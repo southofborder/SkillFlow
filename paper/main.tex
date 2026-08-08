@@ -1,0 +1,187 @@
+% =====================================================================
+% SkillFlow — 顶会论文骨架(占位名:系统 SkillFlow / 图 SFG / 判定 CoDE)
+% 状态:骨架 + intro/method/related work 起草;evaluation 数据留空(审计部分待补)
+% 命名说明:
+%   \sys  = 系统名(SkillFlow)         —— 未被竞品占用
+%   \sfg  = Skill Flow Graph(替旧 FCG,FCG 已被 AgentRaft 同名占用)
+%   \code = Coalitional Data Exposure(替旧 DOE,DOE 已被 AgentRaft 同名占用)
+% 若最终改名,只需改下面三个 \newcommand。
+% =====================================================================
+\documentclass[sigconf,anonymous,review]{acmart}
+
+% ---- 命名宏(占位,全局替换点)----
+\newcommand{\sys}{\textsc{SkillFlow}\xspace}
+\newcommand{\sfg}{\textsc{SFG}\xspace}      % Skill Flow Graph
+\newcommand{\code}{\textsc{CoDE}\xspace}     % Coalitional Data Exposure
+\newcommand{\qi}{quasi-identifier\xspace}
+
+\usepackage{xspace}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% ACM 样板(占位)
+\setcopyright{none}
+\acmConference[Under review]{Submitted for review}{2026}{}
+\settopmatter{printacmref=false, printfolios=true}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+
+\begin{document}
+
+\title{\sys: Static Detection of Unnecessary and Coalitional Data Exposure in LLM Agent Skills}
+
+% 匿名投稿:作者留空
+\author{Under Double-Blind Review}
+\affiliation{\institution{}\country{}}
+
+% =====================================================================
+\begin{abstract}
+% TODO(abstract 最后写;占位骨架,数字待 eval 回填)
+LLM agent \emph{skills}---downloadable bundles of natural-language instructions and
+executable scripts---can, while faithfully performing their advertised task, transmit
+sensitive data across a trust boundary \emph{beyond what the task actually requires}.
+We call the useful question not ``did data flow out'' but ``was this outflow
+\emph{necessary}.'' We present \sys, a \emph{static, execution-free} analysis pipeline that
+answers this at the granularity of individual data flows and, crucially, at the
+granularity of \emph{sets} of flows that converge on the same egress point. \sys{}
+builds a Skill Flow Graph (\sfg) directly from a skill bundle---no runtime, no sandbox,
+no replayed execution---handling cyclic and feedback data flows that prior per-path
+methods discard, and judges each boundary crossing along two orthogonal axes:
+\emph{exposure} and \emph{necessity}. Beyond single-flow judgments, \sys{} detects
+\emph{coalitional} exposure (\code): individually-benign flows whose labels
+\emph{together} form a \qi{} set (in the sense of Sweeney) and thus re-identify an
+individual, a class of leak invisible to per-flow and single-action-ablation methods
+by construction. % TODO: 一句 headline 数据(prevalence / 与 baseline 对比),eval 后填。
+\end{abstract}
+
+\maketitle
+
+% =====================================================================
+\section{Introduction}\label{sec:intro}
+% 叙事弧(见 competitor-narrative-map:避开 "first large-scale/prevalence/taxonomy/
+%   supply chain/bidirectional dataflow";不正撞 MCP-BiFlow 的 dataflow 叙事)
+% Beat 1: agent skills 崛起 + 免执行审计的现实需求(CI 门禁)。
+% Beat 2: 真问题不是"泄没泄",是"该不该泄"(necessity)——但更进一步,
+%         单流合规、汇聚成 QI 组合才泄露的"聚合泄露"是被现有方法结构性漏掉的一类。
+% Beat 3: 为什么现有方法接不住(见下,三点结构盲区,均可从其原文/公式证明):
+%   - 动态/replay 绑定 → 无法免执行地规模化(AgentRaft 6675 crawl 实跑 608 chain;
+%     SkillScope 每候选每任务跑两遍)。
+%   - 逐单元裁决 → 聚合泄露构造性不可见(AgentRaft 单 D_trans;SkillScope 单动作消融)。
+%   - 剪环 → 环/feedback 泄露丢失(AgentRaft "explicitly prune cyclic trajectories")。
+% Beat 4: 我们的 \sys —— 免执行静态 + 环感知 + necessity 正交轴 + 聚合泄露(QI/Sweeney)。
+% Beat 5: 贡献列表。
+% ！诚实前置：necessity 轴本身是既有构件(引 AgentRaft/SkillScope),我们的贡献在
+%   "免执行+环+聚合"下首次让它规模化并抓到聚合型泄露——不吹 "first to define necessity"。
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item \textbf{Execution-free static pipeline (\sys).} % TODO
+  \item \textbf{Cycle-/feedback-aware flow modeling.} % TODO(引 M3 骨料)
+  \item \textbf{Two orthogonal axes: exposure $\perp$ necessity.} % TODO(引 M5)
+  \item \textbf{Coalitional data exposure (\code) via \qi{} sets (Sweeney).} % TODO(M6,待核实回填)
+  \item \textbf{Large-scale static audit of the skill ecosystem.} % TODO(eval 数据留空)
+\end{itemize}
+
+% =====================================================================
+\section{Background and Threat Model}\label{sec:bg}
+% - Agent skill = metadata + SKILL.md 指令 + 脚本/资源;安装后影响 agent 行为。
+% - trust boundary / boundary observation / label / label_flow 概念(引 PROJECT-OVERVIEW §2)。
+% - Threat model:skill 非全局恶意,而是"执行声称任务时越界外发";静态、免执行、
+%   marketplace-scale 的审计视角。攻击者模型:不假设注入,聚焦架构性过度暴露。
+
+% =====================================================================
+\section{Overview}\label{sec:overview}
+% 三阶段图(Download → SFG → CoDE);运行例(motivating example):
+%   一个"生成健康报告发医生"的 skill,DOB/性别/邮编分三条流各自合规,
+%   汇聚到同一 send 边界构成 QI 组合 → 聚合泄露且不必要。此例贯穿全文。
+% ！motivating example 要与竞品的 read_file→send_email 单链例区分:我们的例子
+%   必须是"单条都合规、汇聚才泄露"才能凸显聚合泄露。
+
+% =====================================================================
+\section{The Skill Flow Graph (\sfg)}\label{sec:sfg}
+% 见 METHOD-SCAFFOLD-MAP.md M2。
+\subsection{Block-classified Extraction}\label{sec:sfg:extract}
+% M2.1:块分类+策略派发;四缺陷修复;node-profiler 元数据污染。
+\subsection{The LLM Semantic Gate}\label{sec:sfg:gate}
+% M2.2:规则产候选,LLM 判 actionability/classification/operation_type;真 gpt-5.5。
+\subsection{Edge Connection: Recall vs.\ Precision}\label{sec:sfg:edges}
+% M2.3:type-analyzer 穷举(recall)vs router condition/guard(precision);否定→约束边。
+\subsection{Single-Crossing Split Invariant}\label{sec:sfg:split}
+% M2.4:每节点≤1跨界,observation↔sink-node 1:1。
+
+% =====================================================================
+\section{Cycle-Aware Flow Propagation}\label{sec:cycle}
+% 见 M3 —— 核心差异,竞品全剪环。
+% - removeCycles 静默删环丢自优化语义 → 标记 is_feedback_edge 不删。
+% - 回边合理性分类器(粗规则宽进+LLM复核);实测 92.8% plausible / 7.2% implausible。
+% - 真环带进标签传递层绕一轮;出环闭包模型(specializing 成员复用外部 derive 多流)。
+% - ！反驳"环是 corner case":用实测 prevalence 数据(eval 回填)。
+
+% =====================================================================
+\section{Label Flooding and the Judgment-Driven Rewrite}\label{sec:flood}
+% 见 M4 —— 硬工程主战场(可放一部分到 eval/scalability)。
+% - 判定驱动:FCG 产出服务 CoDE 判定而非复现全路径。
+% - 内存墙 → 去路径化状态(携带 O(真变换) 摘要,不物化路径);dedup key 对齐判定单元。
+% - 存储合并 O(W^2) 墙:Python 增量 O(1)(字节等价);JS 未回港,beast 走 Python。诚实陈述。
+
+% =====================================================================
+\section{Coalitional Data Exposure (\code)}\label{sec:code}
+% 见 M5 + M6。！M6 待两 agent 核实(代码可行性 + 文献查新)回来才填实。
+\subsection{Two Orthogonal Axes: Exposure and Necessity}\label{sec:code:axes}
+% M5.1-5.2:exposure ⊥ necessity;真外泄不可豁免;必要性重设计(词袋→结构判据,
+%   action_input/receiver 相容矩阵/task 声明覆盖);3 分量取 min。
+\subsection{Evidence Packs and the LLM Judge}\label{sec:code:judge}
+% M5.3-5.4:flow-centric pack(500k→1.4k,保真 98.7%);两层打分(规则+LLM blend);
+%   投票+升级;溯源裁剪。
+\subsection{From Single Flows to Coalitions: \qi{} Detection}\label{sec:code:qi}
+% ★ 新大卖点(占位,待回填):
+% - 判定单元升级:单流 (observation × label_flow) → 同 sink 边界的 label_flow 集合。
+% - QI 集命中(Sweeney):label 集合命中准标识符组合(如 {DOB,性别,邮编})→ 聚合泄露。
+% - "聚合 ∧ 不必要":单字段可能任务必要,整个 QI 组合通常不必要。
+% - ！先核实我们代码 observation.label_flow_ids 是否已聚同 sink 多流(agent ac454 核实中);
+%   ！先核实 QI/k匿名/Sweeney 在 agent 隐私是否已被占(agent ac3b5 查新中)。
+% - 【构造性对比】为什么 AgentRaft(单 D_trans)/SkillScope(单动作消融)漏掉这类:
+%   两动作各泄同一物,单独消融任一输出不变 → 都判"必要"。可从其公式逐字证明。
+
+% =====================================================================
+\section{Robustness and Engineering}\label{sec:robust}
+% 见 M7:语义门缓存、分层证据预算(Tier0逐字节)、自适应超时、逐单元降级、传输重试。
+% 不降精度前提下的硬化。可压缩,或并入 evaluation 的 reproducibility。
+
+% =====================================================================
+\section{Evaluation}\label{sec:eval}
+% ！！！数据部分留空(用户/导师明确:审计数据先空着)。以下为结构占位 + 要回答的 RQ。
+% RQ1 (accuracy):CoDE 判定准确性 —— 需带 inter-annotator κ(竞品都没报,这是差异)。
+% RQ2 (aggregation):聚合泄露 prevalence 与案例 —— 证明非 corner case;
+%     构造 coalitional-leak 测试集,展示竞品方法在其上近零召回。
+% RQ3 (cycle):环/feedback 泄露 prevalence(已有 92.8/7.2 雏形)。
+% RQ4 (scale/cost):免执行规模化 —— 与 AgentRaft/SkillScope 的"只能采样"对比;
+%     存储合并墙的 scalability 曲线(bench/ 诊断脚本产数据)。
+% RQ5 (reproducibility):run-to-run variance(竞品都是单轮点估计,我们报方差)。
+\subsection{Experimental Setup}\label{sec:eval:setup}
+% 语料 ClawHub top-k;规模;标注协议(两标注+κ)。TODO 数据。
+\subsection{RQ1--RQ5}\label{sec:eval:rq}
+% TODO：全部数据留空,先占表格/图位。
+
+% =====================================================================
+\section{Related Work}\label{sec:related}
+% 吃 competitor-narrative-map + same-group-deepread-gaps。
+% 分组:
+%  (a) Agent skill security(AgentRaft/SkillScope/42k实证/凭证泄露)——点明我们与两同组
+%      的关系:necessity 轴既有,我们贡献在免执行+环+聚合;不吹 first-to-define。
+%  (b) MCP / data-flow taint(MCP-BiFlow)——不正撞其 bidirectional dataflow 叙事。
+%  (c) 隐私:k-anonymity / quasi-identifier / Sweeney / re-identification —— 我们把它
+%      从数据库发布场景搬到 agent 静态数据流可达性判定(查新结果 agent ac3b5 回填)。
+
+% =====================================================================
+\section{Discussion and Limitations}\label{sec:disc}
+% 诚实:存储合并 JS 未回港;QI 集是固定集(可扩);LLM judge 依赖模型;
+%   静态 over-approximation。
+
+% =====================================================================
+\section{Conclusion}\label{sec:conc}
+
+% =====================================================================
+% \bibliographystyle{ACM-Reference-Format}
+% \bibliography{refs}
+\end{document}
