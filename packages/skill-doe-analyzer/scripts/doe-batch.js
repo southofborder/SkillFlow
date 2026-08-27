@@ -209,15 +209,15 @@ function discoverFcgFiles(fcgRoot) {
   const searchDir = fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory() ? skillsDir : root;
   if (!fs.existsSync(searchDir)) return [];
   return fs.readdirSync(searchDir)
-    .filter(name => name.endsWith('-fcg.json'))
+    .filter(name => name.endsWith('-sfg.json'))
     .map(name => path.join(searchDir, name))
     .sort((a, b) => a.localeCompare(b));
 }
 
 function buildDoeOutputPath(fcgPath, outputRoot) {
   const fileName = path.basename(fcgPath);
-  const base = /-fcg\.json$/i.test(fileName)
-    ? fileName.replace(/-fcg\.json$/i, '-doe.json')
+  const base = /-sfg\.json$/i.test(fileName)
+    ? fileName.replace(/-sfg\.json$/i, '-doe.json')
     : fileName.replace(/\.json$/i, '-doe.json');
   return path.join(outputRoot, 'skills', base);
 }

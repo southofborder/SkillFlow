@@ -1,8 +1,8 @@
 ﻿# Skill Similarity Analyzer 中文说明
 
-`skill-similarity-analyzer` 用于按照功能相似度对 OpenClaw Skill 压缩包分组。它只读取每个 zip 包中的 `SKILL.md` 和可选 `README.md`，然后输出可直接交给 `skill-fcg-analyzer` 继续分析的分组目录。
+`skill-similarity-analyzer` 用于按照功能相似度对 OpenClaw Skill 压缩包分组。它只读取每个 zip 包中的 `SKILL.md` 和可选 `README.md`，然后输出可直接交给 SFG 引擎(`skill-sfg`)继续做技能流图(Skill Flow Graph)分析的分组目录。
 
-本模块不做过暴露判断、不做风险分析、不扫描代码，也不构建 FCG。
+本模块不做过暴露判断、不做风险分析、不扫描代码，也不构建 SFG。
 
 ## 环境要求
 
@@ -120,15 +120,22 @@ output/
 - 每个 zip 内 `SKILL.md` 和 `README.md` 的入口路径
 - 组内 pair 相似度证据
 
-## 与 `skill-fcg-analyzer` 衔接
+## 与 `skill-sfg` 衔接
 
-分组完成后，可以对某一个 group 目录运行 FCG 分析：
+分组完成后，对运行根目录跑 SFG 分析。SFG 批处理会从 `similarity/grouping.json`(或 `<root>/zips`)发现待分析 skill，因此把它指向相似度阶段写入的同一个运行根目录：
 
-```bash
-node ..\skill-fcg-analyzer\src\index.js batch-analyze "D:\datasets\skill-groups\groups\group_001" --output "D:\datasets\fcg-group-001"
+```powershell
+cd packages\skill-sfg
+python -m skill_sfg.batch --root D:\projects\SkillFlow\results\clawhub-top-k100
 ```
 
-分组目录中复制的是原始 zip 包，因此可以直接作为 `skill-fcg-analyzer batch-analyze` 的输入。
+若只想直接分析单个 skill 目录或 zip，用 CLI 入口：
+
+```powershell
+python -m skill_sfg.cli analyze "D:\datasets\skill-groups\groups\group_001\skill-a.zip" --output skill-a-sfg.json
+```
+
+分组目录中复制的是原始 zip 包，因此同一个运行根目录可直接喂给 SFG 批处理。
 
 ## ClawHub 热门 Skills 自动化
 
@@ -308,8 +315,8 @@ node src/index.js group "D:\datasets\skill-zips" --output "D:\datasets\skill-gro
 - 只分析 zip 包。裸 Skill 目录不会被当作单个 Skill 输入，除非该目录中包含可扫描的 zip 包。
 - 每个 zip 中只读取 `SKILL.md` 和可选 `README.md`。
 - 不执行 Skill 包中的代码。
-- 不调用 `skill-fcg-analyzer`。
+- 不调用 SFG 引擎(`skill-sfg`)。
 - 不检测过暴露、数据泄露或风险路径。
 - 极性冲突只用于降低相似度，不等价于完整的自然语言推理。
-- 本模块的输出定位是后续 FCG 分析的预处理分组结果。
+- 本模块的输出定位是后续 SFG 分析的预处理分组结果。
 

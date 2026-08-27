@@ -1,8 +1,8 @@
 ﻿# Skill Similarity Analyzer
 
-`skill-similarity-analyzer` groups OpenClaw Skill zip packages by functional similarity. It reads only each package's `SKILL.md` and optional `README.md`, then writes grouped zip folders that can be passed directly to `skill-fcg-analyzer` for later FCG analysis.
+`skill-similarity-analyzer` groups OpenClaw Skill zip packages by functional similarity. It reads only each package's `SKILL.md` and optional `README.md`, then writes grouped zip folders that can be passed directly to the SFG engine (`skill-sfg`) for later Skill Flow Graph analysis.
 
-This module does not perform over-exposure analysis, risk analysis, code scanning, or FCG construction.
+This module does not perform over-exposure analysis, risk analysis, code scanning, or SFG construction.
 
 ## Requirements
 
@@ -120,15 +120,22 @@ Per-group manifest. It records:
 - `SKILL.md` and `README.md` entry paths inside each zip
 - pairwise similarity evidence inside the group
 
-## Use With `skill-fcg-analyzer`
+## Use With `skill-sfg`
 
-After grouping, run FCG analysis on one group directory:
+After grouping, run SFG analysis over the run root. The SFG batch runner discovers skills from `similarity/grouping.json` (or `<root>/zips`), so point it at the same run root the similarity phase wrote to:
 
-```bash
-node ..\skill-fcg-analyzer\src\index.js batch-analyze "D:\datasets\skill-groups\groups\group_001" --output "D:\datasets\fcg-group-001"
+```powershell
+cd packages\skill-sfg
+python -m skill_sfg.batch --root D:\projects\SkillFlow\results\clawhub-top-k100
 ```
 
-The grouped directories contain copied original zip packages, so they can be used as direct inputs to `skill-fcg-analyzer batch-analyze`.
+To analyze a single skill directory or zip directly, use the CLI entry:
+
+```powershell
+python -m skill_sfg.cli analyze "D:\datasets\skill-groups\groups\group_001\skill-a.zip" --output skill-a-sfg.json
+```
+
+The grouped directories contain copied original zip packages, so the same run root feeds straight into the SFG batch runner.
 
 ## ClawHub Top Skills Automation
 
@@ -306,7 +313,7 @@ node src/index.js group "D:\datasets\skill-zips" --output "D:\datasets\skill-gro
 - Only zip packages are analyzed. A raw unpacked Skill directory is not treated as a Skill input unless it contains zip packages to scan.
 - Only `SKILL.md` and optional `README.md` are read from each zip.
 - The analyzer does not execute package code.
-- The analyzer does not call `skill-fcg-analyzer`.
+- The analyzer does not call the SFG engine (`skill-sfg`).
 - The analyzer does not detect over-exposure, data leakage, or risk paths.
-- Similarity groups are intended as a preparation step for later FCG analysis.
+- Similarity groups are intended as a preparation step for later SFG analysis.
 

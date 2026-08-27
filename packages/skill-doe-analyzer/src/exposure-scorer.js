@@ -118,7 +118,7 @@ function ontologyLabelSensitivity(labelName = '') {
 
 function loadOntologySensitivity() {
   try {
-    const ontologyPath = path.resolve(__dirname, '..', '..', 'skill-fcg-analyzer', 'src', 'security', 'label-ontology.json');
+    const ontologyPath = path.resolve(__dirname, '..', '..', 'skill-sfg', 'skill_sfg', 'security', 'label-ontology.json');
     const raw = JSON.parse(fs.readFileSync(ontologyPath, 'utf-8'));
     return new Map((raw.labels || []).map(entry => [entry.label, entry.sensitivity]));
   } catch {

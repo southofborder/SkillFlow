@@ -1,5 +1,7 @@
 # 交付物 2:判断 flow 是否 DOE —— 完整真实 LLM 交互全文(逐属性注释)
 
+> **命名说明**:图引擎已更名为 SFG(Skill Flow Graph);DOE(Data Over-Exposure)沿用原名。本文散文层已同步;但**发给 LLM 的 prompt 原文按镜像规则保持不变**——`prompt_version` 仍是 `doe-llm-judge-v5-structural-evidence`,pack 里的 `question` 字面量仍写 "Judge DOE necessity"(下文原样贴出,不改),内部脚本名/字段名(`doe-analyzer.js`、`analyzeDoe`、`classifyDoeBoundary` 等)一律保留。
+>
 > 目的:把"判定一条 flow 是否 DOE"实际发给 LLM 的**完整 message 原文**贴出来(system + user),逐属性注释含义,供审核**是否还有冗余属性**。
 >
 > 全文**非杜撰**:由 `packages/skill-doe-analyzer/.m4tmp/dump-judge-payload.js` 加载真实 v6(`v6_00002_skill-vetter`),跑规则期 DOE、选一条送审代表 pack,调真实的 `buildSharedTaskMemory` + `buildJudgePayload` dump 得到。原始 JSON 在 `packages/skill-doe-analyzer/.m4tmp/judge-payload.dump.json`。
@@ -8,7 +10,7 @@
 
 ## ✅ 已实施的瘦身(2026-07-24)
 
-本文最初标出的一批冗余候选**已删/已处理**,下文正文与汇总表已同步为改后状态。这轮改动全在 **prompt 组装层**(`buildJudgePromptBody` / `buildSharedTaskMemory` 输出),**不碰规则裁决**(规则走 `analyzeDoe` rule-only,读 FCG 原始字段,不经此 prompt),56/56 测试绿,dump 实测符合预期。
+本文最初标出的一批冗余候选**已删/已处理**,下文正文与汇总表已同步为改后状态。这轮改动全在 **prompt 组装层**(`buildJudgePromptBody` / `buildSharedTaskMemory` 输出),**不碰规则裁决**(规则走 `analyzeDoe` rule-only,读 SFG 原始字段,不经此 prompt),56/56 测试绿,dump 实测符合预期。
 
 | 字段 | 处置 | 依据 |
 | --- | --- | --- |
@@ -213,7 +215,7 @@ user.content 是一个 JSON 字符串(瘦身后本例 19259 字符,瘦身前 201
 逐属性:
 
 - `data.evidence_id` —— **⚠️ 冗余**:与该条目外层 `evidence_id` 逐字相同(一条 evidence 带了两份自己的 id)。
-- `node_id` —— 溯源到 FCG 节点,轻量,可留。
+- `node_id` —— 溯源到 SFG 节点,轻量,可留。
 - `name`(slug)—— 已内含 `l4.s1`(行/步)+ operation_type + 语义类;与 `location.line`、`operation_type` **部分重复**。⚠️ 中度冗余候选。
 - `semanticKind` / `operation_type` —— 给 LLM 判该 doc step 的作用,**非冗余**。
 - `instructionText` vs `source_line` —— **⚠️ 高度重复**:本例这两个字段绝大多数条目**逐字相同**(见 node_005/006/008…)。少数条目 instructionText 是截断/拼接版(如 node_019 的 external_egress 把 curl 命令重复三遍),但语义仍是同一行。**留一个即可**。
@@ -302,6 +304,6 @@ user.content 是一个 JSON 字符串(瘦身后本例 19259 字符,瘦身前 201
 | `scoring_guidance[2]` 引用约束 | user | 与 system 末句重复 | 轻度,可留作强调 |
 | `sink_boundary.operation_type` vs `flow[].operations[].op` | pack | 同 op 两处;`model_inference` 单 pack 出现 4 次 | 设计分工,观感重复,建议保留但知悉 |
 
-> 说明:上表"删/可删"仅指**给 LLM 的 user 消息**里的呈现冗余,删除只改 `evidence-pack.js`/`llm-judge.js` 的 pack/prompt 组装,**不影响规则裁决**(规则读的是 FCG 原始字段,不读这份 prompt)。真要删需同步 `validEvidenceIdsForPack` 的引用句柄集与 normalizer,并跑裁决等价回归。
+> 说明:上表"删/可删"仅指**给 LLM 的 user 消息**里的呈现冗余,删除只改 `evidence-pack.js`/`llm-judge.js` 的 pack/prompt 组装,**不影响规则裁决**(规则读的是 SFG 原始字段,不读这份 prompt)。真要删需同步 `validEvidenceIdsForPack` 的引用句柄集与 normalizer,并跑裁决等价回归。
 >
 > 关联:[[doe-flow-centric-evidence-pack]] [[doe-prompt-caching-and-usage-tracking]] [[n5-structural-evidence-and-egress-tier]] [[exposure-necessity-orthogonality]]。

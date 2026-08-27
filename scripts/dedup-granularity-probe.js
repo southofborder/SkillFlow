@@ -239,7 +239,7 @@ function probeSkill(fcgJson) {
 }
 
 function main() {
-  const files = nodefs.readdirSync(FCG_DIR).filter(f => f.endsWith('-fcg.json')).sort();
+  const files = nodefs.readdirSync(FCG_DIR).filter(f => f.endsWith('-sfg.json')).sort();
   const rows = [];
   const tot = { gated: 0, groupsTotal: 0, groupsMulti: 0, pathBinding: 0, pathBindingMulti: 0,
     exposedGroups: 0, heteroOrigin: 0, heteroPathSig: 0, distinctObs: 0, distinctBoundaries: 0, mergeableObs: 0,
@@ -254,7 +254,7 @@ function main() {
       console.error(`SKIP ${file}: ${e.message}`);
       continue;
     }
-    const skill = file.replace('-fcg.json', '').replace(/^skill_\d+-\d+_/, '');
+    const skill = file.replace('-sfg.json', '').replace(/^skill_\d+-\d+_/, '');
     rows.push({ skill: skill.slice(0, 28), ...r });
     for (const k of Object.keys(tot)) tot[k] += r[k];
   }

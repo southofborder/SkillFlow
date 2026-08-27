@@ -1,7 +1,9 @@
-# 线 B 方案:FCG `security_profile` 精简(接口契约变更,待对齐)
+# 线 B 方案:SFG `security_profile` 精简(接口契约变更,待对齐)
 
-> 状态:**全链路已实现(FCG 产出端 + DOE 读取端),190 测试全绿**。
-> FCG 现产出 `security_profile.version: "5.0"` + 顶层 `label_dictionary`,`label_flows[]`/`flow_states[]` 用 `label_id` 引用(无 id 的 label 仍内联,无损)。DOE 透明读两种格式。
+> **历史文档(2026-06 时点)**:本文记录 `label_dictionary` + `label_id` 去重契约落地时的状态与实测数据。彼时 SFG 产出端为 JS(`transfer-analysis.js` / `graph-transfer-analyzer.js`、`security_profile.version 5.0`),现已整体重写为 Python(包 `skill-sfg`);DOE 读取端仍为 JS。文中大写引擎名已更新为 SFG(Skill Flow Graph)/ DOE(Data Over-Exposure),但**内部标识符(`doe-analyzer.js`、`label-resolver.js`、`security_profile`、`label_flows`/`flow_states`/`label_id`/`label_dictionary` 等字段名、往返测试名)按镜像规则保留不变**,且旧 JS 文件路径与版本号作为历史记录不回填。
+>
+> 状态:**全链路已实现(SFG 产出端 + DOE 读取端),190 测试全绿**。
+> SFG 现产出 `security_profile.version: "5.0"` + 顶层 `label_dictionary`,`label_flows[]`/`flow_states[]` 用 `label_id` 引用(无 id 的 label 仍内联,无损)。DOE 透明读两种格式。
 > 数据基准:`results/ab-sample` 三个真实 skill(2026-06 实测)。
 
 ## 0. 已完成 vs 待办(对齐用)
@@ -11,9 +13,9 @@
 | DOE 读取端兼容层 `label-resolver.js`(`resolveLabel` / `buildLabelDictionary`) | ✅ 已实现 | 我 |
 | DOE 边界统一规范化(`doe-analyzer.js` labelFlowById,下游 scorer 零改动) | ✅ 已实现 | 我 |
 | 悬空 `label_id` 显式告警(`label_dictionary.miss`,不静默缺省) | ✅ 已实现 | 我 |
-| **FCG 产出 `label_dictionary` + `label_id`** | ✅ 已实现(`transfer-analysis.js`) | 我 |
-| FCG `security_profile.version` 4.9→5.0 + schema + statistics.label_dictionary_count | ✅ 已实现 | 我 |
-| 新旧格式判定一致性 + 告警 + FCG 往返测试 | ✅ 192 全绿 | 我 |
+| **SFG 产出 `label_dictionary` + `label_id`** | ✅ 已实现(`transfer-analysis.js`) | 我 |
+| SFG `security_profile.version` 4.9→5.0 + schema + statistics.label_dictionary_count | ✅ 已实现 | 我 |
+| 新旧格式判定一致性 + 告警 + SFG 往返测试 | ✅ 192 全绿 | 我 |
 | `filter_event_dictionary`(§3.2,可选,收益小) | ⬜ 暂缓 | 后续评估 |
 | `provenance_graph` 精简(§3.3,仅省延迟) | ⬜ 暂缓 | 后续评估 |
 
@@ -23,10 +25,10 @@
 
 ## 1. 背景:为什么要做线 B
 
-线 A(DOE 构造期 task_context 去重)已无损完成,把 DOE 侧的构造浪费砍掉 ~70%。但那是 DOE 内部。线 B 处理的是**上游 FCG 产出本身的结构冗余**——它影响:
+线 A(DOE 构造期 task_context 去重)已无损完成,把 DOE 侧的构造浪费砍掉 ~70%。但那是 DOE 内部。线 B 处理的是**上游 SFG 产出本身的结构冗余**——它影响:
 
-- **磁盘体积**(skill_0001 的 FCG 达 117 MB);
-- **解析延迟**(DOE 每次要 `JSON.parse` 整个 FCG);
+- **磁盘体积**(skill_0001 的 SFG 达 117 MB);
+- **解析延迟**(DOE 每次要 `JSON.parse` 整个 SFG);
 - 间接影响 DOE 构造(读取冗余字段)。
 
 注意:线 B **不直接降 LLM token**——下面会解释为什么。
@@ -92,7 +94,7 @@ label 对象已有稳定 `id` 字段,直接用作字典 key,无需新造。
 
 ## 4. 影响面:两边都要改
 
-### 4.1 FCG 侧 —— ✅ 已实现
+### 4.1 SFG 侧 —— ✅ 已实现
 
 | 文件 | 实际改动 |
 |---|---|
@@ -101,7 +103,7 @@ label 对象已有稳定 `id` 字段,直接用作字典 key,无需新造。
 | `security/transfer-analysis.js: buildProfileFromNodeProfiles` | 建共享 `labelDictionary`,输出顶层 `label_dictionary`;`version` 4.9→**5.0**;statistics 加 `label_dictionary_count` |
 | `output/json-generator.js: fcgSchema` | security_profile 加 `label_dictionary` 字段 |
 
-**无损保证**:label 有稳定 `id` 字段(实测 id→内容严格 1:1)。无 `id` 的 label **保持内联**(`emitLabelRef` 回退),不进字典 → 不会丢。DOE 端 `resolveLabel` 内联优先,两种都正确读。FCG 测试用 `rehydrateLabels` 把引用解析回内联做断言,本身即往返无损校验。
+**无损保证**:label 有稳定 `id` 字段(实测 id→内容严格 1:1)。无 `id` 的 label **保持内联**(`emitLabelRef` 回退),不进字典 → 不会丢。DOE 端 `resolveLabel` 内联优先,两种都正确读。SFG 测试用 `rehydrateLabels` 把引用解析回内联做断言,本身即往返无损校验。
 
 ### 4.2 DOE 侧 —— ✅ 已实现
 
@@ -121,7 +123,7 @@ label 对象已有稳定 `id` 字段,直接用作字典 key,无需新造。
 3. **`label.id → 内容严格 1:1` 已实测验证**(3 skill 零冲突),含 `field_name`/`field_path`,所以按 id 去重无损。
 4. **新旧格式判定逐字段一致**已由测试 `Line B: dictionary-referenced labels produce identical verdicts` 证明。
 
-> 兼容策略(已实现):内联 `label` 优先,无则查 `label_dictionary[label_id]`。新旧 FCG 都能读,师兄改 FCG 期间 DOE 不崩。等全部 FCG 重跑为 5.0 后,可选地移除内联分支。
+> 兼容策略(已实现):内联 `label` 优先,无则查 `label_dictionary[label_id]`。新旧 SFG 都能读,师兄改 SFG 期间 DOE 不崩。等全部 SFG 重跑为 5.0 后,可选地移除内联分支。
 
 ---
 
@@ -129,19 +131,19 @@ label 对象已有稳定 `id` 字段,直接用作字典 key,无需新造。
 
 | 项 | 收益 | 代价 |
 |---|---|---|
-| label 去重 | security_profile 省 ~30-40%(label 占大头);磁盘/解析延迟同比降 | 改接口 schema;两边代码 + 测试;一次性 FCG 重跑 |
+| label 去重 | security_profile 省 ~30-40%(label 占大头);磁盘/解析延迟同比降 | 改接口 schema;两边代码 + 测试;一次性 SFG 重跑 |
 | filter_events 去重 | 再省 ~2-15K/skill | 同上,较小 |
 | provenance_graph | 仅超大 skill 延迟 | 改动复杂,优先级低 |
 
 **不省 LLM token**:因为 pack 里的 label 来自 `label.main`(每 unit 一份,本就是按需取的),去重表是 security_profile 内部的存储优化,不改变"每个 pack 携带它自己那份 label"。token 优化已在线 A/B/C/D 做完。
 
-**结论建议**:label 去重值得做(收益明确、模式干净);filter_events 顺带做;provenance_graph 暂缓。**前提是先确认 DOE 侧 `resolveLabel` 兼容层 + 师兄同步改 FCG,且 `version` bump 到 5.0 让两边显式对齐。**
+**结论建议**:label 去重值得做(收益明确、模式干净);filter_events 顺带做;provenance_graph 暂缓。**前提是先确认 DOE 侧 `resolveLabel` 兼容层 + 师兄同步改 SFG,且 `version` bump 到 5.0 让两边显式对齐。**
 
 ---
 
 ## 6. 待确认问题(对齐时讨论)
 
-1. 去重表放 `security_profile` 顶层(`label_dictionary`)还是放 FCG 根级?建议前者,与现有 `provenance_store` 同级。
-2. 旧 FCG 数据(`results/clawhub-top-k10000` 等)要不要重跑?还是靠 `resolveLabel` 兼容层永久兼容?
+1. 去重表放 `security_profile` 顶层(`label_dictionary`)还是放 SFG 根级?建议前者,与现有 `provenance_store` 同级。
+2. 旧 SFG 数据(`results/clawhub-top-k10000` 等)要不要重跑?还是靠 `resolveLabel` 兼容层永久兼容?
 3. `version` bump 到 5.0 后,DOE 是否要拒绝读 < 5.0 的数据(强一致),还是兼容读(渐进)?我倾向兼容读。
 4. 线 B 做完后是否值得再花时间做 provenance_graph?取决于是否要常态化跑 skill_0001 这类超大 skill。

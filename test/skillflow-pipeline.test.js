@@ -161,14 +161,14 @@ test('relative config paths resolve from projectRoot instead of current cwd', ()
         projectRoot: tmp.tmp,
         resultsRoot: './results/clawhub-top',
         similarityAnalyzer: './packages/skill-similarity-analyzer',
-        fcgAnalyzer: './packages/skill-fcg-analyzer'
+        fcgAnalyzer: './packages/skill-sfg'
       }
     }));
 
     assert.equal(options.paths.projectRoot, tmp.tmp);
     assert.equal(options.paths.clawhubDownloader, path.join(tmp.tmp, 'packages', 'skill-similarity-analyzer'));
     assert.equal(options.paths.similarityAnalyzer, options.paths.clawhubDownloader);
-    assert.equal(options.paths.fcgAnalyzer, path.join(tmp.tmp, 'packages', 'skill-fcg-analyzer'));
+    assert.equal(options.paths.fcgAnalyzer, path.join(tmp.tmp, 'packages', 'skill-sfg'));
     assert.equal(options.paths.doeAnalyzer, path.join(tmp.tmp, 'packages', 'skill-doe-analyzer'));
     assert.equal(options.paths.root, path.join(tmp.tmp, 'results', 'clawhub-top-k9'));
   } finally {
@@ -183,7 +183,7 @@ test('clawhubDownloader path takes priority over legacy similarityAnalyzer', () 
       projectRoot: tmp.tmp,
       clawhubDownloader: './packages/clawhub-downloader',
       similarityAnalyzer: './packages/missing-similarity',
-      fcgAnalyzer: './packages/skill-fcg-analyzer'
+      fcgAnalyzer: './packages/skill-sfg'
     },
     doe: { llmJudge: false }
   }));
@@ -202,7 +202,7 @@ test('legacy similarityAnalyzer path remains a fallback for download entry', () 
       projectRoot: tmp.tmp,
       clawhubDownloader: '',
       similarityAnalyzer: './packages/skill-similarity-analyzer',
-      fcgAnalyzer: './packages/skill-fcg-analyzer'
+      fcgAnalyzer: './packages/skill-sfg'
     },
     doe: { llmJudge: false }
   }));
@@ -341,7 +341,7 @@ function fixtureConfig(overrides = {}) {
       resultsRoot: './results/clawhub-top',
       clawhubDownloader: './packages/skill-similarity-analyzer',
       similarityAnalyzer: './packages/skill-similarity-analyzer',
-      fcgAnalyzer: './packages/skill-fcg-analyzer',
+      fcgAnalyzer: './packages/skill-sfg',
       doeAnalyzer: './packages/skill-doe-analyzer',
       ...(overrides.paths || {})
     },
@@ -400,7 +400,7 @@ function makeModuleTree({ includeSimilarity = true, includeDownloader = false } 
   const packages = path.join(tmp, 'packages');
   const similarityAnalyzer = path.join(packages, 'skill-similarity-analyzer');
   const clawhubDownloader = path.join(packages, 'clawhub-downloader');
-  const fcgAnalyzer = path.join(packages, 'skill-fcg-analyzer');
+  const fcgAnalyzer = path.join(packages, 'skill-sfg');
   const doeAnalyzer = path.join(packages, 'skill-doe-analyzer');
   if (includeSimilarity) {
     fs.mkdirSync(path.join(similarityAnalyzer, 'scripts'), { recursive: true });
@@ -410,8 +410,8 @@ function makeModuleTree({ includeSimilarity = true, includeDownloader = false } 
     fs.mkdirSync(path.join(clawhubDownloader, 'scripts'), { recursive: true });
     fs.writeFileSync(path.join(clawhubDownloader, 'scripts', 'clawhub-top-skills.js'), '');
   }
-  fs.mkdirSync(path.join(fcgAnalyzer, 'scripts'), { recursive: true });
-  fs.writeFileSync(path.join(fcgAnalyzer, 'scripts', 'fcg-batch.js'), '');
+  fs.mkdirSync(path.join(fcgAnalyzer, 'skill_sfg'), { recursive: true });
+  fs.writeFileSync(path.join(fcgAnalyzer, 'skill_sfg', 'batch.py'), '');
   fs.mkdirSync(path.join(doeAnalyzer, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(doeAnalyzer, 'scripts', 'doe-batch.js'), '');
 

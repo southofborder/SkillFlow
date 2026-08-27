@@ -88,7 +88,7 @@ async function call(records) {
 }
 
 (async () => {
-  const skillFile = process.argv[2] || 'results/review-30/fcg/skills/skill_0002-00002_skill-vetter_1.0.0-fcg.json';
+  const skillFile = process.argv[2] || 'results/review-30/fcg/skills/skill_0002-00002_skill-vetter_1.0.0-sfg.json';
   const n = Number(process.argv[3] || 8);
   const d = JSON.parse(fs.readFileSync(skillFile, 'utf8'));
   const candidates = (d.nodes || []).slice(0, n).map((node, i) => ({ id: 'c' + (i + 1), node }));

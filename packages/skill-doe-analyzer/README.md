@@ -1,25 +1,27 @@
 # SkillFlow DOE Analyzer
 
-Independent potential data over-exposure scorer for SkillFlow FCG JSON files.
+Independent data over-exposure scorer for SkillFlow SFG JSON files.
 
-The assessment unit is one observed label flow: `(observation_id, label_flow_id)`. The analyzer does not claim runtime-confirmed leakage; it produces review evidence for potential DOE.
+The assessment unit is one observed label flow: `(observation_id, label_flow_id)`. The analyzer does not claim runtime-confirmed leakage; it produces review evidence for potential over-exposure.
+
+> Naming: the graph engine is **SFG** (Skill Flow Graph) and this verdict engine is **DOE** (Data Over-Exposure). Internal identifiers keep their historical `fcg`/`doe` spelling by design — join-contract flags `--fcg`/`--fcg-root`/`--doe-root`, output dirs `fcg/`/`doe/`, summary files `doe-summary.*`, LLM cache `doe-llm-cache.jsonl`, batch script `doe-batch.js`, and the emitted `doe_score`/`potential_doe` fields are unchanged. Per-skill graph inputs carry the `-sfg.json` suffix and per-skill verdict outputs the `-doe.json` suffix.
 
 ## Usage
 
-Single FCG file:
+Single SFG file:
 
 ```powershell
 cd packages\skill-doe-analyzer
-node src\index.js analyze --fcg D:\path\skill-fcg.json --out D:\path\skill-doe.json --pretty --llm-cache D:\path\doe-llm-cache.jsonl
+node src\index.js analyze --fcg D:\path\skill-sfg.json --out D:\path\skill-doe.json --pretty --llm-cache D:\path\doe-llm-cache.jsonl
 ```
 
-Batch over FCG pipeline output:
+Batch over SFG pipeline output:
 
 ```powershell
 node scripts\doe-batch.js --root D:\projects\SkillFlow\results\clawhub-top-k100
 ```
 
-Naturalize potential DOE paths for audit:
+Naturalize potential over-exposure paths for audit:
 
 ```powershell
 node scripts\doe-path-report.js --root D:\projects\SkillFlow\results\clawhub-top-k100 --skill skill_0001
@@ -33,7 +35,7 @@ For OpenAI-compatible endpoints that reset larger HTTP/1.1 requests or have unst
 
 Single-file options:
 
-- `--fcg <file>`: required input FCG JSON.
+- `--fcg <file>`: required input SFG JSON (flag name kept as the SFG↔DOE join contract).
 - `--out <file>`: optional output path. If omitted, JSON is printed to stdout.
 - `--group-baseline <file>`: optional group behavior baseline JSON.
 - `--threshold <n>`: high-score threshold, default `0.70`.
@@ -68,17 +70,20 @@ Path report options:
 
 ## Method
 
-Potential DOE is reported only for boundary-crossing observations. DOE boundaries come from `observation.boundary` and include information visibility changes such as external network receivers, model providers, persistent retention, and user-visible surfaces. `command_execution` and `destructive_operation` are not DOE boundaries by role alone.
+Potential over-exposure is reported only for boundary-crossing observations. Boundaries come from `observation.boundary` and include information visibility changes such as external network receivers, model providers, persistent retention, and user-visible surfaces. `command_execution` and `destructive_operation` are not exposure boundaries by role alone.
 
 ```text
 component_score = 0.7 * llm_component_score + 0.3 * rule_component_score
-necessity_score = min(action_input_need, receiver_semantic_need, flow_path_task_need, boundary_node_task_need)
+necessity_score = min(action_input_need, receiver_semantic_need, task_need)
 doe_score = clamp(exposure_score * (1 - necessity_score) + baseline_adjustment, 0, 1)
+potential_doe = boundary_crossed && necessity_score < necessity_threshold   // default threshold 0.70
 ```
 
-Evidence packs are sectioned as `boundary_evidence`, `local_action_receiver_evidence`, `flow_path_evidence`, `task_context_evidence`, and `provenance_filter_storage_evidence`. Global necessity is judged over the full `label_flow` path, not just the label name.
+Necessity is a three-component minimum. `action_input_need` reflects whether the label actually participates in the sink action's input (transform participation `sinkTransformedLabel`, schema membership `schemaInputMembership`); `receiver_semantic_need` scores receiver×category compatibility against `RECEIVER_CATEGORY_COMPAT`; `task_need = min(flow_path_signal, boundary_node_signal)` folds the former separate flow-path and boundary-node task signals into one component, backed by declaration coverage (`pathDeclarationCoverage`). Exposure and necessity are orthogonal axes: feeding the LLM never lowers exposure, and a flow is only flagged when it is both exposed **and** unnecessary.
 
-Evidence packs preserve FCG node `source_context.action_evidence`, Markdown `semantic_gate` grammar/classification results, and JS/TS/SH script context such as `ownerScript`, `functionName`, and `callee`. Context-only documentation nodes such as `doc_definition`, `doc_schema`, and `doc_example` may support task semantics, but they are not treated as label-flow path nodes. LLM payloads compact repeated task/document/node evidence into `shared_context`; each assessment unit keeps only its boundary, local receiver/action, full `label_flow` path, and provenance deltas.
+The evidence pack is flow-centric (v7): the unit is one label's full source→sink flow. Each pack carries `label` (semantic descriptor, no internal ids), `sink_boundary` (with an exposure tier), and `flow[]` — an ordered list of nodes `{node_name, role, action, transform?}` where sink nodes add `sink_surface`. Packs also carry `task_memory_evidence_ids`, and optional `leak_type` / `leak_severity` / `cycle_handling`. Global necessity is judged over the whole flow, not just the label name.
+
+Context-only documentation nodes such as `doc_definition`, `doc_schema`, and `doc_example` may support task semantics but are not treated as label-flow path nodes. LLM payloads compact the repeated task/ontology prefix into a `shared_context` block that stays byte-identical across a batch so the OpenAI-compatible endpoint's prompt cache is hit on every unit after the first.
 
 ## Output
 
@@ -88,9 +93,9 @@ The analyzer emits `version: "0.3"` with:
 - `local_necessity` and `global_necessity` component objects.
 - `rule_component_scores`, `component_scores`, and `llm_necessity_score`.
 - `llm_judge`: model, prompt version, vote count, component evidence refs, short reasoning, and disagreement.
-- `statistics`: assessment counts, boundary crossings, potential DOE count, review count, LLM first-pass count, escalated count, timeout split count, cache hits, and warning count.
+- `statistics`: assessment counts, boundary crossings, potential over-exposure count, review count, LLM first-pass count, escalated count, timeout split count, cache hits, warning count, and `llm_token_usage` with a prompt-cache `cache_hit_ratio`.
 
-Batch output layout:
+Batch output layout (internal `doe/` dir name and `doe-*` filenames kept; only per-skill outputs use the `-doe.json` suffix):
 
 ```text
 <root>/doe/
@@ -104,4 +109,4 @@ Batch output layout:
     doe-path-report.json
 ```
 
-The path report is a read-only audit aid. It reconstructs natural-language paths from DOE assessments, prefers exact source lines from the original zip, falls back to FCG `source_context`, and adds audit notes such as `template_or_example_source`, `path_label_metadata_only`, and `model_context_expected_flow`. `label_subtype=path` means a file path, file name, or path-like string; it is not the graph path.
+The path report is a read-only audit aid. It reconstructs natural-language paths from DOE assessments, prefers exact source lines from the original zip, falls back to SFG `source_context`, and adds audit notes such as `template_or_example_source`, `path_label_metadata_only`, and `model_context_expected_flow`. `label_subtype=path` means a file path, file name, or path-like string; it is not the graph path.

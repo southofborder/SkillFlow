@@ -22,7 +22,7 @@ test('DOE path report naturalizes scoped paths with zip source lines and grouped
       'Extracted as a reusable skill'
     ].join('\n')
   });
-  const fcgPath = path.join(root, 'fcg', 'skills', 'skill_0001-00001-self-fcg.json');
+  const fcgPath = path.join(root, 'fcg', 'skills', 'skill_0001-00001-self-sfg.json');
   const doePath = path.join(root, 'doe', 'skills', 'skill_0001-00001-self-doe.json');
   fs.writeFileSync(fcgPath, JSON.stringify(minimalFcg(zipPath)), 'utf8');
   fs.writeFileSync(doePath, JSON.stringify(minimalDoe()), 'utf8');

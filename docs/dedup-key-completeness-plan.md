@@ -1,5 +1,7 @@
 # DOE 送审 dedup 键完备化方案(origin_class + transform_seq)
 
+> **历史文档(点时方案)**:本文是 dedup 键设计阶段的提案快照。其核心提议——把 **transform_seq(有序 transform 前缀)加入去重键**——在后续实现中被**推翻**:实测该分量是唯一无界驱动、会造成状态空间爆炸,已从键中移除(键回退为 JS-8 + `origin_class` 的有界元组,顺序信息改由单父链在传递层重建);`reduction_applied` 则以反链值形式进键。详见记忆 [[flood-transform-sig-dekey]] / [[flood-key-origin-node-explosion-fix]] / [[reduction-antichain-key-component]]。**本文刻意不回填这些后续结论**,仅更新品牌名与失效路径。图引擎已更名为 SFG(Skill Flow Graph),DOE(Data Over-Exposure)沿用原名;包内 `doe-analyzer.js` 等内部标识符按镜像规则保留不变。
+
 ## 0. 背景与决策依据
 
 **问题**:当前送审去重键 = `observation_id | label | transform_set`,其中 `transform_set` 是 transform 类型的**无序去重集合**。这个键在两个维度上**不健全**(unsound),会把 necessity 判定其实不同的流错误合并、只送一条代表:
@@ -61,7 +63,7 @@ transform_seq = 沿 resolved node_path 顺序,
 
 ## 3. 改动清单(全部在 `packages/skill-doe-analyzer/src/doe-analyzer.js`)
 
-去重逻辑与键构造已全部集中在此文件,FCG / evidence-pack / necessity / exposure **零改动**。
+去重逻辑与键构造已全部集中在此文件,SFG / evidence-pack / necessity / exposure **零改动**。
 
 ### 3.1 新增 `originClass(labelFlow, context)` 辅助函数
 
@@ -113,8 +115,8 @@ _dedup_key: `${obs}|${label}|${transformSequence(labelFlow, ctx)}|${originClass(
 
 ### 4.3 回归
 
-- `node --test "packages/skill-doe-analyzer/test/**/*.test.js"`(当前 49 全绿)
-- `node --test "packages/skill-fcg-analyzer/test/**/*.test.js"`(当前 109 全绿,应不受影响)
+- `node --test "packages/skill-doe-analyzer/test/**/*.test.js"`(当时 49 全绿)
+- SFG 侧回归(应不受影响)。历史注:此方案落笔时 SFG 尚为 JS,原文写 `node --test "packages/skill-fcg-analyzer/test/**/*.test.js"`(当时 109 全绿);SFG 现已整体重写为 Python,回归改跑 `python -m pytest packages/skill-sfg/tests`。
 - 规则分 / necessity 三分量 / exposure **必须逐位不变**(本改动只动送审分组,不动任何打分)。
 
 ---
@@ -123,7 +125,7 @@ _dedup_key: `${obs}|${label}|${transformSequence(labelFlow, ctx)}|${originClass(
 
 - **不改门控** `shouldJudgeAssessmentWithLlm`(仍 sensitivity≥high && boundary_risk≥0.75)。
 - **不改 ③ observation_id→boundary 元组合并**:那是往"更多合并"方向、风险方向,与本方案(往更细、更健全方向)相反,放弃。
-- **不改 FCG / evidence-pack / necessity-baseline / exposure-scorer**:键完备化是纯 DOE 送审侧逻辑。
+- **不改 SFG / evidence-pack / necessity-baseline / exposure-scorer**:键完备化是纯 DOE 送审侧逻辑。
 - **不加开关**:直接替换(遵循既往 DOE 重构惯例)。
 
 ---

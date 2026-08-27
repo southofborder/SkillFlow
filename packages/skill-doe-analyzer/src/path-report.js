@@ -409,7 +409,7 @@ function resolveSkillInputs({ doePath, fcgRoot, zipsRoot, summaryMap }) {
 }
 
 function resolveFcgPathFromDoe(doePath, fcgRoot) {
-  const base = path.basename(doePath).replace(/-doe\.json$/i, '-fcg.json');
+  const base = path.basename(doePath).replace(/-doe\.json$/i, '-sfg.json');
   const skillsPath = path.join(fcgRoot, 'skills', base);
   if (fs.existsSync(skillsPath)) return skillsPath;
   const rootPath = path.join(fcgRoot, base);
@@ -420,7 +420,7 @@ function resolveFcgPathFromDoe(doePath, fcgRoot) {
 function resolveZipPathFromFcg(fcgPath, zipsRoot) {
   if (!fcgPath || !fs.existsSync(zipsRoot)) return '';
   const base = path.basename(fcgPath)
-    .replace(/-fcg\.json$/i, '')
+    .replace(/-sfg\.json$/i, '')
     .replace(/^skill_\d+-/, '');
   const match = fs.readdirSync(zipsRoot)
     .filter(name => /\.zip$/i.test(name))
@@ -590,7 +590,7 @@ function matchesSkillFilter(filter, skill) {
 }
 
 function skillIdFromPath(filePath) {
-  const base = path.basename(filePath).replace(/-(doe|fcg)\.json$/i, '');
+  const base = path.basename(filePath).replace(/-(doe|sfg)\.json$/i, '');
   const match = base.match(/^(skill_\d+)/i);
   return match ? match[1] : base;
 }

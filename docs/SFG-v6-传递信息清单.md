@@ -1,8 +1,8 @@
-# 交付物 1:FCG v6 传递给 DOE 的信息清单(逐字段标注下游用途)
+# 交付物 1:SFG v6 传递给 DOE 的信息清单(逐字段标注下游用途)
 
-> 目的:把 FCG(`security_profile.version == "6.0"`)**实际传出**的每个字段列全,并**点明每字段被 DOE 哪段代码消费、做什么用**,供审核是否存在**过度传递**(传了但没人读 / 传了只做溯源展示 / 传了下游忽略)。
+> 目的:把 SFG(`security_profile.version == "6.0"`)**实际传出**的每个字段列全,并**点明每字段被 DOE 哪段代码消费、做什么用**,供审核是否存在**过度传递**(传了但没人读 / 传了只做溯源展示 / 传了下游忽略)。
 >
-> 权威来源:`packages/skill-fcg-py/skill_fcg/flood/public.py`(v6 装配器)真实产出 + DOE 侧 `doe-analyzer.js` / `necessity-baseline.js` / `exposure-scorer.js` / `evidence-pack.js` 的真实读取点。所有"消费者"都标了文件:行区间。
+> 权威来源:`packages/skill-sfg/skill_sfg/flood/public.py`(v6 装配器)真实产出 + DOE 侧 `doe-analyzer.js` / `necessity-baseline.js` / `exposure-scorer.js` / `evidence-pack.js` 的真实读取点。所有"消费者"都标了文件:行区间。
 >
 > 结论速览:**DOE 做"必要性/外泄"裁决实际只读极少数字段**;v6 里绝大多数体积是 `node_profiles`(节点原样透传)与 `observations`(判定摘要)。`flow_states` 已瘦身到只剩 DOE 读的 4 个 + 少量溯源字段;`label_flows` 已降到"兜底重建"最小集;`provenance_graph` 已只留真变换事件。下文逐块标注哪些是**裁决承重**、哪些是**溯源/审计留存**、哪些是**候选可再削**。
 
@@ -29,7 +29,7 @@
 
 ## 1. `node_profiles[]` —— 节点画像(原样透传,最大体积块之一)
 
-FCG 把每个节点的完整 profile 原样塞进 v6(`public.py:84` `"node_profiles": node_profiles`,**未做任何字段裁剪**)。字段全集(实测):
+SFG 把每个节点的完整 profile 原样塞进 v6(`public.py:84` `"node_profiles": node_profiles`,**未做任何字段裁剪**)。字段全集(实测):
 `node_id, node_name, node_roles, security_tags, operation_tags, data_surface, receiver_scope, retention_scope, trust_boundary, data_profile, action_steps, action_order_confidence, action_order_source, has_multi_action, ambiguous_action_order, produced_object_key/text, consumed_object_key/text, conditions, confidence, evidence, formal_semantics`。
 
 DOE 侧真实读取点(`profileByNodeId` 建于 `doe-analyzer.js:103`):
@@ -45,7 +45,7 @@ DOE 侧真实读取点(`profileByNodeId` 建于 `doe-analyzer.js:103`):
 | `name, action_steps(op 串), produced/consumed_object_text` | `evidence-pack.js` 组 pack 的 `action` / `operations[]` 摘要串 | 只进 LLM 证据文本,不进规则分 | **LLM 证据(承重于 LLM)** |
 | `data_profile, security_tags, confidence, evidence, action_order_*, has_multi_action, ambiguous_action_order, conditions, produced/consumed_object_key` | **DOE 侧无读取点** | —— | ⚠️ **候选过度传递**:node_profiles 整块原样透传,这些字段无 DOE 消费者,只是没单独裁 |
 
-> **审核要点(§1)**:`node_profiles` 是"原样透传、未裁剪"的块。真正被 DOE 读的只有上表前 6 类。`data_profile/security_tags/evidence/confidence/action_order_*/conditions/*_object_key` 等在 DOE 端**零读取**。是否值得像 flow_state 那样给 node_profile 也做一次投影裁剪,是一个明确的可优化点(但注意:node_profiles 也可能被 FCG 自己的下游或调试消费,裁剪前需全仓确认)。
+> **审核要点(§1)**:`node_profiles` 是"原样透传、未裁剪"的块。真正被 DOE 读的只有上表前 6 类。`data_profile/security_tags/evidence/confidence/action_order_*/conditions/*_object_key` 等在 DOE 端**零读取**。是否值得像 flow_state 那样给 node_profile 也做一次投影裁剪,是一个明确的可优化点(但注意:node_profiles 也可能被 SFG 自己的下游或调试消费,裁剪前需全仓确认)。
 
 ---
 
@@ -139,11 +139,11 @@ v6 只保 `events.filtering` 且只保 `REAL_TRANSFORM_TYPES` 事件(`public.py:
 | 位置 | 字段 | 现状 | 建议 |
 | --- | --- | --- | --- |
 | observation | `word_set` | 死字段(task_need 规则派生,不逐字读) | **可删**(记忆已标) |
-| observation | `action_step_id, order, order_confidence, ambiguous_action_order, reduction_applied_all` | 无裁决消费 | 可删(先确认无 FCG 自身下游/调试依赖) |
+| observation | `action_step_id, order, order_confidence, ambiguous_action_order, reduction_applied_all` | 无裁决消费 | 可删(先确认无 SFG 自身下游/调试依赖) |
 | node_profiles | `data_profile, security_tags, evidence, confidence, action_order_*, conditions, produced/consumed_object_key, has_multi_action` | 整块原样透传,无 DOE 消费者 | 可投影裁剪(收益最大,但需全仓确认无其它消费者) |
 | label_flows | `terminated, termination_reason, storage_key, merge_group_ids, label_fingerprint, introduced_at` | 无裁决消费 | 可删 |
 | label_flows | `parent_label_flow_ids, current_node, incoming_edge_id, local_filter_event_ids` | 仅"兜底重建"用 | 若确认 DOE 已全吃 observation 摘要、不再兜底,可删 |
 | provenance_graph | `propagated_label, storage_key`(事件内) | `summarizeTransform` 未读 | 可删(轻) |
 | flow_states | `transform_digest, origin_node, node_name, representative_label_flow_id, label` | 溯源留存(**有意保留**) | 建议保留(可审计性) |
 
-> 注:上表"可删"均指 **DOE 裁决路径无消费**;删除前须 grep 确认 FCG 自身/pipeline runner/调试工具无其它读点。`transform_digest`(flow_state 上)是有意的审计留存,不建议删。
+> 注:上表"可删"均指 **DOE 裁决路径无消费**;删除前须 grep 确认 SFG 自身/pipeline runner/调试工具无其它读点。`transform_digest`(flow_state 上)是有意的审计留存,不建议删。

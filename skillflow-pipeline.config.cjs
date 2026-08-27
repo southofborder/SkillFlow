@@ -20,8 +20,9 @@ module.exports = {
     // Compatibility alias for older configs; prefer clawhubDownloader for new configs.
     similarityAnalyzer: './packages/skill-similarity-analyzer',
 
-    // FCG analyzer package.
-    fcgAnalyzer: './packages/skill-fcg-analyzer',
+    // FCG analyzer package (Python engine). Runs via `python -m skill_sfg.batch`
+    // with cwd set here so the un-installed package resolves on sys.path.
+    fcgAnalyzer: './packages/skill-sfg',
 
     // DOE analyzer package.
     doeAnalyzer: './packages/skill-doe-analyzer'
@@ -90,7 +91,11 @@ module.exports = {
     // Markdown 语义门控（semantic gate）缓存文件。留空时固定到 <root>/fcg/semantic-gate-cache.jsonl，
     // 使其随结果目录持久化、可跨机器/CI 复用，避免每次重跑都对未变文档重新调用远程模型。
     // 设为 '0' 或 'false' 可禁用缓存。
-    semanticGateCache: ''
+    semanticGateCache: '',
+
+    // Python 解释器。FCG 现在跑 Python 引擎（python -m skill_sfg.batch）。
+    // 留空时取环境变量 PYTHON，再兜底为 'python'。需要用 python3 或虚拟环境时改这里。
+    pythonExecutable: ''
   },
 
   doe: {

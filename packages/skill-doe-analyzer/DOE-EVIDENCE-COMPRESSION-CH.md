@@ -1,7 +1,9 @@
 # DOE LLM Judge — Evidence Pack 压缩机制与成本分析
 
+> **历史文档(2026-06-14 时点)**:本文记录当时的 v3 prompt(`doe-llm-judge-v3-shared-task-memory`)、旧版 5-section evidence pack 与 4 分量必要性,是彼时的成本测量快照,**刻意不回填到当前 v7 结构**(回填会篡改记录)。图引擎现已更名为 SFG(Skill Flow Graph),DOE(Data Over-Exposure)沿用原名;包内 `fcg`/`doe` 内部标识按镜像规则保留不变。
+>
 > 适用版本:`packages/skill-doe-analyzer`(prompt_version `doe-llm-judge-v3-shared-task-memory`)
-> 测量基准:`skill_0001 self-improving-agent 3.0.21`(FCG 117 MB)
+> 测量基准:`skill_0001 self-improving-agent 3.0.21`(SFG JSON 117 MB)
 > 模型:gpt-5.5;价格为占位值,见末尾「价格假设」。
 
 ---
@@ -9,7 +11,7 @@
 ## 1. 数据流总览(一个 unit 如何变成一次 API 调用)
 
 ```
-FCG JSON
+SFG JSON
   └─ analyzeDoeRuleOnly()                      doe-analyzer.js
         每个 (observation × label_flow) → 1 个 assessment
         shouldJudgeAssessmentWithLlm() 门控:                    ← 第一道减量
@@ -231,5 +233,5 @@ LLM 只能引用 `evidence[]` 里的 evidence_id(经 `taskMemoryEvidenceIdsForPa
 
 **边界**:边界节点(observation 节点)的完整细节仍在 `local_action_receiver_evidence`(`local.action_text` / `local.formal_semantics`)原样保留;被精简的是 task_context 里非边界路径节点的、从未发给 LLM 的重字段。
 
-> 下一步(线 B,需改 `security_profile` schema,涉及 FCG/DOE 接口契约,**先出方案文档与师兄对齐再动**):FCG 侧 `label_flows[].label` 内联重复(实测 100 flow / 22 distinct,4.3×)、`filter_events`(224/100 distinct)用「id 引用 + 去重表」替代。这主要省**磁盘 + 解析延迟**(provenance_graph 占 security_profile 43% 但不直接进 pack),需同步改 evidence-pack 读取端。
+> 下一步(线 B,需改 `security_profile` schema,涉及 SFG/DOE 接口契约,**先出方案文档与师兄对齐再动**):SFG 侧 `label_flows[].label` 内联重复(实测 100 flow / 22 distinct,4.3×)、`filter_events`(224/100 distinct)用「id 引用 + 去重表」替代。这主要省**磁盘 + 解析延迟**(provenance_graph 占 security_profile 43% 但不直接进 pack),需同步改 evidence-pack 读取端。
 

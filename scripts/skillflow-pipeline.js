@@ -110,7 +110,8 @@ function resolvePipelineOptions(cli, loadedConfig) {
       labelLlmAssist: Boolean(config.fcg.labelLlmAssist),
       labelLlmConcurrency: Number(config.fcg.labelLlmConcurrency || 2),
       labelLlmCache: config.fcg.labelLlmCache || '',
-      semanticGateCache: config.fcg.semanticGateCache || ''
+      semanticGateCache: config.fcg.semanticGateCache || '',
+      pythonExecutable: config.fcg.pythonExecutable || process.env.PYTHON || 'python'
     },
     doe: {
       enabled: config.doe.enabled !== false,
@@ -148,7 +149,7 @@ function mergeDefaults(config) {
       clawhubDownloader: './packages/skill-similarity-analyzer',
       similarityAnalyzer: './packages/skill-similarity-analyzer',
       doeAnalyzer: './packages/skill-doe-analyzer',
-      fcgAnalyzer: './packages/skill-fcg-analyzer',
+      fcgAnalyzer: './packages/skill-sfg',
       ...(config.paths || {})
     },
     clawhub: {
@@ -291,7 +292,7 @@ function preflight(options) {
     requiredFiles.push(path.join(options.paths.clawhubDownloader, 'scripts', 'clawhub-top-skills.js'));
   }
   if (options.phase === 'fcg' || options.phase === 'all') {
-    requiredFiles.push(path.join(options.paths.fcgAnalyzer, 'scripts', 'fcg-batch.js'));
+    requiredFiles.push(path.join(options.paths.fcgAnalyzer, 'skill_sfg', 'batch.py'));
   }
   if (options.phase === 'doe' || (options.phase === 'all' && options.doe.enabled)) {
     requiredFiles.push(path.join(options.paths.doeAnalyzer, 'scripts', 'doe-batch.js'));
@@ -370,8 +371,11 @@ function buildSimilarityCommand(options) {
 }
 
 function buildFcgCommand(options) {
+  // FCG now runs on the Python engine (packages/skill-sfg). The package is not
+  // pip-installed, so `python -m skill_sfg.batch` only resolves when cwd is the
+  // package directory (cwd enters sys.path). Flags mirror the retired fcg-batch.js.
   const args = [
-    path.join(options.paths.fcgAnalyzer, 'scripts', 'fcg-batch.js'),
+    '-m', 'skill_sfg.batch',
     '--root', options.paths.root,
     '--scope', options.fcg.scope,
     '--concurrency', String(options.fcg.concurrency),
@@ -387,7 +391,7 @@ function buildFcgCommand(options) {
   if (options.fcg.refresh) args.push('--refresh');
   return {
     name: 'fcg',
-    command: process.execPath,
+    command: options.fcg.pythonExecutable,
     args,
     cwd: options.paths.fcgAnalyzer
   };

@@ -3,7 +3,7 @@
  * Semantic review of FCG outputs: flag "unreasonable / incomplete" nodes and
  * paths after the list-block + conditions + sequence-edge changes.
  *
- * Reads every *-fcg.json under a skills dir and reports, per skill and in
+ * Reads every *-sfg.json under a skills dir and reports, per skill and in
  * aggregate:
  *   - node/edge/observation/label_flow counts
  *   - fragmented bullet nodes (multi-line list items that should have folded)
@@ -172,7 +172,7 @@ for (const r of reports) {
   const c = r.counts, fc = r.finding_counts;
   const flags = ['fragmented_bullets','disclaimer_as_action','dangling','empty_action','description_with_obs']
     .filter(k => fc[k] > 0).map(k => `${k}=${fc[k]}`).join(' ');
-  console.log(`  ${r.file.replace('-fcg.json','')}  N=${c.nodes} E=${c.edges} O=${c.observations} LF=${c.label_flows} brk=${c.broken_edges}  ${flags || 'clean'}`);
+  console.log(`  ${r.file.replace('-sfg.json','')}  N=${c.nodes} E=${c.edges} O=${c.observations} LF=${c.label_flows} brk=${c.broken_edges}  ${flags || 'clean'}`);
 }
 
 if (jsonOut) {

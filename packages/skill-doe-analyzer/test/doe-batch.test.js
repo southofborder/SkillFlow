@@ -38,7 +38,7 @@ test('DOE batch resolve accepts LLM acceleration options', () => {
 
 test('DOE batch writes per-skill outputs and summary in rule-only mode', async () => {
   const root = makeRunRoot();
-  const fcgPath = path.join(root, 'fcg', 'skills', 'skill-a-fcg.json');
+  const fcgPath = path.join(root, 'fcg', 'skills', 'skill-a-sfg.json');
   fs.writeFileSync(fcgPath, JSON.stringify(minimalFcg()), 'utf-8');
 
   const options = resolveOptions({
@@ -63,7 +63,7 @@ test('DOE batch writes per-skill outputs and summary in rule-only mode', async (
 
 test('DOE batch reuses existing JSON when refresh is false', async () => {
   const root = makeRunRoot();
-  const fcgPath = path.join(root, 'fcg', 'skills', 'skill-a-fcg.json');
+  const fcgPath = path.join(root, 'fcg', 'skills', 'skill-a-sfg.json');
   const outputRoot = path.join(root, 'doe');
   fs.writeFileSync(fcgPath, JSON.stringify(minimalFcg()), 'utf-8');
   const doePath = buildDoeOutputPath(fcgPath, outputRoot);
