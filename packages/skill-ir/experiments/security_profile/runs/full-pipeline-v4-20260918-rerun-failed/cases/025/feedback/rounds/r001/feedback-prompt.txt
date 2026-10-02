@@ -1,0 +1,2043 @@
+You analyze one complete Skill package and return exactly one JSON object.
+
+Read every readable file before making any extraction decision. Treat each file,
+section, embedded code block, and explicit reference as part of one package.
+Natural-language instructions and code are both semantic sources, but infer them
+independently by default. Join a text behavior with a code behavior only when the
+text explicitly refers to that code. Do not invent relationships from proximity.
+
+Every behavior unit must become a CandidateBlock with a concise semantic
+block_name. Use block_ref only as a temporary machine reference. Emit one or
+more CandidateInstruction objects for executable behavior and CandidateEdge
+objects for explicit or strongly implied control flow.
+
+Treat code files and code blocks as black-box operations. Do not split internal
+loops, local variables, or internal control flow. Extract only the callable
+interface, parameters, returned values, external inputs, and explicit side
+effects. For a code behavior, preserve the original code body in
+metadata.script_content whenever it is available.
+
+Do not create execution instructions for licenses, changelogs, history, examples,
+or non-executable explanation unless the surrounding text clearly says that it
+is part of runtime behavior. Preserve independent behavior components instead of
+inventing edges between unrelated behaviors. Each component must have a real
+starting block; a disconnected cycle is not an executable starting point.
+
+Represent two different actions explicitly: acquiring data and computing results.
+Every result operand an instruction consumes must refer to an output of some
+instruction; literal constants and resource identifiers are different operand types. A value being mentioned in prose somewhere in the package never
+makes it available; only an instruction that produces it does.
+
+ACQUIRING DATA: Every actual read of runtime context, file/configuration contents,
+or returned data from an external API/tool/service is a real source CandidateBlock.
+Set data_source_kind to "context" or "external". A source block contains exactly one
+acquisition instruction followed by a dispatch or return terminator. One read may
+produce multiple outputs. Preserve conditional reads on their own paths; do not
+hoist every source to the entry block.
+
+For runtime context, use data_source_kind="context". The acquisition inputs
+must be non-empty context_key operands identifying keys in declared_context_keys.
+Only this acquisition may consume context_key operands. The declaration alone
+never makes a result available: the acquisition produces the named results used
+by later instructions. Name the acquisition for what is actually read, for example
+read_user_message or read_city_from_request. Use read_context only when the source
+does not give a more specific action. The data_source_kind and operand structure
+determine the source category, not the opcode spelling.
+
+For external acquisition, use data_source_kind="external" and a descriptive
+opcode such as read_file, http_get, or a named tool call. Include an
+external_resource identifier or a result, such as a dynamic file path, in its
+inputs. A resource identifies a file, API, tool, or service; it is not the data
+returned from it. A pure side effect without returned data can be an ordinary
+block. Keep literal constants in Operand.literal_value; do not create source
+blocks just to introduce literals or service handles.
+
+All opcodes are semantic strings under the same contract. There is no separate
+list of built-in business operations. Do not infer effects or audit findings
+from opcode spelling. Only dispatch and return have fixed control-flow roles as
+specified below. Preserve original code in metadata.script_content.
+
+NAMING OPERATIONS: Choose an action-and-object name that says what this instruction
+does, using details supported by the source: read_city_from_request,
+trim_message_whitespace, or send_slack_notification. A reader should understand
+the action from the opcode together with its operands, without relying only on
+the block name. When calling a function or tool explicitly named in the source,
+preserve that name, for example normalize_city or check_urgency. Do not invent
+processing steps, destinations, or effects to make a name more specific. Use the
+same opcode for the same behavior on different paths; a branch alone does not
+require a different operation name. These names are examples, not a vocabulary
+restriction or a list of operations with special validation rules.
+
+COMPUTING RESULTS: Set data_source_kind to null for ordinary behavior and computed
+transformations. Every instruction output is a result whose identifier you choose,
+and that identifier must be unique across the WHOLE candidate: never give the same identifier
+to two produced values, even in different blocks. Choose a meaningful result identifier based on what it
+holds, for example "extracted_city" or "weather_report".
+
+USING RESULTS: To consume a value, write a result input naming it exactly
+as the producing instruction named it in its outputs, whichever block that
+instruction lives in. Do not re-acquire or relay a value on the way: a block that
+neither reads nor produces a value does not mention it, and later readers refer directly to the original result identifier. The compiler
+checks that a control-flow path connects the producer to the reader. To change a value, consume it and
+produce a NEW identifier for the result, so the original identifier keeps its original
+meaning everywhere it appears.
+
+Say what the package says and let the analysis work out whether a path connects each result producer to its reader. A block after a merge may reference a value that only one branch
+produces, and a block inside a loop may reference a value that a later block on
+the backedge produces. Neither is an error to avoid: do not add a second producer
+to make such a read look safe, and do not drop the read.
+
+Use dispatch as the final instruction of a block that has outgoing edges. Use
+return as the final instruction of a block that ends execution. Put every value
+used to choose a branch in dispatch.inputs, including computed predicates. Edge
+condition_text text is only a readable description; it never declares data dependencies.
+Both dispatch and return must have empty outputs; return consumes its result
+through inputs. A block must not have instructions after its terminator.
+
+ENDING BLOCKS: When a behavior finishes the path, return may appear at the end of
+that block. An independent branch may consist of return alone. Return a
+source-specified literal or an existing result directly; do not introduce
+preparation, assignment, or wrapping operations just to pass it to return.
+Preserve actual branch/merge boundaries and independent behavior components.
+
+CONSTRAINTS: Preserve constraint wording from the source in constraints: list[str].
+Place Skill-wide constraints on IRAnalysisCandidate, block-scoped constraints on
+CandidateBlock, and operation-scoped constraints on CandidateInstruction. The
+containing level expresses scope; use [] when none applies. If scope is unclear,
+report that uncertainty in diagnostics rather than promoting it to a Skill-wide
+rule. Actual data acquisition, processing, and transfer must still appear in
+operands and control flow, not only in constraint text. A constraint alone does
+not introduce a conversion, validation, or other execution step.
+
+Return only JSON matching the schema below; do not wrap it in Markdown fences
+and do not add commentary.
+
+
+Candidate JSON Schema:
+
+{
+  "$defs": {
+    "CandidateBlock": {
+      "additionalProperties": false,
+      "description": "A behavior unit proposed by the LLM.\n\nA block states only what happens inside it.  Which of its values are\nreadable elsewhere is a property of the paths through the graph, so it is\nchecked against CFG paths rather than declared here.",
+      "properties": {
+        "block_ref": {
+          "title": "Block Ref",
+          "type": "string"
+        },
+        "block_name": {
+          "title": "Block Name",
+          "type": "string"
+        },
+        "data_source_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "context",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Source Kind"
+        },
+        "instructions": {
+          "items": {
+            "$ref": "#/$defs/CandidateInstruction"
+          },
+          "title": "Instructions",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "block_ref",
+        "block_name"
+      ],
+      "title": "CandidateBlock",
+      "type": "object"
+    },
+    "CandidateEdge": {
+      "additionalProperties": false,
+      "description": "A control-flow edge proposed by the LLM.",
+      "properties": {
+        "source_block_ref": {
+          "title": "Source Block Ref",
+          "type": "string"
+        },
+        "target_block_ref": {
+          "title": "Target Block Ref",
+          "type": "string"
+        },
+        "condition_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Text"
+        }
+      },
+      "required": [
+        "source_block_ref",
+        "target_block_ref"
+      ],
+      "title": "CandidateEdge",
+      "type": "object"
+    },
+    "CandidateInstruction": {
+      "additionalProperties": false,
+      "description": "An instruction proposed by the LLM before canonical compilation.",
+      "properties": {
+        "instruction_ref": {
+          "title": "Instruction Ref",
+          "type": "string"
+        },
+        "opcode": {
+          "title": "Opcode",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instruction_ref",
+        "opcode"
+      ],
+      "title": "CandidateInstruction",
+      "type": "object"
+    },
+    "Operand": {
+      "additionalProperties": false,
+      "description": "One typed instruction input or output.\n\nRESULT identifies an instruction result; CONTEXT_KEY identifies a declared\nruntime entry; EXTERNAL_RESOURCE identifies a file, tool, API, or service.\nOnly LITERAL stores a payload in ``literal_value``. ``semantic_name`` keeps\nthe extractor's wording when compilation assigns a result identifier.\nResult identifiers are global; a single instruction can produce several.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/OperandType"
+        },
+        "identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identifier"
+        },
+        "literal_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Literal Value"
+        },
+        "semantic_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Name"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Operand",
+      "type": "object"
+    },
+    "OperandType": {
+      "description": "The source or destination kind of an operand.",
+      "enum": [
+        "literal",
+        "context_key",
+        "result",
+        "external_resource"
+      ],
+      "title": "OperandType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete untrusted analysis returned by the LLM.",
+  "properties": {
+    "entry_block_ref": {
+      "title": "Entry Block Ref",
+      "type": "string"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "declared_context_keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Declared Context Keys",
+      "type": "array"
+    },
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/CandidateBlock"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/CandidateEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entry_block_ref"
+  ],
+  "title": "IRAnalysisCandidate",
+  "type": "object"
+}
+
+Straight-line example: read, trim, then log progress and return in the same block:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the user's input message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_user_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_normalize",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "normalize",
+      "block_name": "Remove leading and trailing whitespace from the message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "normalize_message",
+          "opcode": "trim_message_whitespace",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_record",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "record",
+      "block_name": "Record progress and return the normalized message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "record_progress",
+          "opcode": "log_progress",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "ready"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_message",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "normalize"
+    },
+    {
+      "source_block_ref": "normalize",
+      "target_block_ref": "record"
+    }
+  ],
+  "diagnostics": []
+}
+
+Branch example: acquire only on one path, then reference both paths after the merge:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the alert message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_alert_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_decide",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "decide",
+      "block_name": "Check urgency",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_urgency",
+          "opcode": "check_message_urgency",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_path",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "send_alert",
+      "block_name": "Send the alert and read the Slack receipt",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "send_slack",
+          "opcode": "post_slack_alert",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "slack"
+            },
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_alert",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "skip_alert",
+      "block_name": "Prepare the non-urgent note",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "make_skip_note",
+          "opcode": "prepare_no_alert_note",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "No alert needed"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_skip",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "reply",
+      "block_name": "Report the outcome of whichever path ran",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_reply",
+          "opcode": "format_alert_outcome",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            },
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            },
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_outcome",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "decide"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "send_alert",
+      "condition_text": "urgent"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "skip_alert",
+      "condition_text": "not urgent"
+    },
+    {
+      "source_block_ref": "send_alert",
+      "target_block_ref": "reply"
+    },
+    {
+      "source_block_ref": "skip_alert",
+      "target_block_ref": "reply"
+    }
+  ],
+  "diagnostics": []
+}
+
+The examples illustrate the contract only. Extract the actual package below; do not copy example behaviors that are absent from it.
+
+Complete Skill package:
+
+<skill-file path="LICENSE.txt" kind="text" size="10776">
+
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+
+   "Licensor" shall mean the copyright owner or entity authorized by
+   the copyright owner that is granting the License.
+
+   "Legal Entity" shall mean the union of the acting entity and all
+   other entities that control, are controlled by, or are under common
+   control with that entity. For the purposes of this definition,
+   "control" means (i) the power, direct or indirect, to cause the
+   direction or management of such entity, whether by contract or
+   otherwise, or (ii) ownership of fifty percent (50%) or more of the
+   outstanding shares, or (iii) beneficial ownership of such entity.
+
+   "You" (or "Your") shall mean an individual or Legal Entity
+   exercising permissions granted by this License.
+
+   "Source" form shall mean the preferred form for making modifications,
+   including but not limited to software source code, documentation
+   source, and configuration files.
+
+   "Object" form shall mean any form resulting from mechanical
+   transformation or translation of a Source form, including but
+   not limited to compiled object code, generated documentation,
+   and conversions to other media types.
+
+   "Work" shall mean the work of authorship, whether in Source or
+   Object form, made available under the License, as indicated by a
+   copyright notice that is included in or attached to the work
+   (an example is provided in the Appendix below).
+
+   "Derivative Works" shall mean any work, whether in Source or Object
+   form, that is based on (or derived from) the Work and for which the
+   editorial revisions, annotations, elaborations, or other modifications
+   represent, as a whole, an original work of authorship. For the purposes
+   of this License, Derivative Works shall not include works that remain
+   separable from, or merely link (or bind by name) to the interfaces of,
+   the Work and Derivative Works thereof.
+
+   "Contribution" shall mean any work of authorship, including
+   the original version of the Work and any modifications or additions
+   to that Work or Derivative Works thereof, that is intentionally
+   submitted to Licensor for inclusion in the Work by the copyright owner
+   or by an individual or Legal Entity authorized to submit on behalf of
+   the copyright owner. For the purposes of this definition, "submitted"
+   means any form of electronic, verbal, or written communication sent
+   to the Licensor or its representatives, including but not limited to
+   communication on electronic mailing lists, source code control systems,
+   and issue tracking systems that are managed by, or on behalf of, the
+   Licensor for the purpose of discussing and improving the Work, but
+   excluding communication that is conspicuously marked or otherwise
+   designated in writing by the copyright owner as "Not a Contribution."
+
+   "Contributor" shall mean Licensor and any individual or Legal Entity
+   on behalf of whom a Contribution has been received by Licensor and
+   subsequently incorporated within the Work.
+
+2. Grant of Copyright License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   copyright license to reproduce, prepare Derivative Works of,
+   publicly display, publicly perform, sublicense, and distribute the
+   Work and such Derivative Works in Source or Object form.
+
+3. Grant of Patent License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   (except as stated in this section) patent license to make, have made,
+   use, offer to sell, sell, import, and otherwise transfer the Work,
+   where such license applies only to those patent claims licensable
+   by such Contributor that are necessarily infringed by their
+   Contribution(s) alone or by combination of their Contribution(s)
+   with the Work to which such Contribution(s) was submitted. If You
+   institute patent litigation against any entity (including a
+   cross-claim or counterclaim in a lawsuit) alleging that the Work
+   or a Contribution incorporated within the Work constitutes direct
+   or contributory patent infringement, then any patent licenses
+   granted to You under this License for that Work shall terminate
+   as of the date such litigation is filed.
+
+4. Redistribution. You may reproduce and distribute copies of the
+   Work or Derivative Works thereof in any medium, with or without
+   modifications, and in Source or Object form, provided that You
+   meet the following conditions:
+
+   (a) You must give any other recipients of the Work or
+       Derivative Works a copy of this License; and
+
+   (b) You must cause any modified files to carry prominent notices
+       stating that You changed the files; and
+
+   (c) You must retain, in the Source form of any Derivative Works
+       that You distribute, all copyright, patent, trademark, and
+       attribution notices from the Source form of the Work,
+       excluding those notices that do not pertain to any part of
+       the Derivative Works; and
+
+   (d) If the Work includes a "NOTICE" text file as part of its
+       distribution, then any Derivative Works that You distribute must
+       include a readable copy of the attribution notices contained
+       within such NOTICE file, excluding those notices that do not
+       pertain to any part of the Derivative Works, in at least one
+       of the following places: within a NOTICE text file distributed
+       as part of the Derivative Works; within the Source form or
+       documentation, if provided along with the Derivative Works; or,
+       within a display generated by the Derivative Works, if and
+       wherever such third-party notices normally appear. The contents
+       of the NOTICE file are for informational purposes only and
+       do not modify the License. You may add Your own attribution
+       notices within Derivative Works that You distribute, alongside
+       or as an addendum to the NOTICE text from the Work, provided
+       that such additional attribution notices cannot be construed
+       as modifying the License.
+
+   You may add Your own copyright statement to Your modifications and
+   may provide additional or different license terms and conditions
+   for use, reproduction, or distribution of Your modifications, or
+   for any such Derivative Works as a whole, provided Your use,
+   reproduction, and distribution of the Work otherwise complies with
+   the conditions stated in this License.
+
+5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+
+6. Trademarks. This License does not grant permission to use the trade
+   names, trademarks, service marks, or product names of the Licensor,
+   except as required for reasonable and customary use in describing the
+   origin of the Work and reproducing the content of the NOTICE file.
+
+7. Disclaimer of Warranty. Unless required by applicable law or
+   agreed to in writing, Licensor provides the Work (and each
+   Contributor provides its Contributions) on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied, including, without limitation, any warranties or conditions
+   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+   PARTICULAR PURPOSE. You are solely responsible for determining the
+   appropriateness of using or redistributing the Work and assume any
+   risks associated with Your exercise of permissions under this License.
+
+8. Limitation of Liability. In no event and under no legal theory,
+   whether in tort (including negligence), contract, or otherwise,
+   unless required by applicable law (such as deliberate and grossly
+   negligent acts) or agreed to in writing, shall any Contributor be
+   liable to You for damages, including any direct, indirect, special,
+   incidental, or consequential damages of any character arising as a
+   result of this License or out of the use or inability to use the
+   Work (including but not limited to damages for loss of goodwill,
+   work stoppage, computer failure or malfunction, or any and all
+   other commercial damages or losses), even if such Contributor
+   has been advised of the possibility of such damages.
+
+9. Accepting Warranty or Additional Liability. While redistributing
+   the Work or Derivative Works thereof, You may choose to offer,
+   and charge a fee for, acceptance of support, warranty, indemnity,
+   or other liability obligations and/or rights consistent with this
+   License. However, in accepting such obligations, You may act only
+   on Your own behalf and on Your sole responsibility, not on behalf of
+   any other Contributor, and only if You agree to indemnify,
+   defend, and hold each Contributor harmless for any liability
+   incurred by, or claims asserted against, such Contributor by reason
+   of your accepting any such warranty or additional liability.
+
+END OF TERMS AND CONDITIONS
+
+APPENDIX: How to apply the Apache License to your work.
+
+   To apply the Apache License to your work, attach the following
+   boilerplate notice, with the fields enclosed by brackets "[]"
+   replaced with your own identifying information. (Don\'t include
+   the brackets!)  The text should be enclosed in the appropriate
+   comment syntax for the file format. We also recommend that a
+   file or class name and description of purpose be included on the
+   same "printed page" as the copyright notice for easier
+   identification within third-party archives.
+
+Copyright [yyyy] [name of copyright owner]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+
+</skill-file>
+
+<skill-file path="SKILL.md" kind="markdown" size="2517">
+
+---
+name: "pdf"
+description: "Use when tasks involve reading, creating, or reviewing PDF files where rendering and layout matter; prefer visual checks by rendering pages (Poppler) and use Python tools such as `reportlab`, `pdfplumber`, and `pypdf` for generation and extraction."
+---
+
+
+# PDF Skill
+
+## When to use
+- Read or review PDF content where layout and visuals matter.
+- Create PDFs programmatically with reliable formatting.
+- Validate final rendering before delivery.
+
+## Workflow
+1. Prefer visual review: render PDF pages to PNGs and inspect them.
+   - Use `pdftoppm` if available.
+   - If unavailable, install Poppler or ask the user to review the output locally.
+2. Use `reportlab` to generate PDFs when creating new documents.
+3. Use `pdfplumber` (or `pypdf`) for text extraction and quick checks; do not rely on it for layout fidelity.
+4. After each meaningful update, re-render pages and verify alignment, spacing, and legibility.
+
+## Temp and output conventions
+- Use `tmp/pdfs/` for intermediate files; delete when done.
+- Write final artifacts under `output/pdf/` when working in this repo.
+- Keep filenames stable and descriptive.
+
+## Dependencies (install if missing)
+Prefer `uv` for dependency management.
+
+Python packages:
+```
+uv pip install reportlab pdfplumber pypdf
+```
+If `uv` is unavailable:
+```
+python3 -m pip install reportlab pdfplumber pypdf
+```
+System tools (for rendering):
+```
+# macOS (Homebrew)
+brew install poppler
+
+# Ubuntu/Debian
+sudo apt-get install -y poppler-utils
+```
+
+If installation isn't possible in this environment, tell the user which dependency is missing and how to install it locally.
+
+## Environment
+No required environment variables.
+
+## Rendering command
+```
+pdftoppm -png $INPUT_PDF $OUTPUT_PREFIX
+```
+
+## Quality expectations
+- Maintain polished visual design: consistent typography, spacing, margins, and section hierarchy.
+- Avoid rendering issues: clipped text, overlapping elements, broken tables, black squares, or unreadable glyphs.
+- Charts, tables, and images must be sharp, aligned, and clearly labeled.
+- Use ASCII hyphens only. Avoid U+2011 (non-breaking hyphen) and other Unicode dashes.
+- Citations and references must be human-readable; never leave tool tokens or placeholder strings.
+
+## Final checks
+- Do not deliver until the latest PNG inspection shows zero visual or formatting defects.
+- Confirm headers/footers, page numbering, and section transitions look polished.
+- Keep intermediate files organized or remove them after final approval.
+
+
+</skill-file>
+
+<skill-file path="agents/openai.yaml" kind="text" size="219">
+
+interface:
+  display_name: "PDF Skill"
+  short_description: "Create, edit, and review PDFs"
+  icon_large: "./assets/pdf.png"
+  default_prompt: "Create, edit, or review this PDF and summarize the key output or changes."
+
+
+</skill-file>
+
+<skill-file path="assets/pdf.png" kind="binary" size="1312">
+
+[binary content omitted]
+
+</skill-file>
+
+IR 解释与逐项核对契约：skill-ir-semantic-contract-v2
+以下规则解释现有记录及核对边界，不增加当前 Skill 的业务要求。
+[IR-RESOURCE] external_resource 标识文件、工具、API 或服务，不等于远端或网络资源；本地文件也可用该类型。资源定位符不当然是业务参数。根据实际类型、位置与用途核对，不能只据类型名推断网络发送或额外参数。
+[IR-CONTROL] dispatch 与 return 是固定控制终结操作。dispatch 结束当前块，出边连接后继，inputs 记录选择分支使用的值；return 结束当前路径，inputs 记录返回值，也可无返回值。二者不产生结果输出。不能仅因源文没有写出这些 IR 术语判新增或未决；仍要核对实际输入、出边、条件和返回值身份。return 本身不表示向用户展示或发送内容。
+[IR-IDENTITY] result 按实际 identifier 关联唯一结果定义；semantic_name、块名和相似文字不能替换结果身份。首次尝试、重试和回退得到的结果不能互换。操作数列表位置和操作次序照实核对，不自动视为可交换集合。
+[IR-PATH] 边记录连接和条件文字；它们不证明所有路径实际可执行、条件恒真或循环必然终止。结构校验不保证所有路径上所有输入同时可用。不能仅因结果只在部分路径产生判语义错误；合流块可引用分支定义，循环可引用回边定义。不能据此虚构隐含 phi、运行时选值或可选参数机制。
+[IR-DECLARATION] 图、块、操作级 constraints 是各作用域的声明，不等于已经记录对应操作或保证运行成功。约束与操作的冲突可以报告。块标题、名字和声明不能补造遗漏步骤；会改变数据内容、去向或执行条件的原文明示步骤必须分别可定位。
+[IR-OPAQUE] 普通 opcode 是开放操作名，按明确文字和接口核对，不能凭名字猜测未记录的内部步骤。脚本沿用黑盒建模，核对显式接口、输入输出和已记录的外部副作用；metadata 或嵌入源码完整保留，不等于内部行为已被显式建模或执行成功。
+[DEP-MERGE] 合流依赖可保守保留：已有多个 result 候选来源，且源文与记录的控制关系支持这些候选时，允许记录为候选依赖集合。必须列出至少两个已有操作数/定义事实编号，说明支持依据与丢失的按路径区分。这不声称各值同时作为实参使用、不声称图已实现精确选值，也不声称每个候选都会传递。不能仅因缺少更精确的选值区分就判遗漏、错转或未决。
+[DEP-SOURCE] 来源依赖可保守保留：图中已有多个候选来源，源文和当前记录支持这组可能依赖，但无法进一步细分来源关系时，允许保留有依据的候选集合。逐项引用已有操作数/定义事实，写明失去的来源区分；不新增来源，不将候选说成全部实际读取、同时实参或必定传递。
+[DEP-LIMIT] 保守规则只适用于数据来源和依赖精度。不能用于放宽动作、执行路径、业务实参、返回身份、次数、禁止事项或作用域；不能掩盖正确来源缺失、明确错误的返回结果、明确多传参数或禁传违反。不能只用容器、约束、metadata、类型字段或语义标签作为候选来源证据，也不能凭原文补造图中不存在的事实。选择完整操作数或标识事实；同一结果的定义和使用不是两个独立候选来源。保守接受必须由本次核对明确说明；程序不得把 unknown 自动改成 represented。
+[REVIEW-MODALITY] 区分要求、许可、禁止、示例、背景和各自作用域。为实施条件检查存在性，不自动等于格式/合法性校验或规范化。“未要求某动作”不能自动改成“禁止某动作”。合法的表示辅助信息不自动成为新增业务步骤。源文歧义或冲突不得凭模型偏好消解，安全性判断也不能替代忠实性核对。
+[REVIEW-UNIT] 按语义关系组织核对项，允许合并相关行为、条件和结果，不要求固定粒度或归属单一检查类别。组合要求中只要有一部分存在差异，必须说明具体差异，不能将整项标为 represented 掩盖局部错误；需要分别表达不同结论时合理拆分。动作存在不能代替对象、绑定、条件、次数、顺序和作用域成立。说明原文要求、受控记录、差异和证据，并检查结论与本项证据及其他发现是否一致。不用整体相似或编号覆盖代替判断。
+七个阅读检查点（不要求逐类填表或逐项分类）：
+normative_scope：要求性质与作用域
+actions_objects：动作与对象
+data_bindings：数据来源与绑定
+guards_exceptions：条件与例外
+order_dependencies：顺序与依赖
+counts_termination：次数与终止
+grounding_consistency：反向依据与一致性
+
+本次进行一次基于证据的完整重新提取。
+以上固定契约和完整原始 Skill 始终有效。下面 previous_cfg 是上一轮实际图，属于待纠正结果；
+它不是候选 JSON，也不是标准答案。请返回完整候选 JSON，交给既有编译器重新赋号和校验。
+旧图 ID 和图位置只用于理解下面的反馈，不要求沿用，不能猜测它们与旧候选 ID 的映射。
+重新阅读完整原文，检查并纠正全部明确差异，同时检查是否引入了新遗漏、错转、额外行为或冲突。
+原文优先：反馈及建议只是待核实的纠错依据，不得为了满足建议补造原文没有的行为、参数或保证。
+unknown_reminders 是未决提示，不要求猜测缺失的语义；保留原文真实的不确定性。
+源文歧义、源文冲突与未定义语义不是修复目标；只纠正不依赖这些未决解释的明确差异。
+已经依据统一解释契约保守保留的依赖不构成修复目标，不得把候选来源改写成必定同时传递。
+每项 current_facts 和 suggestion_targets 都由程序从上一轮实际图的位置读取；标签和约束声明
+本身不等于执行操作，删除的操作不能根据残留标题补回。业务输入只包含最近一轮图和核对差异。
+只输出符合以上既有候选契约的完整 JSON，不输出 JSON Patch、旧图片段或说明文字。
+
+{
+  "previous_cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "No required environment variables.",
+      "Prefer visual review: render PDF pages to PNGs and inspect them.",
+      "After each meaningful update, re-render pages and verify alignment, spacing, and legibility.",
+      "Use tmp/pdfs/ for intermediate files; delete when done.",
+      "Write final artifacts under output/pdf/ when working in this repo.",
+      "Keep filenames stable and descriptive.",
+      "Maintain polished visual design: consistent typography, spacing, margins, and section hierarchy.",
+      "Avoid rendering issues: clipped text, overlapping elements, broken tables, black squares, or unreadable glyphs.",
+      "Charts, tables, and images must be sharp, aligned, and clearly labeled.",
+      "Use ASCII hyphens only. Avoid U+2011 (non-breaking hyphen) and other Unicode dashes.",
+      "Citations and references must be human-readable; never leave tool tokens or placeholder strings.",
+      "Do not deliver until the latest PNG inspection shows zero visual or formatting defects.",
+      "Confirm headers/footers, page numbering, and section transitions look polished.",
+      "Keep intermediate files organized or remove them after final approval."
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "Check whether pdftoppm is available for rendering",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "read_pdftoppm_availability",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "pdftoppm_available",
+                "semantic_name": "pdftoppm_available"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "pdftoppm_available"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_pdftoppm_available"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "pdftoppm_available"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_on_pdftoppm"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "context"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "Render PDF pages to PNGs with pdftoppm",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "pdftoppm_render_pdf_pages_to_png",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "pdftoppm",
+                "semantic_name": "pdftoppm"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "input_pdf",
+                "semantic_name": "input_pdf"
+              },
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "updated_pdf"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "generated_pdf"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "output_prefix",
+                "semantic_name": "output_prefix"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "rendered_pngs"
+              }
+            ],
+            "constraints": [],
+            "metadata": {
+              "script_content": "pdftoppm -png $INPUT_PDF $OUTPUT_PREFIX"
+            },
+            "draft_instruction_id": "pdftoppm_render"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_inspect"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "Install Poppler or ask the user to review locally",
+        "instructions": [
+          {
+            "id": "ir_005",
+            "opcode": "install_poppler_or_ask_user_to_review_locally",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "poppler",
+                "semantic_name": "poppler"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "poppler_fallback_result"
+              }
+            ],
+            "constraints": [
+              "If installation isn't possible in this environment, tell the user which dependency is missing and how to install it locally."
+            ],
+            "metadata": {
+              "script_content": "# macOS (Homebrew)\nbrew install poppler\n\n# Ubuntu/Debian\nsudo apt-get install -y poppler-utils"
+            },
+            "draft_instruction_id": "handle_missing_poppler"
+          },
+          {
+            "id": "ir_006",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "poppler_fallback_result"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_fallback"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "Inspect rendered pages for visual defects",
+        "instructions": [
+          {
+            "id": "ir_007",
+            "opcode": "inspect_rendered_pngs",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "rendered_pngs"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "inspection_findings"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "inspect_pngs"
+          },
+          {
+            "id": "ir_008",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "inspection_findings"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_on_inspection"
+          }
+        ],
+        "constraints": [
+          "After each meaningful update, re-render pages and verify alignment, spacing, and legibility."
+        ],
+        "data_source_kind": null
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "Apply a meaningful update to the PDF",
+        "instructions": [
+          {
+            "id": "ir_009",
+            "opcode": "apply_meaningful_pdf_update",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "inspection_findings"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "updated_pdf"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "apply_update"
+          },
+          {
+            "id": "ir_010",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_re_render"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_006": {
+        "block_id": "block_006",
+        "block_name": "Perform final checks and prepare delivery",
+        "instructions": [
+          {
+            "id": "ir_011",
+            "opcode": "confirm_headers_footers_page_numbering_section_transitions",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "rendered_pngs"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "layout_confirmed"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "confirm_layout"
+          },
+          {
+            "id": "ir_012",
+            "opcode": "organize_or_remove_intermediate_files",
+            "inputs": [
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "tmp/pdfs/"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "cleanup_intermediate"
+          },
+          {
+            "id": "ir_013",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "layout_confirmed"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_success"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_007": {
+        "block_id": "block_007",
+        "block_name": "Generate a new PDF with reportlab",
+        "instructions": [
+          {
+            "id": "ir_014",
+            "opcode": "generate_pdf_with_reportlab",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "reportlab",
+                "semantic_name": "reportlab"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "generated_pdf"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "generate_with_reportlab"
+          },
+          {
+            "id": "ir_015",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_render"
+          }
+        ],
+        "constraints": [
+          "Use reportlab to generate PDFs when creating new documents.",
+          "Write final artifacts under output/pdf/ when working in this repo."
+        ],
+        "data_source_kind": null
+      },
+      "block_008": {
+        "block_id": "block_008",
+        "block_name": "Extract text from a PDF with pdfplumber or pypdf",
+        "instructions": [
+          {
+            "id": "ir_016",
+            "opcode": "extract_pdf_text_with_pdfplumber_or_pypdf",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "pdfplumber",
+                "semantic_name": "pdfplumber"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "pypdf",
+                "semantic_name": "pypdf"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "input_pdf",
+                "semantic_name": "input_pdf"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "extracted_text"
+              }
+            ],
+            "constraints": [
+              "Use pdfplumber (or pypdf) for text extraction and quick checks; do not rely on it for layout fidelity."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "extract_text"
+          },
+          {
+            "id": "ir_017",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "extracted_text"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_extracted_text"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_009": {
+        "block_id": "block_009",
+        "block_name": "Check whether uv is available",
+        "instructions": [
+          {
+            "id": "ir_018",
+            "opcode": "read_uv_availability",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "uv_available",
+                "semantic_name": "uv_available"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "uv_available"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_uv_available"
+          },
+          {
+            "id": "ir_019",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "uv_available"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_on_uv"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "context"
+      },
+      "block_010": {
+        "block_id": "block_010",
+        "block_name": "Install Python PDF packages with uv",
+        "instructions": [
+          {
+            "id": "ir_020",
+            "opcode": "uv_pip_install",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "uv",
+                "semantic_name": "uv"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "reportlab"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pdfplumber"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pypdf"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Prefer uv for dependency management.",
+              "If installation isn't possible in this environment, tell the user which dependency is missing and how to install it locally."
+            ],
+            "metadata": {
+              "script_content": "uv pip install reportlab pdfplumber pypdf"
+            },
+            "draft_instruction_id": "uv_pip_install"
+          },
+          {
+            "id": "ir_021",
+            "opcode": "return",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_uv"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_011": {
+        "block_id": "block_011",
+        "block_name": "Install Python PDF packages with pip",
+        "instructions": [
+          {
+            "id": "ir_022",
+            "opcode": "python3_m_pip_install",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "python3",
+                "semantic_name": "python3"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "reportlab"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pdfplumber"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pypdf"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "If installation isn't possible in this environment, tell the user which dependency is missing and how to install it locally."
+            ],
+            "metadata": {
+              "script_content": "python3 -m pip install reportlab pdfplumber pypdf"
+            },
+            "draft_instruction_id": "pip_install"
+          },
+          {
+            "id": "ir_023",
+            "opcode": "return",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_pip"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": "pdftoppm available"
+      },
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_003",
+        "condition_text": "pdftoppm unavailable"
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_004",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_005",
+        "condition_text": "visual or formatting defects found"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_006",
+        "condition_text": "zero visual or formatting defects"
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_007",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_009",
+        "target_block_id": "block_010",
+        "condition_text": "uv available"
+      },
+      {
+        "source_block_id": "block_009",
+        "target_block_id": "block_011",
+        "condition_text": "uv unavailable"
+      }
+    ],
+    "declared_context_keys": [
+      "pdftoppm_available",
+      "uv_available"
+    ]
+  },
+  "explicit_differences": [
+    {
+      "id": "finding_3",
+      "status": "omitted",
+      "source_requirement": "When to use 要求：当任务涉及阅读、创建或审阅 PDF，且渲染/版式重要时使用本 Skill；创建 PDF 时需要可靠格式；交付前验证最终渲染。",
+      "actual_representation": "受控回述只有无条件入口 fact:/entry，未记录这些适用触发条件或任务类型区分。",
+      "reason": "源文明确给出使用范围和交付前验证条件；受控图未在入口或图级声明中保留这些条件，仅靠后续块名不能替代触发条件。",
+      "source_refs": [
+        {
+          "unit_id": "src_036",
+          "file": "SKILL.md",
+          "start_line": 9,
+          "end_line": 12,
+          "quote": "- Read or review PDF content where layout and visuals matter."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/entry",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "interpretation"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/entry_block_id",
+          "value": "block_001"
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/entry"
+          ],
+          "change": "在入口或图级声明中补记“阅读/创建/审阅 PDF 且版式重要”的适用条件，以及交付前验证最终渲染的触发条件。",
+          "reason": "当前入口无任何适用条件，无法从受控图判断何时应进入该 Skill。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/entry_block_id",
+              "value": "block_001"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_8b",
+      "status": "mistranslated",
+      "source_requirement": "文本提取工具是 `pdfplumber`（或 `pypdf`），即二者是替代关系。",
+      "actual_representation": "block_007 的操作名含 pdfplumber_or_pypdf，但输入列表把 pdfplumber 和 pypdf 记录为两个并列 external_resource 操作数。",
+      "reason": "源文用“或”表达替代选择；受控输入列表按记录次序并列两个工具，未记录路径条件或候选选择关系，容易被理解为同一操作同时接收两个工具实参。",
+      "source_refs": [
+        {
+          "unit_id": "src_037",
+          "file": "SKILL.md",
+          "start_line": 19,
+          "end_line": 19,
+          "quote": "3. Use `pdfplumber` (or `pypdf`) for text extraction and quick checks; do not rely on it for layout fidelity."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/7/instructions/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/7/instructions/0/inputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/7/instructions/0/inputs/1",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "interpretation"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_008/instructions/0",
+          "value": {
+            "id": "ir_016",
+            "opcode": "extract_pdf_text_with_pdfplumber_or_pypdf",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "pdfplumber",
+                "semantic_name": "pdfplumber"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "pypdf",
+                "semantic_name": "pypdf"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "input_pdf",
+                "semantic_name": "input_pdf"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "extracted_text"
+              }
+            ],
+            "constraints": [
+              "Use pdfplumber (or pypdf) for text extraction and quick checks; do not rely on it for layout fidelity."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "extract_text"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_008/instructions/0/inputs/0",
+          "value": {
+            "type": "external_resource",
+            "identifier": "pdfplumber",
+            "semantic_name": "pdfplumber"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_008/instructions/0/inputs/1",
+          "value": {
+            "type": "external_resource",
+            "identifier": "pypdf",
+            "semantic_name": "pypdf"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/7/instructions/0/inputs/1"
+          ],
+          "change": "将 pypdf 表示为 pdfplumber 的备选/回退条件，而不是同一操作下与 pdfplumber 并列的独立实参；若保留 opcode 中的 or，也不要把两个工具同时作为实际输入。",
+          "reason": "源文只允许 pdfplumber 或 pypdf 二选一，当前并列输入没有对应条件，改变了工具绑定语义。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_008/instructions/0/inputs/1",
+              "value": {
+                "type": "external_resource",
+                "identifier": "pypdf",
+                "semantic_name": "pypdf"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_9b",
+      "status": "mistranslated",
+      "source_requirement": "源文只要求在每次有意义的更新后重新渲染并核对，未规定由检查发现缺陷触发 apply_meaningful_pdf_update，也未规定该更新读取 inspection_findings。",
+      "actual_representation": "受控回述用 /edges/3 在“发现视觉或格式缺陷”时进入 block_005 apply update，并把 result_004 inspection_findings 作为 apply update 的输入。",
+      "reason": "检查发现缺陷可以作为不交付的条件，但源文没有显式把 inspection_findings 绑定为更新输入或缺陷触发更新；该绑定改变了更新动作的触发和依赖来源。",
+      "source_refs": [
+        {
+          "unit_id": "src_037",
+          "file": "SKILL.md",
+          "start_line": 20,
+          "end_line": 20,
+          "quote": "4. After each meaningful update, re-render pages and verify alignment, spacing, and legibility."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/edges/3",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/4/instructions/0/inputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/4/instructions/0/inputs/0:link",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "interpretation"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/edges/3",
+          "value": {
+            "source_block_id": "block_004",
+            "target_block_id": "block_005",
+            "condition_text": "visual or formatting defects found"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_005/instructions/0/inputs/0",
+          "value": {
+            "type": "result",
+            "identifier": "result_004",
+            "semantic_name": "inspection_findings"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/4/instructions/0/inputs/0",
+            "fact:/edges/3"
+          ],
+          "change": "删除或改写缺陷触发边与 inspection_findings 到 apply update 的输入绑定；若保留修复循环，需要源文中明确的缺陷触发和输入依据。",
+          "reason": "当前记录把检查发现作为更新动作的触发和输入，源文未明确支持。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_005/instructions/0/inputs/0",
+              "value": {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "inspection_findings"
+              }
+            },
+            {
+              "graph_pointer": "/edges/3",
+              "value": {
+                "source_block_id": "block_004",
+                "target_block_id": "block_005",
+                "condition_text": "visual or formatting defects found"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_11b",
+      "status": "mistranslated",
+      "source_requirement": "Dependencies 标题要求“install if missing”，即只有缺失依赖时才安装。",
+      "actual_representation": "受控回述只检查 uv_available，并直接依据 uv 是否可用进入 uv 或 pip 安装块；没有记录 reportlab、pdfplumber、pypdf 等依赖是否缺失的前置条件。",
+      "reason": "源文把安装动作限定在依赖缺失时；受控记录把安装条件变成仅由 uv 可用性决定，遗漏了“缺失”这一关键守卫。",
+      "source_refs": [
+        {
+          "unit_id": "src_039",
+          "file": "SKILL.md",
+          "start_line": 27,
+          "end_line": 27,
+          "quote": "## Dependencies (install if missing)"
+        },
+        {
+          "unit_id": "src_040",
+          "file": "SKILL.md",
+          "start_line": 32,
+          "end_line": 32,
+          "quote": "uv pip install reportlab pdfplumber pypdf"
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/8/instructions/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/9/instructions/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/10/instructions/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/edges/7",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/edges/8",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "interpretation"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_009/instructions/0",
+          "value": {
+            "id": "ir_018",
+            "opcode": "read_uv_availability",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "uv_available",
+                "semantic_name": "uv_available"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "uv_available"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_uv_available"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_010/instructions/0",
+          "value": {
+            "id": "ir_020",
+            "opcode": "uv_pip_install",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "uv",
+                "semantic_name": "uv"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "reportlab"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pdfplumber"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pypdf"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Prefer uv for dependency management.",
+              "If installation isn't possible in this environment, tell the user which dependency is missing and how to install it locally."
+            ],
+            "metadata": {
+              "script_content": "uv pip install reportlab pdfplumber pypdf"
+            },
+            "draft_instruction_id": "uv_pip_install"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_011/instructions/0",
+          "value": {
+            "id": "ir_022",
+            "opcode": "python3_m_pip_install",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "python3",
+                "semantic_name": "python3"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "reportlab"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pdfplumber"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "pypdf"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "If installation isn't possible in this environment, tell the user which dependency is missing and how to install it locally."
+            ],
+            "metadata": {
+              "script_content": "python3 -m pip install reportlab pdfplumber pypdf"
+            },
+            "draft_instruction_id": "pip_install"
+          }
+        },
+        {
+          "graph_pointer": "/edges/7",
+          "value": {
+            "source_block_id": "block_009",
+            "target_block_id": "block_010",
+            "condition_text": "uv available"
+          }
+        },
+        {
+          "graph_pointer": "/edges/8",
+          "value": {
+            "source_block_id": "block_009",
+            "target_block_id": "block_011",
+            "condition_text": "uv unavailable"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/8/instructions/0"
+          ],
+          "change": "在分派到 uv/pip 安装前补记 Python 包缺失检查，或在安装操作上记录“if missing”条件；不能只用 uv_available 作为安装触发。",
+          "reason": "当前图会在 uv 可用性满足时安装，而源文要求仅在依赖缺失时安装。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_009/instructions/0",
+              "value": {
+                "id": "ir_018",
+                "opcode": "read_uv_availability",
+                "inputs": [
+                  {
+                    "type": "context_key",
+                    "identifier": "uv_available",
+                    "semantic_name": "uv_available"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_009",
+                    "semantic_name": "uv_available"
+                  }
+                ],
+                "constraints": [],
+                "metadata": {},
+                "draft_instruction_id": "read_uv_available"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unknown_reminders": [],
+  "contract_version": "skill-ir-semantic-contract-v2",
+  "contract_sha256": "bdee4d95241e67e861f74be279c5862df571ea3af208a81c8dab744e0b4f65d1"
+}

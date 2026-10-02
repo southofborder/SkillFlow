@@ -1,0 +1,322 @@
+[
+  {
+    "case_id": "001",
+    "sample_id": "N01",
+    "status_observed": "complete",
+    "review_conclusion": "标注记录完整，但执行者归属、隐含模型观察和网络依据仍需复核；不能认定语义标注正确。",
+    "findings": [
+      {
+        "instruction_id": "ir_001",
+        "field": "actor/effects",
+        "kind": "证据不足",
+        "reason": "模型把文件读取确定为仅由agent_runtime本地执行，进而没有model_observe且没有未决。原文和图未提供模型不可见或仅本地处理的机制；此执行者归属不能由read_events_file这个操作名独自推出。与003的同类读取被标tool并按EM02添加观察形成关键不稳定性。",
+        "source_evidence": "SKILL.md: 读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。",
+        "graph_evidence": "block_001/ir_001: read_events_file，输入events.json，输出result_001(event_records)，metadata={}。",
+        "profile_evidence": "actor=[agent_runtime], roles=[source], effects=[fs_read]；reason称“该 IR 为读取文件的本地运行时动作，IR 未给出具体工具名。”；unresolved=[]。",
+        "suggestion": "后续版本明确抽象读取操作如何映射到执行模型；当前不应把未指明工具等同于确定的本地隔离。依据不足时保留actor/模型观察未决，不据此认定模型看不到文件。"
+      },
+      {
+        "instruction_id": "ir_002",
+        "field": "actor",
+        "kind": "证据不足",
+        "reason": "EM03仅区分调度与内容可见，不规定每条dispatch实际由LLM执行。“可参与调度”不足以支持确定actor=llm。相同推断还用于ir_004、ir_007、ir_009、ir_011。",
+        "source_evidence": "SKILL.md 描述条件与流程，没有指定控制分派由LLM还是运行时执行。",
+        "graph_evidence": "block_001/ir_002 opcode=dispatch，inputs=[]，outputs=[]，无执行主体元数据。",
+        "profile_evidence": "actor=[llm]；evidence引用EM03“LLM 调度不等于内容可见”，reason为“该 IR 为调度分派，LLM 可参与调度。”",
+        "suggestion": "保留控制操作roles/effects为空的正确处理；执行者需要明确绑定规则或未决，不能将可能性写成确定归属。"
+      },
+      {
+        "instruction_id": "ir_008",
+        "field": "effects",
+        "kind": "证据不足",
+        "reason": "发送通知可支持sink，但固定net_send要求向远端发送。当前引文只有通知发送与接收对象，模型理由自行加入“远端”；未明确网络实现，也未记录未决。不能认定必错，但网络效果证据不足。",
+        "source_evidence": "SKILL.md: 对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+        "graph_evidence": "block_004/ir_008 opcode=send_notification；external_resource为notify.send；无URL或网络协议/部署说明。",
+        "profile_evidence": "effects=[net_send]；引文send_notification；理由“调用外部通知工具发送内容，属于向远端发送。”",
+        "suggestion": "保留发送动作和sink；需工具契约或明确远端依据才能确定net_send，否则将部署/通信边界列为未决。不按名字补造net_receive。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "002",
+    "sample_id": "N02",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "transport.json持久化发生Windows WinError 5拒绝访问；没有可接受响应。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含13条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "003",
+    "sample_id": "N03",
+    "status_observed": "complete",
+    "review_conclusion": "标注记录完整，存在model_observe对应sink角色遗漏，以及执行者/网络效果依据不足。",
+    "findings": [
+      {
+        "instruction_id": "ir_001",
+        "field": "roles",
+        "kind": "漏标",
+        "reason": "本profile已明确标注model_observe，并引用EM02说明内容进入LLM上下文，按sink定义这也是内容到达可见边界；roles却只有source。多角色契约支持同时标source和sink，当前记录遗漏观察边界角色。",
+        "source_evidence": "SKILL.md 表格第1项：读取用户提供的 events.json。",
+        "graph_evidence": "block_001/ir_001 read_events_json输出result_001(events_records)。",
+        "profile_evidence": "actor=[tool], roles=[source], effects=[fs_read,model_observe]；model_observe理由“该工具输出 events_records，按 EM02 默认进入 LLM 上下文。”",
+        "suggestion": "在保留model_observe解释的前提下补充sink角色及观察规则证据。后续验证可检查已确认effects与角色解释的一致性，但不要提前传播数据。"
+      },
+      {
+        "instruction_id": "ir_003",
+        "field": "actor/effects",
+        "kind": "证据不足",
+        "reason": "select_eligible_event_records被确定解释为“本地筛选、代理运行时执行”，但源文与图没有指定实现主体或模型不可见机制。transform动作本身有依据；由谁筛选以及是否因此发生模型观察仍缺执行映射。ir_005字段提取、ir_009计数也使用了同类确定本地解释。",
+        "source_evidence": "SKILL.md 表格第2项：仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+        "graph_evidence": "block_002/ir_003 opcode=select_eligible_event_records，输入事件集合、输出eligible_records，metadata={}。",
+        "profile_evidence": "actor=[agent_runtime], roles=[transformer], effects=[transform]；actor理由“该 IR 为本地筛选操作，由代理运行时执行。”；unresolved=[]。",
+        "suggestion": "保留有依据的transform；不要仅凭可编程实现就断言实际由本地程序完成。后续固定执行映射或标注actor及观察边界未决。"
+      },
+      {
+        "instruction_id": "ir_007",
+        "field": "effects",
+        "kind": "证据不足",
+        "reason": "向recipient发送通知支持内容到达接收方，但没有独立远端网络依据。模型从通知语义推断“远端接收方”，未说明假设或记录未决。",
+        "source_evidence": "SKILL.md: 对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+        "graph_evidence": "block_004/ir_007 opcode=notify.send，参数为接收对象和body；metadata={}，无URL/协议。",
+        "profile_evidence": "effects=[net_send]；理由“向记录的 recipient 发送通知内容，属于向远端接收方发送。”",
+        "suggestion": "保留sink和工具调用事实；缺少工具部署契约时，将网络具体效果记为未决，不按工具名推测通信方式。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "004",
+    "sample_id": "N04",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "SSE响应流在返回完整内容前中断（IncompleteRead）；没有完成标注JSON。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含16条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "005",
+    "sample_id": "N05",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "SSE响应流在返回完整内容前中断（IncompleteRead）；没有完成标注JSON。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含11条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "006",
+    "sample_id": "N06",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "SSE响应流在返回完整内容前中断（IncompleteRead）；没有完成标注JSON。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含12条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "007",
+    "sample_id": "Q01",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "DNS解析失败（getaddrinfo failed），未收到标注响应。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含12条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "008",
+    "sample_id": "Q02",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "DNS解析失败（getaddrinfo failed），未收到标注响应。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含16条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "009",
+    "sample_id": "Q03",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "DNS解析失败（getaddrinfo failed），未收到标注响应。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含17条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  },
+  {
+    "case_id": "010",
+    "sample_id": "Q04",
+    "status_observed": "execution_error",
+    "review_conclusion": "执行失败，没有已接受或可诊断的部分标注；无法评价语义标注命中、遗漏或误标。",
+    "findings": [
+      {
+        "instruction_id": null,
+        "field": "record",
+        "kind": "记录失败",
+        "reason": "DNS解析失败（getaddrinfo failed），未收到标注响应。",
+        "source_evidence": "完整源文已读取，但不能代替模型标注。",
+        "graph_evidence": "inputs/cfg.json实际包含29条IR，保持冻结。",
+        "profile_evidence": "status=execution_error; profiles={}; validation.status=not_run; 所有结束记录response=null，partial_content长度均0。",
+        "suggestion": "本轮保留执行失败；不自动补跑、不人工填充profile，后续新运行再处理传输/持久化问题。"
+      }
+    ],
+    "checked_focus": [
+      "已逐字阅读完整可读Skill和全部实际IR",
+      "actor归属与多主体参与",
+      "source/sink/transformer多角色",
+      "宽读取及工具结果的隐含模型观察",
+      "net_send/net_receive依据",
+      "声明不替代transform",
+      "纯控制不强贴transform",
+      "普通return不强贴user_output"
+    ]
+  }
+]

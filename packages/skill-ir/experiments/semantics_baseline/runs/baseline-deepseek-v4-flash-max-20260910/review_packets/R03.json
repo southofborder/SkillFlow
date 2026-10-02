@@ -1,0 +1,3327 @@
+{
+  "sample": {
+    "id": "R03",
+    "title": "gh-fix-ci",
+    "kind": "upstream",
+    "group": "upstream",
+    "expression": "original",
+    "language": "en",
+    "split": "development",
+    "package_path": "inputs/upstream/gh-fix-ci",
+    "annotation_path": "annotations/R03.json",
+    "provenance_path": "provenance/R03.json"
+  },
+  "annotation": {
+    "schema_version": 1,
+    "sample_id": "R03",
+    "group": "upstream",
+    "expression": "original",
+    "language": "en",
+    "split": "development",
+    "coverage_targets": [
+      "actual_behavior",
+      "code_boundary",
+      "condition_preservation",
+      "cross_file_reference",
+      "data_destination",
+      "data_source",
+      "fallback_path",
+      "instruction_vs_suggestion",
+      "local_constraint",
+      "must_not_infer",
+      "output_delivery",
+      "parameter_omission",
+      "parameter_scope",
+      "precondition",
+      "prohibition",
+      "retry_boundaries",
+      "stop_condition"
+    ],
+    "facts": [
+      {
+        "id": "R03-F01",
+        "kind": "condition",
+        "statement": "先在仓库验证 gh auth status；未认证时请用户登录且具备所需 scope，之后才继续。",
+        "scope": {
+          "level": "block",
+          "target": "authentication gate"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 29,
+            "end_line": 31,
+            "quote": "1. Verify gh authentication.\n   - Run `gh auth status` in the repo.\n   - If unauthenticated, ask the user to run `gh auth login` (ensuring repo + workflow scopes) before proceeding."
+          }
+        ],
+        "coverage_tags": [
+          "precondition",
+          "condition_preservation",
+          "stop_condition"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F02",
+        "kind": "data_flow",
+        "statement": "用户提供的 PR 号或 URL 直接作为 PR 标识；省略时读取当前分支 PR，后续 failing-check 查询消费这个解析结果。",
+        "scope": {
+          "level": "block",
+          "target": "resolve PR then inspect"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 16,
+            "end_line": 20,
+            "quote": "## Inputs\n\n- `repo`: path inside the repo (default `.`)\n- `pr`: PR number or URL (optional; defaults to current branch PR)\n- `gh` authentication for the repo host"
+          },
+          {
+            "file": "SKILL.md",
+            "start_line": 32,
+            "end_line": 38,
+            "quote": "2. Resolve the PR.\n   - Prefer the current branch PR: `gh pr view --json number,url`.\n   - If the user provides a PR number or URL, use that directly.\n3. Inspect failing checks (GitHub Actions only).\n   - Preferred: run the bundled script (handles gh field drift and job-log fallbacks):\n     - `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"<number-or-url>\"`\n     - Add `--json` for machine-friendly output."
+          }
+        ],
+        "coverage_tags": [
+          "parameter_omission",
+          "data_source",
+          "data_destination"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F03",
+        "kind": "behavior",
+        "statement": "首选运行 bundled inspect_pr_checks.py 取得失败检查、GitHub Actions 日志和失败片段；可通过 --json 获取供总结的机器输出，脚本作为一个调用边界保留。",
+        "scope": {
+          "level": "operation",
+          "target": "inspect_pr_checks.py"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 35,
+            "end_line": 38,
+            "quote": "3. Inspect failing checks (GitHub Actions only).\n   - Preferred: run the bundled script (handles gh field drift and job-log fallbacks):\n     - `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"<number-or-url>\"`\n     - Add `--json` for machine-friendly output."
+          },
+          {
+            "file": "SKILL.md",
+            "start_line": 60,
+            "end_line": 69,
+            "quote": "## Bundled Resources\n\n### scripts/inspect_pr_checks.py\n\nFetch failing PR checks, pull GitHub Actions logs, and extract a failure snippet. Exits non-zero when failures remain so it can be used in automation.\n\nUsage examples:\n- `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"123\"`\n- `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"https://github.com/org/repo/pull/123\" --json`\n- `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --max-lines 200 --context 40`"
+          }
+        ],
+        "coverage_tags": [
+          "actual_behavior",
+          "code_boundary",
+          "cross_file_reference",
+          "output_delivery"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F04",
+        "kind": "condition",
+        "statement": "手动回退查询若 JSON 字段被 gh 拒绝，按 gh 返回的可用字段重试；脚本同样用 available_fields 筛选 fallback_fields，无可用字段或再失败则返回。",
+        "scope": {
+          "level": "block",
+          "target": "gh field compatibility fallback"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 39,
+            "end_line": 44,
+            "quote": "   - Manual fallback:\n     - `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow`\n       - If a field is rejected, rerun with the available fields reported by `gh`.\n     - For each failing check, extract the run id from `detailsUrl` and run:\n       - `gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha`\n       - `gh run view <run_id> --log`"
+          },
+          {
+            "file": "scripts/inspect_pr_checks.py",
+            "start_line": 182,
+            "end_line": 215,
+            "quote": "def fetch_checks(pr_value: str, repo_root: Path) -> list[dict[str, Any]] | None:\n    primary_fields = [\"name\", \"state\", \"conclusion\", \"detailsUrl\", \"startedAt\", \"completedAt\"]\n    result = run_gh_command(\n        [\"pr\", \"checks\", pr_value, \"--json\", \",\".join(primary_fields)],\n        cwd=repo_root,\n    )\n    if result.returncode != 0:\n        message = \"\\n\".join(filter(None, [result.stderr, result.stdout])).strip()\n        available_fields = parse_available_fields(message)\n        if available_fields:\n            fallback_fields = [\n                \"name\",\n                \"state\",\n                \"bucket\",\n                \"link\",\n                \"startedAt\",\n                \"completedAt\",\n                \"workflow\",\n            ]\n            selected_fields = [field for field in fallback_fields if field in available_fields]\n            if not selected_fields:\n                print(\"Error: no usable fields available for gh pr checks.\", file=sys.stderr)\n                return None\n            result = run_gh_command(\n                [\"pr\", \"checks\", pr_value, \"--json\", \",\".join(selected_fields)],\n                cwd=repo_root,\n            )\n            if result.returncode != 0:\n                message = (result.stderr or result.stdout or \"\").strip()\n                print(message or \"Error: gh pr checks failed.\", file=sys.stderr)\n                return None\n        else:\n            print(message or \"Error: gh pr checks failed.\", file=sys.stderr)\n            return None"
+          }
+        ],
+        "coverage_tags": [
+          "cross_file_reference",
+          "fallback_path",
+          "retry_boundaries",
+          "parameter_scope"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F05",
+        "kind": "data_flow",
+        "statement": "从失败检查的 detailsUrl 提取 run id 并读取对应 run 元信息和日志；run 日志报告仍在运行中且有 job id 时回退至 job logs。手动 gh api 回退将日志重定向写入指定的 <path>；脚本回退返回内存中的日志内容及状态，失败或尚未完成分别保留状态。",
+        "scope": {
+          "level": "block",
+          "target": "log retrieval"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 42,
+            "end_line": 46,
+            "quote": "     - For each failing check, extract the run id from `detailsUrl` and run:\n       - `gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha`\n       - `gh run view <run_id> --log`\n     - If the run log says it is still in progress, fetch job logs directly:\n       - `gh api \"/repos/<owner>/<repo>/actions/jobs/<job_id>/logs\" > \"<path>\"`"
+          },
+          {
+            "file": "scripts/inspect_pr_checks.py",
+            "start_line": 333,
+            "end_line": 355,
+            "quote": "def fetch_check_log(\n    run_id: str,\n    job_id: str | None,\n    repo_root: Path,\n) -> tuple[str, str, str]:\n    log_text, log_error = fetch_run_log(run_id, repo_root)\n    if not log_error:\n        return log_text, \"\", \"ok\"\n\n    if is_log_pending_message(log_error) and job_id:\n        job_log, job_error = fetch_job_log(job_id, repo_root)\n        if job_log:\n            return job_log, \"\", \"ok\"\n        if job_error and is_log_pending_message(job_error):\n            return \"\", job_error, \"pending\"\n        if job_error:\n            return \"\", job_error, \"error\"\n        return \"\", log_error, \"pending\"\n\n    if is_log_pending_message(log_error):\n        return \"\", log_error, \"pending\"\n\n    return \"\", log_error, \"error\""
+          },
+          {
+            "file": "scripts/inspect_pr_checks.py",
+            "start_line": 366,
+            "end_line": 377,
+            "quote": "def fetch_job_log(job_id: str, repo_root: Path) -> tuple[str, str]:\n    repo_slug = fetch_repo_slug(repo_root)\n    if not repo_slug:\n        return \"\", \"Error: unable to resolve repository name for job logs.\"\n    endpoint = f\"/repos/{repo_slug}/actions/jobs/{job_id}/logs\"\n    returncode, stdout_bytes, stderr = run_gh_command_raw([\"api\", endpoint], cwd=repo_root)\n    if returncode != 0:\n        message = (stderr or stdout_bytes.decode(errors=\"replace\")).strip()\n        return \"\", message or \"gh api job logs failed\"\n    if is_zip_payload(stdout_bytes):\n        return \"\", \"Job logs returned a zip archive; unable to parse.\"\n    return stdout_bytes.decode(errors=\"replace\"), \"\""
+          }
+        ],
+        "coverage_tags": [
+          "data_source",
+          "data_destination",
+          "cross_file_reference",
+          "condition_preservation",
+          "fallback_path"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F06",
+        "kind": "constraint",
+        "statement": "非 GitHub Actions 检查标为 external，只报告 URL；禁止进入 Buildkite 等外部供应商的调查，不能把供应商能力说明转换成调用。",
+        "scope": {
+          "level": "block",
+          "target": "external provider branch"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 47,
+            "end_line": 49,
+            "quote": "4. Scope non-GitHub Actions checks.\n   - If `detailsUrl` is not a GitHub Actions run, label it as external and only report the URL.\n   - Do not attempt Buildkite or other providers; keep the workflow lean."
+          },
+          {
+            "file": "scripts/inspect_pr_checks.py",
+            "start_line": 244,
+            "end_line": 257,
+            "quote": "    url = check.get(\"detailsUrl\") or check.get(\"link\") or \"\"\n    run_id = extract_run_id(url)\n    job_id = extract_job_id(url)\n    base: dict[str, Any] = {\n        \"name\": check.get(\"name\", \"\"),\n        \"detailsUrl\": url,\n        \"runId\": run_id,\n        \"jobId\": job_id,\n    }\n\n    if run_id is None:\n        base[\"status\"] = \"external\"\n        base[\"note\"] = \"No GitHub Actions run id detected in detailsUrl.\"\n        return base"
+          }
+        ],
+        "coverage_tags": [
+          "prohibition",
+          "local_constraint",
+          "must_not_infer"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F07",
+        "kind": "data_flow",
+        "statement": "向用户汇报失败检查名、run URL 和简短日志片段，缺失日志必须显式标出；之后提出修复计划，获得明确批准后才应用计划。",
+        "scope": {
+          "level": "block",
+          "target": "summary and approval gate"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 50,
+            "end_line": 58,
+            "quote": "5. Summarize failures for the user.\n   - Provide the failing check name, run URL (if any), and a concise log snippet.\n   - Call out missing logs explicitly.\n6. Create a plan.\n   - Use the `create-plan` skill to draft a concise plan and request approval.\n7. Implement after approval.\n   - Apply the approved plan, summarize diffs/tests, and ask about opening a PR.\n8. Recheck status.\n   - After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+          }
+        ],
+        "coverage_tags": [
+          "output_delivery",
+          "data_destination",
+          "precondition",
+          "condition_preservation"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F08",
+        "kind": "must_not_infer",
+        "statement": "修复后原文只要求建议重跑相关测试和 gh pr checks；不能把该建议或询问开 PR 改写成已自动运行测试或已打开 PR。",
+        "scope": {
+          "level": "block",
+          "target": "after approved changes"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 55,
+            "end_line": 58,
+            "quote": "7. Implement after approval.\n   - Apply the approved plan, summarize diffs/tests, and ask about opening a PR.\n8. Recheck status.\n   - After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+          }
+        ],
+        "coverage_tags": [
+          "instruction_vs_suggestion",
+          "must_not_infer"
+        ],
+        "status": "待共同复核"
+      },
+      {
+        "id": "R03-F09",
+        "kind": "condition",
+        "statement": "脚本检测不到失败检查时打印消息并以 0 退出；存在失败检查时输出结果后以 1 退出。非零返回码不能直接被理解为没有产生可用分析结果。",
+        "scope": {
+          "level": "operation",
+          "target": "inspect_pr_checks.py result"
+        },
+        "evidence": [
+          {
+            "file": "SKILL.md",
+            "start_line": 64,
+            "end_line": 64,
+            "quote": "Fetch failing PR checks, pull GitHub Actions logs, and extract a failure snippet. Exits non-zero when failures remain so it can be used in automation."
+          },
+          {
+            "file": "scripts/inspect_pr_checks.py",
+            "start_line": 110,
+            "end_line": 135,
+            "quote": "    checks = fetch_checks(pr_value, repo_root)\n    if checks is None:\n        return 1\n\n    failing = [c for c in checks if is_failing(c)]\n    if not failing:\n        print(f\"PR #{pr_value}: no failing checks detected.\")\n        return 0\n\n    results = []\n    for check in failing:\n        results.append(\n            analyze_check(\n                check,\n                repo_root=repo_root,\n                max_lines=max(1, args.max_lines),\n                context=max(1, args.context),\n            )\n        )\n\n    if args.json:\n        print(json.dumps({\"pr\": pr_value, \"results\": results}, indent=2))\n    else:\n        render_results(pr_value, results)\n\n    return 1"
+          }
+        ],
+        "coverage_tags": [
+          "cross_file_reference",
+          "stop_condition",
+          "output_delivery",
+          "must_not_infer"
+        ],
+        "status": "待共同复核"
+      }
+    ],
+    "acceptable_variants": [
+      "脚本可保持单个黑盒调用；手动回退也可独立分支表示，不必展开每个 Python 函数。",
+      "失败日志的 pending/unavailable 可采用不同结果字段，但缺失状态必须显式。"
+    ],
+    "open_questions": [
+      "脚本以正则识别 run id，但正文按 GitHub Actions 来源限定；异常 URL 的实际归类边界需要共同确认。",
+      "create-plan 不可用时 Overview 允许内联计划，而步骤 6 直接要求使用；采用可用性条件是否足够？"
+    ],
+    "minimal_pair": null
+  },
+  "source_directory": "D:\\projects\\SkillFlow\\packages\\skill-ir\\experiments\\semantics_baseline\\frozen\\corpus\\inputs\\upstream\\gh-fix-ci",
+  "runs": [
+    {
+      "repetition": 1,
+      "record": {
+        "case": "R03",
+        "variant": "deepseek-v4-flash-max",
+        "repetition": 1,
+        "split": "development",
+        "artifacts": "trials/R03/deepseek-v4-flash-max/1",
+        "status": "complete",
+        "semantic_review_status": "pending_joint_review",
+        "started_at": "2026-09-10T14:29:14.545341+00:00",
+        "resumed_at": "2026-09-10T14:29:14.545341+00:00",
+        "diagnostics": [
+          "candidate warning: LICENSE.txt and assets were not treated as executable behavior.",
+          "candidate warning: agents/openai.yaml provides interface metadata only and was not treated as runtime behavior.",
+          "candidate warning: The manual fallback is represented as a single external acquisition block because its internal per-check loop and conditionals are implementation details."
+        ],
+        "attempts": 2,
+        "blocks": 14,
+        "edges": 14,
+        "prompt_sha256": "017063d65ba9c18f7854643944e68285ceaf518cc3cd95269a2ab7157526149f",
+        "generation_attempts": 2,
+        "repair_attempts": 1,
+        "http_attempts": 2,
+        "http_retries": 0,
+        "usage_records": 2,
+        "known_token_usage": {
+          "input_tokens": 41165,
+          "output_tokens": 61356,
+          "total_tokens": 102521
+        },
+        "elapsed_seconds": 215.70674710000003,
+        "finished_at": "2026-09-10T14:32:50.256521+00:00",
+        "replayed_generations": 0,
+        "artifact_sha256": {
+          "trace.json": "87cd0843acccf307696938c3e29a7a5149c82551ea30e273401fcabbe1b887eb",
+          "analysis.json": "11a52de7ee18978052c4696a9ec3edcd657de6026cf0dccabdc65834e7396c24",
+          "candidate.json": "be443d9a7e09bb7772a6a00b7c67f99ae641a4667692330ececee2101d23e69c",
+          "graph.mmd": "3ba14ea148b9dba2258a5d8ab260a0b6891f94cab5df344fa0958144fd209d22"
+        }
+      },
+      "analysis_sha256": "11a52de7ee18978052c4696a9ec3edcd657de6026cf0dccabdc65834e7396c24",
+      "record_sha256": "4facf847fd360c8237321ff809aeda3eb67804eaca9e7cb6d5ba0a2b19f4df65",
+      "analysis": {
+        "status": "complete",
+        "diagnostics": [
+          "candidate warning: LICENSE.txt and assets were not treated as executable behavior.",
+          "candidate warning: agents/openai.yaml provides interface metadata only and was not treated as runtime behavior.",
+          "candidate warning: The manual fallback is represented as a single external acquisition block because its internal per-check loop and conditionals are implementation details."
+        ],
+        "cfg": {
+          "entry_block_id": "block_001",
+          "constraints": [
+            "Use gh to locate failing PR checks, fetch GitHub Actions logs for actionable failures, summarize the failure snippet, then propose a fix plan and implement after explicit approval.",
+            "If a plan-oriented skill (for example `create-plan`) is available, use it; otherwise draft a concise plan inline and request approval before implementing.",
+            "Prereq: authenticate with the standard GitHub CLI once (for example, run `gh auth login`), then confirm with `gh auth status` (repo + workflow scopes are typically required).",
+            "Treat external providers (for example Buildkite) as out of scope and report only the details URL.",
+            "Do not attempt Buildkite or other providers; keep the workflow lean."
+          ],
+          "blocks": {
+            "block_001": {
+              "block_id": "block_001",
+              "block_name": "Read skill inputs",
+              "instructions": [
+                {
+                  "id": "ir_001",
+                  "opcode": "read_skill_inputs",
+                  "inputs": [
+                    {
+                      "type": "context_key",
+                      "identifier": "repo",
+                      "semantic_name": "repo"
+                    },
+                    {
+                      "type": "context_key",
+                      "identifier": "pr",
+                      "semantic_name": "pr"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "read_inputs_instr"
+                },
+                {
+                  "id": "ir_002",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_to_verify"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "context"
+            },
+            "block_002": {
+              "block_id": "block_002",
+              "block_name": "Verify gh authentication",
+              "instructions": [
+                {
+                  "id": "ir_003",
+                  "opcode": "check_gh_auth_status",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_003",
+                      "semantic_name": "gh_auth_status"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "check_gh_auth"
+                },
+                {
+                  "id": "ir_004",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_003",
+                      "semantic_name": "gh_auth_status"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_auth"
+                }
+              ],
+              "constraints": [
+                "Repo + workflow scopes are typically required."
+              ],
+              "data_source_kind": "external"
+            },
+            "block_003": {
+              "block_id": "block_003",
+              "block_name": "Ask user to authenticate",
+              "instructions": [
+                {
+                  "id": "ir_005",
+                  "opcode": "ask_user_to_run_gh_auth_login",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "gh auth login"
+                    },
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "repo + workflow scopes"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "ask_login"
+                },
+                {
+                  "id": "ir_006",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "Please run `gh auth login` with repo and workflow scopes, then retry."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_auth_prompt"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_004": {
+              "block_id": "block_004",
+              "block_name": "Choose inspection method",
+              "instructions": [
+                {
+                  "id": "ir_007",
+                  "opcode": "select_inspection_method",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "bundled script"
+                    },
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "manual fallback"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "inspection_method_choice"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "select_method"
+                },
+                {
+                  "id": "ir_008",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "inspection_method_choice"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_method"
+                }
+              ],
+              "constraints": [
+                "Preferred method is the bundled script; manual fallback is available if needed."
+              ],
+              "data_source_kind": null
+            },
+            "block_005": {
+              "block_id": "block_005",
+              "block_name": "Run bundled inspect_pr_checks.py",
+              "instructions": [
+                {
+                  "id": "ir_009",
+                  "opcode": "run_inspect_pr_checks_script",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "inspect_pr_checks_script",
+                      "semantic_name": "inspect_pr_checks_script"
+                    },
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "external_resource",
+                      "identifier": "git",
+                      "semantic_name": "git"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "script_inspection_results"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_006",
+                      "semantic_name": "script_exit_code"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {
+                    "script_content": {
+                      "omitted_from_packet_only": true,
+                      "characters": 15222,
+                      "sha256": "9459e5b03f86785d184a83e5cd8d621b832e918ec04158a2962d867785812c6c",
+                      "full_text_in": "analysis.json at this instruction's metadata.script_content"
+                    }
+                  },
+                  "draft_instruction_id": "run_inspect_script"
+                },
+                {
+                  "id": "ir_010",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_script_done"
+                }
+              ],
+              "constraints": [
+                "Exits non-zero when failures remain so it can be used in automation."
+              ],
+              "data_source_kind": "external"
+            },
+            "block_006": {
+              "block_id": "block_006",
+              "block_name": "Run manual gh commands to inspect failing checks",
+              "instructions": [
+                {
+                  "id": "ir_011",
+                  "opcode": "inspect_pr_checks_manually",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_007",
+                      "semantic_name": "manual_inspection_results"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_008",
+                      "semantic_name": "manual_failing_checks_found"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {
+                    "commands": [
+                      "gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow",
+                      "gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha",
+                      "gh run view <run_id> --log",
+                      "gh api \"/repos/<owner>/<repo>/actions/jobs/<job_id>/logs\" > \"<path>\""
+                    ]
+                  },
+                  "draft_instruction_id": "run_manual_inspection"
+                },
+                {
+                  "id": "ir_012",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_manual_done"
+                }
+              ],
+              "constraints": [
+                "If a field is rejected, rerun with the available fields reported by gh.",
+                "If the run log says it is still in progress, fetch job logs directly.",
+                "Do not attempt Buildkite or other providers; keep the workflow lean."
+              ],
+              "data_source_kind": "external"
+            },
+            "block_007": {
+              "block_id": "block_007",
+              "block_name": "Check whether failing checks were found",
+              "instructions": [
+                {
+                  "id": "ir_013",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_006",
+                      "semantic_name": "script_exit_code"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_008",
+                      "semantic_name": "manual_failing_checks_found"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_outcome"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_008": {
+              "block_id": "block_008",
+              "block_name": "Report no failing checks",
+              "instructions": [
+                {
+                  "id": "ir_014",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "No failing checks detected."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_no_failures"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_009": {
+              "block_id": "block_009",
+              "block_name": "Summarize failures for the user",
+              "instructions": [
+                {
+                  "id": "ir_015",
+                  "opcode": "summarize_failure_context",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "script_inspection_results"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_007",
+                      "semantic_name": "manual_inspection_results"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_009",
+                      "semantic_name": "failure_summary"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "summarize_failures_instr"
+                },
+                {
+                  "id": "ir_016",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_to_plan"
+                }
+              ],
+              "constraints": [
+                "Provide the failing check name, run URL (if any), and a concise log snippet.",
+                "Call out missing logs explicitly.",
+                "For non-GitHub Actions checks, only report the details URL."
+              ],
+              "data_source_kind": null
+            },
+            "block_010": {
+              "block_id": "block_010",
+              "block_name": "Create a fix plan",
+              "instructions": [
+                {
+                  "id": "ir_017",
+                  "opcode": "draft_fix_plan",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_009",
+                      "semantic_name": "failure_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "fix_plan"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "draft_fix_plan"
+                },
+                {
+                  "id": "ir_018",
+                  "opcode": "request_plan_approval",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "fix_plan"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "request_approval"
+                },
+                {
+                  "id": "ir_019",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_to_approval"
+                }
+              ],
+              "constraints": [
+                "Use the create-plan skill if available; otherwise draft a concise plan inline.",
+                "Request approval before implementing."
+              ],
+              "data_source_kind": null
+            },
+            "block_011": {
+              "block_id": "block_011",
+              "block_name": "Read user approval",
+              "instructions": [
+                {
+                  "id": "ir_020",
+                  "opcode": "read_user_approval",
+                  "inputs": [
+                    {
+                      "type": "context_key",
+                      "identifier": "user_approval",
+                      "semantic_name": "user_approval"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_011",
+                      "semantic_name": "approval_status"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "read_approval_instr"
+                },
+                {
+                  "id": "ir_021",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_011",
+                      "semantic_name": "approval_status"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_approval"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "context"
+            },
+            "block_012": {
+              "block_id": "block_012",
+              "block_name": "Implement approved fix plan",
+              "instructions": [
+                {
+                  "id": "ir_022",
+                  "opcode": "implement_fix_plan",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "fix_plan"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_012",
+                      "semantic_name": "implementation_summary"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "implement_plan_instr"
+                },
+                {
+                  "id": "ir_023",
+                  "opcode": "summarize_diffs_and_tests",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_012",
+                      "semantic_name": "implementation_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "implementation_report"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "summarize_diffs"
+                },
+                {
+                  "id": "ir_024",
+                  "opcode": "ask_about_opening_pr",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "implementation_report"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "ask_pr"
+                },
+                {
+                  "id": "ir_025",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_to_recheck"
+                }
+              ],
+              "constraints": [
+                "Apply the approved plan, summarize diffs/tests, and ask about opening a PR."
+              ],
+              "data_source_kind": null
+            },
+            "block_013": {
+              "block_id": "block_013",
+              "block_name": "Suggest rechecking status",
+              "instructions": [
+                {
+                  "id": "ir_026",
+                  "opcode": "suggest_rechecking_tests_and_checks",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "re-run relevant tests and `gh pr checks`"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "suggest_recheck"
+                },
+                {
+                  "id": "ir_027",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "Re-run relevant tests and `gh pr checks` to confirm."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_recheck"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_014": {
+              "block_id": "block_014",
+              "block_name": "Return without implementing",
+              "instructions": [
+                {
+                  "id": "ir_028",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "Implementation not approved."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_no_approval"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            }
+          },
+          "edges": [
+            {
+              "source_block_id": "block_001",
+              "target_block_id": "block_002",
+              "condition_text": null,
+              "review_edge_id": "edge_001"
+            },
+            {
+              "source_block_id": "block_002",
+              "target_block_id": "block_003",
+              "condition_text": "not authenticated",
+              "review_edge_id": "edge_002"
+            },
+            {
+              "source_block_id": "block_002",
+              "target_block_id": "block_004",
+              "condition_text": "authenticated",
+              "review_edge_id": "edge_003"
+            },
+            {
+              "source_block_id": "block_004",
+              "target_block_id": "block_005",
+              "condition_text": "bundled script chosen",
+              "review_edge_id": "edge_004"
+            },
+            {
+              "source_block_id": "block_004",
+              "target_block_id": "block_006",
+              "condition_text": "manual fallback chosen",
+              "review_edge_id": "edge_005"
+            },
+            {
+              "source_block_id": "block_005",
+              "target_block_id": "block_007",
+              "condition_text": null,
+              "review_edge_id": "edge_006"
+            },
+            {
+              "source_block_id": "block_006",
+              "target_block_id": "block_007",
+              "condition_text": null,
+              "review_edge_id": "edge_007"
+            },
+            {
+              "source_block_id": "block_007",
+              "target_block_id": "block_009",
+              "condition_text": "failures found",
+              "review_edge_id": "edge_008"
+            },
+            {
+              "source_block_id": "block_007",
+              "target_block_id": "block_008",
+              "condition_text": "no failures found",
+              "review_edge_id": "edge_009"
+            },
+            {
+              "source_block_id": "block_009",
+              "target_block_id": "block_010",
+              "condition_text": null,
+              "review_edge_id": "edge_010"
+            },
+            {
+              "source_block_id": "block_010",
+              "target_block_id": "block_011",
+              "condition_text": null,
+              "review_edge_id": "edge_011"
+            },
+            {
+              "source_block_id": "block_011",
+              "target_block_id": "block_012",
+              "condition_text": "approved",
+              "review_edge_id": "edge_012"
+            },
+            {
+              "source_block_id": "block_011",
+              "target_block_id": "block_014",
+              "condition_text": "not approved",
+              "review_edge_id": "edge_013"
+            },
+            {
+              "source_block_id": "block_012",
+              "target_block_id": "block_013",
+              "condition_text": null,
+              "review_edge_id": "edge_014"
+            }
+          ],
+          "declared_context_keys": [
+            "repo",
+            "pr",
+            "user_approval"
+          ]
+        }
+      }
+    },
+    {
+      "repetition": 2,
+      "record": {
+        "case": "R03",
+        "variant": "deepseek-v4-flash-max",
+        "repetition": 2,
+        "split": "development",
+        "artifacts": "trials/R03/deepseek-v4-flash-max/2",
+        "status": "complete",
+        "semantic_review_status": "pending_joint_review",
+        "started_at": "2026-09-10T14:29:44.305279+00:00",
+        "resumed_at": "2026-09-10T14:29:44.305279+00:00",
+        "diagnostics": [
+          "candidate warning: LICENSE.txt, assets/github-small.svg, assets/github.png, and agents/openai.yaml are non-executable metadata/assets and were not modeled as behavior.",
+          "candidate warning: The bundled Python script is represented as a black-box acquisition; internal functions and loops are preserved in metadata.script_content.",
+          "candidate warning: Manual fallback commands are summarized as one external acquisition block; internal per-check loops and fallbacks are preserved in constraints/metadata."
+        ],
+        "attempts": 2,
+        "blocks": 13,
+        "edges": 13,
+        "prompt_sha256": "017063d65ba9c18f7854643944e68285ceaf518cc3cd95269a2ab7157526149f",
+        "generation_attempts": 2,
+        "repair_attempts": 1,
+        "http_attempts": 2,
+        "http_retries": 0,
+        "usage_records": 2,
+        "known_token_usage": {
+          "input_tokens": 43317,
+          "output_tokens": 66897,
+          "total_tokens": 110214
+        },
+        "elapsed_seconds": 395.0612855000004,
+        "finished_at": "2026-09-10T14:36:19.369135+00:00",
+        "replayed_generations": 0,
+        "artifact_sha256": {
+          "trace.json": "2e62b187b6c21a045ef475e799cb5c9651736949baaf0b7c52faee0cf2ea5bce",
+          "analysis.json": "10064e1c6930471b6521d6ccf4547851b13bf06c342073eefdf1210ba0391cdb",
+          "candidate.json": "3d7ba4bac7bc9f58e576f0dbf37b01ff8f3e39b4bdaef343d07452dc3e7c4531",
+          "graph.mmd": "4cb41c5b5e2baced54a1b083ebc7c26f43d001dcd2e452a0e0315ee54842ffc0"
+        }
+      },
+      "analysis_sha256": "10064e1c6930471b6521d6ccf4547851b13bf06c342073eefdf1210ba0391cdb",
+      "record_sha256": "4a48734e73e9514146a2785dc8c86237b05bb4064d5916a605cd1d2ba8d9d75b",
+      "analysis": {
+        "status": "complete",
+        "diagnostics": [
+          "candidate warning: LICENSE.txt, assets/github-small.svg, assets/github.png, and agents/openai.yaml are non-executable metadata/assets and were not modeled as behavior.",
+          "candidate warning: The bundled Python script is represented as a black-box acquisition; internal functions and loops are preserved in metadata.script_content.",
+          "candidate warning: Manual fallback commands are summarized as one external acquisition block; internal per-check loops and fallbacks are preserved in constraints/metadata."
+        ],
+        "cfg": {
+          "entry_block_id": "block_001",
+          "constraints": [
+            "Prereq: authenticate with the standard GitHub CLI once (for example, run `gh auth login`), then confirm with `gh auth status` (repo + workflow scopes are typically required).",
+            "Use GitHub Actions checks only.",
+            "Treat external providers (for example Buildkite) as out of scope and report only the details URL.",
+            "Do not attempt Buildkite or other providers; keep the workflow lean.",
+            "If a plan-oriented skill (for example `create-plan`) is available, use it; otherwise draft a concise plan inline and request approval before implementing.",
+            "Implement only after explicit approval.",
+            "Provide the failing check name, run URL (if any), and a concise log snippet; call out missing logs explicitly.",
+            "After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+          ],
+          "blocks": {
+            "block_001": {
+              "block_id": "block_001",
+              "block_name": "Read repo and PR inputs",
+              "instructions": [
+                {
+                  "id": "ir_001",
+                  "opcode": "read_repo_and_pr_inputs",
+                  "inputs": [
+                    {
+                      "type": "context_key",
+                      "identifier": "repo",
+                      "semantic_name": "repo"
+                    },
+                    {
+                      "type": "context_key",
+                      "identifier": "pr",
+                      "semantic_name": "pr"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "read_repo_and_pr"
+                },
+                {
+                  "id": "ir_002",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_verify_auth"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "context"
+            },
+            "block_002": {
+              "block_id": "block_002",
+              "block_name": "Verify GitHub CLI authentication",
+              "instructions": [
+                {
+                  "id": "ir_003",
+                  "opcode": "run_gh_auth_status",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_003",
+                      "semantic_name": "authenticated"
+                    }
+                  ],
+                  "constraints": [
+                    "Run `gh auth status` in the repo."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "check_gh_auth"
+                },
+                {
+                  "id": "ir_004",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_003",
+                      "semantic_name": "authenticated"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_after_auth"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_003": {
+              "block_id": "block_003",
+              "block_name": "Ask user to run gh auth login",
+              "instructions": [
+                {
+                  "id": "ir_005",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "Run `gh auth login` (ensuring repo + workflow scopes) before proceeding."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_login_request"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_004": {
+              "block_id": "block_004",
+              "block_name": "Resolve the PR number or URL",
+              "instructions": [
+                {
+                  "id": "ir_006",
+                  "opcode": "resolve_pr",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "pr_value"
+                    }
+                  ],
+                  "constraints": [
+                    "Prefer the current branch PR: `gh pr view --json number,url`.",
+                    "If the user provides a PR number or URL, use that directly."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "resolve_pr_value"
+                },
+                {
+                  "id": "ir_007",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "pr_value"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_inspect"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_005": {
+              "block_id": "block_005",
+              "block_name": "Run bundled inspect_pr_checks.py to inspect failing checks",
+              "instructions": [
+                {
+                  "id": "ir_008",
+                  "opcode": "inspect_pr_checks",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "external_resource",
+                      "identifier": "scripts/inspect_pr_checks.py",
+                      "semantic_name": "scripts/inspect_pr_checks.py"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "pr_value"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "inspection_report"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_006",
+                      "semantic_name": "inspection_exit_code"
+                    }
+                  ],
+                  "constraints": [
+                    "Preferred: run the bundled script (handles gh field drift and job-log fallbacks).",
+                    "Add `--json` for machine-friendly output.",
+                    "Exits non-zero when failures remain so it can be used in automation."
+                  ],
+                  "metadata": {
+                    "script_content": {
+                      "omitted_from_packet_only": true,
+                      "characters": 16775,
+                      "sha256": "177eae2cfb9de7f9de82e5dc2d64d26e110b641a29be06b9459727ac923353cd",
+                      "full_text_in": "analysis.json at this instruction's metadata.script_content"
+                    }
+                  },
+                  "draft_instruction_id": "run_inspect_pr_checks"
+                },
+                {
+                  "id": "ir_009",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_select_inspection"
+                }
+              ],
+              "constraints": [
+                "Use GitHub Actions checks only.",
+                "If `detailsUrl` is not a GitHub Actions run, label it as external and only report the URL.",
+                "Do not attempt Buildkite or other providers; keep the workflow lean."
+              ],
+              "data_source_kind": "external"
+            },
+            "block_006": {
+              "block_id": "block_006",
+              "block_name": "Manually inspect failing checks with gh",
+              "instructions": [
+                {
+                  "id": "ir_010",
+                  "opcode": "inspect_pr_checks_manually",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "pr_value"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_007",
+                      "semantic_name": "manual_inspection_report"
+                    }
+                  ],
+                  "constraints": [
+                    "Manual fallback: `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow`.",
+                    "If a field is rejected, rerun with the available fields reported by `gh`.",
+                    "For each failing check, extract the run id from `detailsUrl` and run `gh run view <run_id> --json ...` and `gh run view <run_id> --log`.",
+                    "If the run log says it is still in progress, fetch job logs directly: `gh api \"/repos/<owner>/<repo>/actions/jobs/<job_id>/logs\" > \"<path>\"`."
+                  ],
+                  "metadata": {
+                    "manual_commands": [
+                      "gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow",
+                      "gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha",
+                      "gh run view <run_id> --log",
+                      "gh api \"/repos/<owner>/<repo>/actions/jobs/<job_id>/logs\" > \"<path>\""
+                    ]
+                  },
+                  "draft_instruction_id": "run_manual_inspection"
+                },
+                {
+                  "id": "ir_011",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_select_manual"
+                }
+              ],
+              "constraints": [
+                "Use GitHub Actions checks only.",
+                "If `detailsUrl` is not a GitHub Actions run, label it as external and only report the URL.",
+                "Do not attempt Buildkite or other providers; keep the workflow lean."
+              ],
+              "data_source_kind": "external"
+            },
+            "block_007": {
+              "block_id": "block_007",
+              "block_name": "Select the inspection result from the chosen method",
+              "instructions": [
+                {
+                  "id": "ir_012",
+                  "opcode": "select_inspection_report",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "inspection_report"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_007",
+                      "semantic_name": "manual_inspection_report"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_008",
+                      "semantic_name": "selected_inspection_report"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "select_inspection_result"
+                },
+                {
+                  "id": "ir_013",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_summarize"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_008": {
+              "block_id": "block_008",
+              "block_name": "Summarize failures for the user",
+              "instructions": [
+                {
+                  "id": "ir_014",
+                  "opcode": "summarize_pr_check_failures",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_008",
+                      "semantic_name": "selected_inspection_report"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_009",
+                      "semantic_name": "failure_summary"
+                    }
+                  ],
+                  "constraints": [
+                    "Provide the failing check name, run URL (if any), and a concise log snippet.",
+                    "Call out missing logs explicitly."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "summarize_failures"
+                },
+                {
+                  "id": "ir_015",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_plan"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_009": {
+              "block_id": "block_009",
+              "block_name": "Create a fix plan and request approval",
+              "instructions": [
+                {
+                  "id": "ir_016",
+                  "opcode": "draft_fix_plan",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_009",
+                      "semantic_name": "failure_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "fix_plan"
+                    }
+                  ],
+                  "constraints": [
+                    "If a plan-oriented skill (for example `create-plan`) is available, use it; otherwise draft a concise plan inline."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "draft_fix_plan"
+                },
+                {
+                  "id": "ir_017",
+                  "opcode": "request_user_approval",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "fix_plan"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [
+                    "Request approval before implementing."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "request_approval"
+                },
+                {
+                  "id": "ir_018",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_read_approval"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_010": {
+              "block_id": "block_010",
+              "block_name": "Read explicit user approval",
+              "instructions": [
+                {
+                  "id": "ir_019",
+                  "opcode": "read_user_approval",
+                  "inputs": [
+                    {
+                      "type": "context_key",
+                      "identifier": "approval",
+                      "semantic_name": "approval"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_011",
+                      "semantic_name": "approval_status"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "read_user_approval"
+                },
+                {
+                  "id": "ir_020",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_011",
+                      "semantic_name": "approval_status"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_after_approval"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "context"
+            },
+            "block_011": {
+              "block_id": "block_011",
+              "block_name": "Wait for explicit approval before implementing",
+              "instructions": [
+                {
+                  "id": "ir_021",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "Wait for explicit approval before implementing."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_awaiting_approval"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_012": {
+              "block_id": "block_012",
+              "block_name": "Implement the approved plan and summarize diffs/tests",
+              "instructions": [
+                {
+                  "id": "ir_022",
+                  "opcode": "implement_approved_plan",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "fix_plan"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_012",
+                      "semantic_name": "implementation_summary"
+                    }
+                  ],
+                  "constraints": [
+                    "Implement only after explicit approval.",
+                    "Apply the approved plan, summarize diffs/tests, and ask about opening a PR."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "implement_approved_plan"
+                },
+                {
+                  "id": "ir_023",
+                  "opcode": "ask_about_opening_pr",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_012",
+                      "semantic_name": "implementation_summary"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "ask_open_pr"
+                },
+                {
+                  "id": "ir_024",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_recheck"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_013": {
+              "block_id": "block_013",
+              "block_name": "Suggest rechecking status",
+              "instructions": [
+                {
+                  "id": "ir_025",
+                  "opcode": "suggest_rechecking_status",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "re-run the relevant tests and `gh pr checks` to confirm."
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "recheck_suggestion"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "suggest_recheck"
+                },
+                {
+                  "id": "ir_026",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "recheck_suggestion"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_suggestion"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            }
+          },
+          "edges": [
+            {
+              "source_block_id": "block_001",
+              "target_block_id": "block_002",
+              "condition_text": null,
+              "review_edge_id": "edge_001"
+            },
+            {
+              "source_block_id": "block_002",
+              "target_block_id": "block_003",
+              "condition_text": "not authenticated",
+              "review_edge_id": "edge_002"
+            },
+            {
+              "source_block_id": "block_002",
+              "target_block_id": "block_004",
+              "condition_text": "authenticated",
+              "review_edge_id": "edge_003"
+            },
+            {
+              "source_block_id": "block_004",
+              "target_block_id": "block_005",
+              "condition_text": "preferred: bundled script available",
+              "review_edge_id": "edge_004"
+            },
+            {
+              "source_block_id": "block_004",
+              "target_block_id": "block_006",
+              "condition_text": "manual fallback: bundled script unavailable or preferred method fails",
+              "review_edge_id": "edge_005"
+            },
+            {
+              "source_block_id": "block_005",
+              "target_block_id": "block_007",
+              "condition_text": null,
+              "review_edge_id": "edge_006"
+            },
+            {
+              "source_block_id": "block_006",
+              "target_block_id": "block_007",
+              "condition_text": null,
+              "review_edge_id": "edge_007"
+            },
+            {
+              "source_block_id": "block_007",
+              "target_block_id": "block_008",
+              "condition_text": null,
+              "review_edge_id": "edge_008"
+            },
+            {
+              "source_block_id": "block_008",
+              "target_block_id": "block_009",
+              "condition_text": null,
+              "review_edge_id": "edge_009"
+            },
+            {
+              "source_block_id": "block_009",
+              "target_block_id": "block_010",
+              "condition_text": null,
+              "review_edge_id": "edge_010"
+            },
+            {
+              "source_block_id": "block_010",
+              "target_block_id": "block_012",
+              "condition_text": "approved",
+              "review_edge_id": "edge_011"
+            },
+            {
+              "source_block_id": "block_010",
+              "target_block_id": "block_011",
+              "condition_text": "not approved",
+              "review_edge_id": "edge_012"
+            },
+            {
+              "source_block_id": "block_012",
+              "target_block_id": "block_013",
+              "condition_text": null,
+              "review_edge_id": "edge_013"
+            }
+          ],
+          "declared_context_keys": [
+            "repo",
+            "pr",
+            "approval"
+          ]
+        }
+      }
+    },
+    {
+      "repetition": 3,
+      "record": {
+        "case": "R03",
+        "variant": "deepseek-v4-flash-max",
+        "repetition": 3,
+        "split": "development",
+        "artifacts": "trials/R03/deepseek-v4-flash-max/3",
+        "status": "complete",
+        "semantic_review_status": "pending_joint_review",
+        "started_at": "2026-09-10T14:31:35.695090+00:00",
+        "resumed_at": "2026-09-10T14:31:35.695090+00:00",
+        "diagnostics": [
+          "candidate warning: The choice between the bundled script and manual fallback is described as 'preferred' vs 'manual fallback' without an explicit predicate; modeled as a branch.",
+          "candidate warning: The manual fallback's per-failing-check loop is represented as list-based operations to avoid splitting the internal iteration as code-like control flow.",
+          "candidate warning: The user approval step is modeled as an external interaction returning an approval decision."
+        ],
+        "attempts": 3,
+        "blocks": 26,
+        "edges": 29,
+        "prompt_sha256": "017063d65ba9c18f7854643944e68285ceaf518cc3cd95269a2ab7157526149f",
+        "generation_attempts": 3,
+        "repair_attempts": 2,
+        "http_attempts": 3,
+        "http_retries": 0,
+        "usage_records": 3,
+        "known_token_usage": {
+          "input_tokens": 80021,
+          "output_tokens": 88966,
+          "total_tokens": 168987
+        },
+        "elapsed_seconds": 431.62188960000003,
+        "finished_at": "2026-09-10T14:38:47.343868+00:00",
+        "replayed_generations": 0,
+        "artifact_sha256": {
+          "trace.json": "43f06ee72686f5e5ee7c4c8106de19b5c7c0f08f22f3ec810b6a3363a5eac7e3",
+          "analysis.json": "b762593e11f4fefc13ba7355aa8e50202e23e5abfa351fd9edac44f248a557b9",
+          "candidate.json": "c2d47f5287bea456a747c9fb3aa7b2f901d226039ad6115c0ff66644558f8869",
+          "graph.mmd": "e4da379c98da3158dcd976a9148e2cee43ad3e9d54bfaa352c2e68f2983015c3"
+        }
+      },
+      "analysis_sha256": "b762593e11f4fefc13ba7355aa8e50202e23e5abfa351fd9edac44f248a557b9",
+      "record_sha256": "3b1d3383833fc4c431131cc78c9deb84407a364de2d9a5da106d93b5e6e5a45e",
+      "analysis": {
+        "status": "complete",
+        "diagnostics": [
+          "candidate warning: The choice between the bundled script and manual fallback is described as 'preferred' vs 'manual fallback' without an explicit predicate; modeled as a branch.",
+          "candidate warning: The manual fallback's per-failing-check loop is represented as list-based operations to avoid splitting the internal iteration as code-like control flow.",
+          "candidate warning: The user approval step is modeled as an external interaction returning an approval decision."
+        ],
+        "cfg": {
+          "entry_block_id": "block_001",
+          "constraints": [
+            "Use only GitHub Actions checks; treat external providers (for example Buildkite) as out of scope and report only the details URL.",
+            "Authenticate with the standard GitHub CLI and confirm with `gh auth status` (repo + workflow scopes are typically required).",
+            "If a plan-oriented skill (for example `create-plan`) is available, use it; otherwise draft a concise plan inline and request approval before implementing.",
+            "Implement only after explicit approval.",
+            "Call out missing logs explicitly.",
+            "After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+          ],
+          "blocks": {
+            "block_001": {
+              "block_id": "block_001",
+              "block_name": "Read repo and PR inputs",
+              "instructions": [
+                {
+                  "id": "ir_001",
+                  "opcode": "read_repo_and_pr_inputs",
+                  "inputs": [
+                    {
+                      "type": "context_key",
+                      "identifier": "repo",
+                      "semantic_name": "repo"
+                    },
+                    {
+                      "type": "context_key",
+                      "identifier": "pr",
+                      "semantic_name": "pr"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "read_inputs"
+                },
+                {
+                  "id": "ir_002",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_verify_auth"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "context"
+            },
+            "block_002": {
+              "block_id": "block_002",
+              "block_name": "Verify gh authentication",
+              "instructions": [
+                {
+                  "id": "ir_003",
+                  "opcode": "run_gh_auth_status",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_003",
+                      "semantic_name": "auth_status"
+                    }
+                  ],
+                  "constraints": [
+                    "repo + workflow scopes are typically required"
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "run_auth_status"
+                },
+                {
+                  "id": "ir_004",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_003",
+                      "semantic_name": "auth_status"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_auth_decision"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_003": {
+              "block_id": "block_003",
+              "block_name": "Ask user to authenticate gh",
+              "instructions": [
+                {
+                  "id": "ir_005",
+                  "opcode": "ask_user_to_run_gh_auth_login",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "gh auth login with repo and workflow scopes"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "ask_auth_login"
+                },
+                {
+                  "id": "ir_006",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "User must run gh auth login with repo and workflow scopes before proceeding."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_auth_required"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_004": {
+              "block_id": "block_004",
+              "block_name": "Decide whether a PR was provided",
+              "instructions": [
+                {
+                  "id": "ir_007",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "choose_pr_source"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_005": {
+              "block_id": "block_005",
+              "block_name": "Use the provided PR number or URL",
+              "instructions": [
+                {
+                  "id": "ir_008",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_merge_pr"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_006": {
+              "block_id": "block_006",
+              "block_name": "Resolve the current branch PR",
+              "instructions": [
+                {
+                  "id": "ir_009",
+                  "opcode": "read_current_branch_pr",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "fetched_pr"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "fetch_current_pr"
+                },
+                {
+                  "id": "ir_010",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_merge_pr_from_fetch"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_007": {
+              "block_id": "block_007",
+              "block_name": "Select the PR to inspect and choose inspection method",
+              "instructions": [
+                {
+                  "id": "ir_011",
+                  "opcode": "select_pr_value",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_002",
+                      "semantic_name": "pr_input"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_004",
+                      "semantic_name": "fetched_pr"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "resolved_pr"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "select_pr"
+                },
+                {
+                  "id": "ir_012",
+                  "opcode": "select_preferred_inspection_method",
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_006",
+                      "semantic_name": "inspection_method_choice"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "select_inspection_method"
+                },
+                {
+                  "id": "ir_013",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_006",
+                      "semantic_name": "inspection_method_choice"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "choose_inspection_method"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_008": {
+              "block_id": "block_008",
+              "block_name": "Run bundled inspect_pr_checks.py",
+              "instructions": [
+                {
+                  "id": "ir_014",
+                  "opcode": "inspect_pr_checks",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "scripts/inspect_pr_checks.py",
+                      "semantic_name": "scripts/inspect_pr_checks.py"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "resolved_pr"
+                    },
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": true
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_007",
+                      "semantic_name": "script_report"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_008",
+                      "semantic_name": "script_exit_code"
+                    }
+                  ],
+                  "constraints": [
+                    "Exits non-zero when failures remain so it can be used in automation."
+                  ],
+                  "metadata": {
+                    "script_content": {
+                      "omitted_from_packet_only": true,
+                      "characters": 15222,
+                      "sha256": "9459e5b03f86785d184a83e5cd8d621b832e918ec04158a2962d867785812c6c",
+                      "full_text_in": "analysis.json at this instruction's metadata.script_content"
+                    }
+                  },
+                  "draft_instruction_id": "run_script"
+                },
+                {
+                  "id": "ir_015",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_select_inspection"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_009": {
+              "block_id": "block_009",
+              "block_name": "Fetch PR checks manually",
+              "instructions": [
+                {
+                  "id": "ir_016",
+                  "opcode": "list_pr_checks",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_005",
+                      "semantic_name": "resolved_pr"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_009",
+                      "semantic_name": "checks_json"
+                    }
+                  ],
+                  "constraints": [
+                    "If a field is rejected, rerun with the available fields reported by gh."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "fetch_checks_manual"
+                },
+                {
+                  "id": "ir_017",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_filter_failing"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_010": {
+              "block_id": "block_010",
+              "block_name": "Filter failing checks",
+              "instructions": [
+                {
+                  "id": "ir_018",
+                  "opcode": "filter_failing_checks",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_009",
+                      "semantic_name": "checks_json"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "failing_checks"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "filter_failing"
+                },
+                {
+                  "id": "ir_019",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_scope_checks"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_011": {
+              "block_id": "block_011",
+              "block_name": "Separate GitHub Actions checks from external checks",
+              "instructions": [
+                {
+                  "id": "ir_020",
+                  "opcode": "separate_github_actions_checks",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_010",
+                      "semantic_name": "failing_checks"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_011",
+                      "semantic_name": "gha_checks"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_012",
+                      "semantic_name": "external_checks"
+                    }
+                  ],
+                  "constraints": [
+                    "Non-GitHub Actions checks are labeled external and only their URL is reported.",
+                    "Do not attempt Buildkite or other providers."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "scope_checks"
+                },
+                {
+                  "id": "ir_021",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_extract_run_ids"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_012": {
+              "block_id": "block_012",
+              "block_name": "Extract run IDs from GitHub Actions details URLs",
+              "instructions": [
+                {
+                  "id": "ir_022",
+                  "opcode": "extract_run_ids_from_details_urls",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_011",
+                      "semantic_name": "gha_checks"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "run_ids"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "extract_run_ids"
+                },
+                {
+                  "id": "ir_023",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_fetch_run_metadata"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_013": {
+              "block_id": "block_013",
+              "block_name": "Fetch run metadata for each failing check",
+              "instructions": [
+                {
+                  "id": "ir_024",
+                  "opcode": "fetch_run_metadata_for_each",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "run_ids"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_014",
+                      "semantic_name": "run_metadata_list"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "fetch_run_metadata"
+                },
+                {
+                  "id": "ir_025",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_fetch_run_logs"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_014": {
+              "block_id": "block_014",
+              "block_name": "Fetch run logs for each failing check",
+              "instructions": [
+                {
+                  "id": "ir_026",
+                  "opcode": "fetch_run_logs_for_each",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_013",
+                      "semantic_name": "run_ids"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_015",
+                      "semantic_name": "run_logs"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "fetch_run_logs"
+                },
+                {
+                  "id": "ir_027",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_check_pending"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_015": {
+              "block_id": "block_015",
+              "block_name": "Detect logs still in progress",
+              "instructions": [
+                {
+                  "id": "ir_028",
+                  "opcode": "detect_pending_logs",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_015",
+                      "semantic_name": "run_logs"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_016",
+                      "semantic_name": "pending_logs"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_017",
+                      "semantic_name": "completed_logs"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "check_pending"
+                },
+                {
+                  "id": "ir_029",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_016",
+                      "semantic_name": "pending_logs"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_pending_decision"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_016": {
+              "block_id": "block_016",
+              "block_name": "Fetch job logs directly for pending runs",
+              "instructions": [
+                {
+                  "id": "ir_030",
+                  "opcode": "fetch_job_logs_for_pending",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "gh",
+                      "semantic_name": "gh"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_001",
+                      "semantic_name": "repo_path"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_016",
+                      "semantic_name": "pending_logs"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_018",
+                      "semantic_name": "job_logs"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "fetch_job_logs"
+                },
+                {
+                  "id": "ir_031",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_summarize_manual"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_017": {
+              "block_id": "block_017",
+              "block_name": "Summarize manual failure context",
+              "instructions": [
+                {
+                  "id": "ir_032",
+                  "opcode": "summarize_failure_context",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_012",
+                      "semantic_name": "external_checks"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_014",
+                      "semantic_name": "run_metadata_list"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_015",
+                      "semantic_name": "run_logs"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_018",
+                      "semantic_name": "job_logs"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_019",
+                      "semantic_name": "manual_failure_summary"
+                    }
+                  ],
+                  "constraints": [
+                    "Call out missing logs explicitly."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "summarize_manual"
+                },
+                {
+                  "id": "ir_033",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_select_inspection_from_manual"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_018": {
+              "block_id": "block_018",
+              "block_name": "Select the inspection result",
+              "instructions": [
+                {
+                  "id": "ir_034",
+                  "opcode": "select_inspection_outcome",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_007",
+                      "semantic_name": "script_report"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_019",
+                      "semantic_name": "manual_failure_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_020",
+                      "semantic_name": "inspection_summary"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "select_inspection"
+                },
+                {
+                  "id": "ir_035",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_create_plan_decision"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_019": {
+              "block_id": "block_019",
+              "block_name": "Decide how to create the fix plan",
+              "instructions": [
+                {
+                  "id": "ir_036",
+                  "opcode": "read_plan_skill_availability",
+                  "inputs": [
+                    {
+                      "type": "context_key",
+                      "identifier": "available_plan_skill",
+                      "semantic_name": "available_plan_skill"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_021",
+                      "semantic_name": "plan_skill_available"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "read_plan_skill_availability"
+                },
+                {
+                  "id": "ir_037",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_021",
+                      "semantic_name": "plan_skill_available"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "choose_plan_method"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "context"
+            },
+            "block_020": {
+              "block_id": "block_020",
+              "block_name": "Use create-plan skill",
+              "instructions": [
+                {
+                  "id": "ir_038",
+                  "opcode": "use_create_plan_skill",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "create-plan",
+                      "semantic_name": "create-plan"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_020",
+                      "semantic_name": "inspection_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_022",
+                      "semantic_name": "plan_draft"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "invoke_create_plan"
+                },
+                {
+                  "id": "ir_039",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_merge_plan"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_021": {
+              "block_id": "block_021",
+              "block_name": "Draft a concise plan inline",
+              "instructions": [
+                {
+                  "id": "ir_040",
+                  "opcode": "draft_concise_plan_inline",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_020",
+                      "semantic_name": "inspection_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_023",
+                      "semantic_name": "inline_plan_draft"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "draft_plan"
+                },
+                {
+                  "id": "ir_041",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_merge_plan_inline"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_022": {
+              "block_id": "block_022",
+              "block_name": "Select the plan to request approval for",
+              "instructions": [
+                {
+                  "id": "ir_042",
+                  "opcode": "select_plan_draft",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_022",
+                      "semantic_name": "plan_draft"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_023",
+                      "semantic_name": "inline_plan_draft"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_024",
+                      "semantic_name": "plan_to_approve"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "select_plan"
+                },
+                {
+                  "id": "ir_043",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_request_approval"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_023": {
+              "block_id": "block_023",
+              "block_name": "Request explicit approval",
+              "instructions": [
+                {
+                  "id": "ir_044",
+                  "opcode": "request_plan_approval",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "user",
+                      "semantic_name": "user"
+                    },
+                    {
+                      "type": "result",
+                      "identifier": "result_024",
+                      "semantic_name": "plan_to_approve"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_025",
+                      "semantic_name": "approval_decision"
+                    }
+                  ],
+                  "constraints": [
+                    "Implement only after explicit approval."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "request_approval"
+                },
+                {
+                  "id": "ir_045",
+                  "opcode": "dispatch",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_025",
+                      "semantic_name": "approval_decision"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_approval_decision"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": "external"
+            },
+            "block_024": {
+              "block_id": "block_024",
+              "block_name": "Return without implementing",
+              "instructions": [
+                {
+                  "id": "ir_046",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "Plan not approved; no changes made."
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_not_approved"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_025": {
+              "block_id": "block_025",
+              "block_name": "Implement approved plan and summarize",
+              "instructions": [
+                {
+                  "id": "ir_047",
+                  "opcode": "apply_approved_plan",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_024",
+                      "semantic_name": "plan_to_approve"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_026",
+                      "semantic_name": "implementation_summary"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "apply_plan"
+                },
+                {
+                  "id": "ir_048",
+                  "opcode": "summarize_diffs_and_tests",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_026",
+                      "semantic_name": "implementation_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_027",
+                      "semantic_name": "diffs_tests_summary"
+                    }
+                  ],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "summarize_diffs"
+                },
+                {
+                  "id": "ir_049",
+                  "opcode": "ask_about_opening_pull_request",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_027",
+                      "semantic_name": "diffs_tests_summary"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "ask_open_pr"
+                },
+                {
+                  "id": "ir_050",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "go_recheck"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            },
+            "block_026": {
+              "block_id": "block_026",
+              "block_name": "Suggest rechecking status",
+              "instructions": [
+                {
+                  "id": "ir_051",
+                  "opcode": "suggest_rechecking_tests_and_checks",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_027",
+                      "semantic_name": "diffs_tests_summary"
+                    }
+                  ],
+                  "outputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_028",
+                      "semantic_name": "recheck_suggestion"
+                    }
+                  ],
+                  "constraints": [
+                    "After changes, suggest re-running the relevant tests and gh pr checks to confirm."
+                  ],
+                  "metadata": {},
+                  "draft_instruction_id": "suggest_recheck"
+                },
+                {
+                  "id": "ir_052",
+                  "opcode": "return",
+                  "inputs": [
+                    {
+                      "type": "result",
+                      "identifier": "result_028",
+                      "semantic_name": "recheck_suggestion"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "return_recheck"
+                }
+              ],
+              "constraints": [],
+              "data_source_kind": null
+            }
+          },
+          "edges": [
+            {
+              "source_block_id": "block_001",
+              "target_block_id": "block_002",
+              "condition_text": null,
+              "review_edge_id": "edge_001"
+            },
+            {
+              "source_block_id": "block_002",
+              "target_block_id": "block_003",
+              "condition_text": "unauthenticated",
+              "review_edge_id": "edge_002"
+            },
+            {
+              "source_block_id": "block_002",
+              "target_block_id": "block_004",
+              "condition_text": "authenticated",
+              "review_edge_id": "edge_003"
+            },
+            {
+              "source_block_id": "block_004",
+              "target_block_id": "block_005",
+              "condition_text": "PR provided",
+              "review_edge_id": "edge_004"
+            },
+            {
+              "source_block_id": "block_004",
+              "target_block_id": "block_006",
+              "condition_text": "PR not provided",
+              "review_edge_id": "edge_005"
+            },
+            {
+              "source_block_id": "block_005",
+              "target_block_id": "block_007",
+              "condition_text": null,
+              "review_edge_id": "edge_006"
+            },
+            {
+              "source_block_id": "block_006",
+              "target_block_id": "block_007",
+              "condition_text": null,
+              "review_edge_id": "edge_007"
+            },
+            {
+              "source_block_id": "block_007",
+              "target_block_id": "block_008",
+              "condition_text": "preferred: bundled script",
+              "review_edge_id": "edge_008"
+            },
+            {
+              "source_block_id": "block_007",
+              "target_block_id": "block_009",
+              "condition_text": "manual fallback",
+              "review_edge_id": "edge_009"
+            },
+            {
+              "source_block_id": "block_008",
+              "target_block_id": "block_018",
+              "condition_text": null,
+              "review_edge_id": "edge_010"
+            },
+            {
+              "source_block_id": "block_009",
+              "target_block_id": "block_010",
+              "condition_text": null,
+              "review_edge_id": "edge_011"
+            },
+            {
+              "source_block_id": "block_010",
+              "target_block_id": "block_011",
+              "condition_text": null,
+              "review_edge_id": "edge_012"
+            },
+            {
+              "source_block_id": "block_011",
+              "target_block_id": "block_012",
+              "condition_text": null,
+              "review_edge_id": "edge_013"
+            },
+            {
+              "source_block_id": "block_012",
+              "target_block_id": "block_013",
+              "condition_text": null,
+              "review_edge_id": "edge_014"
+            },
+            {
+              "source_block_id": "block_013",
+              "target_block_id": "block_014",
+              "condition_text": null,
+              "review_edge_id": "edge_015"
+            },
+            {
+              "source_block_id": "block_014",
+              "target_block_id": "block_015",
+              "condition_text": null,
+              "review_edge_id": "edge_016"
+            },
+            {
+              "source_block_id": "block_015",
+              "target_block_id": "block_016",
+              "condition_text": "log still in progress",
+              "review_edge_id": "edge_017"
+            },
+            {
+              "source_block_id": "block_015",
+              "target_block_id": "block_017",
+              "condition_text": "logs available",
+              "review_edge_id": "edge_018"
+            },
+            {
+              "source_block_id": "block_016",
+              "target_block_id": "block_017",
+              "condition_text": null,
+              "review_edge_id": "edge_019"
+            },
+            {
+              "source_block_id": "block_017",
+              "target_block_id": "block_018",
+              "condition_text": null,
+              "review_edge_id": "edge_020"
+            },
+            {
+              "source_block_id": "block_018",
+              "target_block_id": "block_019",
+              "condition_text": null,
+              "review_edge_id": "edge_021"
+            },
+            {
+              "source_block_id": "block_019",
+              "target_block_id": "block_020",
+              "condition_text": "plan-oriented skill available",
+              "review_edge_id": "edge_022"
+            },
+            {
+              "source_block_id": "block_019",
+              "target_block_id": "block_021",
+              "condition_text": "no plan skill available",
+              "review_edge_id": "edge_023"
+            },
+            {
+              "source_block_id": "block_020",
+              "target_block_id": "block_022",
+              "condition_text": null,
+              "review_edge_id": "edge_024"
+            },
+            {
+              "source_block_id": "block_021",
+              "target_block_id": "block_022",
+              "condition_text": null,
+              "review_edge_id": "edge_025"
+            },
+            {
+              "source_block_id": "block_022",
+              "target_block_id": "block_023",
+              "condition_text": null,
+              "review_edge_id": "edge_026"
+            },
+            {
+              "source_block_id": "block_023",
+              "target_block_id": "block_025",
+              "condition_text": "approved",
+              "review_edge_id": "edge_027"
+            },
+            {
+              "source_block_id": "block_023",
+              "target_block_id": "block_024",
+              "condition_text": "not approved",
+              "review_edge_id": "edge_028"
+            },
+            {
+              "source_block_id": "block_025",
+              "target_block_id": "block_026",
+              "condition_text": null,
+              "review_edge_id": "edge_029"
+            }
+          ],
+          "declared_context_keys": [
+            "repo",
+            "pr",
+            "available_plan_skill"
+          ]
+        }
+      }
+    }
+  ],
+  "policy": "Manual source-grounded review; structure does not imply semantic preservation. No annotation is an extraction input."
+}

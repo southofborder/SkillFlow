@@ -1,0 +1,581 @@
+{
+  "attempt": 1,
+  "raw_candidate": {
+    "entry_block_ref": "read_events",
+    "constraints": [
+      "未选中的记录不调用 notify.send。",
+      "整份流程禁止将 access_token 字段发送给任何接收对象。",
+      "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+    ],
+    "declared_context_keys": [],
+    "blocks": [
+      {
+        "block_ref": "read_events",
+        "block_name": "Read events.json",
+        "data_source_kind": "external",
+        "instructions": [
+          {
+            "instruction_ref": "read_events_json",
+            "opcode": "read_events_json",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "events.json"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "event_records"
+              }
+            ],
+            "constraints": []
+          },
+          {
+            "instruction_ref": "go_to_iteration",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": []
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "next_event",
+        "block_name": "Get next event record",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "get_next_event_record",
+            "opcode": "get_next_event_record",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "event_records"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "current_event_record"
+              },
+              {
+                "type": "result",
+                "identifier": "has_more_records"
+              }
+            ],
+            "constraints": []
+          },
+          {
+            "instruction_ref": "dispatch_has_more",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "has_more_records"
+              }
+            ],
+            "outputs": [],
+            "constraints": []
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "evaluate_record",
+        "block_name": "Extract fields and evaluate notification condition",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "extract_notification_fields",
+            "opcode": "extract_notification_fields",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "current_event_record"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "recipient"
+              },
+              {
+                "type": "result",
+                "identifier": "summary"
+              },
+              {
+                "type": "result",
+                "identifier": "value"
+              },
+              {
+                "type": "result",
+                "identifier": "urgent"
+              },
+              {
+                "type": "result",
+                "identifier": "opted_out"
+              }
+            ],
+            "constraints": []
+          },
+          {
+            "instruction_ref": "evaluate_notification_condition",
+            "opcode": "evaluate_notification_condition",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "value"
+              },
+              {
+                "type": "result",
+                "identifier": "urgent"
+              },
+              {
+                "type": "result",
+                "identifier": "opted_out"
+              },
+              {
+                "type": "literal",
+                "literal_value": 100
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "selected_for_notification"
+              }
+            ],
+            "constraints": [
+              "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+              "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+            ]
+          },
+          {
+            "instruction_ref": "dispatch_selection",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "selected_for_notification"
+              }
+            ],
+            "outputs": [],
+            "constraints": []
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "send_notification",
+        "block_name": "Send notification for selected event",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "send_notify",
+            "opcode": "notify.send",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "notify.send"
+              },
+              {
+                "type": "result",
+                "identifier": "recipient"
+              },
+              {
+                "type": "result",
+                "identifier": "summary"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+              "notify.send 的 body 参数直接取该记录的 summary 字段原值。"
+            ]
+          },
+          {
+            "instruction_ref": "go_next_after_send",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": []
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "finish",
+        "block_name": "Finish processing",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "return_done",
+            "opcode": "return",
+            "inputs": [],
+            "outputs": [],
+            "constraints": []
+          }
+        ],
+        "constraints": []
+      }
+    ],
+    "edges": [
+      {
+        "source_block_ref": "read_events",
+        "target_block_ref": "next_event",
+        "condition_text": null
+      },
+      {
+        "source_block_ref": "next_event",
+        "target_block_ref": "evaluate_record",
+        "condition_text": "has_more_records is true"
+      },
+      {
+        "source_block_ref": "next_event",
+        "target_block_ref": "finish",
+        "condition_text": "has_more_records is false"
+      },
+      {
+        "source_block_ref": "evaluate_record",
+        "target_block_ref": "send_notification",
+        "condition_text": "selected_for_notification is true"
+      },
+      {
+        "source_block_ref": "evaluate_record",
+        "target_block_ref": "next_event",
+        "condition_text": "selected_for_notification is false"
+      },
+      {
+        "source_block_ref": "send_notification",
+        "target_block_ref": "next_event",
+        "condition_text": null
+      }
+    ],
+    "diagnostics": [
+      "历史示例（当前流程不执行）中的 count.txt 写入未提取为执行行为。"
+    ]
+  },
+  "raw_response": "{\n  \"entry_block_ref\": \"read_events\",\n  \"constraints\": [\n    \"未选中的记录不调用 notify.send。\",\n    \"整份流程禁止将 access_token 字段发送给任何接收对象。\",\n    \"字段取值要求不包含摘要生成、内容改写或额外格式转换。\"\n  ],\n  \"declared_context_keys\": [],\n  \"blocks\": [\n    {\n      \"block_ref\": \"read_events\",\n      \"block_name\": \"Read events.json\",\n      \"data_source_kind\": \"external\",\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"read_events_json\",\n          \"opcode\": \"read_events_json\",\n          \"inputs\": [\n            {\n              \"type\": \"external_resource\",\n              \"identifier\": \"events.json\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"event_records\"\n            }\n          ],\n          \"constraints\": []\n        },\n        {\n          \"instruction_ref\": \"go_to_iteration\",\n          \"opcode\": \"dispatch\",\n          \"inputs\": [],\n          \"outputs\": [],\n          \"constraints\": []\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"next_event\",\n      \"block_name\": \"Get next event record\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"get_next_event_record\",\n          \"opcode\": \"get_next_event_record\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"event_records\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"current_event_record\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"has_more_records\"\n            }\n          ],\n          \"constraints\": []\n        },\n        {\n          \"instruction_ref\": \"dispatch_has_more\",\n          \"opcode\": \"dispatch\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"has_more_records\"\n            }\n          ],\n          \"outputs\": [],\n          \"constraints\": []\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"evaluate_record\",\n      \"block_name\": \"Extract fields and evaluate notification condition\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"extract_notification_fields\",\n          \"opcode\": \"extract_notification_fields\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"current_event_record\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"recipient\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"summary\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"value\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"urgent\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"opted_out\"\n            }\n          ],\n          \"constraints\": []\n        },\n        {\n          \"instruction_ref\": \"evaluate_notification_condition\",\n          \"opcode\": \"evaluate_notification_condition\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"value\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"urgent\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"opted_out\"\n            },\n            {\n              \"type\": \"literal\",\n              \"literal_value\": 100\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"selected_for_notification\"\n            }\n          ],\n          \"constraints\": [\n            \"仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。\",\n            \"urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。\"\n          ]\n        },\n        {\n          \"instruction_ref\": \"dispatch_selection\",\n          \"opcode\": \"dispatch\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"selected_for_notification\"\n            }\n          ],\n          \"outputs\": [],\n          \"constraints\": []\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"send_notification\",\n      \"block_name\": \"Send notification for selected event\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"send_notify\",\n          \"opcode\": \"notify.send\",\n          \"inputs\": [\n            {\n              \"type\": \"external_resource\",\n              \"identifier\": \"notify.send\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"recipient\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"summary\"\n            }\n          ],\n          \"outputs\": [],\n          \"constraints\": [\n            \"对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。\",\n            \"notify.send 的 body 参数直接取该记录的 summary 字段原值。\"\n          ]\n        },\n        {\n          \"instruction_ref\": \"go_next_after_send\",\n          \"opcode\": \"dispatch\",\n          \"inputs\": [],\n          \"outputs\": [],\n          \"constraints\": []\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"finish\",\n      \"block_name\": \"Finish processing\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"return_done\",\n          \"opcode\": \"return\",\n          \"inputs\": [],\n          \"outputs\": [],\n          \"constraints\": []\n        }\n      ],\n      \"constraints\": []\n    }\n  ],\n  \"edges\": [\n    {\n      \"source_block_ref\": \"read_events\",\n      \"target_block_ref\": \"next_event\",\n      \"condition_text\": null\n    },\n    {\n      \"source_block_ref\": \"next_event\",\n      \"target_block_ref\": \"evaluate_record\",\n      \"condition_text\": \"has_more_records is true\"\n    },\n    {\n      \"source_block_ref\": \"next_event\",\n      \"target_block_ref\": \"finish\",\n      \"condition_text\": \"has_more_records is false\"\n    },\n    {\n      \"source_block_ref\": \"evaluate_record\",\n      \"target_block_ref\": \"send_notification\",\n      \"condition_text\": \"selected_for_notification is true\"\n    },\n    {\n      \"source_block_ref\": \"evaluate_record\",\n      \"target_block_ref\": \"next_event\",\n      \"condition_text\": \"selected_for_notification is false\"\n    },\n    {\n      \"source_block_ref\": \"send_notification\",\n      \"target_block_ref\": \"next_event\",\n      \"condition_text\": null\n    }\n  ],\n  \"diagnostics\": [\n    \"历史示例（当前流程不执行）中的 count.txt 写入未提取为执行行为。\"\n  ]\n}",
+  "diagnostics": [
+    "candidate warning: 历史示例（当前流程不执行）中的 count.txt 写入未提取为执行行为。"
+  ],
+  "status": "complete",
+  "cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "未选中的记录不调用 notify.send。",
+      "整份流程禁止将 access_token 字段发送给任何接收对象。",
+      "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "Read events.json",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "read_events_json",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "events.json",
+                "literal_value": null,
+                "semantic_name": "events.json"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "literal_value": null,
+                "semantic_name": "event_records"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_events_json"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_to_iteration"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "Get next event record",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "get_next_event_record",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "literal_value": null,
+                "semantic_name": "event_records"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "current_event_record"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "literal_value": null,
+                "semantic_name": "has_more_records"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "get_next_event_record"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "literal_value": null,
+                "semantic_name": "has_more_records"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_has_more"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "Extract fields and evaluate notification condition",
+        "instructions": [
+          {
+            "id": "ir_005",
+            "opcode": "extract_notification_fields",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "current_event_record"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "literal_value": null,
+                "semantic_name": "recipient"
+              },
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "literal_value": null,
+                "semantic_name": "summary"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "literal_value": null,
+                "semantic_name": "value"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "literal_value": null,
+                "semantic_name": "urgent"
+              },
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "literal_value": null,
+                "semantic_name": "opted_out"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "extract_notification_fields"
+          },
+          {
+            "id": "ir_006",
+            "opcode": "evaluate_notification_condition",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "literal_value": null,
+                "semantic_name": "value"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "literal_value": null,
+                "semantic_name": "urgent"
+              },
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "literal_value": null,
+                "semantic_name": "opted_out"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": 100,
+                "semantic_name": null
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "literal_value": null,
+                "semantic_name": "selected_for_notification"
+              }
+            ],
+            "constraints": [
+              "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+              "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "evaluate_notification_condition"
+          },
+          {
+            "id": "ir_007",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "literal_value": null,
+                "semantic_name": "selected_for_notification"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_selection"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "Send notification for selected event",
+        "instructions": [
+          {
+            "id": "ir_008",
+            "opcode": "notify.send",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "notify.send",
+                "literal_value": null,
+                "semantic_name": "notify.send"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "literal_value": null,
+                "semantic_name": "recipient"
+              },
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "literal_value": null,
+                "semantic_name": "summary"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+              "notify.send 的 body 参数直接取该记录的 summary 字段原值。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "send_notify"
+          },
+          {
+            "id": "ir_009",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_next_after_send"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "Finish processing",
+        "instructions": [
+          {
+            "id": "ir_010",
+            "opcode": "return",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_done"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": "has_more_records is true"
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_005",
+        "condition_text": "has_more_records is false"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_004",
+        "condition_text": "selected_for_notification is true"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_002",
+        "condition_text": "selected_for_notification is false"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_002",
+        "condition_text": null
+      }
+    ],
+    "declared_context_keys": []
+  }
+}

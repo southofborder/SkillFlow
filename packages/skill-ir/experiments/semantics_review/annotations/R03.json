@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "sample_id": "R03",
+  "group": "upstream",
+  "expression": "original",
+  "language": "en",
+  "split": "development",
+  "coverage_targets": [
+    "actual_behavior",
+    "code_boundary",
+    "condition_preservation",
+    "cross_file_reference",
+    "data_destination",
+    "data_source",
+    "fallback_path",
+    "instruction_vs_suggestion",
+    "local_constraint",
+    "must_not_infer",
+    "output_delivery",
+    "parameter_omission",
+    "parameter_scope",
+    "precondition",
+    "prohibition",
+    "retry_boundaries",
+    "stop_condition"
+  ],
+  "facts": [
+    {
+      "id": "R03-F01",
+      "kind": "condition",
+      "statement": "先在仓库验证 gh auth status；未认证时请用户登录且具备所需 scope，之后才继续。",
+      "scope": {
+        "level": "block",
+        "target": "authentication gate"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 29,
+          "end_line": 31,
+          "quote": "1. Verify gh authentication.\n   - Run `gh auth status` in the repo.\n   - If unauthenticated, ask the user to run `gh auth login` (ensuring repo + workflow scopes) before proceeding."
+        }
+      ],
+      "coverage_tags": [
+        "precondition",
+        "condition_preservation",
+        "stop_condition"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F02",
+      "kind": "data_flow",
+      "statement": "用户提供的 PR 号或 URL 直接作为 PR 标识；省略时读取当前分支 PR，后续 failing-check 查询消费这个解析结果。",
+      "scope": {
+        "level": "block",
+        "target": "resolve PR then inspect"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 16,
+          "end_line": 20,
+          "quote": "## Inputs\n\n- `repo`: path inside the repo (default `.`)\n- `pr`: PR number or URL (optional; defaults to current branch PR)\n- `gh` authentication for the repo host"
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 32,
+          "end_line": 38,
+          "quote": "2. Resolve the PR.\n   - Prefer the current branch PR: `gh pr view --json number,url`.\n   - If the user provides a PR number or URL, use that directly.\n3. Inspect failing checks (GitHub Actions only).\n   - Preferred: run the bundled script (handles gh field drift and job-log fallbacks):\n     - `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"<number-or-url>\"`\n     - Add `--json` for machine-friendly output."
+        }
+      ],
+      "coverage_tags": [
+        "parameter_omission",
+        "data_source",
+        "data_destination"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F03",
+      "kind": "behavior",
+      "statement": "首选运行 bundled inspect_pr_checks.py 取得失败检查、GitHub Actions 日志和失败片段；可通过 --json 获取供总结的机器输出，脚本作为一个调用边界保留。",
+      "scope": {
+        "level": "operation",
+        "target": "inspect_pr_checks.py"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 35,
+          "end_line": 38,
+          "quote": "3. Inspect failing checks (GitHub Actions only).\n   - Preferred: run the bundled script (handles gh field drift and job-log fallbacks):\n     - `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"<number-or-url>\"`\n     - Add `--json` for machine-friendly output."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 60,
+          "end_line": 69,
+          "quote": "## Bundled Resources\n\n### scripts/inspect_pr_checks.py\n\nFetch failing PR checks, pull GitHub Actions logs, and extract a failure snippet. Exits non-zero when failures remain so it can be used in automation.\n\nUsage examples:\n- `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"123\"`\n- `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --pr \"https://github.com/org/repo/pull/123\" --json`\n- `python \"<path-to-skill>/scripts/inspect_pr_checks.py\" --repo \".\" --max-lines 200 --context 40`"
+        }
+      ],
+      "coverage_tags": [
+        "actual_behavior",
+        "code_boundary",
+        "cross_file_reference",
+        "output_delivery"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F04",
+      "kind": "condition",
+      "statement": "手动回退查询若 JSON 字段被 gh 拒绝，按 gh 返回的可用字段重试；脚本同样用 available_fields 筛选 fallback_fields，无可用字段或再失败则返回。",
+      "scope": {
+        "level": "block",
+        "target": "gh field compatibility fallback"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 39,
+          "end_line": 44,
+          "quote": "   - Manual fallback:\n     - `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow`\n       - If a field is rejected, rerun with the available fields reported by `gh`.\n     - For each failing check, extract the run id from `detailsUrl` and run:\n       - `gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha`\n       - `gh run view <run_id> --log`"
+        },
+        {
+          "file": "scripts/inspect_pr_checks.py",
+          "start_line": 182,
+          "end_line": 215,
+          "quote": "def fetch_checks(pr_value: str, repo_root: Path) -> list[dict[str, Any]] | None:\n    primary_fields = [\"name\", \"state\", \"conclusion\", \"detailsUrl\", \"startedAt\", \"completedAt\"]\n    result = run_gh_command(\n        [\"pr\", \"checks\", pr_value, \"--json\", \",\".join(primary_fields)],\n        cwd=repo_root,\n    )\n    if result.returncode != 0:\n        message = \"\\n\".join(filter(None, [result.stderr, result.stdout])).strip()\n        available_fields = parse_available_fields(message)\n        if available_fields:\n            fallback_fields = [\n                \"name\",\n                \"state\",\n                \"bucket\",\n                \"link\",\n                \"startedAt\",\n                \"completedAt\",\n                \"workflow\",\n            ]\n            selected_fields = [field for field in fallback_fields if field in available_fields]\n            if not selected_fields:\n                print(\"Error: no usable fields available for gh pr checks.\", file=sys.stderr)\n                return None\n            result = run_gh_command(\n                [\"pr\", \"checks\", pr_value, \"--json\", \",\".join(selected_fields)],\n                cwd=repo_root,\n            )\n            if result.returncode != 0:\n                message = (result.stderr or result.stdout or \"\").strip()\n                print(message or \"Error: gh pr checks failed.\", file=sys.stderr)\n                return None\n        else:\n            print(message or \"Error: gh pr checks failed.\", file=sys.stderr)\n            return None"
+        }
+      ],
+      "coverage_tags": [
+        "cross_file_reference",
+        "fallback_path",
+        "retry_boundaries",
+        "parameter_scope"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F05",
+      "kind": "data_flow",
+      "statement": "从失败检查的 detailsUrl 提取 run id 并读取对应 run 元信息和日志；run 日志报告仍在运行中且有 job id 时回退至 job logs。手动 gh api 回退将日志重定向写入指定的 <path>；脚本回退返回内存中的日志内容及状态，失败或尚未完成分别保留状态。",
+      "scope": {
+        "level": "block",
+        "target": "log retrieval"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 42,
+          "end_line": 46,
+          "quote": "     - For each failing check, extract the run id from `detailsUrl` and run:\n       - `gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha`\n       - `gh run view <run_id> --log`\n     - If the run log says it is still in progress, fetch job logs directly:\n       - `gh api \"/repos/<owner>/<repo>/actions/jobs/<job_id>/logs\" > \"<path>\"`"
+        },
+        {
+          "file": "scripts/inspect_pr_checks.py",
+          "start_line": 333,
+          "end_line": 355,
+          "quote": "def fetch_check_log(\n    run_id: str,\n    job_id: str | None,\n    repo_root: Path,\n) -> tuple[str, str, str]:\n    log_text, log_error = fetch_run_log(run_id, repo_root)\n    if not log_error:\n        return log_text, \"\", \"ok\"\n\n    if is_log_pending_message(log_error) and job_id:\n        job_log, job_error = fetch_job_log(job_id, repo_root)\n        if job_log:\n            return job_log, \"\", \"ok\"\n        if job_error and is_log_pending_message(job_error):\n            return \"\", job_error, \"pending\"\n        if job_error:\n            return \"\", job_error, \"error\"\n        return \"\", log_error, \"pending\"\n\n    if is_log_pending_message(log_error):\n        return \"\", log_error, \"pending\"\n\n    return \"\", log_error, \"error\""
+        },
+        {
+          "file": "scripts/inspect_pr_checks.py",
+          "start_line": 366,
+          "end_line": 377,
+          "quote": "def fetch_job_log(job_id: str, repo_root: Path) -> tuple[str, str]:\n    repo_slug = fetch_repo_slug(repo_root)\n    if not repo_slug:\n        return \"\", \"Error: unable to resolve repository name for job logs.\"\n    endpoint = f\"/repos/{repo_slug}/actions/jobs/{job_id}/logs\"\n    returncode, stdout_bytes, stderr = run_gh_command_raw([\"api\", endpoint], cwd=repo_root)\n    if returncode != 0:\n        message = (stderr or stdout_bytes.decode(errors=\"replace\")).strip()\n        return \"\", message or \"gh api job logs failed\"\n    if is_zip_payload(stdout_bytes):\n        return \"\", \"Job logs returned a zip archive; unable to parse.\"\n    return stdout_bytes.decode(errors=\"replace\"), \"\""
+        }
+      ],
+      "coverage_tags": [
+        "data_source",
+        "data_destination",
+        "cross_file_reference",
+        "condition_preservation",
+        "fallback_path"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F06",
+      "kind": "constraint",
+      "statement": "非 GitHub Actions 检查标为 external，只报告 URL；禁止进入 Buildkite 等外部供应商的调查，不能把供应商能力说明转换成调用。",
+      "scope": {
+        "level": "block",
+        "target": "external provider branch"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 47,
+          "end_line": 49,
+          "quote": "4. Scope non-GitHub Actions checks.\n   - If `detailsUrl` is not a GitHub Actions run, label it as external and only report the URL.\n   - Do not attempt Buildkite or other providers; keep the workflow lean."
+        },
+        {
+          "file": "scripts/inspect_pr_checks.py",
+          "start_line": 244,
+          "end_line": 257,
+          "quote": "    url = check.get(\"detailsUrl\") or check.get(\"link\") or \"\"\n    run_id = extract_run_id(url)\n    job_id = extract_job_id(url)\n    base: dict[str, Any] = {\n        \"name\": check.get(\"name\", \"\"),\n        \"detailsUrl\": url,\n        \"runId\": run_id,\n        \"jobId\": job_id,\n    }\n\n    if run_id is None:\n        base[\"status\"] = \"external\"\n        base[\"note\"] = \"No GitHub Actions run id detected in detailsUrl.\"\n        return base"
+        }
+      ],
+      "coverage_tags": [
+        "prohibition",
+        "local_constraint",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F07",
+      "kind": "data_flow",
+      "statement": "向用户汇报失败检查名、run URL 和简短日志片段，缺失日志必须显式标出；之后提出修复计划，获得明确批准后才应用计划。",
+      "scope": {
+        "level": "block",
+        "target": "summary and approval gate"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 50,
+          "end_line": 58,
+          "quote": "5. Summarize failures for the user.\n   - Provide the failing check name, run URL (if any), and a concise log snippet.\n   - Call out missing logs explicitly.\n6. Create a plan.\n   - Use the `create-plan` skill to draft a concise plan and request approval.\n7. Implement after approval.\n   - Apply the approved plan, summarize diffs/tests, and ask about opening a PR.\n8. Recheck status.\n   - After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+        }
+      ],
+      "coverage_tags": [
+        "output_delivery",
+        "data_destination",
+        "precondition",
+        "condition_preservation"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F08",
+      "kind": "must_not_infer",
+      "statement": "修复后原文只要求建议重跑相关测试和 gh pr checks；不能把该建议或询问开 PR 改写成已自动运行测试或已打开 PR。",
+      "scope": {
+        "level": "block",
+        "target": "after approved changes"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 55,
+          "end_line": 58,
+          "quote": "7. Implement after approval.\n   - Apply the approved plan, summarize diffs/tests, and ask about opening a PR.\n8. Recheck status.\n   - After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+        }
+      ],
+      "coverage_tags": [
+        "instruction_vs_suggestion",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R03-F09",
+      "kind": "condition",
+      "statement": "脚本检测不到失败检查时打印消息并以 0 退出；存在失败检查时输出结果后以 1 退出。非零返回码不能直接被理解为没有产生可用分析结果。",
+      "scope": {
+        "level": "operation",
+        "target": "inspect_pr_checks.py result"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 64,
+          "end_line": 64,
+          "quote": "Fetch failing PR checks, pull GitHub Actions logs, and extract a failure snippet. Exits non-zero when failures remain so it can be used in automation."
+        },
+        {
+          "file": "scripts/inspect_pr_checks.py",
+          "start_line": 110,
+          "end_line": 135,
+          "quote": "    checks = fetch_checks(pr_value, repo_root)\n    if checks is None:\n        return 1\n\n    failing = [c for c in checks if is_failing(c)]\n    if not failing:\n        print(f\"PR #{pr_value}: no failing checks detected.\")\n        return 0\n\n    results = []\n    for check in failing:\n        results.append(\n            analyze_check(\n                check,\n                repo_root=repo_root,\n                max_lines=max(1, args.max_lines),\n                context=max(1, args.context),\n            )\n        )\n\n    if args.json:\n        print(json.dumps({\"pr\": pr_value, \"results\": results}, indent=2))\n    else:\n        render_results(pr_value, results)\n\n    return 1"
+        }
+      ],
+      "coverage_tags": [
+        "cross_file_reference",
+        "stop_condition",
+        "output_delivery",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    }
+  ],
+  "acceptable_variants": [
+    "脚本可保持单个黑盒调用；手动回退也可独立分支表示，不必展开每个 Python 函数。",
+    "失败日志的 pending/unavailable 可采用不同结果字段，但缺失状态必须显式。"
+  ],
+  "open_questions": [
+    "脚本以正则识别 run id，但正文按 GitHub Actions 来源限定；异常 URL 的实际归类边界需要共同确认。",
+    "create-plan 不可用时 Overview 允许内联计划，而步骤 6 直接要求使用；采用可用性条件是否足够？"
+  ],
+  "minimal_pair": null
+}

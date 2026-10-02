@@ -1,78 +1,94 @@
 # SkillFlow
 
-针对 Agent Skill(ClawHub 上的可下载 skill 包)的**数据过度暴露(Data Over-Exposure, DOE)**静态分析流水线。
+SkillFlow 面向 Agent Skills 开展任务相关的静态数据最小化分析。当前 **Skill-IR**
+已实现建图、受控回述与源文核对、有界反馈、安全与传播语义标注、聚焦审查及一次标注修复、确定性数据传播。
 
-核心问题:一个 skill 在完成它声称的任务时,是否把**超出任务必要范围的敏感数据**送过了信任边界(外部 LLM、外部服务、持久化存储)?必要的暴露不算发现,不必要的才算——这是 SkillFlow 区别于普通污点分析(taint analysis)的关键。
+**下一阶段是敏感性、任务必要性与 Data Over-Exposure（DOE）的综合判断。**
+当前传播交付完整事实文件 `doe-input.json`，尚不产生 DOE 结论。
+2026-09-15 已删除旧 SFG/FCG 引擎、旧 DOE 评分器及其流水线，不保留兼容转发。
 
-> **命名说明**:图引擎品牌层已更名(FCG→**SFG**),但运行时**保留**了内部选择器与目录以免破坏契约——`--phase fcg`/`--phase doe` 选择器、输出目录 `fcg/`/`doe/`、连接契约 CLI(`--fcg`/`--fcg-root`)均不变;SFG 侧单 skill 文件后缀为 `-sfg.json`、环境变量前缀 `SFG_*`,DOE 侧保持 `-doe.json` 后缀与 `DOE_*` 前缀。package 布局:SFG 现在是 **Python**(`packages/skill-sfg`,用 `python -m skill_sfg.batch` 运行),DOE 仍是 **JS**(`packages/skill-doe-analyzer`)。
->
-> 英文版见 [`README.md`](README.md)。
+[表示契约与一次修复](docs/SkillFlow-表示契约与一次标注修复.md) · [文档导航](docs/README.md) · [English](README.md)
 
-## 流水线概览
+## 当前主流程
 
 ```text
-ClawHub top-k  ──▶  1. 下载  ──▶  2. SFG 流图分析  ──▶  3. DOE 过度暴露评分
-   (按下载量)        zips/         fcg/skills/*-sfg.json  doe/skills/*-doe.json
+Skill 目录 / ZIP
+  → 模型提取候选，程序编译 CFG
+  → 结构与引用校验
+  → Lean 生成受控回述，程序检查实际文本往返
+  → 模型比较完整源文与受控回述
+  → 有明确差异时进行有界 CFG 反馈
+  → 一次安全与传播语义标注，编译模型观察
+  → 聚焦审查；有明确问题时完整修复标注一次并独立复审
+  → 确定性传播，生成 doe-input.json 与审查报告
+  → DOE 判断（下一阶段）
 ```
 
-- **下载** — 抓取 ClawHub 下载量前 k 个 skill zip(复用 `packages/skill-similarity-analyzer`)。
-- **SFG(Skill Flow Graph)** — 把每个 skill 解析成有向流图,叠加 `security_profile`(标签、标签流、边界观测)。提取时先判文件类型与内容块(代码块/表格/列点/散文/免责声明)再派发对应策略,规则优先、LLM 只兜底歧义。连边兼顾 recall(穷举类型兼容候选)与 precision(条件/guard 路由)。这是 DOE 的唯一输入。见 `packages/skill-sfg`(Python)。
-- **DOE(Data Over-Exposure)** — 对每个 `(observation × label_flow)` 评估单元,以规则 + LLM 两层设计算 `exposure × (1 - necessity)`。见 `packages/skill-doe-analyzer`(JS)。
+结构通过不等于源文语义完整；受控回述证明保持图中明确记录的事实，不证明原文提取、
+模型判断或操作执行正确。CFG 反馈重新完整提取；标注修复只生成新候选，不改写冻结图或历史结果。
 
-可选的 similarity grouping(`packages/skill-similarity-analyzer`)默认关闭。
+最新一次验证包括七例标注初审及按需一次修复，以及 001、010、013 三份既有 CFG 的单次核对。
+详情见[助手复核报告](packages/skill-ir/experiments/annotation_review/runs/repair-once-v1-20260929-132248/assistant-review.md)。
+已有 30 例及更早实验保留各自协议和模型身份，不能自动视为通过了最新流程。
 
-## 快速开始
+## 使用入口
 
-先在仓库根目录创建 `.env`(SFG 语义门控与 DOE LLM judge 默认运行,故需要 `LLM_API_KEY`):
-
-```dotenv
-LLM_API_KEY=<your-key>
-LLM_PROVIDER=openai
-LLM_ENDPOINT=https://xiaomuai.cn/v1/chat/completions
-LLM_MODEL=gpt-5.5
-LLM_TIMEOUT=30000
-```
-
-运行完整 pipeline:
+在仓库根目录使用 Python 3.10 或更高版本：
 
 ```powershell
-node scripts\skillflow-pipeline.js --k 100
+python -m pip install -e packages/skill-ir pytest
+python -m skill_ir --help
+python -m skill_ir.backtrace --help
+python -m skill_ir.feedback --help
+python -m skill_ir.security_profile --help
+python -m skill_ir.annotation_review --help
+python -m skill_ir.propagation --help
+python -m skill_ir analyze --input examples/simple_skill --output tmp/analysis.json
+python -m skill_ir render --input tmp/analysis.json --output tmp/graph.mmd
 ```
 
-或只跑某个阶段:
+`analyze` 默认调用模型；提供 `--candidate` 时离线编译。`render` 不调用模型。
+凭据配置模板为 [.env.example](.env.example)。当前项目使用官方 DeepSeek 服务，请求
+模型为 `deepseek-v4-flash`；实际响应模型名单独记录。
+完整说明见 [Skill-IR 使用说明](packages/skill-ir/README.md)。
+
+独立回述实验需要先构建固定版本的 Lean 打印器：
 
 ```powershell
-node scripts\skillflow-pipeline.js --k 100 --phase fcg
-node scripts\skillflow-pipeline.js --k 100 --phase doe
+# 在 packages/skill-ir/formal 中，使用 lean-toolchain 固定的工具链：
+lake build
+lake env lean ProofAudit.lean
+# 回到仓库根目录；prepare 不调用 API：
+python -m skill_ir.backtrace prepare --run-dir tmp/backtrace-review
 ```
 
-Dry run(只打印解析后的命令,不需要 LLM key):
+`run` 对 F01 原图与四个反例执行五次模型核对；`replay` 离线重放已保存的新版响应。
+早期实测可阅读 [F01 历史验收报告](packages/skill-ir/experiments/semantic_backtrace/runs/controlled-v2-f01-20260914T142804Z/acceptance.md)，
+不需要为查看结果重新调用 API。
 
-```powershell
-node scripts\skillflow-pipeline.js --k 100 --dry-run
-```
+## 目录与离线检查
 
-## 各 package
-
-| Package | 职责 |
+| 路径 | 当前用途 |
 | --- | --- |
-| `packages/skill-sfg`(Python) | 建流图 + `security_profile`(阶段 2,DOE 唯一输入) |
-| `packages/skill-doe-analyzer`(JS) | 逐评估单元给数据过度暴露打分(阶段 3,项目核心) |
-| `packages/skill-similarity-analyzer`(JS) | 下载 ClawHub zip;可选的 README/SKILL 相似度分组 |
+| `packages/skill-ir/` | 当前实现、证明、测试与实验工具 |
+| `dataset/skills/` | 30 份冻结的 Skill 语义评测输入 ZIP |
+| `result/ir-IPP/` | 对应的 30 张 CFG PNG；是模型转换结果，不是标准答案 |
+| `result/suggestions/`、`result/advice_for_doe/` | 逐样例评审及先前压缩意见；历史目录名不代表已有新 DOE 实现 |
+| `packages/skill-similarity-analyzer/` | 独立 ClawHub 下载与相似度分组工具，不参与当前语义核对 |
+| `shared/`、`test/` | 该辅助工具仍使用的 JavaScript 支持代码与测试 |
+| `docs/`、`experiments/legacy_sfg_doe/` | 当前规范与保留的历史材料 |
 
-## 文档
+冻结 Skill、外置标注、原始模型调用和 PDF 生成器仍保留在 Skill-IR 实验目录。
+标注不进入 Skill 输入。既有 ZIP、PNG、评审、PDF 及历史记录没有因清理被重写。
 
-- [`PROJECT-OVERVIEW-CH.md`](PROJECT-OVERVIEW-CH.md) — 完整项目总览:核心概念、三阶段流水线、SFG↔DOE 的 `security_profile` 契约、DOE 内部结构、鲁棒性、成本。(英文:[`PROJECT-OVERVIEW.md`](PROJECT-OVERVIEW.md)。)
-- [`README-PIPELINE-CH.md`](README-PIPELINE-CH.md) — 一键 pipeline 参考:参数、阶段、环境变量、evidence 预算。(英文:[`README-PIPELINE.md`](README-PIPELINE.md)。)
-- `skillflow-pipeline.config.cjs` — 高级配置。
-
-## 测试
+以下检查不调用远程模型，也不执行 Skill 中的脚本：
 
 ```powershell
-# SFG 已是 Python(135 pytest):
-python -m pytest packages/skill-sfg/tests
-# DOE + similarity 仍是 JS(58 + 20):
-node --test "packages/skill-doe-analyzer/test/**/*.test.js" "packages/skill-similarity-analyzer/test/**/*.test.js"
+python -B -X utf8 -m pytest packages/skill-ir/tests -q -p no:cacheprovider
+python -B -X utf8 packages/skill-ir/experiments/semantics_baseline/tools/export_review_set.py --check
+node --test "test/*.test.js" "packages/skill-similarity-analyzer/test/*.test.js"
 ```
 
-213 测试全绿(SFG 135 + DOE 58 + similarity 20)。仓库根 `test/` 只放 pipeline/env 传输层测试;核心用例在各 package 下。
+更多内容见 [文档导航](docs/README.md)、[形式化工程](packages/skill-ir/formal/README.md)
+和 [实际受控文本保证](packages/skill-ir/formal/CONTROLLED_RETELLING.md)。
+旧流水线文档已作为 [历史材料](docs/history/legacy-sfg-doe/README.md) 保留。

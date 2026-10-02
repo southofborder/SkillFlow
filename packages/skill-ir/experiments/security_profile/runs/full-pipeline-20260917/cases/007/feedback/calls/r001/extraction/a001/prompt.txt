@@ -1,0 +1,1340 @@
+You analyze one complete Skill package and return exactly one JSON object.
+
+Read every readable file before making any extraction decision. Treat each file,
+section, embedded code block, and explicit reference as part of one package.
+Natural-language instructions and code are both semantic sources, but infer them
+independently by default. Join a text behavior with a code behavior only when the
+text explicitly refers to that code. Do not invent relationships from proximity.
+
+Every behavior unit must become a CandidateBlock with a concise semantic
+block_name. Use block_ref only as a temporary machine reference. Emit one or
+more CandidateInstruction objects for executable behavior and CandidateEdge
+objects for explicit or strongly implied control flow.
+
+Treat code files and code blocks as black-box operations. Do not split internal
+loops, local variables, or internal control flow. Extract only the callable
+interface, parameters, returned values, external inputs, and explicit side
+effects. For a code behavior, preserve the original code body in
+metadata.script_content whenever it is available.
+
+Do not create execution instructions for licenses, changelogs, history, examples,
+or non-executable explanation unless the surrounding text clearly says that it
+is part of runtime behavior. Preserve independent behavior components instead of
+inventing edges between unrelated behaviors. Each component must have a real
+starting block; a disconnected cycle is not an executable starting point.
+
+Represent two different actions explicitly: acquiring data and computing results.
+Every result operand an instruction consumes must refer to an output of some
+instruction; literal constants and resource identifiers are different operand types. A value being mentioned in prose somewhere in the package never
+makes it available; only an instruction that produces it does.
+
+ACQUIRING DATA: Every actual read of runtime context, file/configuration contents,
+or returned data from an external API/tool/service is a real source CandidateBlock.
+Set data_source_kind to "context" or "external". A source block contains exactly one
+acquisition instruction followed by a dispatch or return terminator. One read may
+produce multiple outputs. Preserve conditional reads on their own paths; do not
+hoist every source to the entry block.
+
+For runtime context, use data_source_kind="context". The acquisition inputs
+must be non-empty context_key operands identifying keys in declared_context_keys.
+Only this acquisition may consume context_key operands. The declaration alone
+never makes a result available: the acquisition produces the named results used
+by later instructions. Name the acquisition for what is actually read, for example
+read_user_message or read_city_from_request. Use read_context only when the source
+does not give a more specific action. The data_source_kind and operand structure
+determine the source category, not the opcode spelling.
+
+For external acquisition, use data_source_kind="external" and a descriptive
+opcode such as read_file, http_get, or a named tool call. Include an
+external_resource identifier or a result, such as a dynamic file path, in its
+inputs. A resource identifies a file, API, tool, or service; it is not the data
+returned from it. A pure side effect without returned data can be an ordinary
+block. Keep literal constants in Operand.literal_value; do not create source
+blocks just to introduce literals or service handles.
+
+All opcodes are semantic strings under the same contract. There is no separate
+list of built-in business operations. Do not infer effects or audit findings
+from opcode spelling. Only dispatch and return have fixed control-flow roles as
+specified below. Preserve original code in metadata.script_content.
+
+NAMING OPERATIONS: Choose an action-and-object name that says what this instruction
+does, using details supported by the source: read_city_from_request,
+trim_message_whitespace, or send_slack_notification. A reader should understand
+the action from the opcode together with its operands, without relying only on
+the block name. When calling a function or tool explicitly named in the source,
+preserve that name, for example normalize_city or check_urgency. Do not invent
+processing steps, destinations, or effects to make a name more specific. Use the
+same opcode for the same behavior on different paths; a branch alone does not
+require a different operation name. These names are examples, not a vocabulary
+restriction or a list of operations with special validation rules.
+
+COMPUTING RESULTS: Set data_source_kind to null for ordinary behavior and computed
+transformations. Every instruction output is a result whose identifier you choose,
+and that identifier must be unique across the WHOLE candidate: never give the same identifier
+to two produced values, even in different blocks. Choose a meaningful result identifier based on what it
+holds, for example "extracted_city" or "weather_report".
+
+USING RESULTS: To consume a value, write a result input naming it exactly
+as the producing instruction named it in its outputs, whichever block that
+instruction lives in. Do not re-acquire or relay a value on the way: a block that
+neither reads nor produces a value does not mention it, and later readers refer directly to the original result identifier. The compiler
+checks that a control-flow path connects the producer to the reader. To change a value, consume it and
+produce a NEW identifier for the result, so the original identifier keeps its original
+meaning everywhere it appears.
+
+Say what the package says and let the analysis work out whether a path connects each result producer to its reader. A block after a merge may reference a value that only one branch
+produces, and a block inside a loop may reference a value that a later block on
+the backedge produces. Neither is an error to avoid: do not add a second producer
+to make such a read look safe, and do not drop the read.
+
+Use dispatch as the final instruction of a block that has outgoing edges. Use
+return as the final instruction of a block that ends execution. Put every value
+used to choose a branch in dispatch.inputs, including computed predicates. Edge
+condition_text text is only a readable description; it never declares data dependencies.
+Both dispatch and return must have empty outputs; return consumes its result
+through inputs. A block must not have instructions after its terminator.
+
+ENDING BLOCKS: When a behavior finishes the path, return may appear at the end of
+that block. An independent branch may consist of return alone. Return a
+source-specified literal or an existing result directly; do not introduce
+preparation, assignment, or wrapping operations just to pass it to return.
+Preserve actual branch/merge boundaries and independent behavior components.
+
+CONSTRAINTS: Preserve constraint wording from the source in constraints: list[str].
+Place Skill-wide constraints on IRAnalysisCandidate, block-scoped constraints on
+CandidateBlock, and operation-scoped constraints on CandidateInstruction. The
+containing level expresses scope; use [] when none applies. If scope is unclear,
+report that uncertainty in diagnostics rather than promoting it to a Skill-wide
+rule. Actual data acquisition, processing, and transfer must still appear in
+operands and control flow, not only in constraint text. A constraint alone does
+not introduce a conversion, validation, or other execution step.
+
+Return only JSON matching the schema below; do not wrap it in Markdown fences
+and do not add commentary.
+
+
+Candidate JSON Schema:
+
+{
+  "$defs": {
+    "CandidateBlock": {
+      "additionalProperties": false,
+      "description": "A behavior unit proposed by the LLM.\n\nA block states only what happens inside it.  Which of its values are\nreadable elsewhere is a property of the paths through the graph, so it is\nchecked against CFG paths rather than declared here.",
+      "properties": {
+        "block_ref": {
+          "title": "Block Ref",
+          "type": "string"
+        },
+        "block_name": {
+          "title": "Block Name",
+          "type": "string"
+        },
+        "data_source_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "context",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Source Kind"
+        },
+        "instructions": {
+          "items": {
+            "$ref": "#/$defs/CandidateInstruction"
+          },
+          "title": "Instructions",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "block_ref",
+        "block_name"
+      ],
+      "title": "CandidateBlock",
+      "type": "object"
+    },
+    "CandidateEdge": {
+      "additionalProperties": false,
+      "description": "A control-flow edge proposed by the LLM.",
+      "properties": {
+        "source_block_ref": {
+          "title": "Source Block Ref",
+          "type": "string"
+        },
+        "target_block_ref": {
+          "title": "Target Block Ref",
+          "type": "string"
+        },
+        "condition_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Text"
+        }
+      },
+      "required": [
+        "source_block_ref",
+        "target_block_ref"
+      ],
+      "title": "CandidateEdge",
+      "type": "object"
+    },
+    "CandidateInstruction": {
+      "additionalProperties": false,
+      "description": "An instruction proposed by the LLM before canonical compilation.",
+      "properties": {
+        "instruction_ref": {
+          "title": "Instruction Ref",
+          "type": "string"
+        },
+        "opcode": {
+          "title": "Opcode",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instruction_ref",
+        "opcode"
+      ],
+      "title": "CandidateInstruction",
+      "type": "object"
+    },
+    "Operand": {
+      "additionalProperties": false,
+      "description": "One typed instruction input or output.\n\nRESULT identifies an instruction result; CONTEXT_KEY identifies a declared\nruntime entry; EXTERNAL_RESOURCE identifies a file, tool, API, or service.\nOnly LITERAL stores a payload in ``literal_value``. ``semantic_name`` keeps\nthe extractor's wording when compilation assigns a result identifier.\nResult identifiers are global; a single instruction can produce several.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/OperandType"
+        },
+        "identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identifier"
+        },
+        "literal_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Literal Value"
+        },
+        "semantic_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Name"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Operand",
+      "type": "object"
+    },
+    "OperandType": {
+      "description": "The source or destination kind of an operand.",
+      "enum": [
+        "literal",
+        "context_key",
+        "result",
+        "external_resource"
+      ],
+      "title": "OperandType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete untrusted analysis returned by the LLM.",
+  "properties": {
+    "entry_block_ref": {
+      "title": "Entry Block Ref",
+      "type": "string"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "declared_context_keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Declared Context Keys",
+      "type": "array"
+    },
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/CandidateBlock"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/CandidateEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entry_block_ref"
+  ],
+  "title": "IRAnalysisCandidate",
+  "type": "object"
+}
+
+Straight-line example: read, trim, then log progress and return in the same block:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the user's input message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_user_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_normalize",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "normalize",
+      "block_name": "Remove leading and trailing whitespace from the message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "normalize_message",
+          "opcode": "trim_message_whitespace",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_record",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "record",
+      "block_name": "Record progress and return the normalized message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "record_progress",
+          "opcode": "log_progress",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "ready"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_message",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "normalize"
+    },
+    {
+      "source_block_ref": "normalize",
+      "target_block_ref": "record"
+    }
+  ],
+  "diagnostics": []
+}
+
+Branch example: acquire only on one path, then reference both paths after the merge:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the alert message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_alert_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_decide",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "decide",
+      "block_name": "Check urgency",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_urgency",
+          "opcode": "check_message_urgency",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_path",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "send_alert",
+      "block_name": "Send the alert and read the Slack receipt",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "send_slack",
+          "opcode": "post_slack_alert",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "slack"
+            },
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_alert",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "skip_alert",
+      "block_name": "Prepare the non-urgent note",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "make_skip_note",
+          "opcode": "prepare_no_alert_note",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "No alert needed"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_skip",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "reply",
+      "block_name": "Report the outcome of whichever path ran",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_reply",
+          "opcode": "format_alert_outcome",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            },
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            },
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_outcome",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "decide"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "send_alert",
+      "condition_text": "urgent"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "skip_alert",
+      "condition_text": "not urgent"
+    },
+    {
+      "source_block_ref": "send_alert",
+      "target_block_ref": "reply"
+    },
+    {
+      "source_block_ref": "skip_alert",
+      "target_block_ref": "reply"
+    }
+  ],
+  "diagnostics": []
+}
+
+The examples illustrate the contract only. Extract the actual package below; do not copy example behaviors that are absent from it.
+
+Complete Skill package:
+
+<skill-file path="SKILL.md" kind="markdown" size="1019">
+
+---
+name: catalog-query
+description: Query an index once using a supplied request and preserve optional-parameter semantics.
+---
+
+# Catalog Query
+
+1. Capability note: index.search supports fuzzy matching; this note does not request fuzzy expansion in this workflow.
+2. Read the user-supplied request.json, which contains term and may contain from_date and limit.
+3. Call index.search exactly once, using request.term unchanged as its query argument.
+4. When from_date is present, pass its value unchanged; the accepted format is YYYY-MM-DD.
+5. When from_date is missing, omit the from_date argument.
+6. When limit is present, pass its value unchanged as the limit argument.
+7. When limit is missing, omit the limit argument.
+8. Do not invoke index.delete anywhere in this workflow.
+9. Parameter descriptions are call requirements and do not instruct pre-call validation or normalization.
+10. After the search, write the response's total value to local count.txt.
+11. Return the search response's items value unchanged.
+
+
+</skill-file>
+
+本次进行一次基于证据的完整重新提取。
+以上固定契约和完整原始 Skill 始终有效。下面 previous_cfg 是上一轮实际图，属于待纠正结果；
+它不是候选 JSON，也不是标准答案。请返回完整候选 JSON，交给既有编译器重新赋号和校验。
+旧图 ID 和图位置只用于理解下面的反馈，不要求沿用，不能猜测它们与旧候选 ID 的映射。
+重新阅读完整原文，检查并纠正全部明确差异，同时检查是否引入了新遗漏、错转、额外行为或冲突。
+原文优先：反馈及建议只是待核实的纠错依据，不得为了满足建议补造原文没有的行为、参数或保证。
+unknown_reminders 是未决提示，不要求猜测缺失的语义；保留原文真实的不确定性。
+每项 current_facts 和 suggestion_targets 都由程序从上一轮实际图的位置读取；标签和约束声明
+本身不等于执行操作，删除的操作不能根据残留标题补回。业务输入只包含最近一轮图和核对差异。
+只输出符合以上既有候选契约的完整 JSON，不输出 JSON Patch、旧图片段或说明文字。
+
+{
+  "previous_cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "Call index.search exactly once.",
+      "Do not invoke index.delete anywhere in this workflow.",
+      "Parameter descriptions are call requirements and do not instruct pre-call validation or normalization.",
+      "index.search supports fuzzy matching; this note does not request fuzzy expansion in this workflow."
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "Read the user-supplied request.json",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "read_request_json",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "request.json",
+                "semantic_name": "request.json"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "request_data"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_request_file"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_extract_request_metadata"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "Extract request term and optional-parameter presence flags",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "extract_request_term",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "request_data"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "request_term"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "extract_request_term"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "check_from_date_presence",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "request_data"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "from_date_present"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "check_from_date_presence"
+          },
+          {
+            "id": "ir_005",
+            "opcode": "check_limit_presence",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "request_data"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "limit_present"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "check_limit_presence"
+          },
+          {
+            "id": "ir_006",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "from_date_present"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_from_date_presence"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "Extract from_date when present",
+        "instructions": [
+          {
+            "id": "ir_007",
+            "opcode": "extract_request_from_date",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "request_data"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "request_from_date"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "extract_request_from_date"
+          },
+          {
+            "id": "ir_008",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_limit_decision"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "Decide whether limit is present",
+        "instructions": [
+          {
+            "id": "ir_009",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "limit_present"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_limit_presence"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "Extract limit when present",
+        "instructions": [
+          {
+            "id": "ir_010",
+            "opcode": "extract_request_limit",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "request_data"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "request_limit"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "extract_request_limit"
+          },
+          {
+            "id": "ir_011",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_search"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_006": {
+        "block_id": "block_006",
+        "block_name": "Call index.search once with request.term and optional from_date/limit",
+        "instructions": [
+          {
+            "id": "ir_012",
+            "opcode": "index.search",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "index.search",
+                "semantic_name": "index.search"
+              },
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "request_term"
+              },
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "request_from_date"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "request_limit"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "from_date_present"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "limit_present"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "search_response"
+              }
+            ],
+            "constraints": [
+              "Pass request.term unchanged as query argument.",
+              "When from_date is present, pass its value unchanged; the accepted format is YYYY-MM-DD.",
+              "When from_date is missing, omit the from_date argument.",
+              "When limit is present, pass its value unchanged as the limit argument.",
+              "When limit is missing, omit the limit argument.",
+              "Do not validate or normalize parameters before call."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "search_index_once"
+          },
+          {
+            "id": "ir_013",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_process_response"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_007": {
+        "block_id": "block_007",
+        "block_name": "Write total to count.txt and return items",
+        "instructions": [
+          {
+            "id": "ir_014",
+            "opcode": "extract_search_total",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "search_response"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "total"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "extract_search_total"
+          },
+          {
+            "id": "ir_015",
+            "opcode": "write_file",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "count.txt",
+                "semantic_name": "count.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "total"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "write_count"
+          },
+          {
+            "id": "ir_016",
+            "opcode": "extract_search_items",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "search_response"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "items"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "extract_search_items"
+          },
+          {
+            "id": "ir_017",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "items"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Return the search response's items value unchanged."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "return_items"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": "from_date is present"
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_004",
+        "condition_text": "from_date is missing"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_004",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_005",
+        "condition_text": "limit is present"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_006",
+        "condition_text": "limit is missing"
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_006",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_006",
+        "target_block_id": "block_007",
+        "condition_text": null
+      }
+    ],
+    "declared_context_keys": []
+  },
+  "explicit_differences": [
+    {
+      "id": "finding_9",
+      "status": "mistranslated",
+      "source_requirement": "源文要求说明：参数描述是调用要求，且不指示调用前校验或规范化。",
+      "actual_representation": "受控操作级约束 /blocks/5/instructions/0/constraints/5 写为 'Do not validate or normalize parameters before call.'",
+      "reason": "源文是说明性/非指示性表述，受控文字改为直接禁止校验/规范化，增强了义务强度，属于错转。",
+      "source_refs": [
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 16,
+          "end_line": 16,
+          "quote": "9. Parameter descriptions are call requirements and do not instruct pre-call validation or normalization."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/constraints/5",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "declared_constraint",
+        "interpretation"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/constraints/5",
+          "value": "Do not validate or normalize parameters before call."
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/5/instructions/0/constraints/5"
+          ],
+          "change": "改为与源文一致：'Parameter descriptions are call requirements and do not instruct pre-call validation or normalization.' 或删除该重复约束，保留图级 /constraints/2。",
+          "reason": "避免将不指示误转为禁止，保持义务强度一致。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_006/instructions/0/constraints/5",
+              "value": "Do not validate or normalize parameters before call."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unknown_reminders": [
+    {
+      "id": "finding_10",
+      "status": "unknown",
+      "source_requirement": "源文只要求 index.search 使用 request.term 作为 query，并在 from_date/limit 存在时传值、缺失时省略；未说明是否向 index.search 传入 presence flags。",
+      "actual_representation": "index.search 输入列表含 result_003 from_date_present、result_004 limit_present，且输入列表未区分调用参数与控制操作数。",
+      "reason": "若 presence flags 是调用参数，则源文无依据；若仅用于决定省略条件，则可能合法。受控文字未标明其角色。",
+      "source_refs": [
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 10,
+          "end_line": 10,
+          "quote": "3. Call index.search exactly once, using request.term unchanged as its query argument."
+        },
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 11,
+          "end_line": 11,
+          "quote": "4. When from_date is present, pass its value unchanged; the accepted format is YYYY-MM-DD."
+        },
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 12,
+          "end_line": 12,
+          "quote": "5. When from_date is missing, omit the from_date argument."
+        },
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 13,
+          "end_line": 13,
+          "quote": "6. When limit is present, pass its value unchanged as the limit argument."
+        },
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 14,
+          "end_line": 14,
+          "quote": "7. When limit is missing, omit the limit argument."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/inputs/2",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/inputs/3",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/inputs/4",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/inputs/5",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/constraints/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/constraints/2",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/constraints/3",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/constraints/4",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "insufficient"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/inputs/2",
+          "value": {
+            "type": "result",
+            "identifier": "result_005",
+            "semantic_name": "request_from_date"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/inputs/3",
+          "value": {
+            "type": "result",
+            "identifier": "result_006",
+            "semantic_name": "request_limit"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/inputs/4",
+          "value": {
+            "type": "result",
+            "identifier": "result_003",
+            "semantic_name": "from_date_present"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/inputs/5",
+          "value": {
+            "type": "result",
+            "identifier": "result_004",
+            "semantic_name": "limit_present"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/constraints/1",
+          "value": "When from_date is present, pass its value unchanged; the accepted format is YYYY-MM-DD."
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/constraints/2",
+          "value": "When from_date is missing, omit the from_date argument."
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/constraints/3",
+          "value": "When limit is present, pass its value unchanged as the limit argument."
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/constraints/4",
+          "value": "When limit is missing, omit the limit argument."
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/5/instructions/0/inputs/4",
+            "fact:/blocks/5/instructions/0/inputs/5"
+          ],
+          "change": "标明这些 presence flags 是控制操作数而非 index.search 业务参数；若作为参数则移除。",
+          "reason": "消除源文未要求参数或条件建模不明的边界。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_006/instructions/0/inputs/4",
+              "value": {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "from_date_present"
+              }
+            },
+            {
+              "graph_pointer": "/blocks/block_006/instructions/0/inputs/5",
+              "value": {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "limit_present"
+              }
+            }
+          ]
+        }
+      ],
+      "unknown_reason": "受控文字未区分操作参数与控制操作数，无法判断 result_003/result_004 是否作为 index.search 实际调用参数传入。"
+    }
+  ]
+}

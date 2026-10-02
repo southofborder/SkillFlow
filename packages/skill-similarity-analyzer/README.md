@@ -1,8 +1,8 @@
 ﻿# Skill Similarity Analyzer
 
-`skill-similarity-analyzer` groups OpenClaw Skill zip packages by functional similarity. It reads only each package's `SKILL.md` and optional `README.md`, then writes grouped zip folders that can be passed directly to the SFG engine (`skill-sfg`) for later Skill Flow Graph analysis.
+`skill-similarity-analyzer` downloads and groups OpenClaw Skill zip packages for independent corpus sampling. Grouping reads only each package's `SKILL.md` and optional `README.md`, then writes folders containing copies of the original zip packages. Selected packages can be analyzed individually with `skill-ir`.
 
-This module does not perform over-exposure analysis, risk analysis, code scanning, or SFG construction.
+This optional sampling utility is separate from the current Skill-IR analysis and controlled semantic review workflow. Its similarity scores are sampling aids, not semantic fidelity or security judgments.
 
 ## Requirements
 
@@ -120,22 +120,21 @@ Per-group manifest. It records:
 - `SKILL.md` and `README.md` entry paths inside each zip
 - pairwise similarity evidence inside the group
 
-## Use With `skill-sfg`
+## Analyze a Selected Package With `skill-ir`
 
-After grouping, run SFG analysis over the run root. The SFG batch runner discovers skills from `similarity/grouping.json` (or `<root>/zips`), so point it at the same run root the similarity phase wrote to:
-
-```powershell
-cd packages\skill-sfg
-python -m skill_sfg.batch --root D:\projects\SkillFlow\results\clawhub-top-k100
-```
-
-To analyze a single skill directory or zip directly, use the CLI entry:
+Install the current analyzer from the repository root:
 
 ```powershell
-python -m skill_sfg.cli analyze "D:\datasets\skill-groups\groups\group_001\skill-a.zip" --output skill-a-sfg.json
+python -m pip install -e packages/skill-ir
 ```
 
-The grouped directories contain copied original zip packages, so the same run root feeds straight into the SFG batch runner.
+Choose one of the copied zip packages and pass that package to the analyzer:
+
+```powershell
+python -m skill_ir analyze --input "D:\datasets\skill-groups\groups\group_001\skill-a.zip" --output "D:\datasets\skill-analysis\skill-a.json"
+```
+
+This command performs model-based extraction and uses the configured API credentials. The `--input` value is a single Skill zip or unpacked Skill package, not the grouping output root or `grouping.json`. Grouping and downloading do not invoke `skill-ir` automatically. See the [Skill-IR usage and review documentation](../skill-ir/README.md) for offline candidates, rendering, and controlled semantic review.
 
 ## ClawHub Top Skills Automation
 
@@ -313,7 +312,6 @@ node src/index.js group "D:\datasets\skill-zips" --output "D:\datasets\skill-gro
 - Only zip packages are analyzed. A raw unpacked Skill directory is not treated as a Skill input unless it contains zip packages to scan.
 - Only `SKILL.md` and optional `README.md` are read from each zip.
 - The analyzer does not execute package code.
-- The analyzer does not call the SFG engine (`skill-sfg`).
+- The analyzer does not construct CFGs or invoke `skill-ir`.
 - The analyzer does not detect over-exposure, data leakage, or risk paths.
-- Similarity groups are intended as a preparation step for later SFG analysis.
-
+- Similarity groups support corpus selection independently of the main analysis and review workflow.

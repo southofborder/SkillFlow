@@ -1,0 +1,4866 @@
+You analyze one complete Skill package and return exactly one JSON object.
+
+Read every readable file before making any extraction decision. Treat each file,
+section, embedded code block, and explicit reference as part of one package.
+Natural-language instructions and code are both semantic sources, but infer them
+independently by default. Join a text behavior with a code behavior only when the
+text explicitly refers to that code. Do not invent relationships from proximity.
+
+Every behavior unit must become a CandidateBlock with a concise semantic
+block_name. Use block_ref only as a temporary machine reference. Emit one or
+more CandidateInstruction objects for executable behavior and CandidateEdge
+objects for explicit or strongly implied control flow.
+
+Treat code files and code blocks as black-box operations. Do not split internal
+loops, local variables, or internal control flow. Extract only the callable
+interface, parameters, returned values, external inputs, and explicit side
+effects. For a code behavior, preserve the original code body in
+metadata.script_content whenever it is available.
+
+Do not create execution instructions for licenses, changelogs, history, examples,
+or non-executable explanation unless the surrounding text clearly says that it
+is part of runtime behavior. Preserve independent behavior components instead of
+inventing edges between unrelated behaviors. Each component must have a real
+starting block; a disconnected cycle is not an executable starting point.
+
+Represent two different actions explicitly: acquiring data and computing results.
+Every result operand an instruction consumes must refer to an output of some
+instruction; literal constants and resource identifiers are different operand types. A value being mentioned in prose somewhere in the package never
+makes it available; only an instruction that produces it does.
+
+ACQUIRING DATA: Every actual read of runtime context, file/configuration contents,
+or returned data from an external API/tool/service is a real source CandidateBlock.
+Set data_source_kind to "context" or "external". A source block contains exactly one
+acquisition instruction followed by a dispatch or return terminator. One read may
+produce multiple outputs. Preserve conditional reads on their own paths; do not
+hoist every source to the entry block.
+
+For runtime context, use data_source_kind="context". The acquisition inputs
+must be non-empty context_key operands identifying keys in declared_context_keys.
+Only this acquisition may consume context_key operands. The declaration alone
+never makes a result available: the acquisition produces the named results used
+by later instructions. Name the acquisition for what is actually read, for example
+read_user_message or read_city_from_request. Use read_context only when the source
+does not give a more specific action. The data_source_kind and operand structure
+determine the source category, not the opcode spelling.
+
+For external acquisition, use data_source_kind="external" and a descriptive
+opcode such as read_file, http_get, or a named tool call. Include an
+external_resource identifier or a result, such as a dynamic file path, in its
+inputs. A resource identifies a file, API, tool, or service; it is not the data
+returned from it. A pure side effect without returned data can be an ordinary
+block. Keep literal constants in Operand.literal_value; do not create source
+blocks just to introduce literals or service handles.
+
+All opcodes are semantic strings under the same contract. There is no separate
+list of built-in business operations. Do not infer effects or audit findings
+from opcode spelling. Only dispatch and return have fixed control-flow roles as
+specified below. Preserve original code in metadata.script_content.
+
+NAMING OPERATIONS: Choose an action-and-object name that says what this instruction
+does, using details supported by the source: read_city_from_request,
+trim_message_whitespace, or send_slack_notification. A reader should understand
+the action from the opcode together with its operands, without relying only on
+the block name. When calling a function or tool explicitly named in the source,
+preserve that name, for example normalize_city or check_urgency. Do not invent
+processing steps, destinations, or effects to make a name more specific. Use the
+same opcode for the same behavior on different paths; a branch alone does not
+require a different operation name. These names are examples, not a vocabulary
+restriction or a list of operations with special validation rules.
+
+COMPUTING RESULTS: Set data_source_kind to null for ordinary behavior and computed
+transformations. Every instruction output is a result whose identifier you choose,
+and that identifier must be unique across the WHOLE candidate: never give the same identifier
+to two produced values, even in different blocks. Choose a meaningful result identifier based on what it
+holds, for example "extracted_city" or "weather_report".
+
+USING RESULTS: To consume a value, write a result input naming it exactly
+as the producing instruction named it in its outputs, whichever block that
+instruction lives in. Do not re-acquire or relay a value on the way: a block that
+neither reads nor produces a value does not mention it, and later readers refer directly to the original result identifier. The compiler
+checks that a control-flow path connects the producer to the reader. To change a value, consume it and
+produce a NEW identifier for the result, so the original identifier keeps its original
+meaning everywhere it appears.
+
+Say what the package says and let the analysis work out whether a path connects each result producer to its reader. A block after a merge may reference a value that only one branch
+produces, and a block inside a loop may reference a value that a later block on
+the backedge produces. Neither is an error to avoid: do not add a second producer
+to make such a read look safe, and do not drop the read.
+
+Use dispatch as the final instruction of a block that has outgoing edges. Use
+return as the final instruction of a block that ends execution. Put every value
+used to choose a branch in dispatch.inputs, including computed predicates. Edge
+condition_text text is only a readable description; it never declares data dependencies.
+Both dispatch and return must have empty outputs; return consumes its result
+through inputs. A block must not have instructions after its terminator.
+
+ENDING BLOCKS: When a behavior finishes the path, return may appear at the end of
+that block. An independent branch may consist of return alone. Return a
+source-specified literal or an existing result directly; do not introduce
+preparation, assignment, or wrapping operations just to pass it to return.
+Preserve actual branch/merge boundaries and independent behavior components.
+
+CONSTRAINTS: Preserve constraint wording from the source in constraints: list[str].
+Place Skill-wide constraints on IRAnalysisCandidate, block-scoped constraints on
+CandidateBlock, and operation-scoped constraints on CandidateInstruction. The
+containing level expresses scope; use [] when none applies. If scope is unclear,
+report that uncertainty in diagnostics rather than promoting it to a Skill-wide
+rule. Actual data acquisition, processing, and transfer must still appear in
+operands and control flow, not only in constraint text. A constraint alone does
+not introduce a conversion, validation, or other execution step.
+
+Return only JSON matching the schema below; do not wrap it in Markdown fences
+and do not add commentary.
+
+
+Candidate JSON Schema:
+
+{
+  "$defs": {
+    "CandidateBlock": {
+      "additionalProperties": false,
+      "description": "A behavior unit proposed by the LLM.\n\nA block states only what happens inside it.  Which of its values are\nreadable elsewhere is a property of the paths through the graph, so it is\nchecked against CFG paths rather than declared here.",
+      "properties": {
+        "block_ref": {
+          "title": "Block Ref",
+          "type": "string"
+        },
+        "block_name": {
+          "title": "Block Name",
+          "type": "string"
+        },
+        "data_source_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "context",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Source Kind"
+        },
+        "instructions": {
+          "items": {
+            "$ref": "#/$defs/CandidateInstruction"
+          },
+          "title": "Instructions",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "block_ref",
+        "block_name"
+      ],
+      "title": "CandidateBlock",
+      "type": "object"
+    },
+    "CandidateEdge": {
+      "additionalProperties": false,
+      "description": "A control-flow edge proposed by the LLM.",
+      "properties": {
+        "source_block_ref": {
+          "title": "Source Block Ref",
+          "type": "string"
+        },
+        "target_block_ref": {
+          "title": "Target Block Ref",
+          "type": "string"
+        },
+        "condition_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Text"
+        }
+      },
+      "required": [
+        "source_block_ref",
+        "target_block_ref"
+      ],
+      "title": "CandidateEdge",
+      "type": "object"
+    },
+    "CandidateInstruction": {
+      "additionalProperties": false,
+      "description": "An instruction proposed by the LLM before canonical compilation.",
+      "properties": {
+        "instruction_ref": {
+          "title": "Instruction Ref",
+          "type": "string"
+        },
+        "opcode": {
+          "title": "Opcode",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instruction_ref",
+        "opcode"
+      ],
+      "title": "CandidateInstruction",
+      "type": "object"
+    },
+    "Operand": {
+      "additionalProperties": false,
+      "description": "One typed instruction input or output.\n\nRESULT identifies an instruction result; CONTEXT_KEY identifies a declared\nruntime entry; EXTERNAL_RESOURCE identifies a file, tool, API, or service.\nOnly LITERAL stores a payload in ``literal_value``. ``semantic_name`` keeps\nthe extractor's wording when compilation assigns a result identifier.\nResult identifiers are global; a single instruction can produce several.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/OperandType"
+        },
+        "identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identifier"
+        },
+        "literal_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Literal Value"
+        },
+        "semantic_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Name"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Operand",
+      "type": "object"
+    },
+    "OperandType": {
+      "description": "The source or destination kind of an operand.",
+      "enum": [
+        "literal",
+        "context_key",
+        "result",
+        "external_resource"
+      ],
+      "title": "OperandType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete untrusted analysis returned by the LLM.",
+  "properties": {
+    "entry_block_ref": {
+      "title": "Entry Block Ref",
+      "type": "string"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "declared_context_keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Declared Context Keys",
+      "type": "array"
+    },
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/CandidateBlock"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/CandidateEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entry_block_ref"
+  ],
+  "title": "IRAnalysisCandidate",
+  "type": "object"
+}
+
+Straight-line example: read, trim, then log progress and return in the same block:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the user's input message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_user_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_normalize",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "normalize",
+      "block_name": "Remove leading and trailing whitespace from the message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "normalize_message",
+          "opcode": "trim_message_whitespace",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_record",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "record",
+      "block_name": "Record progress and return the normalized message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "record_progress",
+          "opcode": "log_progress",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "ready"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_message",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "normalize"
+    },
+    {
+      "source_block_ref": "normalize",
+      "target_block_ref": "record"
+    }
+  ],
+  "diagnostics": []
+}
+
+Branch example: acquire only on one path, then reference both paths after the merge:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the alert message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_alert_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_decide",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "decide",
+      "block_name": "Check urgency",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_urgency",
+          "opcode": "check_message_urgency",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_path",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "send_alert",
+      "block_name": "Send the alert and read the Slack receipt",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "send_slack",
+          "opcode": "post_slack_alert",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "slack"
+            },
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_alert",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "skip_alert",
+      "block_name": "Prepare the non-urgent note",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "make_skip_note",
+          "opcode": "prepare_no_alert_note",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "No alert needed"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_skip",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "reply",
+      "block_name": "Report the outcome of whichever path ran",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_reply",
+          "opcode": "format_alert_outcome",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            },
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            },
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_outcome",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "decide"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "send_alert",
+      "condition_text": "urgent"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "skip_alert",
+      "condition_text": "not urgent"
+    },
+    {
+      "source_block_ref": "send_alert",
+      "target_block_ref": "reply"
+    },
+    {
+      "source_block_ref": "skip_alert",
+      "target_block_ref": "reply"
+    }
+  ],
+  "diagnostics": []
+}
+
+The examples illustrate the contract only. Extract the actual package below; do not copy example behaviors that are absent from it.
+
+Complete Skill package:
+
+<skill-file path="LICENSE.txt" kind="text" size="11357">
+
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+</skill-file>
+
+<skill-file path="SKILL.md" kind="markdown" size="4952">
+
+---
+name: linear
+description: Manage issues, projects & team workflows in Linear. Use when the user wants to read, create or updates tickets in Linear.
+metadata:
+  short-description: Manage Linear issues in Codex
+---
+
+# Linear
+
+## Overview
+
+This skill provides a structured workflow for managing issues, projects & team workflows in Linear. It ensures consistent integration with the Linear MCP server, which offers natural-language project management for issues, projects, documentation, and team collaboration.
+
+## Prerequisites
+- Linear MCP server must be connected and accessible via OAuth
+- Confirm access to the relevant Linear workspace, teams, and projects
+
+## Required Workflow
+
+**Follow these steps in order. Do not skip steps.**
+
+### Step 0: Set up Linear MCP (if not already configured)
+
+If any MCP call fails because Linear MCP is not connected, pause and set it up:
+
+1. Add the Linear MCP:
+   - `codex mcp add linear --url https://mcp.linear.app/mcp`
+2. Enable remote MCP client:
+   - Set `[features] rmcp_client = true` in `config.toml` **or** run `codex --enable rmcp_client`
+3. Log in with OAuth:
+   - `codex mcp login linear`
+
+After successful login, the user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1.
+
+**Windows/WSL note:** If you see connection errors on Windows, try configuring the Linear MCP to run via WSL:
+```json
+{"mcpServers": {"linear": {"command": "wsl", "args": ["npx", "-y", "mcp-remote", "https://mcp.linear.app/sse", "--transport", "sse-only"]}}}
+```
+
+### Step 1
+Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance). Confirm team/project, priority, labels, cycle, and due dates as needed.
+
+### Step 2
+Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need. Confirm required identifiers (issue ID, project ID, team key) before calling tools.
+
+### Step 3
+Execute Linear MCP tool calls in logical batches:
+- Read first (list/get/search) to build context.
+- Create or update next (issues, projects, labels, comments) with all required fields.
+- For bulk operations, explain the grouping logic before applying changes.
+
+### Step 4
+Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments).
+
+## Available Tools
+
+Issue Management: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `list_my_issues`, `list_issue_statuses`, `list_issue_labels`, `create_issue_label`
+
+Project & Team: `list_projects`, `get_project`, `create_project`, `update_project`, `list_teams`, `get_team`, `list_users`
+
+Documentation & Collaboration: `list_documents`, `get_document`, `search_documentation`, `list_comments`, `create_comment`, `list_cycles`
+
+## Practical Workflows
+
+- Sprint Planning: Review open issues for a target team, pick top items by priority, and create a new cycle (e.g., "Q1 Performance Sprint") with assignments.
+- Bug Triage: List critical/high-priority bugs, rank by user impact, and move the top items to "In Progress."
+- Documentation Audit: Search documentation (e.g., API auth), then open labeled "documentation" issues for gaps or outdated sections with detailed fixes.
+- Team Workload Balance: Group active issues by assignee, flag anyone with high load, and suggest or apply redistributions.
+- Release Planning: Create a project (e.g., "v2.0 Release") with milestones (feature freeze, beta, docs, launch) and generate issues with estimates.
+- Cross-Project Dependencies: Find all "blocked" issues, identify blockers, and create linked issues if missing.
+- Automated Status Updates: Find your issues with stale updates and add status comments based on current state/blockers.
+- Smart Labeling: Analyze unlabeled issues, suggest/apply labels, and create missing label categories.
+- Sprint Retrospectives: Generate a report for the last completed cycle, note completed vs. pushed work, and open discussion issues for patterns.
+
+## Tips for Maximum Productivity
+
+- Batch operations for related changes; consider smart templates for recurring issue structures.
+- Use natural queries when possible ("Show me what John is working on this week").
+- Leverage context: reference prior issues in new requests.
+- Break large updates into smaller batches to avoid rate limits; cache or reuse filters when listing frequently.
+
+## Troubleshooting
+
+- Authentication: Clear browser cookies, re-run OAuth, verify workspace permissions, ensure API access is enabled.
+- Tool Calling Errors: Confirm the model supports multiple tool calls, provide all required fields, and split complex requests.
+- Missing Data: Refresh token, verify workspace access, check for archived projects, and confirm correct team selection.
+- Performance: Remember Linear API rate limits; batch bulk operations, use specific filters, or cache frequent queries.
+
+
+</skill-file>
+
+<skill-file path="agents/openai.yaml" kind="text" size="460">
+
+interface:
+  display_name: "Linear"
+  short_description: "Manage Linear issues in Codex"
+  icon_small: "./assets/linear-small.svg"
+  icon_large: "./assets/linear.png"
+  default_prompt: "Use Linear context to triage or update relevant issues for this task, with clear next actions."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "linear"
+      description: "Linear MCP server"
+      transport: "streamable_http"
+      url: "https://mcp.linear.app/mcp"
+
+
+</skill-file>
+
+<skill-file path="assets/linear-small.svg" kind="text" size="1065">
+
+<svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="200" height="200" viewBox="0 0 100 100">
+  <path
+    d="M1.22541 61.5228c-.2225-.9485.90748-1.5459 1.59638-.857L39.3342 97.1782c.6889.6889.0915 1.8189-.857 1.5964C20.0515 94.4522 5.54779 79.9485 1.22541 61.5228ZM.00189135 46.8891c-.01764375.2833.08887215.5599.28957165.7606L52.3503 99.7085c.2007.2007.4773.3075.7606.2896 2.3692-.1476 4.6938-.46 6.9624-.9259.7645-.157 1.0301-1.0963.4782-1.6481L2.57595 39.4485c-.55186-.5519-1.49117-.2863-1.648174.4782-.465915 2.2686-.77832 4.5932-.92588465 6.9624ZM4.21093 29.7054c-.16649.3738-.08169.8106.20765 1.1l64.77602 64.776c.2894.2894.7262.3742 1.1.2077 1.7861-.7956 3.5171-1.6927 5.1855-2.684.5521-.328.6373-1.0867.1832-1.5407L8.43566 24.3367c-.45409-.4541-1.21271-.3689-1.54074.1832-.99132 1.6684-1.88843 3.3994-2.68399 5.1855ZM12.6587 18.074c-.3701-.3701-.393-.9637-.0443-1.3541C21.7795 6.45931 35.1114 0 49.9519 0 77.5927 0 100 22.4073 100 50.0481c0 14.8405-6.4593 28.1724-16.7199 37.3375-.3903.3487-.984.3258-1.3542-.0443L12.6587 18.074Z"
+  />
+</svg>
+
+
+</skill-file>
+
+<skill-file path="assets/linear.png" kind="binary" size="6969">
+
+[binary content omitted]
+
+</skill-file>
+
+IR 解释与逐项核对契约：skill-ir-semantic-contract-v2
+以下规则解释现有记录及核对边界，不增加当前 Skill 的业务要求。
+[IR-RESOURCE] external_resource 标识文件、工具、API 或服务，不等于远端或网络资源；本地文件也可用该类型。资源定位符不当然是业务参数。根据实际类型、位置与用途核对，不能只据类型名推断网络发送或额外参数。
+[IR-CONTROL] dispatch 与 return 是固定控制终结操作。dispatch 结束当前块，出边连接后继，inputs 记录选择分支使用的值；return 结束当前路径，inputs 记录返回值，也可无返回值。二者不产生结果输出。不能仅因源文没有写出这些 IR 术语判新增或未决；仍要核对实际输入、出边、条件和返回值身份。return 本身不表示向用户展示或发送内容。
+[IR-IDENTITY] result 按实际 identifier 关联唯一结果定义；semantic_name、块名和相似文字不能替换结果身份。首次尝试、重试和回退得到的结果不能互换。操作数列表位置和操作次序照实核对，不自动视为可交换集合。
+[IR-PATH] 边记录连接和条件文字；它们不证明所有路径实际可执行、条件恒真或循环必然终止。结构校验不保证所有路径上所有输入同时可用。不能仅因结果只在部分路径产生判语义错误；合流块可引用分支定义，循环可引用回边定义。不能据此虚构隐含 phi、运行时选值或可选参数机制。
+[IR-DECLARATION] 图、块、操作级 constraints 是各作用域的声明，不等于已经记录对应操作或保证运行成功。约束与操作的冲突可以报告。块标题、名字和声明不能补造遗漏步骤；会改变数据内容、去向或执行条件的原文明示步骤必须分别可定位。
+[IR-OPAQUE] 普通 opcode 是开放操作名，按明确文字和接口核对，不能凭名字猜测未记录的内部步骤。脚本沿用黑盒建模，核对显式接口、输入输出和已记录的外部副作用；metadata 或嵌入源码完整保留，不等于内部行为已被显式建模或执行成功。
+[DEP-MERGE] 合流依赖可保守保留：已有多个 result 候选来源，且源文与记录的控制关系支持这些候选时，允许记录为候选依赖集合。必须列出至少两个已有操作数/定义事实编号，说明支持依据与丢失的按路径区分。这不声称各值同时作为实参使用、不声称图已实现精确选值，也不声称每个候选都会传递。不能仅因缺少更精确的选值区分就判遗漏、错转或未决。
+[DEP-SOURCE] 来源依赖可保守保留：图中已有多个候选来源，源文和当前记录支持这组可能依赖，但无法进一步细分来源关系时，允许保留有依据的候选集合。逐项引用已有操作数/定义事实，写明失去的来源区分；不新增来源，不将候选说成全部实际读取、同时实参或必定传递。
+[DEP-LIMIT] 保守规则只适用于数据来源和依赖精度。不能用于放宽动作、执行路径、业务实参、返回身份、次数、禁止事项或作用域；不能掩盖正确来源缺失、明确错误的返回结果、明确多传参数或禁传违反。不能只用容器、约束、metadata、类型字段或语义标签作为候选来源证据，也不能凭原文补造图中不存在的事实。选择完整操作数或标识事实；同一结果的定义和使用不是两个独立候选来源。保守接受必须由本次核对明确说明；程序不得把 unknown 自动改成 represented。
+[REVIEW-MODALITY] 区分要求、许可、禁止、示例、背景和各自作用域。为实施条件检查存在性，不自动等于格式/合法性校验或规范化。“未要求某动作”不能自动改成“禁止某动作”。合法的表示辅助信息不自动成为新增业务步骤。源文歧义或冲突不得凭模型偏好消解，安全性判断也不能替代忠实性核对。
+[REVIEW-UNIT] 按语义关系组织核对项，允许合并相关行为、条件和结果，不要求固定粒度或归属单一检查类别。组合要求中只要有一部分存在差异，必须说明具体差异，不能将整项标为 represented 掩盖局部错误；需要分别表达不同结论时合理拆分。动作存在不能代替对象、绑定、条件、次数、顺序和作用域成立。说明原文要求、受控记录、差异和证据，并检查结论与本项证据及其他发现是否一致。不用整体相似或编号覆盖代替判断。
+七个阅读检查点（不要求逐类填表或逐项分类）：
+normative_scope：要求性质与作用域
+actions_objects：动作与对象
+data_bindings：数据来源与绑定
+guards_exceptions：条件与例外
+order_dependencies：顺序与依赖
+counts_termination：次数与终止
+grounding_consistency：反向依据与一致性
+
+本次进行一次基于证据的完整重新提取。
+以上固定契约和完整原始 Skill 始终有效。下面 previous_cfg 是上一轮实际图，属于待纠正结果；
+它不是候选 JSON，也不是标准答案。请返回完整候选 JSON，交给既有编译器重新赋号和校验。
+旧图 ID 和图位置只用于理解下面的反馈，不要求沿用，不能猜测它们与旧候选 ID 的映射。
+重新阅读完整原文，检查并纠正全部明确差异，同时检查是否引入了新遗漏、错转、额外行为或冲突。
+原文优先：反馈及建议只是待核实的纠错依据，不得为了满足建议补造原文没有的行为、参数或保证。
+unknown_reminders 是未决提示，不要求猜测缺失的语义；保留原文真实的不确定性。
+源文歧义、源文冲突与未定义语义不是修复目标；只纠正不依赖这些未决解释的明确差异。
+已经依据统一解释契约保守保留的依赖不构成修复目标，不得把候选来源改写成必定同时传递。
+每项 current_facts 和 suggestion_targets 都由程序从上一轮实际图的位置读取；标签和约束声明
+本身不等于执行操作，删除的操作不能根据残留标题补回。业务输入只包含最近一轮图和核对差异。
+只输出符合以上既有候选契约的完整 JSON，不输出 JSON Patch、旧图片段或说明文字。
+
+{
+  "previous_cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "Follow these steps in order. Do not skip steps.",
+      "Linear MCP server must be connected and accessible via OAuth.",
+      "Confirm access to the relevant Linear workspace, teams, and projects.",
+      "Step 0: Set up Linear MCP (if not already configured).",
+      "If any MCP call fails because Linear MCP is not connected, pause and set it up.",
+      "Step 1: Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance). Confirm team/project, priority, labels, cycle, and due dates as needed.",
+      "Step 2: Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need. Confirm required identifiers (issue ID, project ID, team key) before calling tools.",
+      "Step 3: Execute Linear MCP tool calls in logical batches: Read first (list/get/search) to build context. Create or update next (issues, projects, labels, comments) with all required fields. For bulk operations, explain grouping logic before applying changes.",
+      "Step 4: Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments).",
+      "After successful login, user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "Read the user's request",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "read_user_request",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "user_request",
+                "semantic_name": "user_request"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "user_request_text"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_user_request_instruction"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_clarify"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "context"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "Clarify the user's goal and scope",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "clarify_linear_goal_and_scope",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "user_request_text"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "clarified_linear_scope"
+              }
+            ],
+            "constraints": [
+              "Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance)."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "clarify_linear_goal_and_scope"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "confirm_linear_scope_details",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "clarified_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "constraints": [
+              "Confirm team/project, priority, labels, cycle, and due dates as needed."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "confirm_linear_scope_details"
+          },
+          {
+            "id": "ir_005",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_select_workflow"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "Select the Linear workflow and identify required MCP tools",
+        "instructions": [
+          {
+            "id": "ir_006",
+            "opcode": "select_linear_workflow",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            ],
+            "constraints": [
+              "Select the appropriate workflow (see Practical Workflows below)."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "select_linear_workflow"
+          },
+          {
+            "id": "ir_007",
+            "opcode": "identify_linear_mcp_tools",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "required_mcp_tools"
+              }
+            ],
+            "constraints": [
+              "Identify the Linear MCP tools you will need."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "identify_linear_mcp_tools"
+          },
+          {
+            "id": "ir_008",
+            "opcode": "confirm_linear_identifiers",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "confirmed_linear_identifiers"
+              }
+            ],
+            "constraints": [
+              "Confirm required identifiers (issue ID, project ID, team key) before calling tools."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "confirm_linear_identifiers"
+          },
+          {
+            "id": "ir_009",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_read_context"
+          }
+        ],
+        "constraints": [
+          "Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need.",
+          "Confirm required identifiers (issue ID, project ID, team key) before calling tools."
+        ],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "Read Linear context with MCP read tools",
+        "instructions": [
+          {
+            "id": "ir_010",
+            "opcode": "call_linear_mcp_read_tools",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "linear_mcp",
+                "semantic_name": "Linear MCP server"
+              },
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "required_mcp_tools"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "confirmed_linear_identifiers"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "linear_context"
+              },
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "mcp_read_error"
+              }
+            ],
+            "constraints": [
+              "Read first (list/get/search) to build context."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "call_linear_mcp_read_tools"
+          },
+          {
+            "id": "ir_011",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_008",
+                "semantic_name": "mcp_read_error"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_read"
+          }
+        ],
+        "constraints": [
+          "Read first (list/get/search) to build context."
+        ],
+        "data_source_kind": "external"
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "Create or update Linear entities with MCP write tools",
+        "instructions": [
+          {
+            "id": "ir_012",
+            "opcode": "call_linear_mcp_write_tools",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "linear_mcp",
+                "semantic_name": "Linear MCP server"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "linear_context"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "confirmed_linear_identifiers"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "linear_update_results"
+              },
+              {
+                "type": "result",
+                "identifier": "result_010",
+                "semantic_name": "mcp_write_error"
+              }
+            ],
+            "constraints": [
+              "Create or update next (issues, projects, labels, comments) with all required fields."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "call_linear_mcp_write_tools"
+          },
+          {
+            "id": "ir_013",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_010",
+                "semantic_name": "mcp_write_error"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_write"
+          }
+        ],
+        "constraints": [
+          "Create or update next (issues, projects, labels, comments) with all required fields.",
+          "For bulk operations, explain grouping logic before applying changes."
+        ],
+        "data_source_kind": "external"
+      },
+      "block_006": {
+        "block_id": "block_006",
+        "block_name": "Summarize Linear results and return next actions",
+        "instructions": [
+          {
+            "id": "ir_014",
+            "opcode": "summarize_linear_workflow_results",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "linear_context"
+              },
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "linear_update_results"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_011",
+                "semantic_name": "linear_workflow_summary"
+              }
+            ],
+            "constraints": [
+              "Summarize results, call out remaining gaps or blockers, and propose next actions."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "summarize_linear_workflow_results"
+          },
+          {
+            "id": "ir_015",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_011",
+                "semantic_name": "linear_workflow_summary"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_summary"
+          }
+        ],
+        "constraints": [
+          "Summarize results, call out remaining gaps or blockers, and propose next actions."
+        ],
+        "data_source_kind": null
+      },
+      "block_007": {
+        "block_id": "block_007",
+        "block_name": "Configure Linear MCP and enable remote MCP client",
+        "instructions": [
+          {
+            "id": "ir_016",
+            "opcode": "add_linear_mcp_server",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "codex_cli",
+                "semantic_name": "Codex CLI"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "linear"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "https://mcp.linear.app/mcp"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Run `codex mcp add linear --url https://mcp.linear.app/mcp`."
+            ],
+            "metadata": {
+              "script_content": "codex mcp add linear --url https://mcp.linear.app/mcp"
+            },
+            "draft_instruction_id": "add_linear_mcp_server"
+          },
+          {
+            "id": "ir_017",
+            "opcode": "enable_remote_mcp_client",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "config_toml",
+                "semantic_name": "config.toml"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "codex_cli",
+                "semantic_name": "Codex CLI"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "features.rmcp_client=true"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+            ],
+            "metadata": {
+              "script_content": "codex --enable rmcp_client",
+              "config_toml": "[features]\nrmcp_client = true"
+            },
+            "draft_instruction_id": "enable_remote_mcp_client"
+          },
+          {
+            "id": "ir_018",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_to_login"
+          }
+        ],
+        "constraints": [
+          "Set up Linear MCP (if not already configured).",
+          "If any MCP call fails because Linear MCP is not connected, pause and set it up.",
+          "Windows/WSL note: If you see connection errors on Windows, try configuring the Linear MCP to run via WSL: {\"mcpServers\": {\"linear\": {\"command\": \"wsl\", \"args\": [\"npx\", \"-y\", \"mcp-remote\", \"https://mcp.linear.app/sse\", \"--transport\", \"sse-only\"]}}}"
+        ],
+        "data_source_kind": null
+      },
+      "block_008": {
+        "block_id": "block_008",
+        "block_name": "Log in to Linear MCP with OAuth and return restart instruction",
+        "instructions": [
+          {
+            "id": "ir_019",
+            "opcode": "login_linear_mcp_oauth",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "codex_cli",
+                "semantic_name": "Codex CLI"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "linear_mcp",
+                "semantic_name": "Linear MCP server"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_012",
+                "semantic_name": "oauth_login_result"
+              }
+            ],
+            "constraints": [
+              "Run `codex mcp login linear`."
+            ],
+            "metadata": {
+              "script_content": "codex mcp login linear"
+            },
+            "draft_instruction_id": "login_linear_mcp_oauth"
+          },
+          {
+            "id": "ir_020",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_012",
+                "semantic_name": "oauth_login_result"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "After successful login, restart Codex and continue with Step 1."
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_restart_instruction"
+          }
+        ],
+        "constraints": [
+          "After successful login, user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+        ],
+        "data_source_kind": "external"
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_004",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_007",
+        "condition_text": "MCP read call fails because Linear MCP is not connected"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_005",
+        "condition_text": "MCP read calls succeed"
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_007",
+        "condition_text": "MCP write call fails because Linear MCP is not connected"
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_006",
+        "condition_text": "MCP write calls succeed"
+      },
+      {
+        "source_block_id": "block_007",
+        "target_block_id": "block_008",
+        "condition_text": null
+      }
+    ],
+    "declared_context_keys": [
+      "user_request"
+    ]
+  },
+  "explicit_differences": [
+    {
+      "id": "finding_1",
+      "status": "omitted",
+      "source_requirement": "SKILL.md 前置元数据声明技能名 linear，描述在用户想要在 Linear 中读取、创建或更新 ticket 时使用；agents/openai.yaml 还声明 display_name、short_description、icon 和 default_prompt（使用 Linear 上下文 triage/update 并给出 next actions）。",
+      "actual_representation": "受控回述有入口读取 user_request 和 Linear 工作流，但未记录技能名、description、short-description、display_name、default_prompt 等触发/接口元数据。",
+      "reason": "触发/使用范围属于源文语义元数据；当前只保留工作流步骤，无法从受控事实核对该 Skill 的使用条件和默认接口提示。",
+      "source_refs": [
+        {
+          "unit_id": "src_034",
+          "file": "SKILL.md",
+          "start_line": 1,
+          "end_line": 6,
+          "quote": "name: linear"
+        },
+        {
+          "unit_id": "src_060",
+          "file": "agents/openai.yaml",
+          "start_line": 1,
+          "end_line": 6,
+          "quote": "default_prompt: \"Use Linear context to triage or update relevant issues for this task, with clear next actions.\""
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/entry",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/contexts",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/entry_block_id",
+          "value": "block_001"
+        },
+        {
+          "graph_pointer": "/declared_context_keys",
+          "value": [
+            "user_request"
+          ]
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/contexts"
+          ],
+          "change": "在入口上下文或技能元数据中补充 name、description/触发范围、short-description 与 default_prompt。",
+          "reason": "这些是源文声明的使用触发和默认提示，缺失后无法从受控回述核对何时使用该 Skill。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/declared_context_keys",
+              "value": [
+                "user_request"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_5",
+      "status": "omitted",
+      "source_requirement": "Step 0 要求在 Linear MCP 尚未配置时进行设置；并在任何 MCP 调用因 MCP 未连接而失败时暂停并设置。",
+      "actual_representation": "受控回述把 Step0/失败设置文本记录为 /constraints/3、/constraints/4 和 block_007 的块约束，且 block_007 含 add/enable/login 操作；但控制流只在 read 失败边 edge3 和 write 失败边 edge5 进入 block_007，没有入口前或调用前的 not already configured 条件边，也没有覆盖其他 MCP 调用（如 login）失败的通用分支。",
+      "reason": "要求文本被声明，但条件触发和作用域不完整；初始化设置分支缺失，失败触发仅覆盖读写两类调用。",
+      "source_refs": [
+        {
+          "unit_id": "src_041",
+          "file": "SKILL.md",
+          "start_line": 22,
+          "end_line": 22,
+          "quote": "### Step 0: Set up Linear MCP (if not already configured)"
+        },
+        {
+          "unit_id": "src_042",
+          "file": "SKILL.md",
+          "start_line": 24,
+          "end_line": 24,
+          "quote": "If any MCP call fails because Linear MCP is not connected, pause and set it up:"
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/constraints/3",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/constraints/4",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/constraints/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/constraints/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/edges/3",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/edges/5",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "declared_constraint",
+        "explicit_graph"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/constraints/3",
+          "value": "Step 0: Set up Linear MCP (if not already configured)."
+        },
+        {
+          "graph_pointer": "/constraints/4",
+          "value": "If any MCP call fails because Linear MCP is not connected, pause and set it up."
+        },
+        {
+          "graph_pointer": "/blocks/block_007/constraints/0",
+          "value": "Set up Linear MCP (if not already configured)."
+        },
+        {
+          "graph_pointer": "/blocks/block_007/constraints/1",
+          "value": "If any MCP call fails because Linear MCP is not connected, pause and set it up."
+        },
+        {
+          "graph_pointer": "/edges/3",
+          "value": {
+            "source_block_id": "block_004",
+            "target_block_id": "block_007",
+            "condition_text": "MCP read call fails because Linear MCP is not connected"
+          }
+        },
+        {
+          "graph_pointer": "/edges/5",
+          "value": {
+            "source_block_id": "block_005",
+            "target_block_id": "block_007",
+            "condition_text": "MCP write call fails because Linear MCP is not connected"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/6/instructions",
+            "fact:/edges/3",
+            "fact:/edges/5"
+          ],
+          "change": "为 block_007 增加由入口或调用前触发的 not already configured 条件边/guard，并补充通用 MCP 调用失败进入设置块的分支。",
+          "reason": "当前只有 read/write 失败边进入设置块，Step 0 的初始条件与 any MCP call 失败范围未在控制流中表达。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_007/instructions",
+              "value": [
+                {
+                  "id": "ir_016",
+                  "opcode": "add_linear_mcp_server",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "codex_cli",
+                      "semantic_name": "Codex CLI"
+                    },
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "linear"
+                    },
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "https://mcp.linear.app/mcp"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [
+                    "Run `codex mcp add linear --url https://mcp.linear.app/mcp`."
+                  ],
+                  "metadata": {
+                    "script_content": "codex mcp add linear --url https://mcp.linear.app/mcp"
+                  },
+                  "draft_instruction_id": "add_linear_mcp_server"
+                },
+                {
+                  "id": "ir_017",
+                  "opcode": "enable_remote_mcp_client",
+                  "inputs": [
+                    {
+                      "type": "external_resource",
+                      "identifier": "config_toml",
+                      "semantic_name": "config.toml"
+                    },
+                    {
+                      "type": "external_resource",
+                      "identifier": "codex_cli",
+                      "semantic_name": "Codex CLI"
+                    },
+                    {
+                      "type": "literal",
+                      "identifier": null,
+                      "literal_value": "features.rmcp_client=true"
+                    }
+                  ],
+                  "outputs": [],
+                  "constraints": [
+                    "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+                  ],
+                  "metadata": {
+                    "script_content": "codex --enable rmcp_client",
+                    "config_toml": "[features]\nrmcp_client = true"
+                  },
+                  "draft_instruction_id": "enable_remote_mcp_client"
+                },
+                {
+                  "id": "ir_018",
+                  "opcode": "dispatch",
+                  "inputs": [],
+                  "outputs": [],
+                  "constraints": [],
+                  "metadata": {},
+                  "draft_instruction_id": "dispatch_to_login"
+                }
+              ]
+            },
+            {
+              "graph_pointer": "/edges/3",
+              "value": {
+                "source_block_id": "block_004",
+                "target_block_id": "block_007",
+                "condition_text": "MCP read call fails because Linear MCP is not connected"
+              }
+            },
+            {
+              "graph_pointer": "/edges/5",
+              "value": {
+                "source_block_id": "block_005",
+                "target_block_id": "block_007",
+                "condition_text": "MCP write call fails because Linear MCP is not connected"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_7",
+      "status": "mistranslated",
+      "source_requirement": "Step0 第2步：启用 remote MCP client，方式是设置 `[features] rmcp_client = true` 于 `config.toml`，或者运行 `codex --enable rmcp_client`。这是二选一。",
+      "actual_representation": "ir_017 `enable_remote_mcp_client` 同时把 config_toml、codex_cli 和字面量 `features.rmcp_client=true` 作为同一无分支操作的输入；约束文本保留 or，metadata 有 config 与 CLI script_content，但操作层没有条件/分支选择。",
+      "reason": "二选一的执行条件在操作层被折叠为并列输入，可能表示同时使用 config.toml 和 CLI；metadata 完整保留不等于内部替代选择已建模。",
+      "source_refs": [
+        {
+          "unit_id": "src_043",
+          "file": "SKILL.md",
+          "start_line": 26,
+          "end_line": 31,
+          "quote": "Set `[features] rmcp_client = true` in `config.toml` **or** run `codex --enable rmcp_client`"
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/6/instructions/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/1/inputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/1/inputs/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/1/inputs/2",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/1/constraints/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/1/metadata_json",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "declared_constraint",
+        "embedded_content"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_007/instructions/1",
+          "value": {
+            "id": "ir_017",
+            "opcode": "enable_remote_mcp_client",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "config_toml",
+                "semantic_name": "config.toml"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "codex_cli",
+                "semantic_name": "Codex CLI"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "features.rmcp_client=true"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+            ],
+            "metadata": {
+              "script_content": "codex --enable rmcp_client",
+              "config_toml": "[features]\nrmcp_client = true"
+            },
+            "draft_instruction_id": "enable_remote_mcp_client"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/1/inputs/0",
+          "value": {
+            "type": "external_resource",
+            "identifier": "config_toml",
+            "semantic_name": "config.toml"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/1/inputs/1",
+          "value": {
+            "type": "external_resource",
+            "identifier": "codex_cli",
+            "semantic_name": "Codex CLI"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/1/inputs/2",
+          "value": {
+            "type": "literal",
+            "identifier": null,
+            "literal_value": "features.rmcp_client=true"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/1/constraints/0",
+          "value": "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/1/metadata",
+          "value": {
+            "script_content": "codex --enable rmcp_client",
+            "config_toml": "[features]\nrmcp_client = true"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/6/instructions/1"
+          ],
+          "change": "将该操作拆分为按条件选择的 config.toml 设置或 codex --enable rmcp_client 两个分支，或明确只绑定实际选中的方法；不要把两个资源作为同一无分支操作的并列输入。",
+          "reason": "源文明确为二选一，当前 IR 操作层未表达该选择，可能造成同时配置和命令行启用的错转。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_007/instructions/1",
+              "value": {
+                "id": "ir_017",
+                "opcode": "enable_remote_mcp_client",
+                "inputs": [
+                  {
+                    "type": "external_resource",
+                    "identifier": "config_toml",
+                    "semantic_name": "config.toml"
+                  },
+                  {
+                    "type": "external_resource",
+                    "identifier": "codex_cli",
+                    "semantic_name": "Codex CLI"
+                  },
+                  {
+                    "type": "literal",
+                    "identifier": null,
+                    "literal_value": "features.rmcp_client=true"
+                  }
+                ],
+                "outputs": [],
+                "constraints": [
+                  "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+                ],
+                "metadata": {
+                  "script_content": "codex --enable rmcp_client",
+                  "config_toml": "[features]\nrmcp_client = true"
+                },
+                "draft_instruction_id": "enable_remote_mcp_client"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_10",
+      "status": "omitted",
+      "source_requirement": "重启/告知指令只在登录成功后触发（After successful login）。",
+      "actual_representation": "block_008 中 ir_019 后顺序执行 ir_020 return；没有登录成功 guard、失败分支或条件边，After successful login 只出现在约束/返回字面量，未成为控制条件。",
+      "reason": "源文条件未在控制流中表达，return 可能在同一路径上无条件执行。",
+      "source_refs": [
+        {
+          "unit_id": "src_044",
+          "file": "SKILL.md",
+          "start_line": 33,
+          "end_line": 33,
+          "quote": "After successful login, the user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/7/constraints/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/7/instructions/0/outputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/7/instructions/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/7/instructions/1/inputs/0",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "declared_constraint"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_008/constraints/0",
+          "value": "After successful login, user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+        },
+        {
+          "graph_pointer": "/blocks/block_008/instructions/0/outputs/0",
+          "value": {
+            "type": "result",
+            "identifier": "result_012",
+            "semantic_name": "oauth_login_result"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_008/instructions/1",
+          "value": {
+            "id": "ir_020",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_012",
+                "semantic_name": "oauth_login_result"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "After successful login, restart Codex and continue with Step 1."
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_restart_instruction"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_008/instructions/1/inputs/0",
+          "value": {
+            "type": "result",
+            "identifier": "result_012",
+            "semantic_name": "oauth_login_result"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/7/instructions/1",
+            "fact:/blocks/7/instructions/0/outputs/0"
+          ],
+          "change": "为 ir_020 return 增加登录成功条件或为 oauth_login_result 增加成功/失败分支，确保仅在成功后返回重启指令。",
+          "reason": "源文明示 After successful login，当前顺序执行未把该 guard 记录为控制条件。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_008/instructions/1",
+              "value": {
+                "id": "ir_020",
+                "opcode": "return",
+                "inputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_012",
+                    "semantic_name": "oauth_login_result"
+                  },
+                  {
+                    "type": "literal",
+                    "identifier": null,
+                    "literal_value": "After successful login, restart Codex and continue with Step 1."
+                  }
+                ],
+                "outputs": [],
+                "constraints": [],
+                "metadata": {},
+                "draft_instruction_id": "return_restart_instruction"
+              }
+            },
+            {
+              "graph_pointer": "/blocks/block_008/instructions/0/outputs/0",
+              "value": {
+                "type": "result",
+                "identifier": "result_012",
+                "semantic_name": "oauth_login_result"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_14",
+      "status": "omitted",
+      "source_requirement": "Available Tools 列出 Issue Management、Project & Team、Documentation & Collaboration 的具体 MCP 工具清单。",
+      "actual_representation": "受控回述只有泛化 ir_007 identify_linear_mcp_tools 和 result_005 required_mcp_tools；没有 list_issues、get_issue、create_issue 等工具清单或类别。",
+      "reason": "Step2 要求识别所需工具，但源文提供的可选工具目录未进入受控事实，无法从回述核对识别范围和工具身份。",
+      "source_refs": [
+        {
+          "unit_id": "src_050",
+          "file": "SKILL.md",
+          "start_line": 55,
+          "end_line": 55,
+          "quote": "## Available Tools"
+        },
+        {
+          "unit_id": "src_051",
+          "file": "SKILL.md",
+          "start_line": 57,
+          "end_line": 57,
+          "quote": "Issue Management: `list_issues`, `get_issue`, `create_issue`, `update_issue`, `list_my_issues`, `list_issue_statuses`, `list_issue_labels`, `create_issue_label`"
+        },
+        {
+          "unit_id": "src_052",
+          "file": "SKILL.md",
+          "start_line": 59,
+          "end_line": 59,
+          "quote": "Project & Team: `list_projects`, `get_project`, `create_project`, `update_project`, `list_teams`, `get_team`, `list_users`"
+        },
+        {
+          "unit_id": "src_053",
+          "file": "SKILL.md",
+          "start_line": 61,
+          "end_line": 61,
+          "quote": "Documentation & Collaboration: `list_documents`, `get_document`, `search_documentation`, `list_comments`, `create_comment`, `list_cycles`"
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/2/instructions/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/2/instructions/1/outputs/0",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_003/instructions/1",
+          "value": {
+            "id": "ir_007",
+            "opcode": "identify_linear_mcp_tools",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "required_mcp_tools"
+              }
+            ],
+            "constraints": [
+              "Identify the Linear MCP tools you will need."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "identify_linear_mcp_tools"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_003/instructions/1/outputs/0",
+          "value": {
+            "type": "result",
+            "identifier": "result_005",
+            "semantic_name": "required_mcp_tools"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/2/instructions/1",
+            "fact:/blocks/2/instructions/1/outputs/0"
+          ],
+          "change": "把 Available Tools 的工具清单作为可选工具集合绑定到 identify_linear_mcp_tools 的输入/输出或上下文，而不是只留下泛化 required_mcp_tools。",
+          "reason": "缺少工具目录使识别工具步骤无法核对对象和范围。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_003/instructions/1",
+              "value": {
+                "id": "ir_007",
+                "opcode": "identify_linear_mcp_tools",
+                "inputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_004",
+                    "semantic_name": "selected_workflow"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_005",
+                    "semantic_name": "required_mcp_tools"
+                  }
+                ],
+                "constraints": [
+                  "Identify the Linear MCP tools you will need."
+                ],
+                "metadata": {},
+                "draft_instruction_id": "identify_linear_mcp_tools"
+              }
+            },
+            {
+              "graph_pointer": "/blocks/block_003/instructions/1/outputs/0",
+              "value": {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "required_mcp_tools"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_15",
+      "status": "omitted",
+      "source_requirement": "Practical Workflows 列出 Sprint Planning、Bug Triage、Documentation Audit 等 9 类工作流及其步骤，Step2 要求据此选择合适 workflow。",
+      "actual_representation": "受控回述只有 ir_006 select_linear_workflow 和 result_004 selected_workflow，约束保留 see Practical Workflows below，但没有 workflow 目录、选项或各流程步骤。",
+      "reason": "选择动作存在，但被选择对象的候选/内容缺失，无法核对选的是哪些 workflow。",
+      "source_refs": [
+        {
+          "unit_id": "src_054",
+          "file": "SKILL.md",
+          "start_line": 63,
+          "end_line": 63,
+          "quote": "## Practical Workflows"
+        },
+        {
+          "unit_id": "src_055",
+          "file": "SKILL.md",
+          "start_line": 65,
+          "end_line": 73,
+          "quote": "- Sprint Planning: Review open issues for a target team, pick top items by priority, and create a new cycle (e.g., \"Q1 Performance Sprint\") with assignments."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/2/instructions/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/2/instructions/0/outputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/2/constraints/0",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "declared_constraint"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_003/instructions/0",
+          "value": {
+            "id": "ir_006",
+            "opcode": "select_linear_workflow",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            ],
+            "constraints": [
+              "Select the appropriate workflow (see Practical Workflows below)."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "select_linear_workflow"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_003/instructions/0/outputs/0",
+          "value": {
+            "type": "result",
+            "identifier": "result_004",
+            "semantic_name": "selected_workflow"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_003/constraints/0",
+          "value": "Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need."
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/2/instructions/0",
+            "fact:/blocks/2/instructions/0/outputs/0"
+          ],
+          "change": "为 select_linear_workflow 补充 Practical Workflows 的候选列表/选项来源，或把 workflow 目录绑定到 selected_workflow 的输入上下文。",
+          "reason": "当前只有泛化选择操作，无法核对可选项和选择依据。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_003/instructions/0",
+              "value": {
+                "id": "ir_006",
+                "opcode": "select_linear_workflow",
+                "inputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_003",
+                    "semantic_name": "confirmed_linear_scope"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_004",
+                    "semantic_name": "selected_workflow"
+                  }
+                ],
+                "constraints": [
+                  "Select the appropriate workflow (see Practical Workflows below)."
+                ],
+                "metadata": {},
+                "draft_instruction_id": "select_linear_workflow"
+              }
+            },
+            {
+              "graph_pointer": "/blocks/block_003/instructions/0/outputs/0",
+              "value": {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_17",
+      "status": "omitted",
+      "source_requirement": "Step3：对 bulk operations，在应用变更前解释 grouping logic。",
+      "actual_representation": "该句只作为 /constraints/7 和 block_005 的块级约束 /blocks/4/constraints/1 存在；ir_012 写操作没有 bulk 条件、分组说明操作或应用前顺序 guard。",
+      "reason": "显式条件动作仅以声明文本出现，未记录为操作/条件/顺序，不能视为已实现。",
+      "source_refs": [
+        {
+          "unit_id": "src_048",
+          "file": "SKILL.md",
+          "start_line": 46,
+          "end_line": 50,
+          "quote": "- For bulk operations, explain the grouping logic before applying changes."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/constraints/7",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/4/constraints/1",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/4/instructions/0",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "declared_constraint",
+        "explicit_graph"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/constraints/7",
+          "value": "Step 3: Execute Linear MCP tool calls in logical batches: Read first (list/get/search) to build context. Create or update next (issues, projects, labels, comments) with all required fields. For bulk operations, explain grouping logic before applying changes."
+        },
+        {
+          "graph_pointer": "/blocks/block_005/constraints/1",
+          "value": "For bulk operations, explain grouping logic before applying changes."
+        },
+        {
+          "graph_pointer": "/blocks/block_005/instructions/0",
+          "value": {
+            "id": "ir_012",
+            "opcode": "call_linear_mcp_write_tools",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "linear_mcp",
+                "semantic_name": "Linear MCP server"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "linear_context"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "confirmed_linear_identifiers"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "linear_update_results"
+              },
+              {
+                "type": "result",
+                "identifier": "result_010",
+                "semantic_name": "mcp_write_error"
+              }
+            ],
+            "constraints": [
+              "Create or update next (issues, projects, labels, comments) with all required fields."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "call_linear_mcp_write_tools"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/4/instructions/0",
+            "fact:/blocks/4/constraints/1"
+          ],
+          "change": "为 bulk operations 增加条件 guard，并在写操作前增加 explain grouping logic 的显式操作或输出；当前只有声明约束。",
+          "reason": "源文要求在应用变更前执行解释动作，声明文本不能替代可定位的操作与顺序。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_005/instructions/0",
+              "value": {
+                "id": "ir_012",
+                "opcode": "call_linear_mcp_write_tools",
+                "inputs": [
+                  {
+                    "type": "external_resource",
+                    "identifier": "linear_mcp",
+                    "semantic_name": "Linear MCP server"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_007",
+                    "semantic_name": "linear_context"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_004",
+                    "semantic_name": "selected_workflow"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_006",
+                    "semantic_name": "confirmed_linear_identifiers"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_003",
+                    "semantic_name": "confirmed_linear_scope"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_009",
+                    "semantic_name": "linear_update_results"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_010",
+                    "semantic_name": "mcp_write_error"
+                  }
+                ],
+                "constraints": [
+                  "Create or update next (issues, projects, labels, comments) with all required fields."
+                ],
+                "metadata": {},
+                "draft_instruction_id": "call_linear_mcp_write_tools"
+              }
+            },
+            {
+              "graph_pointer": "/blocks/block_005/constraints/1",
+              "value": "For bulk operations, explain grouping logic before applying changes."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_20",
+      "status": "omitted",
+      "source_requirement": "Step4 的 call out remaining gaps or blockers 和 propose next actions (additional issues, label changes, assignments, follow-up comments)。",
+      "actual_representation": "这两部分只在 /constraints/8 和 block_006 约束文本中出现；ir_014 只命名为 summarize 并只输出 linear_workflow_summary，没有 gaps/blockers/next actions 的输出、操作或绑定。",
+      "reason": "显式动作和对象未单独可定位，不能由汇总动作推断已包含。",
+      "source_refs": [
+        {
+          "unit_id": "src_049",
+          "file": "SKILL.md",
+          "start_line": 52,
+          "end_line": 53,
+          "quote": "Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments)."
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/constraints/8",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/0/outputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/5/instructions/1",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "declared_constraint",
+        "explicit_graph"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/constraints/8",
+          "value": "Step 4: Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments)."
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0",
+          "value": {
+            "id": "ir_014",
+            "opcode": "summarize_linear_workflow_results",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "linear_context"
+              },
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "linear_update_results"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "confirmed_linear_scope"
+              },
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "selected_workflow"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_011",
+                "semantic_name": "linear_workflow_summary"
+              }
+            ],
+            "constraints": [
+              "Summarize results, call out remaining gaps or blockers, and propose next actions."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "summarize_linear_workflow_results"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/0/outputs/0",
+          "value": {
+            "type": "result",
+            "identifier": "result_011",
+            "semantic_name": "linear_workflow_summary"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_006/instructions/1",
+          "value": {
+            "id": "ir_015",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_011",
+                "semantic_name": "linear_workflow_summary"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_summary"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/5/instructions/0",
+            "fact:/blocks/5/instructions/0/outputs/0"
+          ],
+          "change": "为 gaps/blockers 和 next actions 增加显式输出/操作，或将 linear_workflow_summary 明确绑定为包含这些内容的结果。",
+          "reason": "源文有并列的 call out 与 propose 要求，当前只有一个泛化 summary 输出。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_006/instructions/0",
+              "value": {
+                "id": "ir_014",
+                "opcode": "summarize_linear_workflow_results",
+                "inputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_007",
+                    "semantic_name": "linear_context"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_009",
+                    "semantic_name": "linear_update_results"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_003",
+                    "semantic_name": "confirmed_linear_scope"
+                  },
+                  {
+                    "type": "result",
+                    "identifier": "result_004",
+                    "semantic_name": "selected_workflow"
+                  }
+                ],
+                "outputs": [
+                  {
+                    "type": "result",
+                    "identifier": "result_011",
+                    "semantic_name": "linear_workflow_summary"
+                  }
+                ],
+                "constraints": [
+                  "Summarize results, call out remaining gaps or blockers, and propose next actions."
+                ],
+                "metadata": {},
+                "draft_instruction_id": "summarize_linear_workflow_results"
+              }
+            },
+            {
+              "graph_pointer": "/blocks/block_006/instructions/0/outputs/0",
+              "value": {
+                "type": "result",
+                "identifier": "result_011",
+                "semantic_name": "linear_workflow_summary"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "finding_23",
+      "status": "omitted",
+      "source_requirement": "agents/openai.yaml 声明依赖 mcp 工具 linear，description 为 Linear MCP server，transport 为 streamable_http，url 为 https://mcp.linear.app/mcp。",
+      "actual_representation": "受控回述以 external_resource linear_mcp 和 semantic_name Linear MCP server 表示该依赖，并通过 ir_016 的 URL 字面量保留 url；未记录 transport=streamable_http。",
+      "reason": "URL 和描述有对应，但传输方式这一依赖元数据缺失。",
+      "source_refs": [
+        {
+          "unit_id": "src_061",
+          "file": "agents/openai.yaml",
+          "start_line": 8,
+          "end_line": 14,
+          "quote": "transport: \"streamable_http\""
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/blocks/3/instructions/0/inputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/4/instructions/0/inputs/0",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/0/inputs/2",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/6/instructions/0/constraints/0",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "declared_constraint"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/blocks/block_004/instructions/0/inputs/0",
+          "value": {
+            "type": "external_resource",
+            "identifier": "linear_mcp",
+            "semantic_name": "Linear MCP server"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_005/instructions/0/inputs/0",
+          "value": {
+            "type": "external_resource",
+            "identifier": "linear_mcp",
+            "semantic_name": "Linear MCP server"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/0/inputs/2",
+          "value": {
+            "type": "literal",
+            "identifier": null,
+            "literal_value": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "graph_pointer": "/blocks/block_007/instructions/0/constraints/0",
+          "value": "Run `codex mcp add linear --url https://mcp.linear.app/mcp`."
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/blocks/6/instructions/0/constraints/0",
+            "fact:/blocks/3/instructions/0/inputs/0"
+          ],
+          "change": "在 MCP 依赖约束或 add_linear_mcp_server 相关输入中记录 transport=streamable_http。",
+          "reason": "源文 yaml 明确声明的传输方式未在受控事实中表达。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/blocks/block_007/instructions/0/constraints/0",
+              "value": "Run `codex mcp add linear --url https://mcp.linear.app/mcp`."
+            },
+            {
+              "graph_pointer": "/blocks/block_004/instructions/0/inputs/0",
+              "value": {
+                "type": "external_resource",
+                "identifier": "linear_mcp",
+                "semantic_name": "Linear MCP server"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unknown_reminders": [],
+  "contract_version": "skill-ir-semantic-contract-v2",
+  "contract_sha256": "bdee4d95241e67e861f74be279c5862df571ea3af208a81c8dab744e0b4f65d1"
+}
+
+Repair the previous candidate. Return the complete corrected JSON object only.
+
+Previous raw response:
+
+{
+  "entry_block_ref": "read_user_request",
+  "constraints": [
+    "Skill metadata name: linear",
+    "Skill metadata description: Manage issues, projects & team workflows in Linear. Use when the user wants to read, create or updates tickets in Linear.",
+    "Skill metadata short-description: Manage Linear issues in Codex",
+    "Interface display_name: Linear",
+    "Interface short_description: Manage Linear issues in Codex",
+    "Interface icon_small: ./assets/linear-small.svg",
+    "Interface icon_large: ./assets/linear.png",
+    "Interface default_prompt: Use Linear context to triage or update relevant issues for this task, with clear next actions.",
+    "MCP dependency: linear (Linear MCP server), transport streamable_http, url https://mcp.linear.app/mcp.",
+    "Follow these steps in order. Do not skip steps.",
+    "Linear MCP server must be connected and accessible via OAuth.",
+    "Confirm access to the relevant Linear workspace, teams, and projects.",
+    "Step 0: Set up Linear MCP (if not already configured).",
+    "If any MCP call fails because Linear MCP is not connected, pause and set it up.",
+    "Step 1: Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance). Confirm team/project, priority, labels, cycle, and due dates as needed.",
+    "Step 2: Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need. Confirm required identifiers (issue ID, project ID, team key) before calling tools.",
+    "Step 3: Execute Linear MCP tool calls in logical batches: Read first (list/get/search) to build context. Create or update next (issues, projects, labels, comments) with all required fields. For bulk operations, explain grouping logic before applying changes.",
+    "Step 4: Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments).",
+    "After successful login, the user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+  ],
+  "declared_context_keys": [
+    "user_request",
+    "linear_mcp_configuration_status"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_user_request",
+      "block_name": "Read the user's request",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_user_request_ir",
+          "opcode": "read_user_request",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_request"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "user_request_text",
+              "semantic_name": "user request text"
+            }
+          ],
+          "constraints": [],
+          "metadata": {
+            "skill_name": "linear",
+            "skill_description": "Manage issues, projects & team workflows in Linear. Use when the user wants to read, create or updates tickets in Linear.",
+            "skill_short_description": "Manage Linear issues in Codex",
+            "default_prompt": "Use Linear context to triage or update relevant issues for this task, with clear next actions."
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_check_mcp",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "check_mcp_configuration",
+      "block_name": "Check whether Linear MCP is already configured",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_mcp_config_status_ir",
+          "opcode": "read_linear_mcp_configuration_status",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "linear_mcp_configuration_status"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_mcp_configured",
+              "semantic_name": "Linear MCP configuration status"
+            }
+          ],
+          "constraints": [
+            "Set up Linear MCP if not already configured."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_after_mcp_config_check",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_mcp_configured"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "setup_linear_mcp",
+      "block_name": "Add the Linear MCP server",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "add_linear_mcp_server_ir",
+          "opcode": "add_linear_mcp_server",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "codex_cli",
+              "semantic_name": "Codex CLI"
+            },
+            {
+              "type": "literal",
+              "literal_value": "linear"
+            },
+            {
+              "type": "literal",
+              "literal_value": "https://mcp.linear.app/mcp"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "Run `codex mcp add linear --url https://mcp.linear.app/mcp`."
+          ],
+          "metadata": {
+            "script_content": "codex mcp add linear --url https://mcp.linear.app/mcp",
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_choose_enablement",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "If any MCP call fails because Linear MCP is not connected, pause and set it up.",
+        "Windows/WSL note: If you see connection errors on Windows, try configuring the Linear MCP to run via WSL: {\"mcpServers\": {\"linear\": {\"command\": \"wsl\", \"args\": [\"npx\", \"-y\", \"mcp-remote\", \"https://mcp.linear.app/sse\", \"--transport\", \"sse-only\"]}}}"
+      ]
+    },
+    {
+      "block_ref": "choose_remote_mcp_enablement",
+      "block_name": "Choose how to enable the remote MCP client",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "dispatch_choose_enablement",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+      ]
+    },
+    {
+      "block_ref": "set_config_toml_rmcp_client",
+      "block_name": "Enable remote MCP client in config.toml",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "set_config_toml_rmcp_client_ir",
+          "opcode": "set_config_toml_rmcp_client_true",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "config_toml",
+              "semantic_name": "config.toml"
+            },
+            {
+              "type": "literal",
+              "literal_value": "[features]\nrmcp_client = true"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "Set `[features] rmcp_client = true` in `config.toml`."
+          ],
+          "metadata": {
+            "config_toml": "[features]\nrmcp_client = true"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_login_from_config",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "run_codex_enable_rmcp_client",
+      "block_name": "Enable remote MCP client with Codex CLI",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "run_codex_enable_rmcp_client_ir",
+          "opcode": "run_codex_enable_rmcp_client",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "codex_cli",
+              "semantic_name": "Codex CLI"
+            },
+            {
+              "type": "literal",
+              "literal_value": "--enable rmcp_client"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "Run `codex --enable rmcp_client`."
+          ],
+          "metadata": {
+            "script_content": "codex --enable rmcp_client"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_login_from_cli",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "login_linear_mcp",
+      "block_name": "Log in to Linear MCP with OAuth",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "login_linear_mcp_oauth_ir",
+          "opcode": "login_linear_mcp_oauth",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "codex_cli",
+              "semantic_name": "Codex CLI"
+            },
+            {
+              "type": "external_resource",
+              "identifier": "linear_mcp",
+              "semantic_name": "Linear MCP server"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "oauth_login_result",
+              "semantic_name": "OAuth login result"
+            }
+          ],
+          "constraints": [
+            "Run `codex mcp login linear`."
+          ],
+          "metadata": {
+            "script_content": "codex mcp login linear",
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_after_login",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "oauth_login_result"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "After successful login, the user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+      ]
+    },
+    {
+      "block_ref": "return_restart_instruction",
+      "block_name": "Tell the user to restart Codex after successful login",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "return_restart_instruction_ir",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "After successful login, restart Codex. Then continue with Step 1 when you try again."
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "clarify_goal_scope",
+      "block_name": "Clarify the user's goal and scope",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "clarify_linear_goal_and_scope_ir",
+          "opcode": "clarify_linear_goal_and_scope",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "user_request_text"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "clarified_goal_scope",
+              "semantic_name": "clarified goal and scope"
+            }
+          ],
+          "constraints": [
+            "Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance)."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "confirm_linear_scope_details_ir",
+          "opcode": "confirm_linear_scope_details",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "clarified_goal_scope"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_scope",
+              "semantic_name": "confirmed scope details"
+            }
+          ],
+          "constraints": [
+            "Confirm team/project, priority, labels, cycle, and due dates as needed."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_select_workflow",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "select_workflow_and_tools",
+      "block_name": "Select the Linear workflow and identify required MCP tools",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_linear_workflow_ir",
+          "opcode": "select_linear_workflow",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            },
+            {
+              "type": "literal",
+              "literal_value": [
+                {
+                  "name": "Sprint Planning",
+                  "description": "Review open issues for a target team, pick top items by priority, and create a new cycle (e.g., \"Q1 Performance Sprint\") with assignments."
+                },
+                {
+                  "name": "Bug Triage",
+                  "description": "List critical/high-priority bugs, rank by user impact, and move the top items to \"In Progress.\""
+                },
+                {
+                  "name": "Documentation Audit",
+                  "description": "Search documentation (e.g., API auth), then open labeled \"documentation\" issues for gaps or outdated sections with detailed fixes."
+                },
+                {
+                  "name": "Team Workload Balance",
+                  "description": "Group active issues by assignee, flag anyone with high load, and suggest or apply redistributions."
+                },
+                {
+                  "name": "Release Planning",
+                  "description": "Create a project (e.g., \"v2.0 Release\") with milestones (feature freeze, beta, docs, launch) and generate issues with estimates."
+                },
+                {
+                  "name": "Cross-Project Dependencies",
+                  "description": "Find all \"blocked\" issues, identify blockers, and create linked issues if missing."
+                },
+                {
+                  "name": "Automated Status Updates",
+                  "description": "Find your issues with stale updates and add status comments based on current state/blockers."
+                },
+                {
+                  "name": "Smart Labeling",
+                  "description": "Analyze unlabeled issues, suggest/apply labels, and create missing label categories."
+                },
+                {
+                  "name": "Sprint Retrospectives",
+                  "description": "Generate a report for the last completed cycle, note completed vs. pushed work, and open discussion issues for patterns."
+                }
+              ],
+              "semantic_name": "Practical Workflows catalog"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow",
+              "semantic_name": "selected workflow"
+            }
+          ],
+          "constraints": [
+            "Select the appropriate workflow (see Practical Workflows below)."
+          ],
+          "metadata": {
+            "practical_workflows_source": "SKILL.md Practical Workflows"
+          }
+        },
+        {
+          "instruction_ref": "identify_linear_mcp_tools_ir",
+          "opcode": "identify_linear_mcp_tools",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "literal",
+              "literal_value": {
+                "Issue Management": [
+                  "list_issues",
+                  "get_issue",
+                  "create_issue",
+                  "update_issue",
+                  "list_my_issues",
+                  "list_issue_statuses",
+                  "list_issue_labels",
+                  "create_issue_label"
+                ],
+                "Project & Team": [
+                  "list_projects",
+                  "get_project",
+                  "create_project",
+                  "update_project",
+                  "list_teams",
+                  "get_team",
+                  "list_users"
+                ],
+                "Documentation & Collaboration": [
+                  "list_documents",
+                  "get_document",
+                  "search_documentation",
+                  "list_comments",
+                  "create_comment",
+                  "list_cycles"
+                ]
+              },
+              "semantic_name": "Available Linear MCP tools"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "required_mcp_tools",
+              "semantic_name": "required MCP tools"
+            }
+          ],
+          "constraints": [
+            "Identify the Linear MCP tools you will need."
+          ],
+          "metadata": {
+            "available_tools_source": "SKILL.md Available Tools"
+          }
+        },
+        {
+          "instruction_ref": "confirm_linear_identifiers_ir",
+          "opcode": "confirm_linear_identifiers",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_linear_identifiers",
+              "semantic_name": "confirmed Linear identifiers"
+            }
+          ],
+          "constraints": [
+            "Confirm required identifiers (issue ID, project ID, team key) before calling tools."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_read_context",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need.",
+        "Confirm required identifiers (issue ID, project ID, team key) before calling tools."
+      ]
+    },
+    {
+      "block_ref": "read_linear_context",
+      "block_name": "Read Linear context with MCP read tools",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_linear_mcp_read_tools_ir",
+          "opcode": "call_linear_mcp_read_tools",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "linear_mcp",
+              "semantic_name": "Linear MCP server"
+            },
+            {
+              "type": "result",
+              "identifier": "required_mcp_tools"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_linear_identifiers"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_context",
+              "semantic_name": "Linear context"
+            },
+            {
+              "type": "result",
+              "identifier": "mcp_read_error",
+              "semantic_name": "MCP read error"
+            }
+          ],
+          "constraints": [
+            "Read first (list/get/search) to build context."
+          ],
+          "metadata": {
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_after_read",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "mcp_read_error"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Read first (list/get/search) to build context."
+      ]
+    },
+    {
+      "block_ref": "check_bulk_operation",
+      "block_name": "Check whether the apply step is a bulk operation",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_bulk_operation_ir",
+          "opcode": "check_bulk_operation",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "is_bulk_operation",
+              "semantic_name": "bulk operation flag"
+            }
+          ],
+          "constraints": [
+            "For bulk operations, explain the grouping logic before applying changes."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_after_bulk_check",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "is_bulk_operation"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "explain_grouping_logic",
+      "block_name": "Explain grouping logic for bulk operations",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "explain_grouping_logic_ir",
+          "opcode": "explain_grouping_logic",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "is_bulk_operation"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "grouping_logic_explanation",
+              "semantic_name": "grouping logic explanation"
+            }
+          ],
+          "constraints": [
+            "Explain the grouping logic before applying changes."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_apply_updates",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "apply_linear_updates",
+      "block_name": "Create or update Linear entities with MCP write tools",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_linear_mcp_write_tools_ir",
+          "opcode": "call_linear_mcp_write_tools",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "linear_mcp",
+              "semantic_name": "Linear MCP server"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_linear_identifiers"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_update_results",
+              "semantic_name": "Linear update results"
+            },
+            {
+              "type": "result",
+              "identifier": "mcp_write_error",
+              "semantic_name": "MCP write error"
+            }
+          ],
+          "constraints": [
+            "Create or update next (issues, projects, labels, comments) with all required fields."
+          ],
+          "metadata": {
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_after_write",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "mcp_write_error"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Create or update next (issues, projects, labels, comments) with all required fields."
+      ]
+    },
+    {
+      "block_ref": "summarize_results",
+      "block_name": "Summarize results, call out gaps, and propose next actions",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "summarize_linear_workflow_results_ir",
+          "opcode": "summarize_linear_workflow_results",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_update_results"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary",
+              "semantic_name": "Linear workflow summary"
+            }
+          ],
+          "constraints": [
+            "Summarize results."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "identify_remaining_gaps_or_blockers_ir",
+          "opcode": "identify_remaining_gaps_or_blockers",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_update_results"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "remaining_gaps_blockers",
+              "semantic_name": "remaining gaps or blockers"
+            }
+          ],
+          "constraints": [
+            "Call out remaining gaps or blockers."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "propose_next_actions_ir",
+          "opcode": "propose_next_actions",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "remaining_gaps_blockers"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "proposed_next_actions",
+              "semantic_name": "proposed next actions"
+            }
+          ],
+          "constraints": [
+            "Propose next actions (additional issues, label changes, assignments, or follow-up comments)."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "return_final_ir",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary"
+            },
+            {
+              "type": "result",
+              "identifier": "remaining_gaps_blockers"
+            },
+            {
+              "type": "result",
+              "identifier": "proposed_next_actions"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments)."
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_user_request",
+      "target_block_ref": "check_mcp_configuration"
+    },
+    {
+      "source_block_ref": "check_mcp_configuration",
+      "target_block_ref": "setup_linear_mcp",
+      "condition_text": "not already configured"
+    },
+    {
+      "source_block_ref": "check_mcp_configuration",
+      "target_block_ref": "clarify_goal_scope",
+      "condition_text": "already configured"
+    },
+    {
+      "source_block_ref": "setup_linear_mcp",
+      "target_block_ref": "choose_remote_mcp_enablement"
+    },
+    {
+      "source_block_ref": "choose_remote_mcp_enablement",
+      "target_block_ref": "set_config_toml_rmcp_client",
+      "condition_text": "set [features] rmcp_client = true in config.toml"
+    },
+    {
+      "source_block_ref": "choose_remote_mcp_enablement",
+      "target_block_ref": "run_codex_enable_rmcp_client",
+      "condition_text": "run codex --enable rmcp_client"
+    },
+    {
+      "source_block_ref": "set_config_toml_rmcp_client",
+      "target_block_ref": "login_linear_mcp"
+    },
+    {
+      "source_block_ref": "run_codex_enable_rmcp_client",
+      "target_block_ref": "login_linear_mcp"
+    },
+    {
+      "source_block_ref": "login_linear_mcp",
+      "target_block_ref": "return_restart_instruction",
+      "condition_text": "login successful"
+    },
+    {
+      "source_block_ref": "clarify_goal_scope",
+      "target_block_ref": "select_workflow_and_tools"
+    },
+    {
+      "source_block_ref": "select_workflow_and_tools",
+      "target_block_ref": "read_linear_context"
+    },
+    {
+      "source_block_ref": "read_linear_context",
+      "target_block_ref": "setup_linear_mcp",
+      "condition_text": "MCP read call fails because Linear MCP is not connected"
+    },
+    {
+      "source_block_ref": "read_linear_context",
+      "target_block_ref": "check_bulk_operation",
+      "condition_text": "MCP read calls succeed"
+    },
+    {
+      "source_block_ref": "check_bulk_operation",
+      "target_block_ref": "explain_grouping_logic",
+      "condition_text": "bulk operation"
+    },
+    {
+      "source_block_ref": "check_bulk_operation",
+      "target_block_ref": "apply_linear_updates",
+      "condition_text": "not a bulk operation"
+    },
+    {
+      "source_block_ref": "explain_grouping_logic",
+      "target_block_ref": "apply_linear_updates"
+    },
+    {
+      "source_block_ref": "apply_linear_updates",
+      "target_block_ref": "setup_linear_mcp",
+      "condition_text": "MCP write call fails because Linear MCP is not connected"
+    },
+    {
+      "source_block_ref": "apply_linear_updates",
+      "target_block_ref": "summarize_results",
+      "condition_text": "MCP write calls succeed"
+    }
+  ],
+  "diagnostics": [
+    "Skill metadata and interface fields are preserved in root constraints because the candidate schema has no dedicated metadata field.",
+    "The source does not specify how to determine whether an operation is bulk; check_bulk_operation is modeled as a semantic predicate over the selected workflow and Linear context.",
+    "The source does not specify behavior when OAuth login fails; only the successful-login path to restart instruction is modeled.",
+    "The Windows/WSL connection-error alternative is preserved as a constraint on the setup block rather than an executable branch."
+  ]
+}
+
+Previous parsed candidate:
+
+{
+  "entry_block_ref": "read_user_request",
+  "constraints": [
+    "Skill metadata name: linear",
+    "Skill metadata description: Manage issues, projects & team workflows in Linear. Use when the user wants to read, create or updates tickets in Linear.",
+    "Skill metadata short-description: Manage Linear issues in Codex",
+    "Interface display_name: Linear",
+    "Interface short_description: Manage Linear issues in Codex",
+    "Interface icon_small: ./assets/linear-small.svg",
+    "Interface icon_large: ./assets/linear.png",
+    "Interface default_prompt: Use Linear context to triage or update relevant issues for this task, with clear next actions.",
+    "MCP dependency: linear (Linear MCP server), transport streamable_http, url https://mcp.linear.app/mcp.",
+    "Follow these steps in order. Do not skip steps.",
+    "Linear MCP server must be connected and accessible via OAuth.",
+    "Confirm access to the relevant Linear workspace, teams, and projects.",
+    "Step 0: Set up Linear MCP (if not already configured).",
+    "If any MCP call fails because Linear MCP is not connected, pause and set it up.",
+    "Step 1: Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance). Confirm team/project, priority, labels, cycle, and due dates as needed.",
+    "Step 2: Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need. Confirm required identifiers (issue ID, project ID, team key) before calling tools.",
+    "Step 3: Execute Linear MCP tool calls in logical batches: Read first (list/get/search) to build context. Create or update next (issues, projects, labels, comments) with all required fields. For bulk operations, explain grouping logic before applying changes.",
+    "Step 4: Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments).",
+    "After successful login, the user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+  ],
+  "declared_context_keys": [
+    "user_request",
+    "linear_mcp_configuration_status"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_user_request",
+      "block_name": "Read the user's request",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_user_request_ir",
+          "opcode": "read_user_request",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_request"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "user_request_text",
+              "semantic_name": "user request text"
+            }
+          ],
+          "constraints": [],
+          "metadata": {
+            "skill_name": "linear",
+            "skill_description": "Manage issues, projects & team workflows in Linear. Use when the user wants to read, create or updates tickets in Linear.",
+            "skill_short_description": "Manage Linear issues in Codex",
+            "default_prompt": "Use Linear context to triage or update relevant issues for this task, with clear next actions."
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_check_mcp",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "check_mcp_configuration",
+      "block_name": "Check whether Linear MCP is already configured",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_mcp_config_status_ir",
+          "opcode": "read_linear_mcp_configuration_status",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "linear_mcp_configuration_status"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_mcp_configured",
+              "semantic_name": "Linear MCP configuration status"
+            }
+          ],
+          "constraints": [
+            "Set up Linear MCP if not already configured."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_after_mcp_config_check",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_mcp_configured"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "setup_linear_mcp",
+      "block_name": "Add the Linear MCP server",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "add_linear_mcp_server_ir",
+          "opcode": "add_linear_mcp_server",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "codex_cli",
+              "semantic_name": "Codex CLI"
+            },
+            {
+              "type": "literal",
+              "literal_value": "linear"
+            },
+            {
+              "type": "literal",
+              "literal_value": "https://mcp.linear.app/mcp"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "Run `codex mcp add linear --url https://mcp.linear.app/mcp`."
+          ],
+          "metadata": {
+            "script_content": "codex mcp add linear --url https://mcp.linear.app/mcp",
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_choose_enablement",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "If any MCP call fails because Linear MCP is not connected, pause and set it up.",
+        "Windows/WSL note: If you see connection errors on Windows, try configuring the Linear MCP to run via WSL: {\"mcpServers\": {\"linear\": {\"command\": \"wsl\", \"args\": [\"npx\", \"-y\", \"mcp-remote\", \"https://mcp.linear.app/sse\", \"--transport\", \"sse-only\"]}}}"
+      ]
+    },
+    {
+      "block_ref": "choose_remote_mcp_enablement",
+      "block_name": "Choose how to enable the remote MCP client",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "dispatch_choose_enablement",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Set `[features] rmcp_client = true` in `config.toml` or run `codex --enable rmcp_client`."
+      ]
+    },
+    {
+      "block_ref": "set_config_toml_rmcp_client",
+      "block_name": "Enable remote MCP client in config.toml",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "set_config_toml_rmcp_client_ir",
+          "opcode": "set_config_toml_rmcp_client_true",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "config_toml",
+              "semantic_name": "config.toml"
+            },
+            {
+              "type": "literal",
+              "literal_value": "[features]\nrmcp_client = true"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "Set `[features] rmcp_client = true` in `config.toml`."
+          ],
+          "metadata": {
+            "config_toml": "[features]\nrmcp_client = true"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_login_from_config",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "run_codex_enable_rmcp_client",
+      "block_name": "Enable remote MCP client with Codex CLI",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "run_codex_enable_rmcp_client_ir",
+          "opcode": "run_codex_enable_rmcp_client",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "codex_cli",
+              "semantic_name": "Codex CLI"
+            },
+            {
+              "type": "literal",
+              "literal_value": "--enable rmcp_client"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "Run `codex --enable rmcp_client`."
+          ],
+          "metadata": {
+            "script_content": "codex --enable rmcp_client"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_login_from_cli",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "login_linear_mcp",
+      "block_name": "Log in to Linear MCP with OAuth",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "login_linear_mcp_oauth_ir",
+          "opcode": "login_linear_mcp_oauth",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "codex_cli",
+              "semantic_name": "Codex CLI"
+            },
+            {
+              "type": "external_resource",
+              "identifier": "linear_mcp",
+              "semantic_name": "Linear MCP server"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "oauth_login_result",
+              "semantic_name": "OAuth login result"
+            }
+          ],
+          "constraints": [
+            "Run `codex mcp login linear`."
+          ],
+          "metadata": {
+            "script_content": "codex mcp login linear",
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_after_login",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "oauth_login_result"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "After successful login, the user will have to restart codex. You should finish your answer and tell them so when they try again they can continue with Step 1."
+      ]
+    },
+    {
+      "block_ref": "return_restart_instruction",
+      "block_name": "Tell the user to restart Codex after successful login",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "return_restart_instruction_ir",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "After successful login, restart Codex. Then continue with Step 1 when you try again."
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "clarify_goal_scope",
+      "block_name": "Clarify the user's goal and scope",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "clarify_linear_goal_and_scope_ir",
+          "opcode": "clarify_linear_goal_and_scope",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "user_request_text"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "clarified_goal_scope",
+              "semantic_name": "clarified goal and scope"
+            }
+          ],
+          "constraints": [
+            "Clarify the user's goal and scope (e.g., issue triage, sprint planning, documentation audit, workload balance)."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "confirm_linear_scope_details_ir",
+          "opcode": "confirm_linear_scope_details",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "clarified_goal_scope"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_scope",
+              "semantic_name": "confirmed scope details"
+            }
+          ],
+          "constraints": [
+            "Confirm team/project, priority, labels, cycle, and due dates as needed."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_select_workflow",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "select_workflow_and_tools",
+      "block_name": "Select the Linear workflow and identify required MCP tools",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_linear_workflow_ir",
+          "opcode": "select_linear_workflow",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            },
+            {
+              "type": "literal",
+              "literal_value": [
+                {
+                  "name": "Sprint Planning",
+                  "description": "Review open issues for a target team, pick top items by priority, and create a new cycle (e.g., \"Q1 Performance Sprint\") with assignments."
+                },
+                {
+                  "name": "Bug Triage",
+                  "description": "List critical/high-priority bugs, rank by user impact, and move the top items to \"In Progress.\""
+                },
+                {
+                  "name": "Documentation Audit",
+                  "description": "Search documentation (e.g., API auth), then open labeled \"documentation\" issues for gaps or outdated sections with detailed fixes."
+                },
+                {
+                  "name": "Team Workload Balance",
+                  "description": "Group active issues by assignee, flag anyone with high load, and suggest or apply redistributions."
+                },
+                {
+                  "name": "Release Planning",
+                  "description": "Create a project (e.g., \"v2.0 Release\") with milestones (feature freeze, beta, docs, launch) and generate issues with estimates."
+                },
+                {
+                  "name": "Cross-Project Dependencies",
+                  "description": "Find all \"blocked\" issues, identify blockers, and create linked issues if missing."
+                },
+                {
+                  "name": "Automated Status Updates",
+                  "description": "Find your issues with stale updates and add status comments based on current state/blockers."
+                },
+                {
+                  "name": "Smart Labeling",
+                  "description": "Analyze unlabeled issues, suggest/apply labels, and create missing label categories."
+                },
+                {
+                  "name": "Sprint Retrospectives",
+                  "description": "Generate a report for the last completed cycle, note completed vs. pushed work, and open discussion issues for patterns."
+                }
+              ],
+              "semantic_name": "Practical Workflows catalog"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow",
+              "semantic_name": "selected workflow"
+            }
+          ],
+          "constraints": [
+            "Select the appropriate workflow (see Practical Workflows below)."
+          ],
+          "metadata": {
+            "practical_workflows_source": "SKILL.md Practical Workflows"
+          }
+        },
+        {
+          "instruction_ref": "identify_linear_mcp_tools_ir",
+          "opcode": "identify_linear_mcp_tools",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "literal",
+              "literal_value": {
+                "Issue Management": [
+                  "list_issues",
+                  "get_issue",
+                  "create_issue",
+                  "update_issue",
+                  "list_my_issues",
+                  "list_issue_statuses",
+                  "list_issue_labels",
+                  "create_issue_label"
+                ],
+                "Project & Team": [
+                  "list_projects",
+                  "get_project",
+                  "create_project",
+                  "update_project",
+                  "list_teams",
+                  "get_team",
+                  "list_users"
+                ],
+                "Documentation & Collaboration": [
+                  "list_documents",
+                  "get_document",
+                  "search_documentation",
+                  "list_comments",
+                  "create_comment",
+                  "list_cycles"
+                ]
+              },
+              "semantic_name": "Available Linear MCP tools"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "required_mcp_tools",
+              "semantic_name": "required MCP tools"
+            }
+          ],
+          "constraints": [
+            "Identify the Linear MCP tools you will need."
+          ],
+          "metadata": {
+            "available_tools_source": "SKILL.md Available Tools"
+          }
+        },
+        {
+          "instruction_ref": "confirm_linear_identifiers_ir",
+          "opcode": "confirm_linear_identifiers",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "confirmed_linear_identifiers",
+              "semantic_name": "confirmed Linear identifiers"
+            }
+          ],
+          "constraints": [
+            "Confirm required identifiers (issue ID, project ID, team key) before calling tools."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_read_context",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Select the appropriate workflow (see Practical Workflows below) and identify the Linear MCP tools you will need.",
+        "Confirm required identifiers (issue ID, project ID, team key) before calling tools."
+      ]
+    },
+    {
+      "block_ref": "read_linear_context",
+      "block_name": "Read Linear context with MCP read tools",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_linear_mcp_read_tools_ir",
+          "opcode": "call_linear_mcp_read_tools",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "linear_mcp",
+              "semantic_name": "Linear MCP server"
+            },
+            {
+              "type": "result",
+              "identifier": "required_mcp_tools"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_linear_identifiers"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_context",
+              "semantic_name": "Linear context"
+            },
+            {
+              "type": "result",
+              "identifier": "mcp_read_error",
+              "semantic_name": "MCP read error"
+            }
+          ],
+          "constraints": [
+            "Read first (list/get/search) to build context."
+          ],
+          "metadata": {
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_after_read",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "mcp_read_error"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Read first (list/get/search) to build context."
+      ]
+    },
+    {
+      "block_ref": "check_bulk_operation",
+      "block_name": "Check whether the apply step is a bulk operation",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_bulk_operation_ir",
+          "opcode": "check_bulk_operation",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "is_bulk_operation",
+              "semantic_name": "bulk operation flag"
+            }
+          ],
+          "constraints": [
+            "For bulk operations, explain the grouping logic before applying changes."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_after_bulk_check",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "is_bulk_operation"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "explain_grouping_logic",
+      "block_name": "Explain grouping logic for bulk operations",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "explain_grouping_logic_ir",
+          "opcode": "explain_grouping_logic",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "is_bulk_operation"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "grouping_logic_explanation",
+              "semantic_name": "grouping logic explanation"
+            }
+          ],
+          "constraints": [
+            "Explain the grouping logic before applying changes."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_apply_updates",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "apply_linear_updates",
+      "block_name": "Create or update Linear entities with MCP write tools",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_linear_mcp_write_tools_ir",
+          "opcode": "call_linear_mcp_write_tools",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "linear_mcp",
+              "semantic_name": "Linear MCP server"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_linear_identifiers"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_update_results",
+              "semantic_name": "Linear update results"
+            },
+            {
+              "type": "result",
+              "identifier": "mcp_write_error",
+              "semantic_name": "MCP write error"
+            }
+          ],
+          "constraints": [
+            "Create or update next (issues, projects, labels, comments) with all required fields."
+          ],
+          "metadata": {
+            "transport": "streamable_http",
+            "url": "https://mcp.linear.app/mcp"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_after_write",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "mcp_write_error"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Create or update next (issues, projects, labels, comments) with all required fields."
+      ]
+    },
+    {
+      "block_ref": "summarize_results",
+      "block_name": "Summarize results, call out gaps, and propose next actions",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "summarize_linear_workflow_results_ir",
+          "opcode": "summarize_linear_workflow_results",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_update_results"
+            },
+            {
+              "type": "result",
+              "identifier": "confirmed_scope"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary",
+              "semantic_name": "Linear workflow summary"
+            }
+          ],
+          "constraints": [
+            "Summarize results."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "identify_remaining_gaps_or_blockers_ir",
+          "opcode": "identify_remaining_gaps_or_blockers",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_context"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_update_results"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "remaining_gaps_blockers",
+              "semantic_name": "remaining gaps or blockers"
+            }
+          ],
+          "constraints": [
+            "Call out remaining gaps or blockers."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "propose_next_actions_ir",
+          "opcode": "propose_next_actions",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "remaining_gaps_blockers"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_workflow"
+            },
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "proposed_next_actions",
+              "semantic_name": "proposed next actions"
+            }
+          ],
+          "constraints": [
+            "Propose next actions (additional issues, label changes, assignments, or follow-up comments)."
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "return_final_ir",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "linear_workflow_summary"
+            },
+            {
+              "type": "result",
+              "identifier": "remaining_gaps_blockers"
+            },
+            {
+              "type": "result",
+              "identifier": "proposed_next_actions"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "Summarize results, call out remaining gaps or blockers, and propose next actions (additional issues, label changes, assignments, or follow-up comments)."
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_user_request",
+      "target_block_ref": "check_mcp_configuration"
+    },
+    {
+      "source_block_ref": "check_mcp_configuration",
+      "target_block_ref": "setup_linear_mcp",
+      "condition_text": "not already configured"
+    },
+    {
+      "source_block_ref": "check_mcp_configuration",
+      "target_block_ref": "clarify_goal_scope",
+      "condition_text": "already configured"
+    },
+    {
+      "source_block_ref": "setup_linear_mcp",
+      "target_block_ref": "choose_remote_mcp_enablement"
+    },
+    {
+      "source_block_ref": "choose_remote_mcp_enablement",
+      "target_block_ref": "set_config_toml_rmcp_client",
+      "condition_text": "set [features] rmcp_client = true in config.toml"
+    },
+    {
+      "source_block_ref": "choose_remote_mcp_enablement",
+      "target_block_ref": "run_codex_enable_rmcp_client",
+      "condition_text": "run codex --enable rmcp_client"
+    },
+    {
+      "source_block_ref": "set_config_toml_rmcp_client",
+      "target_block_ref": "login_linear_mcp"
+    },
+    {
+      "source_block_ref": "run_codex_enable_rmcp_client",
+      "target_block_ref": "login_linear_mcp"
+    },
+    {
+      "source_block_ref": "login_linear_mcp",
+      "target_block_ref": "return_restart_instruction",
+      "condition_text": "login successful"
+    },
+    {
+      "source_block_ref": "clarify_goal_scope",
+      "target_block_ref": "select_workflow_and_tools"
+    },
+    {
+      "source_block_ref": "select_workflow_and_tools",
+      "target_block_ref": "read_linear_context"
+    },
+    {
+      "source_block_ref": "read_linear_context",
+      "target_block_ref": "setup_linear_mcp",
+      "condition_text": "MCP read call fails because Linear MCP is not connected"
+    },
+    {
+      "source_block_ref": "read_linear_context",
+      "target_block_ref": "check_bulk_operation",
+      "condition_text": "MCP read calls succeed"
+    },
+    {
+      "source_block_ref": "check_bulk_operation",
+      "target_block_ref": "explain_grouping_logic",
+      "condition_text": "bulk operation"
+    },
+    {
+      "source_block_ref": "check_bulk_operation",
+      "target_block_ref": "apply_linear_updates",
+      "condition_text": "not a bulk operation"
+    },
+    {
+      "source_block_ref": "explain_grouping_logic",
+      "target_block_ref": "apply_linear_updates"
+    },
+    {
+      "source_block_ref": "apply_linear_updates",
+      "target_block_ref": "setup_linear_mcp",
+      "condition_text": "MCP write call fails because Linear MCP is not connected"
+    },
+    {
+      "source_block_ref": "apply_linear_updates",
+      "target_block_ref": "summarize_results",
+      "condition_text": "MCP write calls succeed"
+    }
+  ],
+  "diagnostics": [
+    "Skill metadata and interface fields are preserved in root constraints because the candidate schema has no dedicated metadata field.",
+    "The source does not specify how to determine whether an operation is bulk; check_bulk_operation is modeled as a semantic predicate over the selected workflow and Linear context.",
+    "The source does not specify behavior when OAuth login fails; only the successful-login path to restart instruction is modeled.",
+    "The Windows/WSL connection-error alternative is preserved as a constraint on the setup block rather than an executable branch."
+  ]
+}
+
+Deterministic validation errors:
+
+[
+  "CANDIDATE_SCHEMA_INVALID at blocks.9.instructions.0.inputs.1: Value error, literal operand must not define 'semantic_name'",
+  "CANDIDATE_SCHEMA_INVALID at blocks.9.instructions.1.inputs.1: Value error, literal operand must not define 'semantic_name'"
+]

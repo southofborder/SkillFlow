@@ -1,0 +1,1052 @@
+{
+  "entry_block_ref": "read_inputs",
+  "constraints": [
+    "Use only GitHub Actions checks; treat external providers (for example Buildkite) as out of scope and report only the details URL.",
+    "Authenticate with the standard GitHub CLI and confirm with `gh auth status` (repo + workflow scopes are typically required).",
+    "If a plan-oriented skill (for example `create-plan`) is available, use it; otherwise draft a concise plan inline and request approval before implementing.",
+    "Implement only after explicit approval.",
+    "Call out missing logs explicitly.",
+    "After changes, suggest re-running the relevant tests and `gh pr checks` to confirm."
+  ],
+  "declared_context_keys": [
+    "repo",
+    "pr",
+    "available_plan_skill"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_inputs",
+      "block_name": "Read repo and PR inputs",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_inputs",
+          "opcode": "read_repo_and_pr_inputs",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "repo"
+            },
+            {
+              "type": "context_key",
+              "identifier": "pr"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            },
+            {
+              "type": "result",
+              "identifier": "pr_input"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_verify_auth",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "verify_auth",
+      "block_name": "Verify gh authentication",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "run_auth_status",
+          "opcode": "run_gh_auth_status",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "gh"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "auth_status"
+            }
+          ],
+          "constraints": [
+            "repo + workflow scopes are typically required"
+          ]
+        },
+        {
+          "instruction_ref": "go_auth_decision",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "auth_status"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "auth_required",
+      "block_name": "Ask user to authenticate gh",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "ask_auth_login",
+          "opcode": "ask_user_to_run_gh_auth_login",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "gh auth login with repo and workflow scopes"
+            }
+          ],
+          "outputs": []
+        },
+        {
+          "instruction_ref": "return_auth_required",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "User must run gh auth login with repo and workflow scopes before proceeding."
+            }
+          ],
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "resolve_pr_decision",
+      "block_name": "Decide whether a PR was provided",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "choose_pr_source",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "pr_input"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "use_provided_pr",
+      "block_name": "Use the provided PR number or URL",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "go_merge_pr",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "fetch_current_branch_pr",
+      "block_name": "Resolve the current branch PR",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "fetch_current_pr",
+          "opcode": "read_current_branch_pr",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "gh"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "fetched_pr"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_merge_pr_from_fetch",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "merge_pr",
+      "block_name": "Select the PR to inspect and choose inspection method",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_pr",
+          "opcode": "select_pr_value",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "pr_input"
+            },
+            {
+              "type": "result",
+              "identifier": "fetched_pr"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "resolved_pr"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "select_inspection_method",
+          "opcode": "select_preferred_inspection_method",
+          "inputs": [],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "inspection_method_choice"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_inspection_method",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "inspection_method_choice"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "run_bundled_script",
+      "block_name": "Run bundled inspect_pr_checks.py",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "run_script",
+          "opcode": "inspect_pr_checks",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "scripts/inspect_pr_checks.py"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            },
+            {
+              "type": "result",
+              "identifier": "resolved_pr"
+            },
+            {
+              "type": "literal",
+              "literal_value": true
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "script_report"
+            },
+            {
+              "type": "result",
+              "identifier": "script_exit_code"
+            }
+          ],
+          "constraints": [
+            "Exits non-zero when failures remain so it can be used in automation."
+          ],
+          "metadata": {
+            "script_content": "#!/usr/bin/env python3\nfrom __future__ import annotations\n\nimport argparse\nimport json\nimport re\nimport subprocess\nimport sys\nfrom pathlib import Path\nfrom shutil import which\nfrom typing import Any, Iterable, Sequence\n\nFAILURE_CONCLUSIONS = {\n    \"failure\",\n    \"cancelled\",\n    \"timed_out\",\n    \"action_required\",\n}\n\nFAILURE_STATES = {\n    \"failure\",\n    \"error\",\n    \"cancelled\",\n    \"timed_out\",\n    \"action_required\",\n}\n\nFAILURE_BUCKETS = {\"fail\"}\n\nFAILURE_MARKERS = (\n    \"error\",\n    \"fail\",\n    \"failed\",\n    \"traceback\",\n    \"exception\",\n    \"assert\",\n    \"panic\",\n    \"fatal\",\n    \"timeout\",\n    \"segmentation fault\",\n)\n\nDEFAULT_MAX_LINES = 160\nDEFAULT_CONTEXT_LINES = 30\nPENDING_LOG_MARKERS = (\n    \"still in progress\",\n    \"log will be available when it is complete\",\n)\n\n\nclass GhResult:\n    def __init__(self, returncode: int, stdout: str, stderr: str):\n        self.returncode = returncode\n        self.stdout = stdout\n        self.stderr = stderr\n\n\ndef run_gh_command(args: Sequence[str], cwd: Path) -> GhResult:\n    process = subprocess.run(\n        [\"gh\", *args],\n        cwd=cwd,\n        text=True,\n        capture_output=True,\n    )\n    return GhResult(process.returncode, process.stdout, process.stderr)\n\n\ndef run_gh_command_raw(args: Sequence[str], cwd: Path) -> tuple[int, bytes, str]:\n    process = subprocess.run(\n        [\"gh\", *args],\n        cwd=cwd,\n        capture_output=True,\n    )\n    stderr = process.stderr.decode(errors=\"replace\")\n    return process.returncode, process.stdout, stderr\n\n\ndef parse_args() -> argparse.Namespace:\n    parser = argparse.ArgumentParser(\n        description=(\n            \"Inspect failing GitHub PR checks, fetch GitHub Actions logs, and extract a \"\n            \"failure snippet.\"\n        ),\n        formatter_class=argparse.ArgumentDefaultsHelpFormatter,\n    )\n    parser.add_argument(\"--repo\", default=\".\", help=\"Path inside the target Git repository.\")\n    parser.add_argument(\n        \"--pr\", default=None, help=\"PR number or URL (defaults to current branch PR).\"\n    )\n    parser.add_argument(\"--max-lines\", type=int, default=DEFAULT_MAX_LINES)\n    parser.add_argument(\"--context\", type=int, default=DEFAULT_CONTEXT_LINES)\n    parser.add_argument(\"--json\", action=\"store_true\", help=\"Emit JSON instead of text output.\")\n    return parser.parse_args()\n\n\ndef main() -> int:\n    args = parse_args()\n    repo_root = find_git_root(Path(args.repo))\n    if repo_root is None:\n        print(\"Error: not inside a Git repository.\", file=sys.stderr)\n        return 1\n\n    if not ensure_gh_available(repo_root):\n        return 1\n\n    pr_value = resolve_pr(args.pr, repo_root)\n    if pr_value is None:\n        return 1\n\n    checks = fetch_checks(pr_value, repo_root)\n    if checks is None:\n        return 1\n\n    failing = [c for c in checks if is_failing(c)]\n    if not failing:\n        print(f\"PR #{pr_value}: no failing checks detected.\")\n        return 0\n\n    results = []\n    for check in failing:\n        results.append(\n            analyze_check(\n                check,\n                repo_root=repo_root,\n                max_lines=max(1, args.max_lines),\n                context=max(1, args.context),\n            )\n        )\n\n    if args.json:\n        print(json.dumps({\"pr\": pr_value, \"results\": results}, indent=2))\n    else:\n        render_results(pr_value, results)\n\n    return 1\n\n\ndef find_git_root(start: Path) -> Path | None:\n    result = subprocess.run(\n        [\"git\", \"rev-parse\", \"--show-toplevel\"],\n        cwd=start,\n        text=True,\n        capture_output=True,\n    )\n    if result.returncode != 0:\n        return None\n    return Path(result.stdout.strip())\n\n\ndef ensure_gh_available(repo_root: Path) -> bool:\n    if which(\"gh\") is None:\n        print(\"Error: gh is not installed or not on PATH.\", file=sys.stderr)\n        return False\n    result = run_gh_command([\"auth\", \"status\"], cwd=repo_root)\n    if result.returncode == 0:\n        return True\n    message = (result.stderr or result.stdout or \"\").strip()\n    print(message or \"Error: gh not authenticated.\", file=sys.stderr)\n    return False\n\n\ndef resolve_pr(pr_value: str | None, repo_root: Path) -> str | None:\n    if pr_value:\n        return pr_value\n    result = run_gh_command([\"pr\", \"view\", \"--json\", \"number\"], cwd=repo_root)\n    if result.returncode != 0:\n        message = (result.stderr or result.stdout or \"\").strip()\n        print(message or \"Error: unable to resolve PR.\", file=sys.stderr)\n        return None\n    try:\n        data = json.loads(result.stdout or \"{}\")\n    except json.JSONDecodeError:\n        print(\"Error: unable to parse PR JSON.\", file=sys.stderr)\n        return None\n    number = data.get(\"number\")\n    if not number:\n        print(\"Error: no PR number found.\", file=sys.stderr)\n        return None\n    return str(number)\n\n\ndef fetch_checks(pr_value: str, repo_root: Path) -> list[dict[str, Any]] | None:\n    primary_fields = [\"name\", \"state\", \"conclusion\", \"detailsUrl\", \"startedAt\", \"completedAt\"]\n    result = run_gh_command(\n        [\"pr\", \"checks\", pr_value, \"--json\", \",\".join(primary_fields)],\n        cwd=repo_root,\n    )\n    if result.returncode != 0:\n        message = \"\\n\".join(filter(None, [result.stderr, result.stdout])).strip()\n        available_fields = parse_available_fields(message)\n        if available_fields:\n            fallback_fields = [\n                \"name\",\n                \"state\",\n                \"bucket\",\n                \"link\",\n                \"startedAt\",\n                \"completedAt\",\n                \"workflow\",\n            ]\n            selected_fields = [field for field in fallback_fields if field in available_fields]\n            if not selected_fields:\n                print(\"Error: no usable fields available for gh pr checks.\", file=sys.stderr)\n                return None\n            result = run_gh_command(\n                [\"pr\", \"checks\", pr_value, \"--json\", \",\".join(selected_fields)],\n                cwd=repo_root,\n            )\n            if result.returncode != 0:\n                message = (result.stderr or result.stdout or \"\").strip()\n                print(message or \"Error: gh pr checks failed.\", file=sys.stderr)\n                return None\n        else:\n            print(message or \"Error: gh pr checks failed.\", file=sys.stderr)\n            return None\n    try:\n        data = json.loads(result.stdout or \"[]\")\n    except json.JSONDecodeError:\n        print(\"Error: unable to parse checks JSON.\", file=sys.stderr)\n        return None\n    if not isinstance(data, list):\n        print(\"Error: unexpected checks JSON shape.\", file=sys.stderr)\n        return None\n    return data\n\n\ndef is_failing(check: dict[str, Any]) -> bool:\n    conclusion = normalize_field(check.get(\"conclusion\"))\n    if conclusion in FAILURE_CONCLUSIONS:\n        return True\n    state = normalize_field(check.get(\"state\") or check.get(\"status\"))\n    if state in FAILURE_STATES:\n        return True\n    bucket = normalize_field(check.get(\"bucket\"))\n    return bucket in FAILURE_BUCKETS\n\n\ndef analyze_check(\n    check: dict[str, Any],\n    repo_root: Path,\n    max_lines: int,\n    context: int,\n) -> dict[str, Any]:\n    url = check.get(\"detailsUrl\") or check.get(\"link\") or \"\"\n    run_id = extract_run_id(url)\n    job_id = extract_job_id(url)\n    base: dict[str, Any] = {\n        \"name\": check.get(\"name\", \"\"),\n        \"detailsUrl\": url,\n        \"runId\": run_id,\n        \"jobId\": job_id,\n    }\n\n    if run_id is None:\n        base[\"status\"] = \"external\"\n        base[\"note\"] = \"No GitHub Actions run id detected in detailsUrl.\"\n        return base\n\n    metadata = fetch_run_metadata(run_id, repo_root)\n    log_text, log_error, log_status = fetch_check_log(\n        run_id=run_id,\n        job_id=job_id,\n        repo_root=repo_root,\n    )\n\n    if log_status == \"pending\":\n        base[\"status\"] = \"log_pending\"\n        base[\"note\"] = log_error or \"Logs are not available yet.\"\n        if metadata:\n            base[\"run\"] = metadata\n        return base\n\n    if log_error:\n        base[\"status\"] = \"log_unavailable\"\n        base[\"error\"] = log_error\n        if metadata:\n            base[\"run\"] = metadata\n        return base\n\n    snippet = extract_failure_snippet(log_text, max_lines=max_lines, context=context)\n    base[\"status\"] = \"ok\"\n    base[\"run\"] = metadata or {}\n    base[\"logSnippet\"] = snippet\n    base[\"logTail\"] = tail_lines(log_text, max_lines)\n    return base\n\n\ndef extract_run_id(url: str) -> str | None:\n    if not url:\n        return None\n    for pattern in (r\"/actions/runs/(\\d+)\", r\"/runs/(\\d+)\"):\n        match = re.search(pattern, url)\n        if match:\n            return match.group(1)\n    return None\n\n\ndef extract_job_id(url: str) -> str | None:\n    if not url:\n        return None\n    match = re.search(r\"/actions/runs/\\d+/job/(\\d+)\", url)\n    if match:\n        return match.group(1)\n    match = re.search(r\"/job/(\\d+)\", url)\n    if match:\n        return match.group(1)\n    return None\n\n\ndef fetch_run_metadata(run_id: str, repo_root: Path) -> dict[str, Any] | None:\n    fields = [\n        \"conclusion\",\n        \"status\",\n        \"workflowName\",\n        \"name\",\n        \"event\",\n        \"headBranch\",\n        \"headSha\",\n        \"url\",\n    ]\n    result = run_gh_command([\"run\", \"view\", run_id, \"--json\", \",\".join(fields)], cwd=repo_root)\n    if result.returncode != 0:\n        return None\n    try:\n        data = json.loads(result.stdout or \"{}\")\n    except json.JSONDecodeError:\n        return None\n    if not isinstance(data, dict):\n        return None\n    return data\n\n\ndef fetch_check_log(\n    run_id: str,\n    job_id: str | None,\n    repo_root: Path,\n) -> tuple[str, str, str]:\n    log_text, log_error = fetch_run_log(run_id, repo_root)\n    if not log_error:\n        return log_text, \"\", \"ok\"\n\n    if is_log_pending_message(log_error) and job_id:\n        job_log, job_error = fetch_job_log(job_id, repo_root)\n        if job_log:\n            return job_log, \"\", \"ok\"\n        if job_error and is_log_pending_message(job_error):\n            return \"\", job_error, \"pending\"\n        if job_error:\n            return \"\", job_error, \"error\"\n        return \"\", log_error, \"pending\"\n\n    if is_log_pending_message(log_error):\n        return \"\", log_error, \"pending\"\n\n    return \"\", log_error, \"error\"\n\n\ndef fetch_run_log(run_id: str, repo_root: Path) -> tuple[str, str]:\n    result = run_gh_command([\"run\", \"view\", run_id, \"--log\"], cwd=repo_root)\n    if result.returncode != 0:\n        error = (result.stderr or result.stdout or \"\").strip()\n        return \"\", error or \"gh run view failed\"\n    return result.stdout, \"\"\n\n\ndef fetch_job_log(job_id: str, repo_root: Path) -> tuple[str, str]:\n    repo_slug = fetch_repo_slug(repo_root)\n    if not repo_slug:\n        return \"\", \"Error: unable to resolve repository name for job logs.\"\n    endpoint = f\"/repos/{repo_slug}/actions/jobs/{job_id}/logs\"\n    returncode, stdout_bytes, stderr = run_gh_command_raw([\"api\", endpoint], cwd=repo_root)\n    if returncode != 0:\n        message = (stderr or stdout_bytes.decode(errors=\"replace\")).strip()\n        return \"\", message or \"gh api job logs failed\"\n    if is_zip_payload(stdout_bytes):\n        return \"\", \"Job logs returned a zip archive; unable to parse.\"\n    return stdout_bytes.decode(errors=\"replace\"), \"\"\n\n\ndef fetch_repo_slug(repo_root: Path) -> str | None:\n    result = run_gh_command([\"repo\", \"view\", \"--json\", \"nameWithOwner\"], cwd=repo_root)\n    if result.returncode != 0:\n        return None\n    try:\n        data = json.loads(result.stdout or \"{}\")\n    except json.JSONDecodeError:\n        return None\n    name_with_owner = data.get(\"nameWithOwner\")\n    if not name_with_owner:\n        return None\n    return str(name_with_owner)\n\n\ndef normalize_field(value: Any) -> str:\n    if value is None:\n        return \"\"\n    return str(value).strip().lower()\n\n\ndef parse_available_fields(message: str) -> list[str]:\n    if \"Available fields:\" not in message:\n        return []\n    fields: list[str] = []\n    collecting = False\n    for line in message.splitlines():\n        if \"Available fields:\" in line:\n            collecting = True\n            continue\n        if not collecting:\n            continue\n        field = line.strip()\n        if not field:\n            continue\n        fields.append(field)\n    return fields\n\n\ndef is_log_pending_message(message: str) -> bool:\n    lowered = message.lower()\n    return any(marker in lowered for marker in PENDING_LOG_MARKERS)\n\n\ndef is_zip_payload(payload: bytes) -> bool:\n    return payload.startswith(b\"PK\")\n\n\ndef extract_failure_snippet(log_text: str, max_lines: int, context: int) -> str:\n    lines = log_text.splitlines()\n    if not lines:\n        return \"\"\n\n    marker_index = find_failure_index(lines)\n    if marker_index is None:\n        return \"\\n\".join(lines[-max_lines:])\n\n    start = max(0, marker_index - context)\n    end = min(len(lines), marker_index + context)\n    window = lines[start:end]\n    if len(window) > max_lines:\n        window = window[-max_lines:]\n    return \"\\n\".join(window)\n\n\ndef find_failure_index(lines: Sequence[str]) -> int | None:\n    for idx in range(len(lines) - 1, -1, -1):\n        lowered = lines[idx].lower()\n        if any(marker in lowered for marker in FAILURE_MARKERS):\n            return idx\n    return None\n\n\ndef tail_lines(text: str, max_lines: int) -> str:\n    if max_lines <= 0:\n        return \"\"\n    lines = text.splitlines()\n    return \"\\n\".join(lines[-max_lines:])\n\n\ndef render_results(pr_number: str, results: Iterable[dict[str, Any]]) -> None:\n    results_list = list(results)\n    print(f\"PR #{pr_number}: {len(results_list)} failing checks analyzed.\")\n    for result in results_list:\n        print(\"-\" * 60)\n        print(f\"Check: {result.get('name', '')}\")\n        if result.get(\"detailsUrl\"):\n            print(f\"Details: {result['detailsUrl']}\")\n        run_id = result.get(\"runId\")\n        if run_id:\n            print(f\"Run ID: {run_id}\")\n        job_id = result.get(\"jobId\")\n        if job_id:\n            print(f\"Job ID: {job_id}\")\n        status = result.get(\"status\", \"unknown\")\n        print(f\"Status: {status}\")\n\n        run_meta = result.get(\"run\", {})\n        if run_meta:\n            branch = run_meta.get(\"headBranch\", \"\")\n            sha = (run_meta.get(\"headSha\") or \"\")[:12]\n            workflow = run_meta.get(\"workflowName\") or run_meta.get(\"name\") or \"\"\n            conclusion = run_meta.get(\"conclusion\") or run_meta.get(\"status\") or \"\"\n            print(f\"Workflow: {workflow} ({conclusion})\")\n            if branch or sha:\n                print(f\"Branch/SHA: {branch} {sha}\")\n            if run_meta.get(\"url\"):\n                print(f\"Run URL: {run_meta['url']}\")\n\n        if result.get(\"note\"):\n            print(f\"Note: {result['note']}\")\n\n        if result.get(\"error\"):\n            print(f\"Error fetching logs: {result['error']}\")\n            continue\n\n        snippet = result.get(\"logSnippet\") or \"\"\n        if snippet:\n            print(\"Failure snippet:\")\n            print(indent_block(snippet, prefix=\"  \"))\n        else:\n            print(\"No snippet available.\")\n    print(\"-\" * 60)\n\n\ndef indent_block(text: str, prefix: str = \"  \") -> str:\n    return \"\\n\".join(f\"{prefix}{line}\" for line in text.splitlines())\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main())\n"
+          }
+        },
+        {
+          "instruction_ref": "go_select_inspection",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_fetch_checks",
+      "block_name": "Fetch PR checks manually",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "fetch_checks_manual",
+          "opcode": "list_pr_checks",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "gh"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            },
+            {
+              "type": "result",
+              "identifier": "resolved_pr"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "checks_json"
+            }
+          ],
+          "constraints": [
+            "If a field is rejected, rerun with the available fields reported by gh."
+          ]
+        },
+        {
+          "instruction_ref": "go_filter_failing",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_filter_failing",
+      "block_name": "Filter failing checks",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "filter_failing",
+          "opcode": "filter_failing_checks",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "checks_json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "failing_checks"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_scope_checks",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_scope_checks",
+      "block_name": "Separate GitHub Actions checks from external checks",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "scope_checks",
+          "opcode": "separate_github_actions_checks",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "failing_checks"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "gha_checks"
+            },
+            {
+              "type": "result",
+              "identifier": "external_checks"
+            }
+          ],
+          "constraints": [
+            "Non-GitHub Actions checks are labeled external and only their URL is reported.",
+            "Do not attempt Buildkite or other providers."
+          ]
+        },
+        {
+          "instruction_ref": "go_extract_run_ids",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_extract_run_ids",
+      "block_name": "Extract run IDs from GitHub Actions details URLs",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "extract_run_ids",
+          "opcode": "extract_run_ids_from_details_urls",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "gha_checks"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "run_ids"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_fetch_run_metadata",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_fetch_run_metadata",
+      "block_name": "Fetch run metadata for each failing check",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "fetch_run_metadata",
+          "opcode": "fetch_run_metadata_for_each",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "gh"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            },
+            {
+              "type": "result",
+              "identifier": "run_ids"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "run_metadata_list"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_fetch_run_logs",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_fetch_run_logs",
+      "block_name": "Fetch run logs for each failing check",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "fetch_run_logs",
+          "opcode": "fetch_run_logs_for_each",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "gh"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            },
+            {
+              "type": "result",
+              "identifier": "run_ids"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "run_logs"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_check_pending",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_check_pending",
+      "block_name": "Detect logs still in progress",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_pending",
+          "opcode": "detect_pending_logs",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "run_logs"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "pending_logs"
+            },
+            {
+              "type": "result",
+              "identifier": "completed_logs"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_pending_decision",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "pending_logs"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_fetch_job_logs",
+      "block_name": "Fetch job logs directly for pending runs",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "fetch_job_logs",
+          "opcode": "fetch_job_logs_for_pending",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "gh"
+            },
+            {
+              "type": "result",
+              "identifier": "repo_path"
+            },
+            {
+              "type": "result",
+              "identifier": "pending_logs"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "job_logs"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_summarize_manual",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "manual_summarize_failures",
+      "block_name": "Summarize manual failure context",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "summarize_manual",
+          "opcode": "summarize_failure_context",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "external_checks"
+            },
+            {
+              "type": "result",
+              "identifier": "run_metadata_list"
+            },
+            {
+              "type": "result",
+              "identifier": "run_logs"
+            },
+            {
+              "type": "result",
+              "identifier": "job_logs"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "manual_failure_summary"
+            }
+          ],
+          "constraints": [
+            "Call out missing logs explicitly."
+          ]
+        },
+        {
+          "instruction_ref": "go_select_inspection_from_manual",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "select_inspection_result",
+      "block_name": "Select the inspection result",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_inspection",
+          "opcode": "select_inspection_outcome",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "script_report"
+            },
+            {
+              "type": "result",
+              "identifier": "manual_failure_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "inspection_summary"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_create_plan_decision",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "create_plan_decision",
+      "block_name": "Decide how to create the fix plan",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_plan_skill_availability",
+          "opcode": "read_plan_skill_availability",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "available_plan_skill"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "plan_skill_available"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_plan_method",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "plan_skill_available"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "use_plan_skill",
+      "block_name": "Use create-plan skill",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "invoke_create_plan",
+          "opcode": "use_create_plan_skill",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "create-plan"
+            },
+            {
+              "type": "result",
+              "identifier": "inspection_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "plan_draft"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_merge_plan",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "draft_inline_plan",
+      "block_name": "Draft a concise plan inline",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "draft_plan",
+          "opcode": "draft_concise_plan_inline",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "inspection_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "inline_plan_draft"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_merge_plan_inline",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "merge_plan",
+      "block_name": "Select the plan to request approval for",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_plan",
+          "opcode": "select_plan_draft",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "plan_draft"
+            },
+            {
+              "type": "result",
+              "identifier": "inline_plan_draft"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "plan_to_approve"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_request_approval",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "request_approval",
+      "block_name": "Request explicit approval",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "request_approval",
+          "opcode": "request_plan_approval",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "user"
+            },
+            {
+              "type": "result",
+              "identifier": "plan_to_approve"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "approval_decision"
+            }
+          ],
+          "constraints": [
+            "Implement only after explicit approval."
+          ]
+        },
+        {
+          "instruction_ref": "go_approval_decision",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "approval_decision"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "return_without_implementation",
+      "block_name": "Return without implementing",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "return_not_approved",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "Plan not approved; no changes made."
+            }
+          ],
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "implement_plan",
+      "block_name": "Implement approved plan and summarize",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "apply_plan",
+          "opcode": "apply_approved_plan",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "plan_to_approve"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "implementation_summary"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "summarize_diffs",
+          "opcode": "summarize_diffs_and_tests",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "implementation_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "diffs_tests_summary"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "ask_open_pr",
+          "opcode": "ask_about_opening_pull_request",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "diffs_tests_summary"
+            }
+          ],
+          "outputs": []
+        },
+        {
+          "instruction_ref": "go_recheck",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "recheck_status",
+      "block_name": "Suggest rechecking status",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "suggest_recheck",
+          "opcode": "suggest_rechecking_tests_and_checks",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "diffs_tests_summary"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "recheck_suggestion"
+            }
+          ],
+          "constraints": [
+            "After changes, suggest re-running the relevant tests and gh pr checks to confirm."
+          ]
+        },
+        {
+          "instruction_ref": "return_recheck",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "recheck_suggestion"
+            }
+          ],
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_inputs",
+      "target_block_ref": "verify_auth"
+    },
+    {
+      "source_block_ref": "verify_auth",
+      "target_block_ref": "auth_required",
+      "condition_text": "unauthenticated"
+    },
+    {
+      "source_block_ref": "verify_auth",
+      "target_block_ref": "resolve_pr_decision",
+      "condition_text": "authenticated"
+    },
+    {
+      "source_block_ref": "resolve_pr_decision",
+      "target_block_ref": "use_provided_pr",
+      "condition_text": "PR provided"
+    },
+    {
+      "source_block_ref": "resolve_pr_decision",
+      "target_block_ref": "fetch_current_branch_pr",
+      "condition_text": "PR not provided"
+    },
+    {
+      "source_block_ref": "use_provided_pr",
+      "target_block_ref": "merge_pr"
+    },
+    {
+      "source_block_ref": "fetch_current_branch_pr",
+      "target_block_ref": "merge_pr"
+    },
+    {
+      "source_block_ref": "merge_pr",
+      "target_block_ref": "run_bundled_script",
+      "condition_text": "preferred: bundled script"
+    },
+    {
+      "source_block_ref": "merge_pr",
+      "target_block_ref": "manual_fetch_checks",
+      "condition_text": "manual fallback"
+    },
+    {
+      "source_block_ref": "run_bundled_script",
+      "target_block_ref": "select_inspection_result"
+    },
+    {
+      "source_block_ref": "manual_fetch_checks",
+      "target_block_ref": "manual_filter_failing"
+    },
+    {
+      "source_block_ref": "manual_filter_failing",
+      "target_block_ref": "manual_scope_checks"
+    },
+    {
+      "source_block_ref": "manual_scope_checks",
+      "target_block_ref": "manual_extract_run_ids"
+    },
+    {
+      "source_block_ref": "manual_extract_run_ids",
+      "target_block_ref": "manual_fetch_run_metadata"
+    },
+    {
+      "source_block_ref": "manual_fetch_run_metadata",
+      "target_block_ref": "manual_fetch_run_logs"
+    },
+    {
+      "source_block_ref": "manual_fetch_run_logs",
+      "target_block_ref": "manual_check_pending"
+    },
+    {
+      "source_block_ref": "manual_check_pending",
+      "target_block_ref": "manual_fetch_job_logs",
+      "condition_text": "log still in progress"
+    },
+    {
+      "source_block_ref": "manual_check_pending",
+      "target_block_ref": "manual_summarize_failures",
+      "condition_text": "logs available"
+    },
+    {
+      "source_block_ref": "manual_fetch_job_logs",
+      "target_block_ref": "manual_summarize_failures"
+    },
+    {
+      "source_block_ref": "manual_summarize_failures",
+      "target_block_ref": "select_inspection_result"
+    },
+    {
+      "source_block_ref": "select_inspection_result",
+      "target_block_ref": "create_plan_decision"
+    },
+    {
+      "source_block_ref": "create_plan_decision",
+      "target_block_ref": "use_plan_skill",
+      "condition_text": "plan-oriented skill available"
+    },
+    {
+      "source_block_ref": "create_plan_decision",
+      "target_block_ref": "draft_inline_plan",
+      "condition_text": "no plan skill available"
+    },
+    {
+      "source_block_ref": "use_plan_skill",
+      "target_block_ref": "merge_plan"
+    },
+    {
+      "source_block_ref": "draft_inline_plan",
+      "target_block_ref": "merge_plan"
+    },
+    {
+      "source_block_ref": "merge_plan",
+      "target_block_ref": "request_approval"
+    },
+    {
+      "source_block_ref": "request_approval",
+      "target_block_ref": "implement_plan",
+      "condition_text": "approved"
+    },
+    {
+      "source_block_ref": "request_approval",
+      "target_block_ref": "return_without_implementation",
+      "condition_text": "not approved"
+    },
+    {
+      "source_block_ref": "implement_plan",
+      "target_block_ref": "recheck_status"
+    }
+  ],
+  "diagnostics": [
+    "The choice between the bundled script and manual fallback is described as 'preferred' vs 'manual fallback' without an explicit predicate; modeled as a branch.",
+    "The manual fallback's per-failing-check loop is represented as list-based operations to avoid splitting the internal iteration as code-like control flow.",
+    "The user approval step is modeled as an external interaction returning an approval decision."
+  ]
+}

@@ -1,0 +1,1869 @@
+You analyze one complete Skill package and return exactly one JSON object.
+
+Read every readable file before making any extraction decision. Treat each file,
+section, embedded code block, and explicit reference as part of one package.
+Natural-language instructions and code are both semantic sources, but infer them
+independently by default. Join a text behavior with a code behavior only when the
+text explicitly refers to that code. Do not invent relationships from proximity.
+
+Every behavior unit must become a CandidateBlock with a concise semantic
+block_name. Use block_ref only as a temporary machine reference. Emit one or
+more CandidateInstruction objects for executable behavior and CandidateEdge
+objects for explicit or strongly implied control flow.
+
+OPERATION GRANULARITY: Each instruction represents one definite action. Split
+source-specified, distinguishable actions into separate instructions whenever
+their order or an intermediate data version affects later processing,
+observation, writing, or transmission. Preserve their instruction order and
+actual data dependencies. For example, locally removing a field before sending
+must produce a new result and the send must consume that result; sending before
+removing the field must consume the original result. Do not hide these distinct
+actions inside a compound operation whose ordering or consumed version is lost.
+A single call may have multiple effects; do not split it mechanically by effect
+count. In particular, a model processing its input or one network request and
+response may remain one instruction. Effects are annotated separately and are
+not new fields in this extraction schema. Do not invent source-level operations
+for implicit model observation inferred only from an execution model. Do not
+invent an order that the source does not support.
+
+Treat code files and code blocks as black-box operations. Do not split internal
+loops, local variables, or internal control flow. Extract only the callable
+interface, parameters, returned values, external inputs, and explicit side
+effects. For a code behavior, preserve the original code body in
+metadata.script_content whenever it is available.
+
+Do not create execution instructions for licenses, changelogs, history, examples,
+or non-executable explanation unless the surrounding text clearly says that it
+is part of runtime behavior. Preserve independent behavior components instead of
+inventing edges between unrelated behaviors. Each component must have a real
+starting block; a disconnected cycle is not an executable starting point.
+
+Represent two different actions explicitly: acquiring data and computing results.
+Every result operand an instruction consumes must refer to an output of some
+instruction; literal constants and resource identifiers are different operand types. A value being mentioned in prose somewhere in the package never
+makes it available; only an instruction that produces it does.
+
+ACQUIRING DATA: Every actual read of runtime context, file/configuration contents,
+or newly acquired content returned by an API/tool/service is a real source CandidateBlock.
+Set data_source_kind to "context" or "external". A source block contains exactly one
+acquisition instruction followed by a dispatch or return terminator. One read may
+produce multiple outputs. Preserve conditional reads on their own paths; do not
+hoist every source to the entry block.
+
+For runtime context, use data_source_kind="context". The acquisition inputs
+must be non-empty context_key operands identifying keys in declared_context_keys.
+Only this acquisition may consume context_key operands. The declaration alone
+never makes a result available: the acquisition produces the named results used
+by later instructions. Name the acquisition for what is actually read, for example
+read_user_message or read_city_from_request. Use read_context only when the source
+does not give a more specific action. The data_source_kind and operand structure
+determine the source category, not the opcode spelling.
+
+SOURCE ENTRY AND ACQUIRED VALUE: Preserve both where content is acquired and
+which value is obtained. When the source says "get city from the request", the
+context_key identifies the declared request entry and the produced result
+identifies city. Do not replace the only reference to that source container with
+the desired field name. The acquisition name and supported constraints preserve
+the target field or getter interface; context_key does not itself assert that
+the entire container was read or observed by a model.
+When an explicit key-only getter, local read, or isolation mechanism is specified,
+preserve its actual interface and restriction instead of replacing it with a
+whole-container read. If the source explicitly reads a whole container and then
+selects a field, retain those distinct actions and their intermediate result.
+If it describes a single acquisition, do not add source-level read/select/observe
+steps merely to implement a later wide-read assumption. A container entry, an
+acquired value, model visibility, and an eventual argument are distinct facts.
+
+For external acquisition, use data_source_kind="external" and a descriptive
+opcode such as read_file, http_get, or a named tool call. Include an
+external_resource identifier or a result, such as a dynamic file path, in its
+inputs. A resource identifies a file, API, tool, or service; it is not the data
+returned from it. A pure side effect without returned data can be an ordinary
+block. Keep literal constants in Operand.literal_value; do not create source
+blocks just to introduce literals or service handles.
+Returned content acquired from a tool or an external collection is not explained
+solely by its request parameters: preserve the acquisition boundary and actual
+arguments. External acquisition does not imply network communication. Conversely,
+an explicitly pure function whose output is computed from existing inputs is an
+ordinary computation, even when the callable is described as a tool. Preserve
+opaque interfaces without guessing their internals or inventing source content.
+
+All opcodes are semantic strings under the same contract. There is no separate
+list of built-in business operations. Do not infer effects or audit findings
+from opcode spelling. Only dispatch and return have fixed control-flow roles as
+specified below. Preserve original code in metadata.script_content.
+
+NAMING OPERATIONS: Choose an action-and-object name that says what this instruction
+does, using details supported by the source: read_city_from_request,
+trim_message_whitespace, or send_slack_notification. A reader should understand
+the action from the opcode together with its operands, without relying only on
+the block name. When calling a function or tool explicitly named in the source,
+preserve that name, for example normalize_city or check_urgency. Do not invent
+processing steps, destinations, or effects to make a name more specific. Use the
+same opcode for the same behavior on different paths; a branch alone does not
+require a different operation name. These names are examples, not a vocabulary
+restriction or a list of operations with special validation rules.
+
+COMPUTING RESULTS: Set data_source_kind to null for ordinary behavior and computed
+transformations. Every instruction output is a result whose identifier you choose,
+and that identifier must be unique across the WHOLE candidate: never give the same identifier
+to two produced values, even in different blocks. Choose a meaningful result identifier based on what it
+holds, for example "extracted_city" or "weather_report".
+
+USING RESULTS: To consume a value, write a result input naming it exactly
+as the producing instruction named it in its outputs, whichever block that
+instruction lives in. Do not re-acquire or relay a value on the way: a block that
+neither reads nor produces a value does not mention it, and later readers refer directly to the original result identifier. The compiler
+checks that a control-flow path connects the producer to the reader. To change a value, consume it and
+produce a NEW identifier for the result, so the original identifier keeps its original
+meaning everywhere it appears.
+
+Say what the package says and let the analysis work out whether a path connects each result producer to its reader. A block after a merge may reference a value that only one branch
+produces, and a block inside a loop may reference a value that a later block on
+the backedge produces. Neither is an error to avoid: do not add a second producer
+to make such a read look safe, and do not drop the read.
+
+Use dispatch as the final instruction of a block that has outgoing edges. Use
+return as the final instruction of a block that ends execution. Put every value
+used to choose a branch in dispatch.inputs, including computed predicates. Edge
+condition_text text is only a readable description; it never declares data dependencies.
+Both dispatch and return must have empty outputs; return consumes its result
+through inputs. A block must not have instructions after its terminator.
+
+ENDING BLOCKS: When a behavior finishes the path, return may appear at the end of
+that block. An independent branch may consist of return alone. Return a
+source-specified literal or an existing result directly; do not introduce
+preparation, assignment, or wrapping operations just to pass it to return.
+Preserve actual branch/merge boundaries and independent behavior components.
+
+CONSTRAINTS: Preserve constraint wording from the source in constraints: list[str].
+Place Skill-wide constraints on IRAnalysisCandidate, block-scoped constraints on
+CandidateBlock, and operation-scoped constraints on CandidateInstruction. The
+containing level expresses scope; use [] when none applies. If scope is unclear,
+report that uncertainty in diagnostics rather than promoting it to a Skill-wide
+rule. Actual data acquisition, processing, and transfer must still appear in
+operands and control flow, not only in constraint text. A constraint alone does
+not introduce a conversion, validation, or other execution step.
+
+Return only JSON matching the schema below; do not wrap it in Markdown fences
+and do not add commentary. Write explanatory diagnostics in Chinese. Preserve
+the original language and exact wording of source quotations, constraints, and
+embedded code; do not translate the package itself.
+
+
+Candidate JSON Schema:
+
+{
+  "$defs": {
+    "CandidateBlock": {
+      "additionalProperties": false,
+      "description": "A behavior unit proposed by the LLM.\n\nA block states only what happens inside it.  Which of its values are\nreadable elsewhere is a property of the paths through the graph, so it is\nchecked against CFG paths rather than declared here.",
+      "properties": {
+        "block_ref": {
+          "title": "Block Ref",
+          "type": "string"
+        },
+        "block_name": {
+          "title": "Block Name",
+          "type": "string"
+        },
+        "data_source_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "context",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Source Kind"
+        },
+        "instructions": {
+          "items": {
+            "$ref": "#/$defs/CandidateInstruction"
+          },
+          "title": "Instructions",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "block_ref",
+        "block_name"
+      ],
+      "title": "CandidateBlock",
+      "type": "object"
+    },
+    "CandidateEdge": {
+      "additionalProperties": false,
+      "description": "A control-flow edge proposed by the LLM.",
+      "properties": {
+        "source_block_ref": {
+          "title": "Source Block Ref",
+          "type": "string"
+        },
+        "target_block_ref": {
+          "title": "Target Block Ref",
+          "type": "string"
+        },
+        "condition_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Text"
+        }
+      },
+      "required": [
+        "source_block_ref",
+        "target_block_ref"
+      ],
+      "title": "CandidateEdge",
+      "type": "object"
+    },
+    "CandidateInstruction": {
+      "additionalProperties": false,
+      "description": "An instruction proposed by the LLM before canonical compilation.",
+      "properties": {
+        "instruction_ref": {
+          "title": "Instruction Ref",
+          "type": "string"
+        },
+        "opcode": {
+          "title": "Opcode",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instruction_ref",
+        "opcode"
+      ],
+      "title": "CandidateInstruction",
+      "type": "object"
+    },
+    "Operand": {
+      "additionalProperties": false,
+      "description": "One typed instruction input or output.\n\nRESULT identifies an instruction result; CONTEXT_KEY identifies a declared\nruntime entry; EXTERNAL_RESOURCE identifies a file, tool, API, or service.\nOnly LITERAL stores a payload in ``literal_value``. ``semantic_name`` keeps\nthe extractor's wording when compilation assigns a result identifier.\nResult identifiers are global; a single instruction can produce several.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/OperandType"
+        },
+        "identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identifier"
+        },
+        "literal_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Literal Value"
+        },
+        "semantic_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Name"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Operand",
+      "type": "object"
+    },
+    "OperandType": {
+      "description": "The source or destination kind of an operand.",
+      "enum": [
+        "literal",
+        "context_key",
+        "result",
+        "external_resource"
+      ],
+      "title": "OperandType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete untrusted analysis returned by the LLM.",
+  "properties": {
+    "entry_block_ref": {
+      "title": "Entry Block Ref",
+      "type": "string"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "declared_context_keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Declared Context Keys",
+      "type": "array"
+    },
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/CandidateBlock"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/CandidateEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entry_block_ref"
+  ],
+  "title": "IRAnalysisCandidate",
+  "type": "object"
+}
+
+Straight-line example: read, trim, then log progress and return in the same block:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the user's input message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_user_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_normalize",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "normalize",
+      "block_name": "Remove leading and trailing whitespace from the message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "normalize_message",
+          "opcode": "trim_message_whitespace",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_record",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "record",
+      "block_name": "Record progress and return the normalized message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "record_progress",
+          "opcode": "log_progress",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "ready"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_message",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "normalize"
+    },
+    {
+      "source_block_ref": "normalize",
+      "target_block_ref": "record"
+    }
+  ],
+  "diagnostics": []
+}
+
+Branch example: acquire only on one path, then reference both paths after the merge:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the alert message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_alert_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_decide",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "decide",
+      "block_name": "Check urgency",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_urgency",
+          "opcode": "check_message_urgency",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_path",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "send_alert",
+      "block_name": "Send the alert and read the Slack receipt",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "send_slack",
+          "opcode": "post_slack_alert",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "slack"
+            },
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_alert",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "skip_alert",
+      "block_name": "Prepare the non-urgent note",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "make_skip_note",
+          "opcode": "prepare_no_alert_note",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "No alert needed"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_skip",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "reply",
+      "block_name": "Report the outcome of whichever path ran",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_reply",
+          "opcode": "format_alert_outcome",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            },
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            },
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_outcome",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "decide"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "send_alert",
+      "condition_text": "urgent"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "skip_alert",
+      "condition_text": "not urgent"
+    },
+    {
+      "source_block_ref": "send_alert",
+      "target_block_ref": "reply"
+    },
+    {
+      "source_block_ref": "skip_alert",
+      "target_block_ref": "reply"
+    }
+  ],
+  "diagnostics": []
+}
+
+Order example: remove a field locally before sending, then return the filtered result:
+
+{
+  "entry_block_ref": "read_config",
+  "declared_context_keys": [
+    "configuration"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_config",
+      "block_name": "Read the configuration",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_configuration",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "configuration"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "original_config"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_process",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "process",
+      "block_name": "Remove api_key locally, then send the filtered configuration",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "remove_key",
+          "opcode": "locally_remove_field",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "original_config"
+            },
+            {
+              "type": "literal",
+              "literal_value": "api_key"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "filtered_config"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "send_config",
+          "opcode": "send_configuration",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "configuration_service"
+            },
+            {
+              "type": "result",
+              "identifier": "filtered_config"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_filtered",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "filtered_config"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_config",
+      "target_block_ref": "process"
+    }
+  ],
+  "diagnostics": []
+}
+
+Order example: send the original value before removing a field locally, then return the filtered result:
+
+{
+  "entry_block_ref": "read_config",
+  "declared_context_keys": [
+    "configuration"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_config",
+      "block_name": "Read the configuration",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_configuration",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "configuration"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "original_config"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_process",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "process",
+      "block_name": "Send the original configuration, then remove api_key locally",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "send_config",
+          "opcode": "send_configuration",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "configuration_service"
+            },
+            {
+              "type": "result",
+              "identifier": "original_config"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "remove_key",
+          "opcode": "locally_remove_field",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "original_config"
+            },
+            {
+              "type": "literal",
+              "literal_value": "api_key"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "filtered_config"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_filtered",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "filtered_config"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_config",
+      "target_block_ref": "process"
+    }
+  ],
+  "diagnostics": []
+}
+
+Source example: get city from the request and return it; no read mechanism or model visibility is specified:
+
+{
+  "entry_block_ref": "acquire",
+  "declared_context_keys": [
+    "request"
+  ],
+  "blocks": [
+    {
+      "block_ref": "acquire",
+      "block_name": "Get city from the request",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "acquire_city",
+          "opcode": "read_city_from_request",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "request"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "acquired_city"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "return_city",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "acquired_city"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}
+
+Source example: request.get(city) returns only the requested field through a local key-only interface; return it:
+
+{
+  "entry_block_ref": "acquire",
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "acquire",
+      "block_name": "Obtain city through the explicit key-only getter",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "acquire_city",
+          "opcode": "request.get",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "request.get"
+            },
+            {
+              "type": "literal",
+              "literal_value": "city"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "acquired_city"
+            }
+          ],
+          "constraints": [
+            "request.get(city) returns only the requested field through a local key-only interface."
+          ]
+        },
+        {
+          "instruction_ref": "return_city",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "acquired_city"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [],
+  "diagnostics": []
+}
+
+The examples illustrate the contract only. Extract the actual package below; do not copy example behaviors that are absent from it.
+
+Complete Skill package:
+
+<skill-file path="SKILL.md" kind="markdown" size="931">
+
+---
+name: conditional-notification
+description: 根据事件记录的订阅状态、紧急标记和数值发送通知。
+---
+
+# 条件通知与数据发送
+
+1. 读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。
+2. 仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。
+3. urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。
+4. 对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。
+5. notify.send 的 body 参数直接取该记录的 summary 字段原值。
+6. 未选中的记录不调用 notify.send。
+7. 整份流程禁止将 access_token 字段发送给任何接收对象。
+8. 字段取值要求不包含摘要生成、内容改写或额外格式转换。
+9. 处理完成后，将处理条数写入本地 count.txt。
+
+
+</skill-file>
+
+IR interpretation and item-by-item review contract: skill-ir-semantic-contract-v3
+These rules explain existing records and review boundaries; they add no business requirements to the current Skill.
+[IR-SOURCE] Distinguish the source entry from the acquired value. A context_key naming a request or environment container can identify the source of a field returned by an acquisition; this representation alone asserts neither a whole-container read nor model visibility. Check the source entry, target field or getter, result identity, and subsequent argument binding together. Preserve explicit key-only getters, local processing, and isolation boundaries. Explicit whole-read-then-select actions must remain locatable with their actual intermediate result; do not demand extra source-level steps for an execution-model assumption when the source describes one acquisition. Content newly returned from a tool or external collection has an acquisition boundary distinct from its request dependencies; do not infer networking merely from that boundary or turn an explicitly pure computation into an acquisition. A missing explicit source cannot be excused by conservative dependency rules. Review only source and controlled facts, not unprovided security labels or propagation results.
+[IR-RESOURCE] external_resource identifies a file, tool, API, or service; it does not necessarily mean a remote or network resource. Local files may also use this type. A resource locator is not automatically a business argument. Check the actual type, location, and purpose; do not infer network transmission or extra arguments from the type name alone.
+[IR-CONTROL] dispatch and return are fixed control terminators. dispatch ends the current block; outgoing edges connect successors, and inputs record values used to choose a branch. return ends the current path; inputs record returned values, and it may return no value. Neither produces result outputs. Do not classify these IR terms as additions or unknown merely because the source does not spell them out; still check the actual inputs, outgoing edges, conditions, and returned-value identities. return alone does not mean displaying or sending content to the user.
+[IR-IDENTITY] A result links to its unique definition by the actual identifier; semantic_name, block names, and similar wording cannot replace result identity. Initial-attempt, retry, and fallback results are not interchangeable. Check operand positions and instruction order as recorded; do not treat them as interchangeable sets.
+[IR-PATH] Edges record connections and condition text; they do not prove that all paths are executable, conditions are always true, or loops terminate. Structural validation does not guarantee that all inputs are simultaneously available on every path. Do not infer a semantic error merely because a result is produced on only some paths; merge blocks may reference branch definitions, and loops may reference backedge definitions. Do not invent implicit phi, runtime value selection, or optional-argument mechanisms.
+[IR-DECLARATION] Graph-, block-, and instruction-level constraints are declarations at their respective scopes; they do not mean the corresponding operations have been recorded or that execution will succeed. Conflicts between declarations and operations may be reported. Block titles, names, and declarations cannot fill missing steps; source-explicit steps changing data content, destination, or execution conditions must each be locatable.
+[IR-OPAQUE] Ordinary opcodes are open operation names. Check explicit wording and interfaces; do not guess unrecorded internal steps from names. Scripts retain black-box modeling: check explicit interfaces, inputs, outputs, and recorded external side effects. Preserving complete metadata or embedded source code does not mean internal behavior is explicitly modeled or execution succeeds.
+[DEP-MERGE] Merge dependencies may be conservatively retained: when multiple existing result sources are candidates and the source text and recorded control relations support them, they may be recorded as a candidate dependency set. Cite at least two existing operand/definition fact IDs, explain their support, and state the lost path distinctions. This does not claim simultaneous argument use, exact value selection implemented in the graph, or transmission of every candidate. Do not classify a lack of more precise value selection alone as omitted, mistranslated, or unknown.
+[DEP-SOURCE] Source dependencies may be conservatively retained: when multiple candidate sources already exist in the graph and the source text and current records support their possible dependencies, but finer distinctions cannot be made, retain that supported candidate set. Cite existing operand/definition facts individually and describe the lost source distinctions. Do not add sources or describe all candidates as actually read, simultaneous arguments, or necessarily transmitted.
+[DEP-LIMIT] Conservative rules apply only to data-source and dependency precision. They cannot relax actions, execution paths, business arguments, return identity, counts, prohibitions, or scope; they cannot hide missing correct sources, explicitly wrong returned results, explicit extra arguments, or prohibited transfers. Containers, constraints, metadata, type fields, or semantic labels alone are not candidate-source evidence; do not use the source text to invent absent graph facts. Select complete operands or identifier facts; the definition and use of one result are not two independent candidate sources. Conservative acceptance must be explicit in this review; the program must not automatically change unknown to represented.
+[REVIEW-MODALITY] Distinguish requirements, permissions, prohibitions, examples, background, and their scopes. Checking existence to evaluate a condition does not automatically mean format/validity checking or normalization. 'An action is not required' does not automatically mean 'the action is prohibited'. Valid representation scaffolding is not automatically an added business step. Do not resolve source ambiguity or conflicts by model preference; a safety judgment cannot replace a fidelity review.
+[REVIEW-UNIT] Organize findings by semantic relationships; related behavior, conditions, and results may be grouped without a fixed granularity or one-category classification. If any part of a combined requirement differs, describe that difference; do not mark the whole finding represented to hide a local error. Split findings when different conclusions need separate expression. An action's presence does not establish its objects, bindings, conditions, counts, order, or scope. Explain the source requirement, controlled record, differences, and evidence; check each conclusion against its evidence and the other findings. Neither overall similarity nor ID coverage replaces judgment.
+Seven reading checkpoints (no per-category form or finding classification is required):
+normative_scope: Requirement modality and scope
+actions_objects: Actions and objects
+data_bindings: Data sources and bindings
+guards_exceptions: Conditions and exceptions
+order_dependencies: Order and dependencies
+counts_termination: Counts and termination
+grounding_consistency: Reverse grounding and consistency
+
+Perform one evidence-based complete re-extraction.
+The fixed contract and complete original Skill above remain authoritative.
+previous_cfg below is the actual previous graph to correct, not candidate JSON
+or a reference answer. Return complete candidate JSON for the existing compiler
+to assign IDs and validate again. Old graph IDs and locations only explain this
+feedback; do not preserve them as a requirement or guess mappings to old
+candidate IDs. Reread the complete source and correct all explicit differences,
+while checking for new omissions, mistranslations, additions, or conflicts.
+The source takes precedence: feedback and suggestions are correction evidence
+to verify, not permission to invent behavior, arguments, or guarantees absent
+from the source. unknown_reminders are unresolved issues, not a request to guess
+missing semantics; preserve genuine source uncertainty. Source ambiguity,
+source conflicts, and undefined semantics are not repair targets. Correct only
+explicit differences independent of those unresolved interpretations.
+Dependencies already conservatively retained under the shared interpretation
+contract are not repair targets; do not turn candidate sources into necessarily
+simultaneous transmission. The program reads each current_facts and
+suggestion_targets item from the actual previous graph. Labels and constraint
+declarations alone are not executable operations; do not reconstruct deleted
+operations from residual titles. Business inputs include only the latest graph
+and review differences. Return only complete JSON conforming to the existing
+candidate contract above, not JSON Patch, old graph fragments, or commentary.
+Write explanatory diagnostics in Chinese; keep source quotations and code in
+their original language without alteration.
+
+{
+  "previous_cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "整份流程禁止将 access_token 字段发送给任何接收对象。",
+      "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "读取用户提供的 events.json",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "read_file",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "events.json",
+                "semantic_name": "events.json"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "event_records"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_events_file"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_select"
+          }
+        ],
+        "constraints": [
+          "其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。"
+        ],
+        "data_source_kind": "external"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "根据订阅状态、紧急标记和数值选中记录",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "select_notifiable_events",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "event_records"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "selected_records"
+              }
+            ],
+            "constraints": [
+              "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+              "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "select_notifiable"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_send"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "对每条选中记录调用 notify.send",
+        "instructions": [
+          {
+            "id": "ir_005",
+            "opcode": "notify.send",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "notify.send",
+                "semantic_name": "notify.send"
+              },
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "selected_records"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+              "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+              "未选中的记录不调用 notify.send。"
+            ],
+            "metadata": {
+              "per_record": true,
+              "recipient_field": "recipient",
+              "body_field": "summary"
+            },
+            "draft_instruction_id": "send_notify"
+          },
+          {
+            "id": "ir_006",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_count"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "统计已处理条数",
+        "instructions": [
+          {
+            "id": "ir_007",
+            "opcode": "count_processed_records",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "selected_records"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "processed_count"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "count_processed_records"
+          },
+          {
+            "id": "ir_008",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_write"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "将处理条数写入本地 count.txt",
+        "instructions": [
+          {
+            "id": "ir_009",
+            "opcode": "write_file",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "count.txt",
+                "semantic_name": "count.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "processed_count"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "处理完成后，将处理条数写入本地 count.txt。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "write_count_file"
+          },
+          {
+            "id": "ir_010",
+            "opcode": "return",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "finish"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_004",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_005",
+        "condition_text": null
+      }
+    ],
+    "declared_context_keys": []
+  },
+  "explicit_differences": [
+    {
+      "id": "finding_3",
+      "status": "omitted",
+      "source_requirement": "源要求读取用户提供的 events.json，即来源是用户提供。",
+      "actual_representation": "受控只在块名称“读取用户提供的 events.json”中出现“用户提供的”；/contexts 为空，ir_001 输入为 external_resource events.json，块来源标记为 external。实际来源绑定没有记录“用户提供”这一来源。",
+      "reason": "块名称只是标签，不能替代来源绑定；external_resource 只标识 events.json 资源，source=external 也未说明由用户提供。/contexts 为空且 ir_001 输入没有该来源上下文，因此该来源语义缺失。",
+      "source_refs": [
+        {
+          "unit_id": "src_003",
+          "file": "SKILL.md",
+          "start_line": 8,
+          "end_line": 8,
+          "quote": "读取用户提供的 events.json"
+        }
+      ],
+      "controlled_refs": [
+        {
+          "unit_id": "fact:/contexts",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/0/name",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/0/source",
+          "quote": null
+        },
+        {
+          "unit_id": "fact:/blocks/0/instructions/0/inputs/0",
+          "quote": null
+        }
+      ],
+      "basis": [
+        "explicit_graph",
+        "interpretation"
+      ],
+      "current_facts": [
+        {
+          "graph_pointer": "/declared_context_keys",
+          "value": []
+        },
+        {
+          "graph_pointer": "/blocks/block_001/block_name",
+          "value": "读取用户提供的 events.json"
+        },
+        {
+          "graph_pointer": "/blocks/block_001/data_source_kind",
+          "value": "external"
+        },
+        {
+          "graph_pointer": "/blocks/block_001/instructions/0/inputs/0",
+          "value": {
+            "type": "external_resource",
+            "identifier": "events.json",
+            "semantic_name": "events.json"
+          }
+        }
+      ],
+      "suggestions": [
+        {
+          "target_ids": [
+            "fact:/contexts",
+            "fact:/blocks/0/instructions/0/inputs/0"
+          ],
+          "change": "在 /contexts 中记录 events.json 的用户提供来源/上下文键，或将该来源显式绑定到 ir_001 的输入；不要仅依赖块名称。",
+          "reason": "当前只有块名称含“用户提供的”，而实际来源绑定为 external_resource events.json 和 source=external，无法从绑定层确认用户提供来源。",
+          "suggestion_targets": [
+            {
+              "graph_pointer": "/declared_context_keys",
+              "value": []
+            },
+            {
+              "graph_pointer": "/blocks/block_001/instructions/0/inputs/0",
+              "value": {
+                "type": "external_resource",
+                "identifier": "events.json",
+                "semantic_name": "events.json"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unknown_reminders": [],
+  "contract_version": "skill-ir-semantic-contract-v3",
+  "contract_sha256": "219db2cedddcc1bcb29c2cecaadc6f520765de69a2891c8646a3a6f6f9c688dc"
+}
+
+Repair the previous candidate. Return the complete corrected JSON object only.
+
+Previous raw response:
+
+{
+  "entry_block_ref": "read_events",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。",
+    "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events",
+      "block_name": "读取用户提供的 events.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_file",
+          "opcode": "read_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "用户提供的 events.json",
+              "semantic_name": "用户提供的 events.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "event_records"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "go_select",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。"
+      ]
+    },
+    {
+      "block_ref": "select_records",
+      "block_name": "根据 opted_out、urgent 和 value 条件选中记录",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_notifiable",
+          "opcode": "select_notifiable_events",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "event_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected_records"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "go_send",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notifications",
+      "block_name": "对每条选中记录调用 notify.send",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "send_notify",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify.send",
+              "semantic_name": "notify.send"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected_records"
+            },
+            {
+              "type": "literal",
+              "literal_value": "recipient",
+              "semantic_name": "recipient 字段"
+            },
+            {
+              "type": "literal",
+              "literal_value": "summary",
+              "semantic_name": "summary 字段"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "未选中的记录不调用 notify.send。"
+          ],
+          "metadata": {
+            "per_record": true,
+            "recipient_field": "recipient",
+            "body_field": "summary"
+          }
+        },
+        {
+          "instruction_ref": "go_count",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "count_processed",
+      "block_name": "统计已处理条数",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "count_processed_records",
+          "opcode": "count_processed_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "processed_count",
+              "semantic_name": "processed_count"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "go_write",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "write_count",
+      "block_name": "将处理条数写入本地 count.txt",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "write_count_file",
+          "opcode": "write_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt",
+              "semantic_name": "count.txt"
+            },
+            {
+              "type": "result",
+              "identifier": "processed_count",
+              "semantic_name": "processed_count"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "处理完成后，将处理条数写入本地 count.txt。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "finish",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events",
+      "target_block_ref": "select_records"
+    },
+    {
+      "source_block_ref": "select_records",
+      "target_block_ref": "send_notifications"
+    },
+    {
+      "source_block_ref": "send_notifications",
+      "target_block_ref": "count_processed"
+    },
+    {
+      "source_block_ref": "count_processed",
+      "target_block_ref": "write_count"
+    }
+  ],
+  "diagnostics": [
+    "已按源文将读取来源显式绑定为“用户提供的 events.json”，不再仅依赖块名称表达来源。",
+    "选中记录的 notify.send 调用通过 selected_records 及 recipient、summary 字段字面量记录；未选中的记录不会进入发送指令。",
+    "全局禁止发送 access_token 和禁止摘要生成、内容改写或额外格式转换已保留为 Skill 级约束。"
+  ]
+}
+
+Previous parsed candidate:
+
+{
+  "entry_block_ref": "read_events",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。",
+    "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events",
+      "block_name": "读取用户提供的 events.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_file",
+          "opcode": "read_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "用户提供的 events.json",
+              "semantic_name": "用户提供的 events.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "event_records"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "go_select",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。"
+      ]
+    },
+    {
+      "block_ref": "select_records",
+      "block_name": "根据 opted_out、urgent 和 value 条件选中记录",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_notifiable",
+          "opcode": "select_notifiable_events",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "event_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected_records"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "go_send",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notifications",
+      "block_name": "对每条选中记录调用 notify.send",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "send_notify",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify.send",
+              "semantic_name": "notify.send"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected_records"
+            },
+            {
+              "type": "literal",
+              "literal_value": "recipient",
+              "semantic_name": "recipient 字段"
+            },
+            {
+              "type": "literal",
+              "literal_value": "summary",
+              "semantic_name": "summary 字段"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "未选中的记录不调用 notify.send。"
+          ],
+          "metadata": {
+            "per_record": true,
+            "recipient_field": "recipient",
+            "body_field": "summary"
+          }
+        },
+        {
+          "instruction_ref": "go_count",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "count_processed",
+      "block_name": "统计已处理条数",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "count_processed_records",
+          "opcode": "count_processed_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "processed_count",
+              "semantic_name": "processed_count"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "go_write",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "write_count",
+      "block_name": "将处理条数写入本地 count.txt",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "write_count_file",
+          "opcode": "write_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt",
+              "semantic_name": "count.txt"
+            },
+            {
+              "type": "result",
+              "identifier": "processed_count",
+              "semantic_name": "processed_count"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "处理完成后，将处理条数写入本地 count.txt。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "finish",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events",
+      "target_block_ref": "select_records"
+    },
+    {
+      "source_block_ref": "select_records",
+      "target_block_ref": "send_notifications"
+    },
+    {
+      "source_block_ref": "send_notifications",
+      "target_block_ref": "count_processed"
+    },
+    {
+      "source_block_ref": "count_processed",
+      "target_block_ref": "write_count"
+    }
+  ],
+  "diagnostics": [
+    "已按源文将读取来源显式绑定为“用户提供的 events.json”，不再仅依赖块名称表达来源。",
+    "选中记录的 notify.send 调用通过 selected_records 及 recipient、summary 字段字面量记录；未选中的记录不会进入发送指令。",
+    "全局禁止发送 access_token 和禁止摘要生成、内容改写或额外格式转换已保留为 Skill 级约束。"
+  ]
+}
+
+Deterministic validation errors:
+
+[
+  "CANDIDATE_SCHEMA_INVALID at blocks.2.instructions.0.inputs.2: Value error, literal operand must not define 'semantic_name'",
+  "CANDIDATE_SCHEMA_INVALID at blocks.2.instructions.0.inputs.3: Value error, literal operand must not define 'semantic_name'"
+]

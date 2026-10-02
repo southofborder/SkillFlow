@@ -1,0 +1,921 @@
+{
+  "attempt": 2,
+  "raw_candidate": {
+    "entry_block_ref": "check_npx",
+    "constraints": [
+      "Treat this skill as CLI-first automation.",
+      "Do not pivot to `@playwright/test` unless the user explicitly asks for test files.",
+      "Before proposing commands, check whether `npx` is available (the wrapper depends on it).",
+      "If it is not available, pause and ask the user to install Node.js/npm (which provides `npx`).",
+      "Once `npx` is present, proceed with the wrapper script. A global install of `playwright-cli` is optional.",
+      "Prefer the bundled wrapper script so the CLI works even when it is not globally installed.",
+      "Prefer the wrapper unless the repository already standardizes on a global install.",
+      "Always snapshot before referencing element ids like `e12`.",
+      "Re-snapshot when refs seem stale.",
+      "Prefer explicit commands over `eval` and `run-code` unless needed.",
+      "When you do not have a fresh snapshot, use placeholder refs like `eX` and say why; do not bypass refs with `run-code`.",
+      "Use `--headed` when a visual check will help.",
+      "When capturing artifacts in this repo, use `output/playwright/` and avoid introducing new top-level artifact folders.",
+      "Default to CLI commands and workflows, not Playwright test specs.",
+      "In this repo, run commands from `output/playwright/<label>/` to keep artifacts contained.",
+      "If an element ref fails, run `pwcli snapshot` again and retry.",
+      "If the page looks wrong, re-open with `--headed` and resize the window.",
+      "If a flow depends on prior state, use a named `--session`."
+    ],
+    "declared_context_keys": [
+      "PATH",
+      "CODEX_HOME",
+      "HOME"
+    ],
+    "blocks": [
+      {
+        "block_ref": "check_npx",
+        "block_name": "Check whether npx is available",
+        "data_source_kind": "context",
+        "instructions": [
+          {
+            "instruction_ref": "check_npx_availability",
+            "opcode": "check_npx_availability",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "PATH"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "npx_available"
+              }
+            ],
+            "metadata": {
+              "script_content": "command -v npx >/dev/null 2>&1"
+            }
+          },
+          {
+            "instruction_ref": "dispatch_npx_check",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "decide_npx",
+        "block_name": "Branch on npx availability",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "dispatch_npx",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "npx_available"
+              }
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "ask_install",
+        "block_name": "Ask the user to install Node.js/npm",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "ask_user_to_install_nodejs",
+            "opcode": "ask_user_to_install_nodejs",
+            "inputs": [
+              {
+                "type": "literal",
+                "literal_value": "node --version\nnpm --version\nnpm install -g @playwright/cli@latest\nplaywright-cli --help"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Provide these steps verbatim."
+            ]
+          },
+          {
+            "instruction_ref": "dispatch_after_install_request",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "set_path",
+        "block_name": "Set the bundled Playwright CLI wrapper path",
+        "data_source_kind": "context",
+        "instructions": [
+          {
+            "instruction_ref": "set_playwright_cli_wrapper_path",
+            "opcode": "set_playwright_cli_wrapper_path",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "CODEX_HOME"
+              },
+              {
+                "type": "context_key",
+                "identifier": "HOME"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "pwcli_path"
+              }
+            ],
+            "metadata": {
+              "script_content": "export CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"\nexport PWCLI=\"$CODEX_HOME/skills/playwright/scripts/playwright_cli.sh\""
+            }
+          },
+          {
+            "instruction_ref": "dispatch_after_path_setup",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "open_page",
+        "block_name": "Open the target browser page",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "open_page",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "pwcli_path"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "target_webpage"
+              },
+              {
+                "type": "literal",
+                "literal_value": "open"
+              }
+            ],
+            "outputs": [],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            }
+          },
+          {
+            "instruction_ref": "dispatch_after_open",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "snapshot",
+        "block_name": "Take a browser snapshot to get element refs",
+        "data_source_kind": "external",
+        "instructions": [
+          {
+            "instruction_ref": "take_browser_snapshot",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "pwcli_path"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "browser_session"
+              },
+              {
+                "type": "literal",
+                "literal_value": "snapshot"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "snapshot_refs"
+              }
+            ],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            }
+          },
+          {
+            "instruction_ref": "dispatch_after_snapshot",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "interact",
+        "block_name": "Interact with the page using the latest snapshot refs",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "interact_with_snapshot_ref",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "pwcli_path"
+              },
+              {
+                "type": "result",
+                "identifier": "snapshot_refs"
+              },
+              {
+                "type": "literal",
+                "literal_value": "click/type/press"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "interaction_result"
+              }
+            ],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            }
+          },
+          {
+            "instruction_ref": "dispatch_after_interact",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": [
+          "Always snapshot before referencing element ids like `e12`.",
+          "Prefer explicit commands over `eval` and `run-code` unless needed."
+        ]
+      },
+      {
+        "block_ref": "assess_resnapshot",
+        "block_name": "Determine whether a new snapshot is needed",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "assess_need_for_resnapshot",
+            "opcode": "assess_need_for_resnapshot",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "interaction_result"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "needs_resnapshot"
+              }
+            ],
+            "constraints": [
+              "Snapshot again after navigation, clicking elements that change the UI substantially, opening/closing modals or menus, and tab switches.",
+              "Re-snapshot when refs seem stale.",
+              "When a command fails due to a missing ref, snapshot again."
+            ]
+          },
+          {
+            "instruction_ref": "dispatch_resnapshot_decision",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "needs_resnapshot"
+              }
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      {
+        "block_ref": "capture_artifacts",
+        "block_name": "Capture browser artifacts when useful",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "capture_browser_artifacts",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "pwcli_path"
+              },
+              {
+                "type": "literal",
+                "literal_value": "screenshot/pdf/traces"
+              }
+            ],
+            "outputs": [],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            }
+          },
+          {
+            "instruction_ref": "dispatch_after_capture",
+            "opcode": "dispatch"
+          }
+        ],
+        "constraints": [
+          "When capturing artifacts in this repo, use `output/playwright/` and avoid introducing new top-level artifact folders."
+        ]
+      },
+      {
+        "block_ref": "finish",
+        "block_name": "Return the completed browser workflow",
+        "data_source_kind": null,
+        "instructions": [
+          {
+            "instruction_ref": "return_result",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "literal",
+                "literal_value": "browser workflow completed"
+              }
+            ]
+          }
+        ],
+        "constraints": []
+      }
+    ],
+    "edges": [
+      {
+        "source_block_ref": "check_npx",
+        "target_block_ref": "decide_npx"
+      },
+      {
+        "source_block_ref": "decide_npx",
+        "target_block_ref": "ask_install",
+        "condition_text": "npx is not available"
+      },
+      {
+        "source_block_ref": "decide_npx",
+        "target_block_ref": "set_path",
+        "condition_text": "npx is available"
+      },
+      {
+        "source_block_ref": "ask_install",
+        "target_block_ref": "check_npx"
+      },
+      {
+        "source_block_ref": "set_path",
+        "target_block_ref": "open_page"
+      },
+      {
+        "source_block_ref": "open_page",
+        "target_block_ref": "snapshot"
+      },
+      {
+        "source_block_ref": "snapshot",
+        "target_block_ref": "interact"
+      },
+      {
+        "source_block_ref": "interact",
+        "target_block_ref": "assess_resnapshot"
+      },
+      {
+        "source_block_ref": "assess_resnapshot",
+        "target_block_ref": "snapshot",
+        "condition_text": "needs resnapshot"
+      },
+      {
+        "source_block_ref": "assess_resnapshot",
+        "target_block_ref": "capture_artifacts",
+        "condition_text": "no resnapshot needed"
+      },
+      {
+        "source_block_ref": "capture_artifacts",
+        "target_block_ref": "finish"
+      }
+    ],
+    "diagnostics": [
+      "Reference guides (references/cli.md, references/workflows.md) and recommended pattern examples were treated as informational and not extracted as mandatory execution blocks.",
+      "agents/openai.yaml, assets, LICENSE.txt, and NOTICE.txt contain metadata, legal text, or binary assets and were not extracted as executable behavior.",
+      "The wrapper script's internal npx check and session handling are preserved in metadata.script_content of the wrapper invocation instructions; the skill-level prerequisite check is modeled separately as required by SKILL.md."
+    ]
+  },
+  "raw_response": "{\n  \"entry_block_ref\": \"check_npx\",\n  \"constraints\": [\n    \"Treat this skill as CLI-first automation.\",\n    \"Do not pivot to `@playwright/test` unless the user explicitly asks for test files.\",\n    \"Before proposing commands, check whether `npx` is available (the wrapper depends on it).\",\n    \"If it is not available, pause and ask the user to install Node.js/npm (which provides `npx`).\",\n    \"Once `npx` is present, proceed with the wrapper script. A global install of `playwright-cli` is optional.\",\n    \"Prefer the bundled wrapper script so the CLI works even when it is not globally installed.\",\n    \"Prefer the wrapper unless the repository already standardizes on a global install.\",\n    \"Always snapshot before referencing element ids like `e12`.\",\n    \"Re-snapshot when refs seem stale.\",\n    \"Prefer explicit commands over `eval` and `run-code` unless needed.\",\n    \"When you do not have a fresh snapshot, use placeholder refs like `eX` and say why; do not bypass refs with `run-code`.\",\n    \"Use `--headed` when a visual check will help.\",\n    \"When capturing artifacts in this repo, use `output/playwright/` and avoid introducing new top-level artifact folders.\",\n    \"Default to CLI commands and workflows, not Playwright test specs.\",\n    \"In this repo, run commands from `output/playwright/<label>/` to keep artifacts contained.\",\n    \"If an element ref fails, run `pwcli snapshot` again and retry.\",\n    \"If the page looks wrong, re-open with `--headed` and resize the window.\",\n    \"If a flow depends on prior state, use a named `--session`.\"\n  ],\n  \"declared_context_keys\": [\n    \"PATH\",\n    \"CODEX_HOME\",\n    \"HOME\"\n  ],\n  \"blocks\": [\n    {\n      \"block_ref\": \"check_npx\",\n      \"block_name\": \"Check whether npx is available\",\n      \"data_source_kind\": \"context\",\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"check_npx_availability\",\n          \"opcode\": \"check_npx_availability\",\n          \"inputs\": [\n            {\n              \"type\": \"context_key\",\n              \"identifier\": \"PATH\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"npx_available\"\n            }\n          ],\n          \"metadata\": {\n            \"script_content\": \"command -v npx >/dev/null 2>&1\"\n          }\n        },\n        {\n          \"instruction_ref\": \"dispatch_npx_check\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"decide_npx\",\n      \"block_name\": \"Branch on npx availability\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"dispatch_npx\",\n          \"opcode\": \"dispatch\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"npx_available\"\n            }\n          ]\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"ask_install\",\n      \"block_name\": \"Ask the user to install Node.js/npm\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"ask_user_to_install_nodejs\",\n          \"opcode\": \"ask_user_to_install_nodejs\",\n          \"inputs\": [\n            {\n              \"type\": \"literal\",\n              \"literal_value\": \"node --version\\nnpm --version\\nnpm install -g @playwright/cli@latest\\nplaywright-cli --help\"\n            }\n          ],\n          \"outputs\": [],\n          \"constraints\": [\n            \"Provide these steps verbatim.\"\n          ]\n        },\n        {\n          \"instruction_ref\": \"dispatch_after_install_request\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"set_path\",\n      \"block_name\": \"Set the bundled Playwright CLI wrapper path\",\n      \"data_source_kind\": \"context\",\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"set_playwright_cli_wrapper_path\",\n          \"opcode\": \"set_playwright_cli_wrapper_path\",\n          \"inputs\": [\n            {\n              \"type\": \"context_key\",\n              \"identifier\": \"CODEX_HOME\"\n            },\n            {\n              \"type\": \"context_key\",\n              \"identifier\": \"HOME\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"pwcli_path\"\n            }\n          ],\n          \"metadata\": {\n            \"script_content\": \"export CODEX_HOME=\\\"${CODEX_HOME:-$HOME/.codex}\\\"\\nexport PWCLI=\\\"$CODEX_HOME/skills/playwright/scripts/playwright_cli.sh\\\"\"\n          }\n        },\n        {\n          \"instruction_ref\": \"dispatch_after_path_setup\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"open_page\",\n      \"block_name\": \"Open the target browser page\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"open_page\",\n          \"opcode\": \"execute_playwright_cli_wrapper\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"pwcli_path\"\n            },\n            {\n              \"type\": \"external_resource\",\n              \"identifier\": \"target_webpage\"\n            },\n            {\n              \"type\": \"literal\",\n              \"literal_value\": \"open\"\n            }\n          ],\n          \"outputs\": [],\n          \"metadata\": {\n            \"script_content\": \"#!/usr/bin/env bash\\nset -euo pipefail\\n\\nif ! command -v npx >/dev/null 2>&1; then\\n  echo \\\"Error: npx is required but not found on PATH.\\\" >&2\\n  exit 1\\nfi\\n\\nhas_session_flag=\\\"false\\\"\\nfor arg in \\\"$@\\\"; do\\n  case \\\"$arg\\\" in\\n    --session|--session=*)\\n      has_session_flag=\\\"true\\\"\\n      break\\n      ;;\\n  esac\\ndone\\n\\ncmd=(npx --yes --package @playwright/cli playwright-cli)\\nif [[ \\\"${has_session_flag}\\\" != \\\"true\\\" && -n \\\"${PLAYWRIGHT_CLI_SESSION:-}\\\" ]]; then\\n  cmd+=(--session \\\"${PLAYWRIGHT_CLI_SESSION}\\\")\\nfi\\ncmd+=(\\\"$@\\\")\\n\\nexec \\\"${cmd[@]}\\\"\"\n          }\n        },\n        {\n          \"instruction_ref\": \"dispatch_after_open\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"snapshot\",\n      \"block_name\": \"Take a browser snapshot to get element refs\",\n      \"data_source_kind\": \"external\",\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"take_browser_snapshot\",\n          \"opcode\": \"execute_playwright_cli_wrapper\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"pwcli_path\"\n            },\n            {\n              \"type\": \"external_resource\",\n              \"identifier\": \"browser_session\"\n            },\n            {\n              \"type\": \"literal\",\n              \"literal_value\": \"snapshot\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"snapshot_refs\"\n            }\n          ],\n          \"metadata\": {\n            \"script_content\": \"#!/usr/bin/env bash\\nset -euo pipefail\\n\\nif ! command -v npx >/dev/null 2>&1; then\\n  echo \\\"Error: npx is required but not found on PATH.\\\" >&2\\n  exit 1\\nfi\\n\\nhas_session_flag=\\\"false\\\"\\nfor arg in \\\"$@\\\"; do\\n  case \\\"$arg\\\" in\\n    --session|--session=*)\\n      has_session_flag=\\\"true\\\"\\n      break\\n      ;;\\n  esac\\ndone\\n\\ncmd=(npx --yes --package @playwright/cli playwright-cli)\\nif [[ \\\"${has_session_flag}\\\" != \\\"true\\\" && -n \\\"${PLAYWRIGHT_CLI_SESSION:-}\\\" ]]; then\\n  cmd+=(--session \\\"${PLAYWRIGHT_CLI_SESSION}\\\")\\nfi\\ncmd+=(\\\"$@\\\")\\n\\nexec \\\"${cmd[@]}\\\"\"\n          }\n        },\n        {\n          \"instruction_ref\": \"dispatch_after_snapshot\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"interact\",\n      \"block_name\": \"Interact with the page using the latest snapshot refs\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"interact_with_snapshot_ref\",\n          \"opcode\": \"execute_playwright_cli_wrapper\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"pwcli_path\"\n            },\n            {\n              \"type\": \"result\",\n              \"identifier\": \"snapshot_refs\"\n            },\n            {\n              \"type\": \"literal\",\n              \"literal_value\": \"click/type/press\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"interaction_result\"\n            }\n          ],\n          \"metadata\": {\n            \"script_content\": \"#!/usr/bin/env bash\\nset -euo pipefail\\n\\nif ! command -v npx >/dev/null 2>&1; then\\n  echo \\\"Error: npx is required but not found on PATH.\\\" >&2\\n  exit 1\\nfi\\n\\nhas_session_flag=\\\"false\\\"\\nfor arg in \\\"$@\\\"; do\\n  case \\\"$arg\\\" in\\n    --session|--session=*)\\n      has_session_flag=\\\"true\\\"\\n      break\\n      ;;\\n  esac\\ndone\\n\\ncmd=(npx --yes --package @playwright/cli playwright-cli)\\nif [[ \\\"${has_session_flag}\\\" != \\\"true\\\" && -n \\\"${PLAYWRIGHT_CLI_SESSION:-}\\\" ]]; then\\n  cmd+=(--session \\\"${PLAYWRIGHT_CLI_SESSION}\\\")\\nfi\\ncmd+=(\\\"$@\\\")\\n\\nexec \\\"${cmd[@]}\\\"\"\n          }\n        },\n        {\n          \"instruction_ref\": \"dispatch_after_interact\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": [\n        \"Always snapshot before referencing element ids like `e12`.\",\n        \"Prefer explicit commands over `eval` and `run-code` unless needed.\"\n      ]\n    },\n    {\n      \"block_ref\": \"assess_resnapshot\",\n      \"block_name\": \"Determine whether a new snapshot is needed\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"assess_need_for_resnapshot\",\n          \"opcode\": \"assess_need_for_resnapshot\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"interaction_result\"\n            }\n          ],\n          \"outputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"needs_resnapshot\"\n            }\n          ],\n          \"constraints\": [\n            \"Snapshot again after navigation, clicking elements that change the UI substantially, opening/closing modals or menus, and tab switches.\",\n            \"Re-snapshot when refs seem stale.\",\n            \"When a command fails due to a missing ref, snapshot again.\"\n          ]\n        },\n        {\n          \"instruction_ref\": \"dispatch_resnapshot_decision\",\n          \"opcode\": \"dispatch\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"needs_resnapshot\"\n            }\n          ]\n        }\n      ],\n      \"constraints\": []\n    },\n    {\n      \"block_ref\": \"capture_artifacts\",\n      \"block_name\": \"Capture browser artifacts when useful\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"capture_browser_artifacts\",\n          \"opcode\": \"execute_playwright_cli_wrapper\",\n          \"inputs\": [\n            {\n              \"type\": \"result\",\n              \"identifier\": \"pwcli_path\"\n            },\n            {\n              \"type\": \"literal\",\n              \"literal_value\": \"screenshot/pdf/traces\"\n            }\n          ],\n          \"outputs\": [],\n          \"metadata\": {\n            \"script_content\": \"#!/usr/bin/env bash\\nset -euo pipefail\\n\\nif ! command -v npx >/dev/null 2>&1; then\\n  echo \\\"Error: npx is required but not found on PATH.\\\" >&2\\n  exit 1\\nfi\\n\\nhas_session_flag=\\\"false\\\"\\nfor arg in \\\"$@\\\"; do\\n  case \\\"$arg\\\" in\\n    --session|--session=*)\\n      has_session_flag=\\\"true\\\"\\n      break\\n      ;;\\n  esac\\ndone\\n\\ncmd=(npx --yes --package @playwright/cli playwright-cli)\\nif [[ \\\"${has_session_flag}\\\" != \\\"true\\\" && -n \\\"${PLAYWRIGHT_CLI_SESSION:-}\\\" ]]; then\\n  cmd+=(--session \\\"${PLAYWRIGHT_CLI_SESSION}\\\")\\nfi\\ncmd+=(\\\"$@\\\")\\n\\nexec \\\"${cmd[@]}\\\"\"\n          }\n        },\n        {\n          \"instruction_ref\": \"dispatch_after_capture\",\n          \"opcode\": \"dispatch\"\n        }\n      ],\n      \"constraints\": [\n        \"When capturing artifacts in this repo, use `output/playwright/` and avoid introducing new top-level artifact folders.\"\n      ]\n    },\n    {\n      \"block_ref\": \"finish\",\n      \"block_name\": \"Return the completed browser workflow\",\n      \"data_source_kind\": null,\n      \"instructions\": [\n        {\n          \"instruction_ref\": \"return_result\",\n          \"opcode\": \"return\",\n          \"inputs\": [\n            {\n              \"type\": \"literal\",\n              \"literal_value\": \"browser workflow completed\"\n            }\n          ]\n        }\n      ],\n      \"constraints\": []\n    }\n  ],\n  \"edges\": [\n    {\n      \"source_block_ref\": \"check_npx\",\n      \"target_block_ref\": \"decide_npx\"\n    },\n    {\n      \"source_block_ref\": \"decide_npx\",\n      \"target_block_ref\": \"ask_install\",\n      \"condition_text\": \"npx is not available\"\n    },\n    {\n      \"source_block_ref\": \"decide_npx\",\n      \"target_block_ref\": \"set_path\",\n      \"condition_text\": \"npx is available\"\n    },\n    {\n      \"source_block_ref\": \"ask_install\",\n      \"target_block_ref\": \"check_npx\"\n    },\n    {\n      \"source_block_ref\": \"set_path\",\n      \"target_block_ref\": \"open_page\"\n    },\n    {\n      \"source_block_ref\": \"open_page\",\n      \"target_block_ref\": \"snapshot\"\n    },\n    {\n      \"source_block_ref\": \"snapshot\",\n      \"target_block_ref\": \"interact\"\n    },\n    {\n      \"source_block_ref\": \"interact\",\n      \"target_block_ref\": \"assess_resnapshot\"\n    },\n    {\n      \"source_block_ref\": \"assess_resnapshot\",\n      \"target_block_ref\": \"snapshot\",\n      \"condition_text\": \"needs resnapshot\"\n    },\n    {\n      \"source_block_ref\": \"assess_resnapshot\",\n      \"target_block_ref\": \"capture_artifacts\",\n      \"condition_text\": \"no resnapshot needed\"\n    },\n    {\n      \"source_block_ref\": \"capture_artifacts\",\n      \"target_block_ref\": \"finish\"\n    }\n  ],\n  \"diagnostics\": [\n    \"Reference guides (references/cli.md, references/workflows.md) and recommended pattern examples were treated as informational and not extracted as mandatory execution blocks.\",\n    \"agents/openai.yaml, assets, LICENSE.txt, and NOTICE.txt contain metadata, legal text, or binary assets and were not extracted as executable behavior.\",\n    \"The wrapper script's internal npx check and session handling are preserved in metadata.script_content of the wrapper invocation instructions; the skill-level prerequisite check is modeled separately as required by SKILL.md.\"\n  ]\n}",
+  "diagnostics": [
+    "candidate warning: Reference guides (references/cli.md, references/workflows.md) and recommended pattern examples were treated as informational and not extracted as mandatory execution blocks.",
+    "candidate warning: agents/openai.yaml, assets, LICENSE.txt, and NOTICE.txt contain metadata, legal text, or binary assets and were not extracted as executable behavior.",
+    "candidate warning: The wrapper script's internal npx check and session handling are preserved in metadata.script_content of the wrapper invocation instructions; the skill-level prerequisite check is modeled separately as required by SKILL.md."
+  ],
+  "status": "complete",
+  "cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "Treat this skill as CLI-first automation.",
+      "Do not pivot to `@playwright/test` unless the user explicitly asks for test files.",
+      "Before proposing commands, check whether `npx` is available (the wrapper depends on it).",
+      "If it is not available, pause and ask the user to install Node.js/npm (which provides `npx`).",
+      "Once `npx` is present, proceed with the wrapper script. A global install of `playwright-cli` is optional.",
+      "Prefer the bundled wrapper script so the CLI works even when it is not globally installed.",
+      "Prefer the wrapper unless the repository already standardizes on a global install.",
+      "Always snapshot before referencing element ids like `e12`.",
+      "Re-snapshot when refs seem stale.",
+      "Prefer explicit commands over `eval` and `run-code` unless needed.",
+      "When you do not have a fresh snapshot, use placeholder refs like `eX` and say why; do not bypass refs with `run-code`.",
+      "Use `--headed` when a visual check will help.",
+      "When capturing artifacts in this repo, use `output/playwright/` and avoid introducing new top-level artifact folders.",
+      "Default to CLI commands and workflows, not Playwright test specs.",
+      "In this repo, run commands from `output/playwright/<label>/` to keep artifacts contained.",
+      "If an element ref fails, run `pwcli snapshot` again and retry.",
+      "If the page looks wrong, re-open with `--headed` and resize the window.",
+      "If a flow depends on prior state, use a named `--session`."
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "Check whether npx is available",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "check_npx_availability",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "PATH",
+                "literal_value": null,
+                "semantic_name": "PATH"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "literal_value": null,
+                "semantic_name": "npx_available"
+              }
+            ],
+            "constraints": [],
+            "metadata": {
+              "script_content": "command -v npx >/dev/null 2>&1"
+            },
+            "draft_instruction_id": "check_npx_availability"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_npx_check"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "context"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "Branch on npx availability",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "literal_value": null,
+                "semantic_name": "npx_available"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_npx"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "Ask the user to install Node.js/npm",
+        "instructions": [
+          {
+            "id": "ir_004",
+            "opcode": "ask_user_to_install_nodejs",
+            "inputs": [
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "node --version\nnpm --version\nnpm install -g @playwright/cli@latest\nplaywright-cli --help",
+                "semantic_name": null
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Provide these steps verbatim."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "ask_user_to_install_nodejs"
+          },
+          {
+            "id": "ir_005",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_install_request"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "Set the bundled Playwright CLI wrapper path",
+        "instructions": [
+          {
+            "id": "ir_006",
+            "opcode": "set_playwright_cli_wrapper_path",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "CODEX_HOME",
+                "literal_value": null,
+                "semantic_name": "CODEX_HOME"
+              },
+              {
+                "type": "context_key",
+                "identifier": "HOME",
+                "literal_value": null,
+                "semantic_name": "HOME"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "pwcli_path"
+              }
+            ],
+            "constraints": [],
+            "metadata": {
+              "script_content": "export CODEX_HOME=\"${CODEX_HOME:-$HOME/.codex}\"\nexport PWCLI=\"$CODEX_HOME/skills/playwright/scripts/playwright_cli.sh\""
+            },
+            "draft_instruction_id": "set_playwright_cli_wrapper_path"
+          },
+          {
+            "id": "ir_007",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_path_setup"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "context"
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "Open the target browser page",
+        "instructions": [
+          {
+            "id": "ir_008",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "pwcli_path"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "target_webpage",
+                "literal_value": null,
+                "semantic_name": "target_webpage"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "open",
+                "semantic_name": null
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            },
+            "draft_instruction_id": "open_page"
+          },
+          {
+            "id": "ir_009",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_open"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_006": {
+        "block_id": "block_006",
+        "block_name": "Take a browser snapshot to get element refs",
+        "instructions": [
+          {
+            "id": "ir_010",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "pwcli_path"
+              },
+              {
+                "type": "external_resource",
+                "identifier": "browser_session",
+                "literal_value": null,
+                "semantic_name": "browser_session"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "snapshot",
+                "semantic_name": null
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "literal_value": null,
+                "semantic_name": "snapshot_refs"
+              }
+            ],
+            "constraints": [],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            },
+            "draft_instruction_id": "take_browser_snapshot"
+          },
+          {
+            "id": "ir_011",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_snapshot"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_007": {
+        "block_id": "block_007",
+        "block_name": "Interact with the page using the latest snapshot refs",
+        "instructions": [
+          {
+            "id": "ir_012",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "pwcli_path"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "literal_value": null,
+                "semantic_name": "snapshot_refs"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "click/type/press",
+                "semantic_name": null
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "literal_value": null,
+                "semantic_name": "interaction_result"
+              }
+            ],
+            "constraints": [],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            },
+            "draft_instruction_id": "interact_with_snapshot_ref"
+          },
+          {
+            "id": "ir_013",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_interact"
+          }
+        ],
+        "constraints": [
+          "Always snapshot before referencing element ids like `e12`.",
+          "Prefer explicit commands over `eval` and `run-code` unless needed."
+        ],
+        "data_source_kind": null
+      },
+      "block_008": {
+        "block_id": "block_008",
+        "block_name": "Determine whether a new snapshot is needed",
+        "instructions": [
+          {
+            "id": "ir_014",
+            "opcode": "assess_need_for_resnapshot",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "literal_value": null,
+                "semantic_name": "interaction_result"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "literal_value": null,
+                "semantic_name": "needs_resnapshot"
+              }
+            ],
+            "constraints": [
+              "Snapshot again after navigation, clicking elements that change the UI substantially, opening/closing modals or menus, and tab switches.",
+              "Re-snapshot when refs seem stale.",
+              "When a command fails due to a missing ref, snapshot again."
+            ],
+            "metadata": {},
+            "draft_instruction_id": "assess_need_for_resnapshot"
+          },
+          {
+            "id": "ir_015",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "literal_value": null,
+                "semantic_name": "needs_resnapshot"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_resnapshot_decision"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_009": {
+        "block_id": "block_009",
+        "block_name": "Capture browser artifacts when useful",
+        "instructions": [
+          {
+            "id": "ir_016",
+            "opcode": "execute_playwright_cli_wrapper",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "literal_value": null,
+                "semantic_name": "pwcli_path"
+              },
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "screenshot/pdf/traces",
+                "semantic_name": null
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {
+              "script_content": "#!/usr/bin/env bash\nset -euo pipefail\n\nif ! command -v npx >/dev/null 2>&1; then\n  echo \"Error: npx is required but not found on PATH.\" >&2\n  exit 1\nfi\n\nhas_session_flag=\"false\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --session|--session=*)\n      has_session_flag=\"true\"\n      break\n      ;;\n  esac\ndone\n\ncmd=(npx --yes --package @playwright/cli playwright-cli)\nif [[ \"${has_session_flag}\" != \"true\" && -n \"${PLAYWRIGHT_CLI_SESSION:-}\" ]]; then\n  cmd+=(--session \"${PLAYWRIGHT_CLI_SESSION}\")\nfi\ncmd+=(\"$@\")\n\nexec \"${cmd[@]}\""
+            },
+            "draft_instruction_id": "capture_browser_artifacts"
+          },
+          {
+            "id": "ir_017",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "dispatch_after_capture"
+          }
+        ],
+        "constraints": [
+          "When capturing artifacts in this repo, use `output/playwright/` and avoid introducing new top-level artifact folders."
+        ],
+        "data_source_kind": null
+      },
+      "block_010": {
+        "block_id": "block_010",
+        "block_name": "Return the completed browser workflow",
+        "instructions": [
+          {
+            "id": "ir_018",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "literal",
+                "identifier": null,
+                "literal_value": "browser workflow completed",
+                "semantic_name": null
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_result"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": "npx is not available"
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_004",
+        "condition_text": "npx is available"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_001",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_005",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_006",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_006",
+        "target_block_id": "block_007",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_007",
+        "target_block_id": "block_008",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_008",
+        "target_block_id": "block_006",
+        "condition_text": "needs resnapshot"
+      },
+      {
+        "source_block_id": "block_008",
+        "target_block_id": "block_009",
+        "condition_text": "no resnapshot needed"
+      },
+      {
+        "source_block_id": "block_009",
+        "target_block_id": "block_010",
+        "condition_text": null
+      }
+    ],
+    "declared_context_keys": [
+      "PATH",
+      "CODEX_HOME",
+      "HOME"
+    ]
+  }
+}

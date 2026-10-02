@@ -1,0 +1,640 @@
+{
+  "version": "security-profile-v4",
+  "source": {
+    "files": [
+      {
+        "path": "SKILL.md",
+        "content": "---\nname: conditional-notification\ndescription: 根据事件记录的订阅状态、紧急标记和数值发送通知。\n---\n\n# 条件通知与数据发送\n\n1. 读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。\n2. 仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。\n3. urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。\n4. 对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。\n5. notify.send 的 body 参数直接取该记录的 summary 字段原值。\n6. 未选中的记录不调用 notify.send。\n7. 整份流程禁止将 access_token 字段发送给任何接收对象。\n8. 字段取值要求不包含摘要生成、内容改写或额外格式转换。\n9. 处理完成后，将处理条数写入本地 count.txt。\n",
+        "sha256": "461270c7deec087306acf3473a0b276b72edd45811642c5da19482d35f5bcd3f"
+      }
+    ],
+    "source_sha256": "6c0561338e81f9706b4a30b1f9ed4fffac663c7f7bb3a144e01a8f2a8e1c59ab"
+  },
+  "cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "对每条选中记录调用一次 notify.send。",
+      "未选中的记录不调用 notify.send。",
+      "整份流程禁止将 access_token 字段发送给任何接收对象。",
+      "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "Read the user-provided events.json file",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "read_events_json",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "events.json",
+                "semantic_name": "user-provided events.json"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "event_records"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "read_events_file"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "go_loop"
+          }
+        ],
+        "constraints": [
+          "读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。"
+        ],
+        "data_source_kind": "external"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "Get the next event record",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "get_next_event_record",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "event_records"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "current_record"
+              },
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "has_more_records"
+              }
+            ],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "get_next_record"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "has_more_records"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "loop_dispatch"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "Evaluate whether the current record is selected for notification",
+        "instructions": [
+          {
+            "id": "ir_005",
+            "opcode": "evaluate_event_record_selection",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "current_record"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "is_selected"
+              }
+            ],
+            "constraints": [
+              "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+              "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "evaluate_selection"
+          },
+          {
+            "id": "ir_006",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "is_selected"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "selection_dispatch"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "Extract notification fields and send the selected record's notification",
+        "instructions": [
+          {
+            "id": "ir_007",
+            "opcode": "extract_event_notification_fields",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "current_record"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "recipient"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "summary"
+              }
+            ],
+            "constraints": [
+              "字段取值要求不包含摘要生成、内容改写或额外格式转换。",
+              "notify.send 的 body 参数直接取该记录的 summary 字段原值。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "extract_fields"
+          },
+          {
+            "id": "ir_008",
+            "opcode": "notify_send",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "notify.send",
+                "semantic_name": "notify.send"
+              },
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "recipient"
+              },
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "summary"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "对每条选中记录调用一次 notify.send。",
+              "接收对象取该记录的 recipient 字段。",
+              "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+              "整份流程禁止将 access_token 字段发送给任何接收对象。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "send_notify"
+          },
+          {
+            "id": "ir_009",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "send_dispatch"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "Write the number of processed records to count.txt",
+        "instructions": [
+          {
+            "id": "ir_010",
+            "opcode": "count_processed_event_records",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "event_records"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "processed_count"
+              }
+            ],
+            "constraints": [
+              "处理完成后，将处理条数写入本地 count.txt。"
+            ],
+            "metadata": {},
+            "draft_instruction_id": "count_processed"
+          },
+          {
+            "id": "ir_011",
+            "opcode": "write_count_to_file",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "count.txt",
+                "semantic_name": "count.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "processed_count"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "write_count_file"
+          },
+          {
+            "id": "ir_012",
+            "opcode": "return",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "return_result"
+          }
+        ],
+        "constraints": [
+          "处理完成后，将处理条数写入本地 count.txt。"
+        ],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": "has_more_records is true"
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_005",
+        "condition_text": "has_more_records is false"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_004",
+        "condition_text": "is_selected is true"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_002",
+        "condition_text": "is_selected is false"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_002",
+        "condition_text": null
+      }
+    ],
+    "declared_context_keys": []
+  },
+  "source_index": [
+    {
+      "id": "src_001",
+      "file": "SKILL.md",
+      "start_line": 1,
+      "end_line": 4
+    },
+    {
+      "id": "src_002",
+      "file": "SKILL.md",
+      "start_line": 6,
+      "end_line": 6
+    },
+    {
+      "id": "src_003",
+      "file": "SKILL.md",
+      "start_line": 8,
+      "end_line": 16
+    }
+  ],
+  "graph_index": [
+    {
+      "id": "g_0001",
+      "pointer": "/entry_block_id"
+    },
+    {
+      "id": "g_0002",
+      "pointer": "/constraints"
+    },
+    {
+      "id": "g_0003",
+      "pointer": "/edges"
+    },
+    {
+      "id": "g_0004",
+      "pointer": "/declared_context_keys"
+    },
+    {
+      "id": "g_0005",
+      "pointer": "/blocks/block_001/block_id",
+      "block_id": "block_001"
+    },
+    {
+      "id": "g_0006",
+      "pointer": "/blocks/block_001/block_name",
+      "block_id": "block_001"
+    },
+    {
+      "id": "g_0007",
+      "pointer": "/blocks/block_001/constraints",
+      "block_id": "block_001"
+    },
+    {
+      "id": "g_0008",
+      "pointer": "/blocks/block_001/data_source_kind",
+      "block_id": "block_001"
+    },
+    {
+      "id": "g_0009",
+      "pointer": "/blocks/block_001/instructions/0",
+      "block_id": "block_001",
+      "instruction_id": "ir_001"
+    },
+    {
+      "id": "g_0010",
+      "pointer": "/blocks/block_001/instructions/1",
+      "block_id": "block_001",
+      "instruction_id": "ir_002"
+    },
+    {
+      "id": "g_0011",
+      "pointer": "/blocks/block_002/block_id",
+      "block_id": "block_002"
+    },
+    {
+      "id": "g_0012",
+      "pointer": "/blocks/block_002/block_name",
+      "block_id": "block_002"
+    },
+    {
+      "id": "g_0013",
+      "pointer": "/blocks/block_002/constraints",
+      "block_id": "block_002"
+    },
+    {
+      "id": "g_0014",
+      "pointer": "/blocks/block_002/data_source_kind",
+      "block_id": "block_002"
+    },
+    {
+      "id": "g_0015",
+      "pointer": "/blocks/block_002/instructions/0",
+      "block_id": "block_002",
+      "instruction_id": "ir_003"
+    },
+    {
+      "id": "g_0016",
+      "pointer": "/blocks/block_002/instructions/1",
+      "block_id": "block_002",
+      "instruction_id": "ir_004"
+    },
+    {
+      "id": "g_0017",
+      "pointer": "/blocks/block_003/block_id",
+      "block_id": "block_003"
+    },
+    {
+      "id": "g_0018",
+      "pointer": "/blocks/block_003/block_name",
+      "block_id": "block_003"
+    },
+    {
+      "id": "g_0019",
+      "pointer": "/blocks/block_003/constraints",
+      "block_id": "block_003"
+    },
+    {
+      "id": "g_0020",
+      "pointer": "/blocks/block_003/data_source_kind",
+      "block_id": "block_003"
+    },
+    {
+      "id": "g_0021",
+      "pointer": "/blocks/block_003/instructions/0",
+      "block_id": "block_003",
+      "instruction_id": "ir_005"
+    },
+    {
+      "id": "g_0022",
+      "pointer": "/blocks/block_003/instructions/1",
+      "block_id": "block_003",
+      "instruction_id": "ir_006"
+    },
+    {
+      "id": "g_0023",
+      "pointer": "/blocks/block_004/block_id",
+      "block_id": "block_004"
+    },
+    {
+      "id": "g_0024",
+      "pointer": "/blocks/block_004/block_name",
+      "block_id": "block_004"
+    },
+    {
+      "id": "g_0025",
+      "pointer": "/blocks/block_004/constraints",
+      "block_id": "block_004"
+    },
+    {
+      "id": "g_0026",
+      "pointer": "/blocks/block_004/data_source_kind",
+      "block_id": "block_004"
+    },
+    {
+      "id": "g_0027",
+      "pointer": "/blocks/block_004/instructions/0",
+      "block_id": "block_004",
+      "instruction_id": "ir_007"
+    },
+    {
+      "id": "g_0028",
+      "pointer": "/blocks/block_004/instructions/1",
+      "block_id": "block_004",
+      "instruction_id": "ir_008"
+    },
+    {
+      "id": "g_0029",
+      "pointer": "/blocks/block_004/instructions/2",
+      "block_id": "block_004",
+      "instruction_id": "ir_009"
+    },
+    {
+      "id": "g_0030",
+      "pointer": "/blocks/block_005/block_id",
+      "block_id": "block_005"
+    },
+    {
+      "id": "g_0031",
+      "pointer": "/blocks/block_005/block_name",
+      "block_id": "block_005"
+    },
+    {
+      "id": "g_0032",
+      "pointer": "/blocks/block_005/constraints",
+      "block_id": "block_005"
+    },
+    {
+      "id": "g_0033",
+      "pointer": "/blocks/block_005/data_source_kind",
+      "block_id": "block_005"
+    },
+    {
+      "id": "g_0034",
+      "pointer": "/blocks/block_005/instructions/0",
+      "block_id": "block_005",
+      "instruction_id": "ir_010"
+    },
+    {
+      "id": "g_0035",
+      "pointer": "/blocks/block_005/instructions/1",
+      "block_id": "block_005",
+      "instruction_id": "ir_011"
+    },
+    {
+      "id": "g_0036",
+      "pointer": "/blocks/block_005/instructions/2",
+      "block_id": "block_005",
+      "instruction_id": "ir_012"
+    }
+  ],
+  "instruction_index": {
+    "ir_001": {
+      "block_id": "block_001",
+      "position": 0,
+      "location": "g_0009"
+    },
+    "ir_002": {
+      "block_id": "block_001",
+      "position": 1,
+      "location": "g_0010"
+    },
+    "ir_003": {
+      "block_id": "block_002",
+      "position": 0,
+      "location": "g_0015"
+    },
+    "ir_004": {
+      "block_id": "block_002",
+      "position": 1,
+      "location": "g_0016"
+    },
+    "ir_005": {
+      "block_id": "block_003",
+      "position": 0,
+      "location": "g_0021"
+    },
+    "ir_006": {
+      "block_id": "block_003",
+      "position": 1,
+      "location": "g_0022"
+    },
+    "ir_007": {
+      "block_id": "block_004",
+      "position": 0,
+      "location": "g_0027"
+    },
+    "ir_008": {
+      "block_id": "block_004",
+      "position": 1,
+      "location": "g_0028"
+    },
+    "ir_009": {
+      "block_id": "block_004",
+      "position": 2,
+      "location": "g_0029"
+    },
+    "ir_010": {
+      "block_id": "block_005",
+      "position": 0,
+      "location": "g_0034"
+    },
+    "ir_011": {
+      "block_id": "block_005",
+      "position": 1,
+      "location": "g_0035"
+    },
+    "ir_012": {
+      "block_id": "block_005",
+      "position": 2,
+      "location": "g_0036"
+    }
+  },
+  "execution_model": {
+    "version": "wide-read-agent-v4",
+    "rules": [
+      {
+        "id": "EM01",
+        "text": "Wide-read assumption: unless the read scope is explicitly restricted or an isolation mechanism is provided, read the related data container. This stage only labels the read effect; do not infer the container's actual fields, sensitive-data sets, or that the entire runtime environment is read."
+      },
+      {
+        "id": "EM02",
+        "text": "Tool-result return assumption: content returned by an agent tool enters the LLM context by default. Respect explicit boundaries for local-only processing, model-invisible content, handles, or isolated storage. This is an analysis assumption, not a fact about all agents."
+      },
+      {
+        "id": "EM03",
+        "text": "LLM scheduling does not imply content visibility: merely selecting or initiating an action is insufficient for model_observe. This effect requires content actually processed by the model, returned to the model, or explicitly entering its context."
+      },
+      {
+        "id": "EM04",
+        "text": "Distinguish local and model processing: local field selection, masking, encryption, and summarization have transform. Also annotate model_observe when the model actually reads and processes the content. transform does not guarantee removal of sensitive data."
+      },
+      {
+        "id": "EM05",
+        "text": "Declarations do not replace behavior: constraints such as prohibiting disclosure or using only specified fields do not automatically constitute executed filtering, masking, or isolation. Do not invent business actions absent from the graph."
+      },
+      {
+        "id": "EM06",
+        "text": "Do not guess boundaries: a tool name or LLM identity alone does not prove remote network communication; an ordinary return alone does not prove user-facing output. Assess model observation and network transfer separately. Record uncertainty externally as unresolved."
+      },
+      {
+        "id": "EM07",
+        "text": "Runtime-context writes: context_write requires evidence of creating, updating, or deleting runtime context content or bindings that later actions can read, including shared session state and environment variables. Merely producing an IR result is not a context write. File writes and model observation do not automatically imply context_write; each effect requires its own evidence. Saving unchanged content does not imply transform. Deleting a binding does not imply reading, transforming, or observing its former content. This rule explains classification; it does not establish that an otherwise unrecorded write occurred."
+      },
+      {
+        "id": "EM08",
+        "text": "Symbolic transfer boundary: preserve relevant input content unless an explicit selection, deletion, replacement, or isolation supports reduction. Unknown computations retain possible input dependencies, without claiming every input byte survives. A dynamic or unresolved location must use a symbolic: key and cannot justify a definite overwrite or deletion. An uncertain effect order cannot justify observing only a cleaned result; retain original candidates alongside possible later results. This stage declares symbolic operations, not propagated Data identities or sensitive-data sets."
+      }
+    ]
+  }
+}

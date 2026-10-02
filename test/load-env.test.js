@@ -39,7 +39,7 @@ test('findNearestEnv finds root env from nested directory', () => {
 
 test('loadProjectEnv preserves existing shell env values', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillflow-env-'));
-  const nested = path.join(root, 'packages', 'skill-sfg', 'src');
+  const nested = path.join(root, 'packages', 'skill-ir', 'src');
   fs.mkdirSync(nested, { recursive: true });
   fs.writeFileSync(path.join(root, '.env'), 'LLM_MODEL=gpt-5.5\nLLM_PROVIDER=openai\n', 'utf-8');
   const previous = process.env.LLM_MODEL;
@@ -60,4 +60,3 @@ test('loadProjectEnv preserves existing shell env values', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-

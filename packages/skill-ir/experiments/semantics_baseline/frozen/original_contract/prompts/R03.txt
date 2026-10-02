@@ -1,0 +1,1451 @@
+You analyze one complete Skill package and return exactly one JSON object.
+
+Read every readable file before making any extraction decision. Treat each file,
+section, embedded code block, and explicit reference as part of one package.
+Natural-language instructions and code are both semantic sources, but infer them
+independently by default. Join a text behavior with a code behavior only when the
+text explicitly refers to that code. Do not invent relationships from proximity.
+
+Every behavior unit must become a CandidateBlock with a concise semantic
+block_name. Use block_ref only as a temporary machine reference. Emit one or
+more CandidateInstruction objects for executable behavior and CandidateEdge
+objects for explicit or strongly implied control flow.
+
+Treat code files and code blocks as black-box operations. Do not split internal
+loops, local variables, or internal control flow. Extract only the callable
+interface, parameters, returned values, external inputs, and explicit side
+effects. For a code behavior, preserve the original code body in
+metadata.script_content whenever it is available.
+
+Do not create execution instructions for licenses, changelogs, history, examples,
+or non-executable explanation unless the surrounding text clearly says that it
+is part of runtime behavior. Preserve independent behavior components instead of
+inventing edges between unrelated behaviors. Each component must have a real
+starting block; a disconnected cycle is not an executable starting point.
+
+Represent two different actions explicitly: acquiring data and computing results.
+Every result operand an instruction consumes must refer to an output of some
+instruction; literal constants and resource identifiers are different operand types. A value being mentioned in prose somewhere in the package never
+makes it available; only an instruction that produces it does.
+
+ACQUIRING DATA: Every actual read of runtime context, file/configuration contents,
+or returned data from an external API/tool/service is a real source CandidateBlock.
+Set data_source_kind to "context" or "external". A source block contains exactly one
+acquisition instruction followed by a dispatch or return terminator. One read may
+produce multiple outputs. Preserve conditional reads on their own paths; do not
+hoist every source to the entry block.
+
+For runtime context, use data_source_kind="context". The acquisition inputs
+must be non-empty context_key operands identifying keys in declared_context_keys.
+Only this acquisition may consume context_key operands. The declaration alone
+never makes a result available: the acquisition produces the named results used
+by later instructions. Name the acquisition for what is actually read, for example
+read_user_message or read_city_from_request. Use read_context only when the source
+does not give a more specific action. The data_source_kind and operand structure
+determine the source category, not the opcode spelling.
+
+For external acquisition, use data_source_kind="external" and a descriptive
+opcode such as read_file, http_get, or a named tool call. Include an
+external_resource identifier or a result, such as a dynamic file path, in its
+inputs. A resource identifies a file, API, tool, or service; it is not the data
+returned from it. A pure side effect without returned data can be an ordinary
+block. Keep literal constants in Operand.literal_value; do not create source
+blocks just to introduce literals or service handles.
+
+All opcodes are semantic strings under the same contract. There is no separate
+list of built-in business operations. Do not infer effects or audit findings
+from opcode spelling. Only dispatch and return have fixed control-flow roles as
+specified below. Preserve original code in metadata.script_content.
+
+NAMING OPERATIONS: Choose an action-and-object name that says what this instruction
+does, using details supported by the source: read_city_from_request,
+trim_message_whitespace, or send_slack_notification. A reader should understand
+the action from the opcode together with its operands, without relying only on
+the block name. When calling a function or tool explicitly named in the source,
+preserve that name, for example normalize_city or check_urgency. Do not invent
+processing steps, destinations, or effects to make a name more specific. Use the
+same opcode for the same behavior on different paths; a branch alone does not
+require a different operation name. These names are examples, not a vocabulary
+restriction or a list of operations with special validation rules.
+
+COMPUTING RESULTS: Set data_source_kind to null for ordinary behavior and computed
+transformations. Every instruction output is a result whose identifier you choose,
+and that identifier must be unique across the WHOLE candidate: never give the same identifier
+to two produced values, even in different blocks. Choose a meaningful result identifier based on what it
+holds, for example "extracted_city" or "weather_report".
+
+USING RESULTS: To consume a value, write a result input naming it exactly
+as the producing instruction named it in its outputs, whichever block that
+instruction lives in. Do not re-acquire or relay a value on the way: a block that
+neither reads nor produces a value does not mention it, and later readers refer directly to the original result identifier. The compiler
+checks that a control-flow path connects the producer to the reader. To change a value, consume it and
+produce a NEW identifier for the result, so the original identifier keeps its original
+meaning everywhere it appears.
+
+Say what the package says and let the analysis work out whether a path connects each result producer to its reader. A block after a merge may reference a value that only one branch
+produces, and a block inside a loop may reference a value that a later block on
+the backedge produces. Neither is an error to avoid: do not add a second producer
+to make such a read look safe, and do not drop the read.
+
+Use dispatch as the final instruction of a block that has outgoing edges. Use
+return as the final instruction of a block that ends execution. Put every value
+used to choose a branch in dispatch.inputs, including computed predicates. Edge
+condition_text text is only a readable description; it never declares data dependencies.
+Both dispatch and return must have empty outputs; return consumes its result
+through inputs. A block must not have instructions after its terminator.
+
+ENDING BLOCKS: When a behavior finishes the path, return may appear at the end of
+that block. An independent branch may consist of return alone. Return a
+source-specified literal or an existing result directly; do not introduce
+preparation, assignment, or wrapping operations just to pass it to return.
+Preserve actual branch/merge boundaries and independent behavior components.
+
+Return only JSON matching the schema below; do not wrap it in Markdown fences
+and do not add commentary.
+
+
+Candidate JSON Schema:
+
+{
+  "$defs": {
+    "CandidateBlock": {
+      "additionalProperties": false,
+      "description": "A behavior unit proposed by the LLM.\n\nA block states only what happens inside it.  Which of its values are\nreadable elsewhere is a property of the paths through the graph, so it is\nchecked against CFG paths rather than declared here.",
+      "properties": {
+        "block_ref": {
+          "title": "Block Ref",
+          "type": "string"
+        },
+        "block_name": {
+          "title": "Block Name",
+          "type": "string"
+        },
+        "data_source_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "context",
+                "external"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Source Kind"
+        },
+        "instructions": {
+          "items": {
+            "$ref": "#/$defs/CandidateInstruction"
+          },
+          "title": "Instructions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "block_ref",
+        "block_name"
+      ],
+      "title": "CandidateBlock",
+      "type": "object"
+    },
+    "CandidateEdge": {
+      "additionalProperties": false,
+      "description": "A control-flow edge proposed by the LLM.",
+      "properties": {
+        "source_block_ref": {
+          "title": "Source Block Ref",
+          "type": "string"
+        },
+        "target_block_ref": {
+          "title": "Target Block Ref",
+          "type": "string"
+        },
+        "condition_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition Text"
+        }
+      },
+      "required": [
+        "source_block_ref",
+        "target_block_ref"
+      ],
+      "title": "CandidateEdge",
+      "type": "object"
+    },
+    "CandidateInstruction": {
+      "additionalProperties": false,
+      "description": "An instruction proposed by the LLM before canonical compilation.",
+      "properties": {
+        "instruction_ref": {
+          "title": "Instruction Ref",
+          "type": "string"
+        },
+        "opcode": {
+          "title": "Opcode",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/Operand"
+          },
+          "title": "Outputs",
+          "type": "array"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "instruction_ref",
+        "opcode"
+      ],
+      "title": "CandidateInstruction",
+      "type": "object"
+    },
+    "Operand": {
+      "additionalProperties": false,
+      "description": "One typed instruction input or output.\n\nRESULT identifies an instruction result; CONTEXT_KEY identifies a declared\nruntime entry; EXTERNAL_RESOURCE identifies a file, tool, API, or service.\nOnly LITERAL stores a payload in ``literal_value``. ``semantic_name`` keeps\nthe extractor's wording when compilation assigns a result identifier.\nResult identifiers are global; a single instruction can produce several.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/OperandType"
+        },
+        "identifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identifier"
+        },
+        "literal_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Literal Value"
+        },
+        "semantic_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Name"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Operand",
+      "type": "object"
+    },
+    "OperandType": {
+      "description": "The source or destination kind of an operand.",
+      "enum": [
+        "literal",
+        "context_key",
+        "result",
+        "external_resource"
+      ],
+      "title": "OperandType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The complete untrusted analysis returned by the LLM.",
+  "properties": {
+    "entry_block_ref": {
+      "title": "Entry Block Ref",
+      "type": "string"
+    },
+    "declared_context_keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Declared Context Keys",
+      "type": "array"
+    },
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/CandidateBlock"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/CandidateEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "entry_block_ref"
+  ],
+  "title": "IRAnalysisCandidate",
+  "type": "object"
+}
+
+Straight-line example: read, trim, then log progress and return in the same block:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the user's input message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_user_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_normalize",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "normalize",
+      "block_name": "Remove leading and trailing whitespace from the message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "normalize_message",
+          "opcode": "trim_message_whitespace",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_record",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "record",
+      "block_name": "Record progress and return the normalized message",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "record_progress",
+          "opcode": "log_progress",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "ready"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_message",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "normalized_message"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "normalize"
+    },
+    {
+      "source_block_ref": "normalize",
+      "target_block_ref": "record"
+    }
+  ],
+  "diagnostics": []
+}
+
+Branch example: acquire only on one path, then reference both paths after the merge:
+
+{
+  "entry_block_ref": "read_input",
+  "declared_context_keys": [
+    "user_input"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_input",
+      "block_name": "Read the alert message",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read",
+          "opcode": "read_alert_message",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_input"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_decide",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "decide",
+      "block_name": "Check urgency",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_urgency",
+          "opcode": "check_message_urgency",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_path",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "urgent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "send_alert",
+      "block_name": "Send the alert and read the Slack receipt",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "send_slack",
+          "opcode": "post_slack_alert",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "slack"
+            },
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_alert",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "skip_alert",
+      "block_name": "Prepare the non-urgent note",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "make_skip_note",
+          "opcode": "prepare_no_alert_note",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "No alert needed"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_reply_from_skip",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "reply",
+      "block_name": "Report the outcome of whichever path ran",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_reply",
+          "opcode": "format_alert_outcome",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "raw_message"
+            },
+            {
+              "type": "result",
+              "identifier": "slack_receipt"
+            },
+            {
+              "type": "result",
+              "identifier": "skip_note"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_outcome",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "outcome_text"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_input",
+      "target_block_ref": "decide"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "send_alert",
+      "condition_text": "urgent"
+    },
+    {
+      "source_block_ref": "decide",
+      "target_block_ref": "skip_alert",
+      "condition_text": "not urgent"
+    },
+    {
+      "source_block_ref": "send_alert",
+      "target_block_ref": "reply"
+    },
+    {
+      "source_block_ref": "skip_alert",
+      "target_block_ref": "reply"
+    }
+  ],
+  "diagnostics": []
+}
+
+The examples illustrate the contract only. Extract the actual package below; do not copy example behaviors that are absent from it.
+
+Complete Skill package:
+
+<skill-file path="LICENSE.txt" kind="text" size="10776">
+
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+
+   "Licensor" shall mean the copyright owner or entity authorized by
+   the copyright owner that is granting the License.
+
+   "Legal Entity" shall mean the union of the acting entity and all
+   other entities that control, are controlled by, or are under common
+   control with that entity. For the purposes of this definition,
+   "control" means (i) the power, direct or indirect, to cause the
+   direction or management of such entity, whether by contract or
+   otherwise, or (ii) ownership of fifty percent (50%) or more of the
+   outstanding shares, or (iii) beneficial ownership of such entity.
+
+   "You" (or "Your") shall mean an individual or Legal Entity
+   exercising permissions granted by this License.
+
+   "Source" form shall mean the preferred form for making modifications,
+   including but not limited to software source code, documentation
+   source, and configuration files.
+
+   "Object" form shall mean any form resulting from mechanical
+   transformation or translation of a Source form, including but
+   not limited to compiled object code, generated documentation,
+   and conversions to other media types.
+
+   "Work" shall mean the work of authorship, whether in Source or
+   Object form, made available under the License, as indicated by a
+   copyright notice that is included in or attached to the work
+   (an example is provided in the Appendix below).
+
+   "Derivative Works" shall mean any work, whether in Source or Object
+   form, that is based on (or derived from) the Work and for which the
+   editorial revisions, annotations, elaborations, or other modifications
+   represent, as a whole, an original work of authorship. For the purposes
+   of this License, Derivative Works shall not include works that remain
+   separable from, or merely link (or bind by name) to the interfaces of,
+   the Work and Derivative Works thereof.
+
+   "Contribution" shall mean any work of authorship, including
+   the original version of the Work and any modifications or additions
+   to that Work or Derivative Works thereof, that is intentionally
+   submitted to Licensor for inclusion in the Work by the copyright owner
+   or by an individual or Legal Entity authorized to submit on behalf of
+   the copyright owner. For the purposes of this definition, "submitted"
+   means any form of electronic, verbal, or written communication sent
+   to the Licensor or its representatives, including but not limited to
+   communication on electronic mailing lists, source code control systems,
+   and issue tracking systems that are managed by, or on behalf of, the
+   Licensor for the purpose of discussing and improving the Work, but
+   excluding communication that is conspicuously marked or otherwise
+   designated in writing by the copyright owner as "Not a Contribution."
+
+   "Contributor" shall mean Licensor and any individual or Legal Entity
+   on behalf of whom a Contribution has been received by Licensor and
+   subsequently incorporated within the Work.
+
+2. Grant of Copyright License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   copyright license to reproduce, prepare Derivative Works of,
+   publicly display, publicly perform, sublicense, and distribute the
+   Work and such Derivative Works in Source or Object form.
+
+3. Grant of Patent License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   (except as stated in this section) patent license to make, have made,
+   use, offer to sell, sell, import, and otherwise transfer the Work,
+   where such license applies only to those patent claims licensable
+   by such Contributor that are necessarily infringed by their
+   Contribution(s) alone or by combination of their Contribution(s)
+   with the Work to which such Contribution(s) was submitted. If You
+   institute patent litigation against any entity (including a
+   cross-claim or counterclaim in a lawsuit) alleging that the Work
+   or a Contribution incorporated within the Work constitutes direct
+   or contributory patent infringement, then any patent licenses
+   granted to You under this License for that Work shall terminate
+   as of the date such litigation is filed.
+
+4. Redistribution. You may reproduce and distribute copies of the
+   Work or Derivative Works thereof in any medium, with or without
+   modifications, and in Source or Object form, provided that You
+   meet the following conditions:
+
+   (a) You must give any other recipients of the Work or
+       Derivative Works a copy of this License; and
+
+   (b) You must cause any modified files to carry prominent notices
+       stating that You changed the files; and
+
+   (c) You must retain, in the Source form of any Derivative Works
+       that You distribute, all copyright, patent, trademark, and
+       attribution notices from the Source form of the Work,
+       excluding those notices that do not pertain to any part of
+       the Derivative Works; and
+
+   (d) If the Work includes a "NOTICE" text file as part of its
+       distribution, then any Derivative Works that You distribute must
+       include a readable copy of the attribution notices contained
+       within such NOTICE file, excluding those notices that do not
+       pertain to any part of the Derivative Works, in at least one
+       of the following places: within a NOTICE text file distributed
+       as part of the Derivative Works; within the Source form or
+       documentation, if provided along with the Derivative Works; or,
+       within a display generated by the Derivative Works, if and
+       wherever such third-party notices normally appear. The contents
+       of the NOTICE file are for informational purposes only and
+       do not modify the License. You may add Your own attribution
+       notices within Derivative Works that You distribute, alongside
+       or as an addendum to the NOTICE text from the Work, provided
+       that such additional attribution notices cannot be construed
+       as modifying the License.
+
+   You may add Your own copyright statement to Your modifications and
+   may provide additional or different license terms and conditions
+   for use, reproduction, or distribution of Your modifications, or
+   for any such Derivative Works as a whole, provided Your use,
+   reproduction, and distribution of the Work otherwise complies with
+   the conditions stated in this License.
+
+5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+
+6. Trademarks. This License does not grant permission to use the trade
+   names, trademarks, service marks, or product names of the Licensor,
+   except as required for reasonable and customary use in describing the
+   origin of the Work and reproducing the content of the NOTICE file.
+
+7. Disclaimer of Warranty. Unless required by applicable law or
+   agreed to in writing, Licensor provides the Work (and each
+   Contributor provides its Contributions) on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied, including, without limitation, any warranties or conditions
+   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+   PARTICULAR PURPOSE. You are solely responsible for determining the
+   appropriateness of using or redistributing the Work and assume any
+   risks associated with Your exercise of permissions under this License.
+
+8. Limitation of Liability. In no event and under no legal theory,
+   whether in tort (including negligence), contract, or otherwise,
+   unless required by applicable law (such as deliberate and grossly
+   negligent acts) or agreed to in writing, shall any Contributor be
+   liable to You for damages, including any direct, indirect, special,
+   incidental, or consequential damages of any character arising as a
+   result of this License or out of the use or inability to use the
+   Work (including but not limited to damages for loss of goodwill,
+   work stoppage, computer failure or malfunction, or any and all
+   other commercial damages or losses), even if such Contributor
+   has been advised of the possibility of such damages.
+
+9. Accepting Warranty or Additional Liability. While redistributing
+   the Work or Derivative Works thereof, You may choose to offer,
+   and charge a fee for, acceptance of support, warranty, indemnity,
+   or other liability obligations and/or rights consistent with this
+   License. However, in accepting such obligations, You may act only
+   on Your own behalf and on Your sole responsibility, not on behalf of
+   any other Contributor, and only if You agree to indemnify,
+   defend, and hold each Contributor harmless for any liability
+   incurred by, or claims asserted against, such Contributor by reason
+   of your accepting any such warranty or additional liability.
+
+END OF TERMS AND CONDITIONS
+
+APPENDIX: How to apply the Apache License to your work.
+
+   To apply the Apache License to your work, attach the following
+   boilerplate notice, with the fields enclosed by brackets "[]"
+   replaced with your own identifying information. (Don\'t include
+   the brackets!)  The text should be enclosed in the appropriate
+   comment syntax for the file format. We also recommend that a
+   file or class name and description of purpose be included on the
+   same "printed page" as the copyright notice for easier
+   identification within third-party archives.
+
+Copyright [yyyy] [name of copyright owner]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+
+</skill-file>
+
+<skill-file path="SKILL.md" kind="markdown" size="3651">
+
+---
+name: "gh-fix-ci"
+description: "Use when a user asks to debug or fix failing GitHub PR checks that run in GitHub Actions; use `gh` to inspect checks and logs, summarize failure context, draft a fix plan, and implement only after explicit approval. Treat external providers (for example Buildkite) as out of scope and report only the details URL."
+---
+
+
+# Gh Pr Checks Plan Fix
+
+## Overview
+
+Use gh to locate failing PR checks, fetch GitHub Actions logs for actionable failures, summarize the failure snippet, then propose a fix plan and implement after explicit approval.
+- If a plan-oriented skill (for example `create-plan`) is available, use it; otherwise draft a concise plan inline and request approval before implementing.
+
+Prereq: authenticate with the standard GitHub CLI once (for example, run `gh auth login`), then confirm with `gh auth status` (repo + workflow scopes are typically required).
+
+## Inputs
+
+- `repo`: path inside the repo (default `.`)
+- `pr`: PR number or URL (optional; defaults to current branch PR)
+- `gh` authentication for the repo host
+
+## Quick start
+
+- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "<number-or-url>"`
+- Add `--json` if you want machine-friendly output for summarization.
+
+## Workflow
+
+1. Verify gh authentication.
+   - Run `gh auth status` in the repo.
+   - If unauthenticated, ask the user to run `gh auth login` (ensuring repo + workflow scopes) before proceeding.
+2. Resolve the PR.
+   - Prefer the current branch PR: `gh pr view --json number,url`.
+   - If the user provides a PR number or URL, use that directly.
+3. Inspect failing checks (GitHub Actions only).
+   - Preferred: run the bundled script (handles gh field drift and job-log fallbacks):
+     - `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "<number-or-url>"`
+     - Add `--json` for machine-friendly output.
+   - Manual fallback:
+     - `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow`
+       - If a field is rejected, rerun with the available fields reported by `gh`.
+     - For each failing check, extract the run id from `detailsUrl` and run:
+       - `gh run view <run_id> --json name,workflowName,conclusion,status,url,event,headBranch,headSha`
+       - `gh run view <run_id> --log`
+     - If the run log says it is still in progress, fetch job logs directly:
+       - `gh api "/repos/<owner>/<repo>/actions/jobs/<job_id>/logs" > "<path>"`
+4. Scope non-GitHub Actions checks.
+   - If `detailsUrl` is not a GitHub Actions run, label it as external and only report the URL.
+   - Do not attempt Buildkite or other providers; keep the workflow lean.
+5. Summarize failures for the user.
+   - Provide the failing check name, run URL (if any), and a concise log snippet.
+   - Call out missing logs explicitly.
+6. Create a plan.
+   - Use the `create-plan` skill to draft a concise plan and request approval.
+7. Implement after approval.
+   - Apply the approved plan, summarize diffs/tests, and ask about opening a PR.
+8. Recheck status.
+   - After changes, suggest re-running the relevant tests and `gh pr checks` to confirm.
+
+## Bundled Resources
+
+### scripts/inspect_pr_checks.py
+
+Fetch failing PR checks, pull GitHub Actions logs, and extract a failure snippet. Exits non-zero when failures remain so it can be used in automation.
+
+Usage examples:
+- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "123"`
+- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "https://github.com/org/repo/pull/123" --json`
+- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --max-lines 200 --context 40`
+
+
+</skill-file>
+
+<skill-file path="agents/openai.yaml" kind="text" size="302">
+
+interface:
+  display_name: "GitHub Fix CI"
+  short_description: "Debug failing GitHub Actions CI"
+  icon_small: "./assets/github-small.svg"
+  icon_large: "./assets/github.png"
+  default_prompt: "Inspect failing GitHub Actions checks in this repo, summarize root cause, and propose a focused fix plan."
+
+
+</skill-file>
+
+<skill-file path="assets/github-small.svg" kind="text" size="853">
+
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+  <path fill="currentColor" d="M8 1.3a6.665 6.665 0 0 1 5.413 10.56 6.677 6.677 0 0 1-3.288 2.432c-.333.067-.458-.142-.458-.316 0-.226.008-.942.008-1.834 0-.625-.208-1.025-.45-1.233 1.483-.167 3.042-.734 3.042-3.292a2.58 2.58 0 0 0-.684-1.792c.067-.166.3-.85-.066-1.766 0 0-.559-.184-1.834.683a6.186 6.186 0 0 0-1.666-.225c-.567 0-1.134.075-1.667.225-1.275-.858-1.833-.683-1.833-.683-.367.916-.134 1.6-.067 1.766a2.594 2.594 0 0 0-.683 1.792c0 2.55 1.55 3.125 3.033 3.292-.192.166-.367.458-.425.891-.383.175-1.342.459-1.942-.55-.125-.2-.5-.691-1.025-.683-.558.008-.225.317.009.442.283.158.608.75.683.941.133.376.567 1.092 2.242.784 0 .558.008 1.083.008 1.242 0 .174-.125.374-.458.316a6.662 6.662 0 0 1-4.559-6.325A6.665 6.665 0 0 1 8 1.3Z"/>
+</svg>
+
+
+</skill-file>
+
+<skill-file path="assets/github.png" kind="binary" size="1838">
+
+[binary content omitted]
+
+</skill-file>
+
+<skill-file path="scripts/inspect_pr_checks.py" kind="code" size="15222">
+
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from shutil import which
+from typing import Any, Iterable, Sequence
+
+FAILURE_CONCLUSIONS = {
+    "failure",
+    "cancelled",
+    "timed_out",
+    "action_required",
+}
+
+FAILURE_STATES = {
+    "failure",
+    "error",
+    "cancelled",
+    "timed_out",
+    "action_required",
+}
+
+FAILURE_BUCKETS = {"fail"}
+
+FAILURE_MARKERS = (
+    "error",
+    "fail",
+    "failed",
+    "traceback",
+    "exception",
+    "assert",
+    "panic",
+    "fatal",
+    "timeout",
+    "segmentation fault",
+)
+
+DEFAULT_MAX_LINES = 160
+DEFAULT_CONTEXT_LINES = 30
+PENDING_LOG_MARKERS = (
+    "still in progress",
+    "log will be available when it is complete",
+)
+
+
+class GhResult:
+    def __init__(self, returncode: int, stdout: str, stderr: str):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def run_gh_command(args: Sequence[str], cwd: Path) -> GhResult:
+    process = subprocess.run(
+        ["gh", *args],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+    )
+    return GhResult(process.returncode, process.stdout, process.stderr)
+
+
+def run_gh_command_raw(args: Sequence[str], cwd: Path) -> tuple[int, bytes, str]:
+    process = subprocess.run(
+        ["gh", *args],
+        cwd=cwd,
+        capture_output=True,
+    )
+    stderr = process.stderr.decode(errors="replace")
+    return process.returncode, process.stdout, stderr
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Inspect failing GitHub PR checks, fetch GitHub Actions logs, and extract a "
+            "failure snippet."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--repo", default=".", help="Path inside the target Git repository.")
+    parser.add_argument(
+        "--pr", default=None, help="PR number or URL (defaults to current branch PR)."
+    )
+    parser.add_argument("--max-lines", type=int, default=DEFAULT_MAX_LINES)
+    parser.add_argument("--context", type=int, default=DEFAULT_CONTEXT_LINES)
+    parser.add_argument("--json", action="store_true", help="Emit JSON instead of text output.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    repo_root = find_git_root(Path(args.repo))
+    if repo_root is None:
+        print("Error: not inside a Git repository.", file=sys.stderr)
+        return 1
+
+    if not ensure_gh_available(repo_root):
+        return 1
+
+    pr_value = resolve_pr(args.pr, repo_root)
+    if pr_value is None:
+        return 1
+
+    checks = fetch_checks(pr_value, repo_root)
+    if checks is None:
+        return 1
+
+    failing = [c for c in checks if is_failing(c)]
+    if not failing:
+        print(f"PR #{pr_value}: no failing checks detected.")
+        return 0
+
+    results = []
+    for check in failing:
+        results.append(
+            analyze_check(
+                check,
+                repo_root=repo_root,
+                max_lines=max(1, args.max_lines),
+                context=max(1, args.context),
+            )
+        )
+
+    if args.json:
+        print(json.dumps({"pr": pr_value, "results": results}, indent=2))
+    else:
+        render_results(pr_value, results)
+
+    return 1
+
+
+def find_git_root(start: Path) -> Path | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=start,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip())
+
+
+def ensure_gh_available(repo_root: Path) -> bool:
+    if which("gh") is None:
+        print("Error: gh is not installed or not on PATH.", file=sys.stderr)
+        return False
+    result = run_gh_command(["auth", "status"], cwd=repo_root)
+    if result.returncode == 0:
+        return True
+    message = (result.stderr or result.stdout or "").strip()
+    print(message or "Error: gh not authenticated.", file=sys.stderr)
+    return False
+
+
+def resolve_pr(pr_value: str | None, repo_root: Path) -> str | None:
+    if pr_value:
+        return pr_value
+    result = run_gh_command(["pr", "view", "--json", "number"], cwd=repo_root)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        print(message or "Error: unable to resolve PR.", file=sys.stderr)
+        return None
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        print("Error: unable to parse PR JSON.", file=sys.stderr)
+        return None
+    number = data.get("number")
+    if not number:
+        print("Error: no PR number found.", file=sys.stderr)
+        return None
+    return str(number)
+
+
+def fetch_checks(pr_value: str, repo_root: Path) -> list[dict[str, Any]] | None:
+    primary_fields = ["name", "state", "conclusion", "detailsUrl", "startedAt", "completedAt"]
+    result = run_gh_command(
+        ["pr", "checks", pr_value, "--json", ",".join(primary_fields)],
+        cwd=repo_root,
+    )
+    if result.returncode != 0:
+        message = "\n".join(filter(None, [result.stderr, result.stdout])).strip()
+        available_fields = parse_available_fields(message)
+        if available_fields:
+            fallback_fields = [
+                "name",
+                "state",
+                "bucket",
+                "link",
+                "startedAt",
+                "completedAt",
+                "workflow",
+            ]
+            selected_fields = [field for field in fallback_fields if field in available_fields]
+            if not selected_fields:
+                print("Error: no usable fields available for gh pr checks.", file=sys.stderr)
+                return None
+            result = run_gh_command(
+                ["pr", "checks", pr_value, "--json", ",".join(selected_fields)],
+                cwd=repo_root,
+            )
+            if result.returncode != 0:
+                message = (result.stderr or result.stdout or "").strip()
+                print(message or "Error: gh pr checks failed.", file=sys.stderr)
+                return None
+        else:
+            print(message or "Error: gh pr checks failed.", file=sys.stderr)
+            return None
+    try:
+        data = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        print("Error: unable to parse checks JSON.", file=sys.stderr)
+        return None
+    if not isinstance(data, list):
+        print("Error: unexpected checks JSON shape.", file=sys.stderr)
+        return None
+    return data
+
+
+def is_failing(check: dict[str, Any]) -> bool:
+    conclusion = normalize_field(check.get("conclusion"))
+    if conclusion in FAILURE_CONCLUSIONS:
+        return True
+    state = normalize_field(check.get("state") or check.get("status"))
+    if state in FAILURE_STATES:
+        return True
+    bucket = normalize_field(check.get("bucket"))
+    return bucket in FAILURE_BUCKETS
+
+
+def analyze_check(
+    check: dict[str, Any],
+    repo_root: Path,
+    max_lines: int,
+    context: int,
+) -> dict[str, Any]:
+    url = check.get("detailsUrl") or check.get("link") or ""
+    run_id = extract_run_id(url)
+    job_id = extract_job_id(url)
+    base: dict[str, Any] = {
+        "name": check.get("name", ""),
+        "detailsUrl": url,
+        "runId": run_id,
+        "jobId": job_id,
+    }
+
+    if run_id is None:
+        base["status"] = "external"
+        base["note"] = "No GitHub Actions run id detected in detailsUrl."
+        return base
+
+    metadata = fetch_run_metadata(run_id, repo_root)
+    log_text, log_error, log_status = fetch_check_log(
+        run_id=run_id,
+        job_id=job_id,
+        repo_root=repo_root,
+    )
+
+    if log_status == "pending":
+        base["status"] = "log_pending"
+        base["note"] = log_error or "Logs are not available yet."
+        if metadata:
+            base["run"] = metadata
+        return base
+
+    if log_error:
+        base["status"] = "log_unavailable"
+        base["error"] = log_error
+        if metadata:
+            base["run"] = metadata
+        return base
+
+    snippet = extract_failure_snippet(log_text, max_lines=max_lines, context=context)
+    base["status"] = "ok"
+    base["run"] = metadata or {}
+    base["logSnippet"] = snippet
+    base["logTail"] = tail_lines(log_text, max_lines)
+    return base
+
+
+def extract_run_id(url: str) -> str | None:
+    if not url:
+        return None
+    for pattern in (r"/actions/runs/(\d+)", r"/runs/(\d+)"):
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def extract_job_id(url: str) -> str | None:
+    if not url:
+        return None
+    match = re.search(r"/actions/runs/\d+/job/(\d+)", url)
+    if match:
+        return match.group(1)
+    match = re.search(r"/job/(\d+)", url)
+    if match:
+        return match.group(1)
+    return None
+
+
+def fetch_run_metadata(run_id: str, repo_root: Path) -> dict[str, Any] | None:
+    fields = [
+        "conclusion",
+        "status",
+        "workflowName",
+        "name",
+        "event",
+        "headBranch",
+        "headSha",
+        "url",
+    ]
+    result = run_gh_command(["run", "view", run_id, "--json", ",".join(fields)], cwd=repo_root)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def fetch_check_log(
+    run_id: str,
+    job_id: str | None,
+    repo_root: Path,
+) -> tuple[str, str, str]:
+    log_text, log_error = fetch_run_log(run_id, repo_root)
+    if not log_error:
+        return log_text, "", "ok"
+
+    if is_log_pending_message(log_error) and job_id:
+        job_log, job_error = fetch_job_log(job_id, repo_root)
+        if job_log:
+            return job_log, "", "ok"
+        if job_error and is_log_pending_message(job_error):
+            return "", job_error, "pending"
+        if job_error:
+            return "", job_error, "error"
+        return "", log_error, "pending"
+
+    if is_log_pending_message(log_error):
+        return "", log_error, "pending"
+
+    return "", log_error, "error"
+
+
+def fetch_run_log(run_id: str, repo_root: Path) -> tuple[str, str]:
+    result = run_gh_command(["run", "view", run_id, "--log"], cwd=repo_root)
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "").strip()
+        return "", error or "gh run view failed"
+    return result.stdout, ""
+
+
+def fetch_job_log(job_id: str, repo_root: Path) -> tuple[str, str]:
+    repo_slug = fetch_repo_slug(repo_root)
+    if not repo_slug:
+        return "", "Error: unable to resolve repository name for job logs."
+    endpoint = f"/repos/{repo_slug}/actions/jobs/{job_id}/logs"
+    returncode, stdout_bytes, stderr = run_gh_command_raw(["api", endpoint], cwd=repo_root)
+    if returncode != 0:
+        message = (stderr or stdout_bytes.decode(errors="replace")).strip()
+        return "", message or "gh api job logs failed"
+    if is_zip_payload(stdout_bytes):
+        return "", "Job logs returned a zip archive; unable to parse."
+    return stdout_bytes.decode(errors="replace"), ""
+
+
+def fetch_repo_slug(repo_root: Path) -> str | None:
+    result = run_gh_command(["repo", "view", "--json", "nameWithOwner"], cwd=repo_root)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    name_with_owner = data.get("nameWithOwner")
+    if not name_with_owner:
+        return None
+    return str(name_with_owner)
+
+
+def normalize_field(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def parse_available_fields(message: str) -> list[str]:
+    if "Available fields:" not in message:
+        return []
+    fields: list[str] = []
+    collecting = False
+    for line in message.splitlines():
+        if "Available fields:" in line:
+            collecting = True
+            continue
+        if not collecting:
+            continue
+        field = line.strip()
+        if not field:
+            continue
+        fields.append(field)
+    return fields
+
+
+def is_log_pending_message(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in PENDING_LOG_MARKERS)
+
+
+def is_zip_payload(payload: bytes) -> bool:
+    return payload.startswith(b"PK")
+
+
+def extract_failure_snippet(log_text: str, max_lines: int, context: int) -> str:
+    lines = log_text.splitlines()
+    if not lines:
+        return ""
+
+    marker_index = find_failure_index(lines)
+    if marker_index is None:
+        return "\n".join(lines[-max_lines:])
+
+    start = max(0, marker_index - context)
+    end = min(len(lines), marker_index + context)
+    window = lines[start:end]
+    if len(window) > max_lines:
+        window = window[-max_lines:]
+    return "\n".join(window)
+
+
+def find_failure_index(lines: Sequence[str]) -> int | None:
+    for idx in range(len(lines) - 1, -1, -1):
+        lowered = lines[idx].lower()
+        if any(marker in lowered for marker in FAILURE_MARKERS):
+            return idx
+    return None
+
+
+def tail_lines(text: str, max_lines: int) -> str:
+    if max_lines <= 0:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def render_results(pr_number: str, results: Iterable[dict[str, Any]]) -> None:
+    results_list = list(results)
+    print(f"PR #{pr_number}: {len(results_list)} failing checks analyzed.")
+    for result in results_list:
+        print("-" * 60)
+        print(f"Check: {result.get('name', '')}")
+        if result.get("detailsUrl"):
+            print(f"Details: {result['detailsUrl']}")
+        run_id = result.get("runId")
+        if run_id:
+            print(f"Run ID: {run_id}")
+        job_id = result.get("jobId")
+        if job_id:
+            print(f"Job ID: {job_id}")
+        status = result.get("status", "unknown")
+        print(f"Status: {status}")
+
+        run_meta = result.get("run", {})
+        if run_meta:
+            branch = run_meta.get("headBranch", "")
+            sha = (run_meta.get("headSha") or "")[:12]
+            workflow = run_meta.get("workflowName") or run_meta.get("name") or ""
+            conclusion = run_meta.get("conclusion") or run_meta.get("status") or ""
+            print(f"Workflow: {workflow} ({conclusion})")
+            if branch or sha:
+                print(f"Branch/SHA: {branch} {sha}")
+            if run_meta.get("url"):
+                print(f"Run URL: {run_meta['url']}")
+
+        if result.get("note"):
+            print(f"Note: {result['note']}")
+
+        if result.get("error"):
+            print(f"Error fetching logs: {result['error']}")
+            continue
+
+        snippet = result.get("logSnippet") or ""
+        if snippet:
+            print("Failure snippet:")
+            print(indent_block(snippet, prefix="  "))
+        else:
+            print("No snippet available.")
+    print("-" * 60)
+
+
+def indent_block(text: str, prefix: str = "  ") -> str:
+    return "\n".join(f"{prefix}{line}" for line in text.splitlines())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+</skill-file>

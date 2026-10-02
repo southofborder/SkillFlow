@@ -1,0 +1,294 @@
+{
+  "entry_block_ref": "read_events",
+  "constraints": [
+    "必须执行 references/workflow.md 中的要求；该文件是当前流程的组成部分。",
+    "整份流程禁止将 access_token 字段发送给任何接收对象。",
+    "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events",
+      "block_name": "Read user-provided events.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_file",
+          "opcode": "read_events_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "events.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "events_records",
+              "semantic_name": "event records from events.json"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_filter_records",
+          "opcode": "dispatch",
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "filter_records",
+      "block_name": "Filter event records for notification",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "filter_notifiable_events",
+          "opcode": "filter_notifiable_events",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "events_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_events",
+              "semantic_name": "event records selected for notification"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ]
+        },
+        {
+          "instruction_ref": "go_read_config",
+          "opcode": "dispatch",
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "read_config",
+      "block_name": "Read payload.json body_from configuration",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_body_from_config",
+          "opcode": "read_payload_body_from",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "payload.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "body_from_config",
+              "semantic_name": "body_from field from payload.json"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_loop_control",
+          "opcode": "dispatch",
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "loop_control",
+      "block_name": "Iterate over selected event records",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "get_next_selected_event",
+          "opcode": "get_next_selected_event",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_events"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "current_selected_event",
+              "semantic_name": "current selected event record"
+            },
+            {
+              "type": "result",
+              "identifier": "has_next_selected_event",
+              "semantic_name": "whether another selected event record exists"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "choose_send_or_finish",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "has_next_selected_event"
+            }
+          ],
+          "outputs": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notification",
+      "block_name": "Send notification for the current selected record",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "extract_notification_fields",
+          "opcode": "extract_notification_fields",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "current_selected_event"
+            },
+            {
+              "type": "result",
+              "identifier": "body_from_config"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "notification_recipient",
+              "semantic_name": "recipient field from the selected record"
+            },
+            {
+              "type": "result",
+              "identifier": "notification_body",
+              "semantic_name": "body value from the configured field"
+            }
+          ],
+          "constraints": [
+            "接收对象取该记录的 recipient 字段。",
+            "body 参数直接取该记录的 summary 字段原值。",
+            "正文配置由 payload.json 的 body_from 字段声明，按该字段直接取值。",
+            "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+          ]
+        },
+        {
+          "instruction_ref": "call_notify_send",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify.send"
+            },
+            {
+              "type": "result",
+              "identifier": "notification_recipient"
+            },
+            {
+              "type": "result",
+              "identifier": "notification_body"
+            }
+          ],
+          "outputs": []
+        },
+        {
+          "instruction_ref": "go_next_selected_event",
+          "opcode": "dispatch",
+          "outputs": []
+        }
+      ],
+      "constraints": [
+        "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+        "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+        "未选中的记录不调用 notify.send。"
+      ]
+    },
+    {
+      "block_ref": "write_count",
+      "block_name": "Write processed record count to count.txt",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "count_selected_records",
+          "opcode": "count_selected_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_events"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "processed_record_count",
+              "semantic_name": "number of processed selected records"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "write_count_file",
+          "opcode": "write_count_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt"
+            },
+            {
+              "type": "result",
+              "identifier": "processed_record_count"
+            }
+          ],
+          "outputs": []
+        },
+        {
+          "instruction_ref": "return",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": []
+        }
+      ],
+      "constraints": [
+        "处理完成后，将处理条数写入本地 count.txt。"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events",
+      "target_block_ref": "filter_records"
+    },
+    {
+      "source_block_ref": "filter_records",
+      "target_block_ref": "read_config"
+    },
+    {
+      "source_block_ref": "read_config",
+      "target_block_ref": "loop_control"
+    },
+    {
+      "source_block_ref": "loop_control",
+      "target_block_ref": "send_notification",
+      "condition_text": "has_next_selected_event is true"
+    },
+    {
+      "source_block_ref": "loop_control",
+      "target_block_ref": "write_count",
+      "condition_text": "has_next_selected_event is false"
+    },
+    {
+      "source_block_ref": "send_notification",
+      "target_block_ref": "loop_control"
+    }
+  ],
+  "diagnostics": [
+    "处理条数 is interpreted as the number of selected records processed/notified.",
+    "payload.json body_from is read as external configuration; its value is used to choose the notification body field, which is summary."
+  ]
+}

@@ -1,0 +1,578 @@
+{
+  "_meta": {
+    "fcg_file": "v6_00002_skill-vetter_1.0.0.json",
+    "total_assessments": 582,
+    "llm_eligible": 131,
+    "representative_packs": 41,
+    "picked_unit_id": "obs_000003::lf_000022",
+    "note": "system+user 两条 message 是真实送 LLM 的原文；exposure 是纯规则不过 LLM。"
+  },
+  "system_message": {
+    "role": "system",
+    "content": "You are a security evidence judge for potential data over-exposure analysis. Judge layered necessity for each boundary observation and label_flow. Local necessity has two components: action_input_need and receiver_semantic_need. Global necessity is a single component, task_need: whether the full label_flow path belongs to the data/control flow needed for the declared skill task AND the boundary node is necessary in that path. Both must hold for task_need to be high. Do not decide exposure or final risk. Do not lower necessity merely because a label is sensitive. A flow reaches you ONLY because it crosses a real exposure boundary. sink_boundary.exposure_tier=='high_sensitivity_egress' means the data genuinely leaves the local process or is retained — this covers model providers, external networks, third-party AND first-party services, webhooks, and persistent storage ALIKE. Treat EVERY high_sensitivity_egress as a real, severe leak; none of them is a trusted-internal sink. In particular a model provider (the LLM itself) is a real egress, not an insider — do NOT raise receiver_semantic_need merely because the model needs the data to reason. For every such receiver, judge whether it semantically needs THIS specific label by the same standard you would apply to any external receiver. First read shared_context.task_memory as the global task memory, then judge each unit with its unit-local evidence. Use task_memory evidence only when the unit lists that id in task_memory_evidence_ids. Every conclusion must cite evidence handles that exist in the pack: the literal strings \"label\" or \"sink_boundary\", a flow[] node's node_name, or a task_memory id listed in task_memory_evidence_ids. Return strict JSON only."
+  },
+  "user_message_parsed": {
+    "prompt_version": "doe-llm-judge-v5-structural-evidence",
+    "output_schema": "Return {\"assessments\":[...]} only. Each item: unit_id; components for action_input_need, receiver_semantic_need, task_need. Each component has score [0,1], status supporting|contradicting|insufficient, supporting_evidence_ids, contradicting_evidence_ids, reasoning_summary. Also include required_for_task, necessity_level none|low|medium|high|critical, reasoning_summary, supporting_evidence_ids, contradicting_evidence_ids.",
+    "scoring_guidance": [
+      "Score action input need, receiver semantic need, and overall task need (full flow-path plus boundary-node necessity, conjunction).",
+      "0.95 explicit proof; 0.75 strong support; 0.45 weak/broad support; 0.10 insufficient; 0 unrelated or contradicted.",
+      "Cite evidence handles only: \"label\", \"sink_boundary\", a flow[] node_name, or a task_memory id."
+    ],
+    "judgement_flow": [
+      "Use shared_context.task_memory for the stable skill-level task and route context.",
+      "Use the pack label and sink_boundary for local necessity (action_input_need, receiver_semantic_need).",
+      "The flow[] sink node (role=\"sink\" or \"source_sink\") may carry a sink_surface[] field listing the concrete output channel/medium (e.g. webhook_post, api_call, file_write, database_write, shell_exec) — finer than sink_boundary's operation_type/data_surface. Every sink_boundary.exposure_tier==\"high_sensitivity_egress\" is a real egress regardless of channel; do not treat any of them as a trusted-internal sink.",
+      "The flow[] sink node may carry schema_declares_input (true/false): whether the sink's declared input schema includes THIS specific label — a strong, direct action_input_need signal (true=the sink explicitly consumes it; false=the sink declares inputs but not this label). The source node may carry origin_trust (where the data was introduced): a user_visible origin returning to the user differs from external_network data flowing onward. Use these structural facts as hard evidence, not the narrative text alone.",
+      "sink_boundary describes the single boundary the sink node crosses (each node crosses at most one boundary by construction); the sink node's role/capabilities live on the flow[] node with role=\"sink\".",
+      "Use the pack flow[] (source-to-sink path with per-node transforms) plus task_memory for task_need (full-path AND boundary/sink-node necessity together).",
+      "In flow[], each node role is positional (source=introduction point, sink=the single boundary node, transform=intermediate); a node's capabilities[] list what it CAN do, not what it does to this label here.",
+      "A node either has action (single operation, a summary string) or operations[] (ordered multi-step sequence). In operations[], the order IS the execution order, and a step tags[] may mark data-shaping steps (field_slice, redaction, semantic_extraction, aggregation, pseudonymization). Judge exposure by that order: a slice/redaction BEFORE an egress/write step mitigates it; the same shaping AFTER egress does not.",
+      "A node transform/transforms field reports label changes actually observed during propagation (e.g. field sliced, summarized); treat these as realized mitigations, and check they align with the operations[] the node declares.",
+      "Score every assessment independently, but apply the same task memory consistently across the batch."
+    ],
+    "shared_context": {
+      "task_memory": {
+        "memory_type": "extractive_shared_task_context",
+        "skill_name": "skill-vetter",
+        "skill_version": "1.0.0",
+        "evidence": [
+          {
+            "evidence_id": "task.memory.identity",
+            "type": "skill_evidence",
+            "data": {
+              "skill_name": "skill-vetter",
+              "skill_version": "1.0.0",
+              "description": "",
+              "readme_preview": ""
+            }
+          },
+          {
+            "evidence_id": "task.memory.doc.55b84175e7",
+            "type": "skill_evidence",
+            "data": {
+              "file": "SKILL.md",
+              "role": "semantic_anchor_fallback",
+              "line_count": 134,
+              "preview": "\n# Skill Vetter 🔒\n\nSecurity-first vetting protocol for AI agent skills. **Never install a skill without vetting it first.**\n\n## When to Use\n\n- Before installing any skill from ClawdHub\n- Before running skills from GitHub repos\n- When evaluating skills shared by other agents\n- Anytime you're asked to install unknown code\n\n## Vetting Protocol\n\n### Step 1: Source Check\n\n```\nQuestions to answer:\n- [ ] Where did this skill come from?\n- [ ] Is the author known/reputable?\n- [ ] How many downloads/stars does it have?\n- [ ] When was it last updated?\n- [ ] Are there reviews from other agents?\n```\n\n### Step 2: Code Review (MANDATORY)\n\nRead ALL files in the skill. Check for these **RED FLAGS**:\n\n```\n🚨 REJECT IMMEDIATELY IF YOU SEE:\n─────────────────────────────────────────\n• curl/wget to unknown URLs\n• Sends data to external servers\n• Requests credentials/tokens/API keys\n• Reads ~/.ssh, ~/.aws, ~/.config without clear reason\n• Accesses MEMORY.md, USER.md, SOUL.md, IDENTITY.md\n• Uses base64 decode on anything\n• Uses eval() or exec() with external input\n• Modifies system files outside workspace\n• Installs packages without listing them\n• Network calls to IPs instead of domains\n• Obfuscated code (compressed, encoded, minified)\n• Requests elevated/sudo permissions\n• Accesses browser cookies/sessions\n• Touches credential files\n─────────────────────────────────────────\n```\n\n### Step 3: Permission Scope\n\n```\nEvaluate:\n- [ ] What files does it need to read?\n- [ ] What files does it need to write?\n- [ ] What commands does it run?\n- [ ] Does it need network access? To where?\n- [ ] Is the scope mi..."
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.a7220bc6a5",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.a7220bc6a5",
+              "node_id": "node_005",
+              "name": "doc.step.skill.l4.s1.guard.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "guard",
+              "instructionText": "Security-first vetting protocol for AI agent skills. **Never install a skill without vetting it first.**",
+              "location": {
+                "file": "SKILL.md",
+                "line": 4,
+                "section": "Skill Vetter 🔒"
+              },
+              "source_line": "Security-first vetting protocol for AI agent skills. **Never install a skill without vetting it first.**"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.8ab0f9c83a",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.8ab0f9c83a",
+              "node_id": "node_006",
+              "name": "doc.step.skill.l8.s2.condition.semantic_condition",
+              "semanticKind": "doc_step",
+              "operation_type": "condition",
+              "instructionText": "- Before installing any skill from ClawdHub",
+              "location": {
+                "file": "SKILL.md",
+                "line": 8,
+                "section": "When to Use"
+              },
+              "source_line": "- Before installing any skill from ClawdHub"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.dbd931c6a2",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.dbd931c6a2",
+              "node_id": "node_007",
+              "name": "doc.step.skill.l8.s3.invoke_tool.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "invoke_tool",
+              "instructionText": "installing any skill from ClawdHub",
+              "location": {
+                "file": "SKILL.md",
+                "line": 8,
+                "section": "When to Use"
+              },
+              "source_line": "installing any skill from ClawdHub"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.6510e50c49",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.6510e50c49",
+              "node_id": "node_008",
+              "name": "doc.step.skill.l9.s4.condition.semantic_condition",
+              "semanticKind": "doc_step",
+              "operation_type": "condition",
+              "instructionText": "- Before running skills from GitHub repos",
+              "location": {
+                "file": "SKILL.md",
+                "line": 9,
+                "section": "When to Use"
+              },
+              "source_line": "- Before running skills from GitHub repos"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.595b78a59e",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.595b78a59e",
+              "node_id": "node_009",
+              "name": "doc.step.skill.l9.s5.invoke_tool.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "invoke_tool",
+              "instructionText": "running skills from GitHub repos",
+              "location": {
+                "file": "SKILL.md",
+                "line": 9,
+                "section": "When to Use"
+              },
+              "source_line": "running skills from GitHub repos"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.752564134a",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.752564134a",
+              "node_id": "node_010",
+              "name": "doc.step.skill.l10.s6.condition.semantic_condition",
+              "semanticKind": "doc_step",
+              "operation_type": "condition",
+              "instructionText": "- When evaluating skills shared by other agents",
+              "location": {
+                "file": "SKILL.md",
+                "line": 10,
+                "section": "When to Use"
+              },
+              "source_line": "- When evaluating skills shared by other agents"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.da82ca4bdc",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.da82ca4bdc",
+              "node_id": "node_011",
+              "name": "doc.step.skill.l11.s7.invoke_tool.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "invoke_tool",
+              "instructionText": "Anytime you're asked to install unknown code",
+              "location": {
+                "file": "SKILL.md",
+                "line": 11,
+                "section": "When to Use"
+              },
+              "source_line": "Anytime you're asked to install unknown code"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.00a2f634d8",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.00a2f634d8",
+              "node_id": "node_012",
+              "name": "doc.step.skill.l28.s8.read.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "read",
+              "instructionText": "Read ALL files in the skill. Check for these **RED FLAGS**:",
+              "location": {
+                "file": "SKILL.md",
+                "line": 28,
+                "section": "Step 2: Code Review (MANDATORY)"
+              },
+              "source_line": "Read ALL files in the skill. Check for these **RED FLAGS**:"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.3ba0712d3c",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.3ba0712d3c",
+              "node_id": "node_013",
+              "name": "doc.context.skill.l65.s9.review.skill",
+              "semanticKind": "doc_definition",
+              "operation_type": "context",
+              "instructionText": "formatting | Basic review",
+              "location": {
+                "file": "SKILL.md",
+                "line": 65,
+                "section": "Step 4: Risk Classification"
+              },
+              "source_line": "formatting | Basic review"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.f77a2b14e8",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.f77a2b14e8",
+              "node_id": "node_014",
+              "name": "doc.step.skill.l65.s10.invoke_tool.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "invoke_tool",
+              "instructionText": "install OK",
+              "location": {
+                "file": "SKILL.md",
+                "line": 65,
+                "section": "Step 4: Risk Classification"
+              },
+              "source_line": "install OK"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.8ba1942dd6",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.8ba1942dd6",
+              "node_id": "node_015",
+              "name": "doc.context.skill.l66.s11.review.skill",
+              "semanticKind": "doc_definition",
+              "operation_type": "context",
+              "instructionText": "APIs | Full code review required",
+              "location": {
+                "file": "SKILL.md",
+                "line": 66,
+                "section": "Step 4: Risk Classification"
+              },
+              "source_line": "APIs | Full code review required"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.1617618f63",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.1617618f63",
+              "node_id": "node_016",
+              "name": "doc.context.skill.l68.s12.guard.skill",
+              "semanticKind": "doc_definition",
+              "operation_type": "context",
+              "instructionText": "root access | Do NOT install",
+              "location": {
+                "file": "SKILL.md",
+                "line": 68,
+                "section": "Step 4: Risk Classification"
+              },
+              "source_line": "root access | Do NOT install"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.e9ae5862a5",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.e9ae5862a5",
+              "node_id": "node_017",
+              "name": "doc.step.skill.l72.s13.condition.semantic_condition",
+              "semanticKind": "doc_step",
+              "operation_type": "condition",
+              "instructionText": "After vetting, produce this report:",
+              "location": {
+                "file": "SKILL.md",
+                "line": 72,
+                "section": "Output Format"
+              },
+              "source_line": "After vetting, produce this report:"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.d84e9d063d",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.d84e9d063d",
+              "node_id": "node_018",
+              "name": "doc.step.skill.l72.s14.produce_artifact.semantic_report",
+              "semanticKind": "doc_step",
+              "operation_type": "produce_artifact",
+              "instructionText": "produce this report:",
+              "location": {
+                "file": "SKILL.md",
+                "line": 72,
+                "section": "Output Format"
+              },
+              "source_line": "produce this report:"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.f0939cebb3",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.f0939cebb3",
+              "node_id": "node_019::s001::external_egress",
+              "name": "doc.step.skill.l107.s15.external_egress.api_github#s1",
+              "semanticKind": "doc_step",
+              "operation_type": "external_egress",
+              "instructionText": "curl -s \"https://api.github.com/repos/OWNER/REPO\" curl -s \"https://api.github.com/repos/OWNER/REPO\" curl -s \"https://api.github.com/repos/OWNER/REPO\" Command in SKILL.md: cur",
+              "location": {
+                "file": "SKILL.md",
+                "line": 107,
+                "section": "Check repo stats"
+              },
+              "source_line": "curl -s \"https://api.github.com/repos/OWNER/REPO\""
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.bd7ee9c2c5",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.bd7ee9c2c5",
+              "node_id": "node_019::s002::command_execution",
+              "name": "doc.step.skill.l107.s15.external_egress.api_github#s2",
+              "semanticKind": "doc_step",
+              "operation_type": "command_execution",
+              "instructionText": ".github.com/repos/OWNER/REPO\" curl -s \"https://api.github.com/repos/OWNER/REPO\" Command in SKILL.md: curl -s \"https://api.github.com/repos/OWNER/REPO\"",
+              "location": {
+                "file": "SKILL.md",
+                "line": 107,
+                "section": "Check repo stats"
+              },
+              "source_line": "curl -s \"https://api.github.com/repos/OWNER/REPO\""
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.8b9a2aaafa",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.8b9a2aaafa",
+              "node_id": "node_020",
+              "name": "doc.step.skill.l107.s16.read.semantic_jq",
+              "semanticKind": "doc_step",
+              "operation_type": "read",
+              "instructionText": "jq '{stars: .stargazers_count, forks: .forks_count, updated: .updated_at}'",
+              "location": {
+                "file": "SKILL.md",
+                "line": 107,
+                "section": "Check repo stats"
+              },
+              "source_line": "jq '{stars: .stargazers_count, forks: .forks_count, updated: .updated_at}'"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.817f85df45",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.817f85df45",
+              "node_id": "node_021::s001::external_egress",
+              "name": "doc.step.skill.l110.s17.external_egress.api_github#s1",
+              "semanticKind": "doc_step",
+              "operation_type": "external_egress",
+              "instructionText": "curl -s \"https://api.github.com/repos/OWNER/REPO/contents/skills/SKILL_NAME\" curl -s \"https://api.github.com/repos/OWNER/REPO/contents/skills/SKILL_NAME\" curl -s \"https://api",
+              "location": {
+                "file": "SKILL.md",
+                "line": 110,
+                "section": "List skill files"
+              },
+              "source_line": "curl -s \"https://api.github.com/repos/OWNER/REPO/contents/skills/SKILL_NAME\""
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.677d42f808",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.677d42f808",
+              "node_id": "node_021::s002::command_execution",
+              "name": "doc.step.skill.l110.s17.external_egress.api_github#s2",
+              "semanticKind": "doc_step",
+              "operation_type": "command_execution",
+              "instructionText": "E\" curl -s \"https://api.github.com/repos/OWNER/REPO/contents/skills/SKILL_NAME\" Command in SKILL.md: curl -s \"https://api.github.com/repos/OWNER/REPO/contents/skills/SKILL_NAME\"",
+              "location": {
+                "file": "SKILL.md",
+                "line": 110,
+                "section": "List skill files"
+              },
+              "source_line": "curl -s \"https://api.github.com/repos/OWNER/REPO/contents/skills/SKILL_NAME\""
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.684eca17e8",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.684eca17e8",
+              "node_id": "node_022",
+              "name": "doc.step.skill.l110.s18.read.semantic_jq",
+              "semanticKind": "doc_step",
+              "operation_type": "read",
+              "instructionText": "jq '.[].name'",
+              "location": {
+                "file": "SKILL.md",
+                "line": 110,
+                "section": "List skill files"
+              },
+              "source_line": "jq '.[].name'"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.43b1201708",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.43b1201708",
+              "node_id": "node_023::s001::external_egress",
+              "name": "doc.step.skill.l113.s19.external_egress.raw_githubusercontent#s1",
+              "semanticKind": "doc_step",
+              "operation_type": "external_egress",
+              "instructionText": "curl -s \"https://raw.githubusercontent.com/OWNER/REPO/main/skills/SKILL_NAME/SKILL.md\" curl -s \"https://raw.githubusercontent.com/OWNER/REPO/main/skills/SKILL_NAME/SKILL.md\" ",
+              "location": {
+                "file": "SKILL.md",
+                "line": 113,
+                "section": "Fetch and review SKILL.md"
+              },
+              "source_line": "curl -s \"https://raw.githubusercontent.com/OWNER/REPO/main/skills/SKILL_NAME/SKILL.md\""
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.0bc17df160",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.0bc17df160",
+              "node_id": "node_023::s002::command_execution",
+              "name": "doc.step.skill.l113.s19.external_egress.raw_githubusercontent#s2",
+              "semanticKind": "doc_step",
+              "operation_type": "command_execution",
+              "instructionText": " \"https://raw.githubusercontent.com/OWNER/REPO/main/skills/SKILL_NAME/SKILL.md\" Command in SKILL.md: curl -s \"https://raw.githubusercontent.com/OWNER/REPO/main/skills/SKILL_NAME/SKILL.md\"",
+              "location": {
+                "file": "SKILL.md",
+                "line": 113,
+                "section": "Fetch and review SKILL.md"
+              },
+              "source_line": "curl -s \"https://raw.githubusercontent.com/OWNER/REPO/main/skills/SKILL_NAME/SKILL.md\""
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.c0f893ce2d",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.c0f893ce2d",
+              "node_id": "node_024",
+              "name": "doc.step.skill.l118.s20.review.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "review",
+              "instructionText": "**Official OpenClaw skills** → Lower scrutiny (still review)",
+              "location": {
+                "file": "SKILL.md",
+                "line": 118,
+                "section": "Trust Hierarchy"
+              },
+              "source_line": "**Official OpenClaw skills** → Lower scrutiny (still review)"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.ece3adafd7",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.ece3adafd7",
+              "node_id": "node_025",
+              "name": "doc.step.skill.l127.s21.condition.semantic_condition",
+              "semanticKind": "doc_step",
+              "operation_type": "condition",
+              "instructionText": "- When in doubt, don't install",
+              "location": {
+                "file": "SKILL.md",
+                "line": 127,
+                "section": "Remember"
+              },
+              "source_line": "- When in doubt, don't install"
+            }
+          },
+          {
+            "evidence_id": "task.memory.node.60cbfc41a2",
+            "type": "skill_evidence",
+            "data": {
+              "evidence_id": "task.memory.node.60cbfc41a2",
+              "node_id": "node_026",
+              "name": "doc.step.skill.l127.s22.guard.skill",
+              "semanticKind": "doc_step",
+              "operation_type": "guard",
+              "instructionText": "don't install",
+              "location": {
+                "file": "SKILL.md",
+                "line": 127,
+                "section": "Remember"
+              },
+              "source_line": "don't install"
+            }
+          }
+        ],
+        "use_for_components": [
+          "task_need"
+        ],
+        "note": "This is shared global task memory. Cite only task memory evidence IDs listed by the assessment unit."
+      }
+    },
+    "evidence_packs": [
+      {
+        "unit_id": "obs_000003::lf_000022",
+        "question": "Judge DOE necessity for this label flowing from its source to this sink. Local necessity: do the sink action input and receiver semantics need this label? Global necessity (task_need): does the whole source-to-sink path belong to the data/control flow needed for the declared skill task, AND is the sink (boundary) node necessary in that path?",
+        "observation_id": "obs_000003",
+        "label_flow_id": "lf_000022",
+        "label": {
+          "category": "database_record",
+          "subtype": "query",
+          "sensitivity": "high",
+          "field_name": "query_text",
+          "field_path": "signature.output.query_text",
+          "mode": "definite"
+        },
+        "sink_boundary": {
+          "node_name": "llm.inference",
+          "operation_type": "model_inference",
+          "data_surface": "llm_context",
+          "receiver_scope": "model_provider",
+          "retention_scope": "transient",
+          "trust_boundary": "model_provider",
+          "operation_tags": [
+            "routing_decision"
+          ],
+          "exposure_tier": "high_sensitivity_egress"
+        },
+        "flow": [
+          {
+            "node_name": "user.query",
+            "role": "source",
+            "action": "User query that triggers Skill activation",
+            "capabilities": [
+              "control_context",
+              "data_introduction"
+            ],
+            "origin_trust": "user_visible"
+          },
+          {
+            "node_name": "llm.inference",
+            "role": "sink",
+            "action": "Implicit LLM call: Skill content (SKILL.md) is injected into LLM context when activated",
+            "operations": [
+              {
+                "op": "model_inference"
+              },
+              {
+                "op": "decision"
+              }
+            ],
+            "capabilities": [
+              "model_inference"
+            ]
+          }
+        ],
+        "task_memory_evidence_ids": [
+          "task.memory.identity"
+        ]
+      }
+    ]
+  },
+  "raw_user_message_string_length": 19259
+}

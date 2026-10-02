@@ -1,0 +1,331 @@
+{
+  "schema_version": 1,
+  "sample_id": "R04",
+  "group": "upstream",
+  "expression": "original",
+  "language": "en",
+  "split": "development",
+  "coverage_targets": [
+    "actual_behavior",
+    "adopted_reference",
+    "capability_vs_execution",
+    "condition_preservation",
+    "conditional_instruction",
+    "configuration_snippet",
+    "cross_file_reference",
+    "data_destination",
+    "data_source",
+    "example_vs_instruction",
+    "exception_condition",
+    "external_input_boundary",
+    "fallback_path",
+    "global_constraint",
+    "local_constraint",
+    "must_not_infer",
+    "output_delivery",
+    "parameter_scope",
+    "precondition",
+    "prohibition",
+    "stop_condition",
+    "suspicious_behavior_preserved"
+  ],
+  "facts": [
+    {
+      "id": "R04-F01",
+      "kind": "condition",
+      "statement": "检查 Netlify 登录状态；未认证时指导 OAuth 登录并等待用户完成，再查 status；浏览器认证不可用可改用 NETLIFY_AUTH_TOKEN，仍不能建立认证时结束。",
+      "scope": {
+        "level": "block",
+        "target": "authentication"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 30,
+          "end_line": 36,
+          "quote": "1. Check authentication status with `npx netlify status`\n2. If not authenticated, guide user through `npx netlify login`\n3. Fail gracefully if authentication cannot be established\n\nAuthentication uses either:\n- **Browser-based OAuth** (primary): `netlify login` opens browser for authentication\n- **API Key** (alternative): Set `NETLIFY_AUTH_TOKEN` environment variable"
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 52,
+          "end_line": 66,
+          "quote": "**If not authenticated**, guide the user:\n\n```bash\nnpx netlify login\n```\n\nThis opens a browser window for OAuth authentication. Wait for user to complete login, then verify with `netlify status` again.\n\n**Alternative: API Key authentication**\n\nIf browser authentication isn't available, users can set:\n\n```bash\nexport NETLIFY_AUTH_TOKEN=your_token_here\n```"
+        }
+      ],
+      "coverage_tags": [
+        "precondition",
+        "fallback_path",
+        "stop_condition"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F02",
+      "kind": "data_flow",
+      "statement": "从 status 输出取得站点关联状态；已关联则跳过关联步骤，未关联且为 Git 仓库则读取 origin remote URL 传给 netlify link --git-remote-url，关联失败时 init。",
+      "scope": {
+        "level": "block",
+        "target": "site linking"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 70,
+          "end_line": 98,
+          "quote": "### 2. Detect Site Link Status\n\nFrom `netlify status` output, determine:\n- **Linked**: Site already connected to Netlify (shows site name/URL)\n- **Not linked**: Need to link or create site\n\n### 3. Link to Existing Site or Create New\n\n**If already linked** → Skip to step 4\n\n**If not linked**, attempt to link by Git remote:\n\n```bash\n# Check if project is Git-based\ngit remote show origin\n\n# If Git-based, extract remote URL\n# Format: https://github.com/username/repo or git@github.com:username/repo.git\n\n# Try to link by Git remote\nnpx netlify link --git-remote-url <REMOTE_URL>\n```\n\n**If link fails** (site doesn't exist on Netlify):\n\n```bash\n# Create new site interactively\nnpx netlify init\n```"
+        }
+      ],
+      "coverage_tags": [
+        "data_source",
+        "data_destination",
+        "condition_preservation",
+        "parameter_scope"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F03",
+      "kind": "condition",
+      "statement": "按需引用 deployment-patterns 的决策树后，未关联且非 Git 仓库时直接 init；新站或首次发布与已有站点分别选择生产发布和预览发布。",
+      "scope": {
+        "level": "block",
+        "target": "deployment decision tree"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 243,
+          "end_line": 247,
+          "quote": "## Bundled References (Load As Needed)\n\n- [CLI commands](references/cli-commands.md)\n- [Deployment patterns](references/deployment-patterns.md)\n- [netlify.toml guide](references/netlify-toml.md)"
+        },
+        {
+          "file": "references/deployment-patterns.md",
+          "start_line": 5,
+          "end_line": 19,
+          "quote": "## Deployment Decision Tree\n\n```\nIs user authenticated?\n├─ No → Run `netlify login`\n└─ Yes → Is site linked?\n    ├─ No → Is it a Git repo?\n    │   ├─ Yes → Try `netlify link --git-remote-url`\n    │   │   ├─ Success → Continue to deploy\n    │   │   └─ Fail → Run `netlify init`\n    │   └─ No → Run `netlify init`\n    └─ Yes → Is this first deploy or existing site?\n        ├─ First deploy/new site → `netlify deploy --prod`\n        └─ Existing site → `netlify deploy` (preview)\n```"
+        }
+      ],
+      "coverage_tags": [
+        "cross_file_reference",
+        "adopted_reference",
+        "conditional_instruction"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F04",
+      "kind": "condition",
+      "statement": "已有站点默认 preview；新站或明确生产请求采用 --prod；预览测试场景的参考流程要求预览获批后才生产发布，不能把两个 deploy 命令无条件串联。",
+      "scope": {
+        "level": "block",
+        "target": "preview versus production"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 118,
+          "end_line": 136,
+          "quote": "### 5. Deploy to Netlify\n\nChoose deployment type based on context:\n\n**Preview/Draft Deploy** (default for existing sites):\n\n```bash\nnpx netlify deploy\n```\n\nThis creates a deploy preview with a unique URL for testing.\n\n**Production Deploy** (for new sites or explicit production deployments):\n\n```bash\nnpx netlify deploy --prod\n```\n\nThis deploys to the live production URL."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 243,
+          "end_line": 247,
+          "quote": "## Bundled References (Load As Needed)\n\n- [CLI commands](references/cli-commands.md)\n- [Deployment patterns](references/deployment-patterns.md)\n- [netlify.toml guide](references/netlify-toml.md)"
+        },
+        {
+          "file": "references/deployment-patterns.md",
+          "start_line": 70,
+          "end_line": 90,
+          "quote": "## Scenario 3: Preview Deployment (Testing Changes)\n\n**Context**: User wants to test changes before pushing to production.\n\n**Steps**:\n1. Ensure site is linked: `npx netlify status`\n2. Make code changes\n3. Deploy preview: `npx netlify deploy`\n4. Review preview URL\n5. If approved, deploy to prod: `npx netlify deploy --prod`\n\n**Example**:\n```bash\n# Make changes to code\n\nnpx netlify deploy\n# Draft deploy URL: https://507f1f77bcf86cd799439011-my-app.netlify.app\n\n# Test the preview, then:\nnpx netlify deploy --prod\n```"
+        }
+      ],
+      "coverage_tags": [
+        "cross_file_reference",
+        "exception_condition",
+        "example_vs_instruction",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F05",
+      "kind": "data_flow",
+      "statement": "发布前确保项目依赖已安装并根据包管理器选命令；发布读取构建设置，在本地构建并上传构建产物至 Netlify，取得并向用户报告部署 URL、适用的生产 URL 和日志链接。",
+      "scope": {
+        "level": "block",
+        "target": "build deploy and report"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 106,
+          "end_line": 116,
+          "quote": "### 4. Verify Dependencies\n\nBefore deploying, ensure project dependencies are installed:\n\n```bash\n# For npm projects\nnpm install\n\n# For other package managers, detect and use appropriate command\n# yarn install, pnpm install, etc.\n```"
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 138,
+          "end_line": 150,
+          "quote": "**Deployment process**:\n1. CLI detects build settings (from netlify.toml or prompts user)\n2. Builds the project locally\n3. Uploads built assets to Netlify\n4. Returns deployment URL\n\n### 6. Report Results\n\nAfter deployment, report to user:\n- **Deploy URL**: Unique URL for this deployment\n- **Site URL**: Production URL (if production deploy)\n- **Deploy logs**: Link to Netlify dashboard for logs\n- **Next steps**: Suggest `netlify open` to view site or dashboard"
+        }
+      ],
+      "coverage_tags": [
+        "actual_behavior",
+        "data_source",
+        "data_destination",
+        "output_delivery"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F06",
+      "kind": "constraint",
+      "statement": "已有 netlify.toml 由 CLI 自动使用；缺失时询问 build command 和 publish directory，可读 package.json 判断框架并建议值。参考 TOML 的 command/publish/base 属构建配置，不能把所有示例配置同时执行。",
+      "scope": {
+        "level": "operation",
+        "target": "deployment configuration"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 152,
+          "end_line": 163,
+          "quote": "## Handling netlify.toml\n\nIf a `netlify.toml` file exists, the CLI uses it automatically. If not, the CLI will prompt for:\n- **Build command**: e.g., `npm run build`, `next build`\n- **Publish directory**: e.g., `dist`, `build`, `.next`\n\nCommon framework defaults:\n- **Next.js**: build command `npm run build`, publish `.next`\n- **React (Vite)**: build command `npm run build`, publish `dist`\n- **Static HTML**: no build command, publish current directory\n\nThe skill should detect framework from `package.json` if possible and suggest appropriate settings."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 243,
+          "end_line": 247,
+          "quote": "## Bundled References (Load As Needed)\n\n- [CLI commands](references/cli-commands.md)\n- [Deployment patterns](references/deployment-patterns.md)\n- [netlify.toml guide](references/netlify-toml.md)"
+        },
+        {
+          "file": "references/netlify-toml.md",
+          "start_line": 13,
+          "end_line": 33,
+          "quote": "## Build Settings\n\n### Common Configuration\n\n```toml\n[build]\n  # Command to build your site\n  command = \"npm run build\"\n\n  # Directory to publish (relative to repo root)\n  publish = \"dist\"\n\n  # Functions directory\n  functions = \"netlify/functions\"\n\n  # Base directory (if not repo root)\n  base = \"packages/frontend\"\n\n  # Ignore builds for specific conditions\n  ignore = \"git diff --quiet HEAD^ HEAD package.json\"\n```"
+        }
+      ],
+      "coverage_tags": [
+        "configuration_snippet",
+        "parameter_scope",
+        "capability_vs_execution",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F07",
+      "kind": "condition",
+      "statement": "构建失败时检查构建命令、发布目录、依赖和日志；publish directory 不存在时验证构建已成功以及目录路径。保留这些特定故障条件。",
+      "scope": {
+        "level": "block",
+        "target": "deployment failure handling"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 192,
+          "end_line": 209,
+          "quote": "## Error Handling\n\nCommon issues and solutions:\n\n**\"Not logged in\"**\n→ Run `npx netlify login`\n\n**\"No site linked\"**\n→ Run `npx netlify link` or `npx netlify init`\n\n**\"Build failed\"**\n→ Check build command and publish directory in netlify.toml or CLI prompts\n→ Verify dependencies are installed\n→ Review build logs for specific errors\n\n**\"Publish directory not found\"**\n→ Verify build command ran successfully\n→ Check publish directory path is correct"
+        }
+      ],
+      "coverage_tags": [
+        "fallback_path",
+        "condition_preservation"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F08",
+      "kind": "constraint",
+      "statement": "网络超时、DNS 错误、连接重置或沙箱阻断出站请求时，上游文档要求以 escalated permissions 重跑部署；这是样例实际提出的有条件要求，静态分析应保留其范围，不在语料复核中执行。",
+      "scope": {
+        "level": "block",
+        "target": "Escalated Network Access"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 213,
+          "end_line": 220,
+          "quote": "### Escalated Network Access\n\nIf deployment fails due to network issues (timeouts, DNS errors, connection resets), rerun the deploy with escalated permissions (use `sandbox_permissions=require_escalated`). The deploy requires escalated network access when sandbox networking blocks outbound requests.\n\nExample guidance to the user:\n\n```\nThe deploy needs escalated network access to deploy to Netlify. I can rerun the command with escalated permissions—want me to proceed?"
+        }
+      ],
+      "coverage_tags": [
+        "conditional_instruction",
+        "local_constraint",
+        "suspicious_behavior_preserved"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F09",
+      "kind": "constraint",
+      "statement": "“Never commit secrets to Git”约束整份部署流程；需要环境秘密时写入 Netlify 配置并由构建访问。CLI reference 中 env:import .env 只是能力条目，不能凭此制造每次自动导入。",
+      "scope": {
+        "level": "skill",
+        "target": "secret handling"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 223,
+          "end_line": 229,
+          "quote": "## Environment Variables\n\nFor secrets and configuration:\n\n1. Never commit secrets to Git\n2. Set in Netlify dashboard: Site Settings → Environment Variables\n3. Access in builds via `process.env.VARIABLE_NAME`"
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 243,
+          "end_line": 247,
+          "quote": "## Bundled References (Load As Needed)\n\n- [CLI commands](references/cli-commands.md)\n- [Deployment patterns](references/deployment-patterns.md)\n- [netlify.toml guide](references/netlify-toml.md)"
+        },
+        {
+          "file": "references/cli-commands.md",
+          "start_line": 82,
+          "end_line": 96,
+          "quote": "## Environment Variables\n\n```bash\n# List environment variables\nnpx netlify env:list\n\n# Set environment variable\nnpx netlify env:set KEY value\n\n# Get environment variable value\nnpx netlify env:get KEY\n\n# Import env vars from file\nnpx netlify env:import .env\n```"
+        }
+      ],
+      "coverage_tags": [
+        "global_constraint",
+        "prohibition",
+        "capability_vs_execution",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R04-F10",
+      "kind": "must_not_infer",
+      "statement": "References 中的 Netlify 官网文档仅提供 URL，包内 Bundled References 才作为已提供文本；不得把未下载外链文档的隐含步骤补入本轮输入。",
+      "scope": {
+        "level": "block",
+        "target": "reference boundary"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 238,
+          "end_line": 247,
+          "quote": "## Reference\n\n- Netlify CLI Docs: https://docs.netlify.com/cli/get-started/\n- netlify.toml Reference: https://docs.netlify.com/configure-builds/file-based-configuration/\n\n## Bundled References (Load As Needed)\n\n- [CLI commands](references/cli-commands.md)\n- [Deployment patterns](references/deployment-patterns.md)\n- [netlify.toml guide](references/netlify-toml.md)"
+        }
+      ],
+      "coverage_tags": [
+        "external_input_boundary",
+        "cross_file_reference",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    }
+  ],
+  "acceptable_variants": [
+    "生产/预览选择可用分支或调用条件表达，不要求同一 CFG。",
+    "框架建议及 Netlify 配置可保留原文约束，不要求发明自动校验步骤。"
+  ],
+  "open_questions": [
+    "新站默认生产发布与先预览的要求存在源文冲突：SKILL.md:130-136 及 references/deployment-patterns.md:21-32 对新站/首次部署直接采用 --prod；SKILL.md:231-234 的 Tips 建议先预览，references/deployment-patterns.md:169-180 更明确写 Always Preview First。源文未说明这些要求的优先级，保留冲突，不预填唯一执行路径。",
+    "上游声明 CLI 自动构建，但不同真实工具版本未在本阶段运行验证；只复核原文语义。"
+  ],
+  "minimal_pair": null
+}

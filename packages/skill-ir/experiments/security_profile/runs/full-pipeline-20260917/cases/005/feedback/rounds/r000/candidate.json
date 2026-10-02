@@ -1,0 +1,255 @@
+{
+  "entry_block_ref": "read_events",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。",
+    "字段取值要求不包含摘要生成、内容改写或额外格式转换。",
+    "未选中的记录不调用 notify.send。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events",
+      "block_name": "Read user-provided events.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_file",
+          "opcode": "read_events_json",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "events.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "event_records"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_to_next_record",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "next_record",
+      "block_name": "Get the next event record to process",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "next_event_record",
+          "opcode": "next_event_record",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "current_event_record"
+            },
+            {
+              "type": "result",
+              "identifier": "has_more_records"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_next_record",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "has_more_records"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "extract_record_fields",
+      "block_name": "Extract notification fields from the current record",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "extract_event_record_fields",
+          "opcode": "extract_event_record_fields",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "current_event_record"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "record_recipient"
+            },
+            {
+              "type": "result",
+              "identifier": "record_summary"
+            },
+            {
+              "type": "result",
+              "identifier": "record_value"
+            },
+            {
+              "type": "result",
+              "identifier": "record_urgent"
+            },
+            {
+              "type": "result",
+              "identifier": "record_opted_out"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_to_check_eligibility",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "check_eligibility",
+      "block_name": "Check whether the current record is selected for notification",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "check_notification_eligibility",
+          "opcode": "check_notification_eligibility",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "record_opted_out"
+            },
+            {
+              "type": "result",
+              "identifier": "record_urgent"
+            },
+            {
+              "type": "result",
+              "identifier": "record_value"
+            },
+            {
+              "type": "literal",
+              "literal_value": 100
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "should_notify"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_eligibility",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "should_notify"
+            }
+          ]
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notification",
+      "block_name": "Send notification for the selected record",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "send_notify",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify"
+            },
+            {
+              "type": "result",
+              "identifier": "record_recipient"
+            },
+            {
+              "type": "result",
+              "identifier": "record_summary"
+            }
+          ],
+          "constraints": [
+            "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。"
+          ]
+        },
+        {
+          "instruction_ref": "go_to_next_record_after_send",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "finish",
+      "block_name": "Finish after all records are processed",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "return_finish",
+          "opcode": "return",
+          "inputs": []
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events",
+      "target_block_ref": "next_record"
+    },
+    {
+      "source_block_ref": "next_record",
+      "target_block_ref": "extract_record_fields",
+      "condition_text": "has more records"
+    },
+    {
+      "source_block_ref": "next_record",
+      "target_block_ref": "finish",
+      "condition_text": "no more records"
+    },
+    {
+      "source_block_ref": "extract_record_fields",
+      "target_block_ref": "check_eligibility"
+    },
+    {
+      "source_block_ref": "check_eligibility",
+      "target_block_ref": "send_notification",
+      "condition_text": "selected: opted_out is not true and (urgent is true or value >= 100)"
+    },
+    {
+      "source_block_ref": "check_eligibility",
+      "target_block_ref": "next_record",
+      "condition_text": "not selected"
+    },
+    {
+      "source_block_ref": "send_notification",
+      "target_block_ref": "next_record"
+    }
+  ],
+  "diagnostics": [
+    "历史示例中的 count.txt 写入步骤标记为当前流程不执行，因此未建模。"
+  ]
+}

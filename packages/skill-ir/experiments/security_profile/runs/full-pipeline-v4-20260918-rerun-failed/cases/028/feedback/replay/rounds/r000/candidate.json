@@ -1,0 +1,669 @@
+{
+  "entry_block_ref": "read_user_request",
+  "declared_context_keys": [
+    "user_request"
+  ],
+  "constraints": [
+    "Netlify CLI is installed via npx; no global install is required.",
+    "Authentication requires a Netlify account with an active login session.",
+    "The project must be a valid web project in the current directory.",
+    "When sandboxing blocks deployment network calls, rerun the deployment with sandbox_permissions=require_escalated.",
+    "Deployment might take a few minutes; use appropriate timeout values.",
+    "Never commit secrets to Git.",
+    "Set secrets in the Netlify dashboard under Site Settings → Environment Variables.",
+    "Access secrets in builds via process.env.VARIABLE_NAME.",
+    "If browser authentication isn't available, users can set the NETLIFY_AUTH_TOKEN environment variable.",
+    "Tokens can be generated at https://app.netlify.com/user/applications#personal-access-tokens."
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_user_request",
+      "block_name": "Read the user's deployment request",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_request",
+          "opcode": "read_deployment_request",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_request"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "requested_deployment"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_auth_check",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "check_auth_initial",
+      "block_name": "Check Netlify authentication and site link status",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_status_initial",
+          "opcode": "read_netlify_status",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "auth_status"
+            },
+            {
+              "type": "result",
+              "identifier": "site_link_status"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify status"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_auth_initial",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "auth_status"
+            },
+            {
+              "type": "result",
+              "identifier": "site_link_status"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "netlify_login",
+      "block_name": "Guide user through Netlify login",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "run_login",
+          "opcode": "netlify_login",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify login"
+          }
+        },
+        {
+          "instruction_ref": "go_recheck_auth",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": [
+        "This opens a browser window for OAuth authentication. Wait for user to complete login, then verify with netlify status again."
+      ]
+    },
+    {
+      "block_ref": "check_auth_after_login",
+      "block_name": "Verify authentication after login",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_status_after_login",
+          "opcode": "read_netlify_status",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "auth_status_after_login"
+            },
+            {
+              "type": "result",
+              "identifier": "site_link_status_after_login"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify status"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_auth_after_login",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "auth_status_after_login"
+            },
+            {
+              "type": "result",
+              "identifier": "site_link_status_after_login"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "authentication_failure",
+      "block_name": "Fail gracefully when authentication cannot be established",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "return_auth_failure",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "literal",
+              "literal_value": "Authentication could not be established"
+            }
+          ]
+        }
+      ],
+      "constraints": [
+        "Fail gracefully if authentication cannot be established."
+      ]
+    },
+    {
+      "block_ref": "read_git_remote",
+      "block_name": "Check if the project has a Git remote origin",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_git_remote_origin",
+          "opcode": "read_git_remote_origin",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "git remote origin"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "git_remote_url"
+            },
+            {
+              "type": "result",
+              "identifier": "git_remote_exists"
+            }
+          ],
+          "metadata": {
+            "script_content": "git remote show origin"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_git_remote",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "git_remote_exists"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "link_site_by_git_remote",
+      "block_name": "Try to link the project to a Netlify site by Git remote URL",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "run_link",
+          "opcode": "link_netlify_site_by_git_remote",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            },
+            {
+              "type": "result",
+              "identifier": "git_remote_url"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "link_succeeded"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify link --git-remote-url <REMOTE_URL>"
+          }
+        },
+        {
+          "instruction_ref": "dispatch_link",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "link_succeeded"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "init_new_site",
+      "block_name": "Create and link a new Netlify site interactively",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "run_init",
+          "opcode": "netlify_init",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "site_is_new"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify init"
+          }
+        },
+        {
+          "instruction_ref": "go_install_deps_from_init",
+          "opcode": "dispatch"
+        }
+      ]
+    },
+    {
+      "block_ref": "install_dependencies",
+      "block_name": "Install project dependencies",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "install_project_dependencies",
+          "opcode": "install_project_dependencies",
+          "inputs": [],
+          "metadata": {
+            "script_content": "npm install\n# For other package managers, detect and use appropriate command (yarn install, pnpm install, etc.)"
+          }
+        },
+        {
+          "instruction_ref": "go_choose_deploy_type",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": [
+        "For npm projects, run npm install; for other package managers, detect and use the appropriate command."
+      ]
+    },
+    {
+      "block_ref": "choose_deployment_type",
+      "block_name": "Choose deployment type from site status and explicit request",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "choose_deployment_type",
+          "opcode": "choose_deployment_type",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "requested_deployment"
+            },
+            {
+              "type": "result",
+              "identifier": "site_is_new"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_type"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "go_deploy",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": [
+        "Preview/Draft deploy is the default for existing sites; production deploy is for new sites or explicit production deployments."
+      ]
+    },
+    {
+      "block_ref": "deploy_to_netlify",
+      "block_name": "Deploy the project to Netlify",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "run_deploy",
+          "opcode": "deploy_to_netlify",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            },
+            {
+              "type": "result",
+              "identifier": "deployment_type"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_url"
+            },
+            {
+              "type": "result",
+              "identifier": "site_url"
+            },
+            {
+              "type": "result",
+              "identifier": "build_command"
+            },
+            {
+              "type": "result",
+              "identifier": "publish_dir"
+            },
+            {
+              "type": "result",
+              "identifier": "deploy_logs"
+            },
+            {
+              "type": "result",
+              "identifier": "deploy_error"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify deploy  # preview/draft\nnpx netlify deploy --prod  # production"
+          },
+          "constraints": [
+            "CLI detects build settings from netlify.toml or prompts user; builds the project locally; uploads built assets to Netlify; returns deployment URL."
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_deploy_result",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "deploy_error"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "block_ref": "report_deployment",
+      "block_name": "Report deployment results to the user",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_report",
+          "opcode": "format_deployment_report",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_url"
+            },
+            {
+              "type": "result",
+              "identifier": "site_url"
+            },
+            {
+              "type": "result",
+              "identifier": "build_command"
+            },
+            {
+              "type": "result",
+              "identifier": "publish_dir"
+            },
+            {
+              "type": "result",
+              "identifier": "deploy_logs"
+            },
+            {
+              "type": "literal",
+              "literal_value": "Run netlify open to view the site."
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_report"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_report",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_report"
+            }
+          ]
+        }
+      ],
+      "constraints": [
+        "Report Deploy URL, Site URL (if production deploy), Deploy logs, and next steps."
+      ]
+    },
+    {
+      "block_ref": "deploy_escalated",
+      "block_name": "Rerun deployment with escalated network permissions",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "run_deploy_escalated",
+          "opcode": "deploy_to_netlify_escalated",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "netlify-cli"
+            },
+            {
+              "type": "result",
+              "identifier": "deployment_type"
+            },
+            {
+              "type": "literal",
+              "literal_value": "require_escalated"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_url_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "site_url_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "build_command_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "publish_dir_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "deploy_logs_escalated"
+            }
+          ],
+          "metadata": {
+            "script_content": "npx netlify deploy [--prod] with sandbox_permissions=require_escalated"
+          }
+        },
+        {
+          "instruction_ref": "go_report_escalated",
+          "opcode": "dispatch"
+        }
+      ],
+      "constraints": [
+        "Rerun the deploy with escalated permissions (sandbox_permissions=require_escalated) when sandbox networking blocks outbound requests."
+      ]
+    },
+    {
+      "block_ref": "report_escalated",
+      "block_name": "Report escalated deployment results",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "format_report_escalated",
+          "opcode": "format_deployment_report",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_url_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "site_url_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "build_command_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "publish_dir_escalated"
+            },
+            {
+              "type": "result",
+              "identifier": "deploy_logs_escalated"
+            },
+            {
+              "type": "literal",
+              "literal_value": "Run netlify open to view the site."
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_report_escalated"
+            }
+          ]
+        },
+        {
+          "instruction_ref": "return_report_escalated",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "deployment_report_escalated"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_user_request",
+      "target_block_ref": "check_auth_initial"
+    },
+    {
+      "source_block_ref": "check_auth_initial",
+      "target_block_ref": "netlify_login",
+      "condition_text": "not authenticated"
+    },
+    {
+      "source_block_ref": "check_auth_initial",
+      "target_block_ref": "install_dependencies",
+      "condition_text": "authenticated and site linked"
+    },
+    {
+      "source_block_ref": "check_auth_initial",
+      "target_block_ref": "read_git_remote",
+      "condition_text": "authenticated and site not linked"
+    },
+    {
+      "source_block_ref": "netlify_login",
+      "target_block_ref": "check_auth_after_login"
+    },
+    {
+      "source_block_ref": "check_auth_after_login",
+      "target_block_ref": "authentication_failure",
+      "condition_text": "not authenticated"
+    },
+    {
+      "source_block_ref": "check_auth_after_login",
+      "target_block_ref": "install_dependencies",
+      "condition_text": "authenticated and site linked"
+    },
+    {
+      "source_block_ref": "check_auth_after_login",
+      "target_block_ref": "read_git_remote",
+      "condition_text": "authenticated and site not linked"
+    },
+    {
+      "source_block_ref": "read_git_remote",
+      "target_block_ref": "link_site_by_git_remote",
+      "condition_text": "git remote exists"
+    },
+    {
+      "source_block_ref": "read_git_remote",
+      "target_block_ref": "init_new_site",
+      "condition_text": "no git remote"
+    },
+    {
+      "source_block_ref": "link_site_by_git_remote",
+      "target_block_ref": "install_dependencies",
+      "condition_text": "link succeeded"
+    },
+    {
+      "source_block_ref": "link_site_by_git_remote",
+      "target_block_ref": "init_new_site",
+      "condition_text": "link failed"
+    },
+    {
+      "source_block_ref": "init_new_site",
+      "target_block_ref": "install_dependencies"
+    },
+    {
+      "source_block_ref": "install_dependencies",
+      "target_block_ref": "choose_deployment_type"
+    },
+    {
+      "source_block_ref": "choose_deployment_type",
+      "target_block_ref": "deploy_to_netlify"
+    },
+    {
+      "source_block_ref": "deploy_to_netlify",
+      "target_block_ref": "report_deployment",
+      "condition_text": "deployment succeeded"
+    },
+    {
+      "source_block_ref": "deploy_to_netlify",
+      "target_block_ref": "deploy_escalated",
+      "condition_text": "network error"
+    },
+    {
+      "source_block_ref": "deploy_escalated",
+      "target_block_ref": "report_escalated"
+    }
+  ],
+  "diagnostics": [
+    "Bundled reference documents (references/cli-commands.md, references/deployment-patterns.md, references/netlify-toml.md) were treated as reference material and not extracted as separate executable behaviors.",
+    "The default prompt in agents/openai.yaml mentions returning 'required fixes', but no runtime instruction in the package produces a required_fixes result, so it was not extracted.",
+    "Non-network deployment failures (e.g., build failed, publish directory not found) are described in error handling but are not modeled as explicit conditional branches in this extraction.",
+    "The API key authentication alternative (NETLIFY_AUTH_TOKEN) is captured as a skill-wide constraint rather than a separate authentication branch."
+  ]
+}

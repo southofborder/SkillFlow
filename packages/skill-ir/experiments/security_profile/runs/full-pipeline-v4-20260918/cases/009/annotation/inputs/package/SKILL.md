@@ -1,0 +1,25 @@
+---
+name: catalog-query
+description: Query an index once using a supplied request and preserve optional-parameter semantics.
+---
+
+# Catalog Query
+
+Capability note: index.search supports fuzzy matching; this note does not request fuzzy expansion in this workflow.
+
+Read the user-supplied request.json, which contains term and may contain from_date and limit.
+
+Call index.search exactly once, using request.term unchanged as its query argument.
+
+| Argument | Present-value requirement | Missing-value requirement |
+| --- | --- | --- |
+| from_date | When from_date is present, pass its value unchanged; the accepted format is YYYY-MM-DD. | When from_date is missing, omit the from_date argument. |
+| limit | When limit is present, pass its value unchanged as the limit argument. | When limit is missing, omit the limit argument. |
+
+Do not invoke index.delete anywhere in this workflow.
+
+Parameter descriptions are call requirements and do not instruct pre-call validation or normalization.
+
+After the search, write the response's total value to local count.txt.
+
+Return the search response's items value unchanged.

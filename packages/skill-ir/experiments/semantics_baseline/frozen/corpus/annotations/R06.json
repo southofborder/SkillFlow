@@ -1,0 +1,428 @@
+{
+  "schema_version": 1,
+  "sample_id": "R06",
+  "group": "upstream",
+  "expression": "original",
+  "language": "en",
+  "split": "held_out",
+  "coverage_targets": [
+    "actual_behavior",
+    "capability_vs_execution",
+    "code_boundary",
+    "condition_preservation",
+    "cross_file_reference",
+    "data_destination",
+    "data_flow",
+    "data_source",
+    "example_vs_instruction",
+    "global_constraint",
+    "local_constraint",
+    "must_not_infer",
+    "output_delivery",
+    "parameter_defaults",
+    "parameter_format",
+    "parameter_omission",
+    "parameter_scope",
+    "precondition",
+    "prohibition",
+    "stop_condition",
+    "unresolved_scope"
+  ],
+  "facts": [
+    {
+      "id": "R06-F01",
+      "kind": "data_flow",
+      "statement": "收集音频文件路径、输出格式、可选语言提示和已知说话人参考，调用 bundled CLI；随后检查转录质量、说话人标签和分段边界，必要时做单一针对性调整；在此仓库工作时，将输出保存到 output/transcribe/。",
+      "scope": {
+        "level": "block",
+        "target": "transcription workflow"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 11,
+          "end_line": 16,
+          "quote": "## Workflow\n1. Collect inputs: audio file path(s), desired response format (text/json/diarized_json), optional language hint, and any known speaker references.\n2. Verify `OPENAI_API_KEY` is set. If missing, ask the user to set it locally (do not ask them to paste the key).\n3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription).\n4. Validate the output: transcription quality, speaker labels, and segment boundaries; iterate with a single targeted change if needed.\n5. Save outputs under `output/transcribe/` when working in this repo."
+        }
+      ],
+      "coverage_tags": [
+        "actual_behavior",
+        "data_source",
+        "data_destination",
+        "output_delivery",
+        "condition_preservation"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F02",
+      "kind": "constraint",
+      "statement": "实时 API 调用前要求本地 OPENAI_API_KEY；缺失则让用户在本地设置，绝不要求把完整密钥粘贴到聊天。",
+      "scope": {
+        "level": "skill",
+        "target": "API key handling"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 13,
+          "end_line": 14,
+          "quote": "2. Verify `OPENAI_API_KEY` is set. If missing, ask the user to set it locally (do not ask them to paste the key).\n3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription)."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 39,
+          "end_line": 42,
+          "quote": "## Environment\n- `OPENAI_API_KEY` must be set for live API calls.\n- If the key is missing, instruct the user to create one in the OpenAI platform UI and export it in their shell.\n- Never ask the user to paste the full key in chat."
+        }
+      ],
+      "coverage_tags": [
+        "precondition",
+        "prohibition",
+        "global_constraint"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F03",
+      "kind": "condition",
+      "statement": "默认 gpt-4o-mini-transcribe 与 text；用户要求说话人标签或分离时选择 gpt-4o-transcribe-diarize 与 diarized_json，超过约 30 秒保持 auto 分块。",
+      "scope": {
+        "level": "operation",
+        "target": "transcription model and parameters"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 18,
+          "end_line": 22,
+          "quote": "## Decision rules\n- Default to `gpt-4o-mini-transcribe` with `--response-format text` for fast transcription.\n- If the user wants speaker labels or diarization, use `--model gpt-4o-transcribe-diarize --response-format diarized_json`.\n- If audio is longer than ~30 seconds, keep `--chunking-strategy auto`.\n- Prompting is not supported for `gpt-4o-transcribe-diarize`."
+        }
+      ],
+      "coverage_tags": [
+        "condition_preservation",
+        "parameter_scope",
+        "parameter_defaults"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F04",
+      "kind": "constraint",
+      "statement": "diarize 模型不支持 prompt；脚本对该组合直接终止，并对非 diarize 模型请求 diarized_json 直接终止，不能静默忽略或改变请求参数。",
+      "scope": {
+        "level": "operation",
+        "target": "CLI argument compatibility"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 22,
+          "end_line": 22,
+          "quote": "- Prompting is not supported for `gpt-4o-transcribe-diarize`."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 14,
+          "end_line": 14,
+          "quote": "3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 241,
+          "end_line": 244,
+          "quote": "    if args.prompt and \"transcribe-diarize\" in args.model:\n        _die(\"prompt is not supported with gpt-4o-transcribe-diarize\")\n    if args.response_format == \"diarized_json\" and \"transcribe-diarize\" not in args.model:\n        _die(\"diarized_json requires gpt-4o-transcribe-diarize\")"
+        }
+      ],
+      "coverage_tags": [
+        "cross_file_reference",
+        "local_constraint",
+        "prohibition",
+        "stop_condition"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F05",
+      "kind": "data_flow",
+      "statement": "已知说话人按 NAME=PATH 解析、读取参考音频并编码 data URL；姓名与参考列表一起传入 extra_body。参考最多 4 个，缺文件、格式不符或超量均终止。",
+      "scope": {
+        "level": "operation",
+        "target": "known speaker references"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 61,
+          "end_line": 70,
+          "quote": "Diarization with known speakers (up to 4):\n```\npython3 \"$TRANSCRIBE_CLI\" \\\n  meeting.m4a \\\n  --model gpt-4o-transcribe-diarize \\\n  --known-speaker \"Alice=refs/alice.wav\" \\\n  --known-speaker \"Bob=refs/bob.wav\" \\\n  --response-format diarized_json \\\n  --out-dir output/transcribe/meeting\n```"
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 80,
+          "end_line": 81,
+          "quote": "## Reference map\n- `references/api.md`: supported formats, limits, response formats, and known-speaker notes."
+        },
+        {
+          "file": "references/api.md",
+          "start_line": 7,
+          "end_line": 7,
+          "quote": "- Known speakers: up to 4 references via extra_body known_speaker_names + known_speaker_references (data URLs)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 74,
+          "end_line": 98,
+          "quote": "def _encode_data_url(path: Path) -> str:\n    data = path.read_bytes()\n    mime = _guess_mime_type(path)\n    encoded = base64.b64encode(data).decode(\"ascii\")\n    return f\"data:{mime};base64,{encoded}\"\n\n\ndef _parse_known_speakers(raw_items: List[str]) -> Tuple[List[str], List[str]]:\n    names: List[str] = []\n    refs: List[str] = []\n    for raw in raw_items:\n        if \"=\" not in raw:\n            _die(\"known-speaker must be NAME=PATH\")\n        name, path_str = raw.split(\"=\", 1)\n        name = name.strip()\n        path = Path(path_str.strip())\n        if not name or not path_str.strip():\n            _die(\"known-speaker must be NAME=PATH\")\n        if not path.exists():\n            _die(f\"Known speaker file not found: {path}\")\n        names.append(name)\n        refs.append(_encode_data_url(path))\n    if len(names) > MAX_KNOWN_SPEAKERS:\n        _die(f\"known speakers must be <= {MAX_KNOWN_SPEAKERS}\")\n    return names, refs"
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 169,
+          "end_line": 174,
+          "quote": "    if known_speaker_names:\n        payload[\"extra_body\"] = {\n            \"known_speaker_names\": known_speaker_names,\n            \"known_speaker_references\": known_speaker_refs,\n        }\n    return payload"
+        }
+      ],
+      "coverage_tags": [
+        "cross_file_reference",
+        "data_source",
+        "data_destination",
+        "parameter_format"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F06",
+      "kind": "data_flow",
+      "statement": "CLI payload 始终含 model、response_format、chunking_strategy；language/prompt 仅有值才加入，speaker names 非空才加入 extra_body。音频以二进制文件对象连同 payload 传给 audio.transcriptions.create。",
+      "scope": {
+        "level": "operation",
+        "target": "API request payload"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 14,
+          "end_line": 14,
+          "quote": "3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 155,
+          "end_line": 186,
+          "quote": "def _build_payload(\n    args: argparse.Namespace,\n    known_speaker_names: List[str],\n    known_speaker_refs: List[str],\n) -> Dict[str, Any]:\n    payload: Dict[str, Any] = {\n        \"model\": args.model,\n        \"response_format\": args.response_format,\n        \"chunking_strategy\": args.chunking_strategy,\n    }\n    if args.language:\n        payload[\"language\"] = args.language\n    if args.prompt:\n        payload[\"prompt\"] = args.prompt\n    if known_speaker_names:\n        payload[\"extra_body\"] = {\n            \"known_speaker_names\": known_speaker_names,\n            \"known_speaker_references\": known_speaker_refs,\n        }\n    return payload\n\n\ndef _run_one(\n    client: Any,\n    audio_path: Path,\n    payload: Dict[str, Any],\n) -> Any:\n    with audio_path.open(\"rb\") as audio_file:\n        return client.audio.transcriptions.create(\n            file=audio_file,\n            **payload,\n        )"
+        }
+      ],
+      "coverage_tags": [
+        "parameter_omission",
+        "cross_file_reference",
+        "data_flow",
+        "code_boundary"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F07",
+      "kind": "condition",
+      "statement": "dry-run 在验证与 payload 组装后只打印 JSON 并返回，允许没有 API key；正常分支才创建客户端和调用 API。不能因源码出现 API 调用而为 dry-run 增加网络行为。",
+      "scope": {
+        "level": "block",
+        "target": "dry-run branch"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 14,
+          "end_line": 14,
+          "quote": "3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 33,
+          "end_line": 40,
+          "quote": "def _ensure_api_key(dry_run: bool) -> None:\n    if os.getenv(\"OPENAI_API_KEY\"):\n        print(\"OPENAI_API_KEY is set.\", file=sys.stderr)\n        return\n    if dry_run:\n        _warn(\"OPENAI_API_KEY is not set; dry-run only.\")\n        return\n    _die(\"OPENAI_API_KEY is not set. Export it before running.\")"
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 246,
+          "end_line": 264,
+          "quote": "    _ensure_api_key(args.dry_run)\n\n    audio_paths = [Path(p) for p in args.audio]\n    for path in audio_paths:\n        _validate_audio(path)\n\n    known_names, known_refs = _parse_known_speakers(args.known_speaker)\n    if known_names and \"transcribe-diarize\" not in args.model:\n        _warn(\"known-speaker references are only supported for gpt-4o-transcribe-diarize\")\n    payload = _build_payload(args, known_names, known_refs)\n\n    if args.dry_run:\n        print(json.dumps(payload, indent=2))\n        return\n\n    client = _create_client()\n\n    for path in audio_paths:\n        result = _run_one(client, path, payload)"
+        }
+      ],
+      "coverage_tags": [
+        "condition_preservation",
+        "cross_file_reference",
+        "must_not_infer",
+        "stop_condition"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F08",
+      "kind": "constraint",
+      "statement": "文档要求评估运行使用 output/transcribe/<job-id>/，多文件使用 --out-dir；--out 和 --stdout 仅支持单音频，--stdout 与 --out/--out-dir 不能同时使用。正常写文件分支优先采用 --out：若指向现有目录，则在其下按音频 stem 生成文件名；无后缀则补格式后缀，否则保留显式文件路径。未提供 --out 时，使用 --out-dir 或当前目录，文件名为 <stem>.transcript.txt（text）或 <stem>.transcript.json（其他格式），随后写出 UTF-8。--out-dir 本身不保证避免同 stem 输入覆盖同名输出；脚本未检测这类冲突，也未自动重命名。",
+      "scope": {
+        "level": "operation",
+        "target": "transcript output"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 24,
+          "end_line": 26,
+          "quote": "## Output conventions\n- Use `output/transcribe/<job-id>/` for evaluation runs.\n- Use `--out-dir` for multiple files to avoid overwriting."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 14,
+          "end_line": 14,
+          "quote": "3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 234,
+          "end_line": 239,
+          "quote": "    if args.out and len(args.audio) > 1:\n        _die(\"--out only supports a single audio file\")\n    if args.stdout and (args.out or args.out_dir):\n        _die(\"--stdout cannot be combined with --out or --out-dir\")\n    if args.stdout and len(args.audio) > 1:\n        _die(\"--stdout only supports a single audio file\")"
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 101,
+          "end_line": 123,
+          "quote": "def _output_extension(response_format: str) -> str:\n    return \"txt\" if response_format == \"text\" else \"json\"\n\n\ndef _build_output_path(\n    audio_path: Path,\n    response_format: str,\n    out: Optional[str],\n    out_dir: Optional[str],\n) -> Path:\n    ext = \".\" + _output_extension(response_format)\n    if out:\n        path = Path(out)\n        if path.exists() and path.is_dir():\n            return path / f\"{audio_path.stem}.transcript{ext}\"\n        if path.suffix == \"\":\n            return path.with_suffix(ext)\n        return path\n    if out_dir:\n        base = Path(out_dir)\n        base.mkdir(parents=True, exist_ok=True)\n        return base / f\"{audio_path.stem}.transcript{ext}\"\n    return Path(f\"{audio_path.stem}.transcript{ext}\")"
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 263,
+          "end_line": 272,
+          "quote": "    for path in audio_paths:\n        result = _run_one(client, path, payload)\n        output = _format_output(result, args.response_format)\n        if args.stdout:\n            print(output)\n            continue\n        out_path = _build_output_path(path, args.response_format, args.out, args.out_dir)\n        out_path.parent.mkdir(parents=True, exist_ok=True)\n        out_path.write_text(output, encoding=\"utf-8\")\n        print(f\"Wrote {out_path}\")"
+        }
+      ],
+      "coverage_tags": [
+        "parameter_scope",
+        "local_constraint",
+        "output_delivery",
+        "data_destination",
+        "parameter_defaults",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F09",
+      "kind": "must_not_infer",
+      "statement": "参考文档把单次请求最大文件大小写为 25 MB，但脚本超过 25*1024*1024 bytes 仅警告，不停止、不裁切；不能将限制说明自动扩展为音频压缩、转码或客户端强制拒绝。",
+      "scope": {
+        "level": "unresolved",
+        "target": "document size limit versus script behavior"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 80,
+          "end_line": 81,
+          "quote": "## Reference map\n- `references/api.md`: supported formats, limits, response formats, and known-speaker notes."
+        },
+        {
+          "file": "references/api.md",
+          "start_line": 3,
+          "end_line": 6,
+          "quote": "- Input formats: mp3, mp4, mpeg, mpga, m4a, wav, webm.\n- Max file size: 25 MB per request.\n- response_format options: text, json, diarized_json.\n- For audio longer than ~30 seconds, pass chunking_strategy (use \"auto\" to split into chunks)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 18,
+          "end_line": 19,
+          "quote": "MAX_AUDIO_BYTES = 25 * 1024 * 1024\nMAX_KNOWN_SPEAKERS = 4"
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 145,
+          "end_line": 152,
+          "quote": "def _validate_audio(path: Path) -> None:\n    if not path.exists():\n        _die(f\"Audio file not found: {path}\")\n    size = path.stat().st_size\n    if size > MAX_AUDIO_BYTES:\n        _warn(\n            f\"Audio file exceeds 25MB limit ({size} bytes): {path}\"\n        )"
+        }
+      ],
+      "coverage_tags": [
+        "unresolved_scope",
+        "capability_vs_execution",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F10",
+      "kind": "must_not_infer",
+      "statement": "Quick start 的 Alice/Bob 参考路径和 meeting.m4a 是示例实参，不是每次用户任务的固定输入；流程必须消费实际收集到的文件和参考。",
+      "scope": {
+        "level": "block",
+        "target": "CLI quick start examples"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 12,
+          "end_line": 12,
+          "quote": "1. Collect inputs: audio file path(s), desired response format (text/json/diarized_json), optional language hint, and any known speaker references."
+        },
+        {
+          "file": "SKILL.md",
+          "start_line": 53,
+          "end_line": 78,
+          "quote": "## CLI quick start\nSingle file (fast text default):\n```\npython3 \"$TRANSCRIBE_CLI\" \\\n  path/to/audio.wav \\\n  --out transcript.txt\n```\n\nDiarization with known speakers (up to 4):\n```\npython3 \"$TRANSCRIBE_CLI\" \\\n  meeting.m4a \\\n  --model gpt-4o-transcribe-diarize \\\n  --known-speaker \"Alice=refs/alice.wav\" \\\n  --known-speaker \"Bob=refs/bob.wav\" \\\n  --response-format diarized_json \\\n  --out-dir output/transcribe/meeting\n```\n\nPlain text output (explicit):\n```\npython3 \"$TRANSCRIBE_CLI\" \\\n  interview.mp3 \\\n  --response-format text \\\n  --out interview.txt\n```"
+        }
+      ],
+      "coverage_tags": [
+        "example_vs_instruction",
+        "data_source",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    },
+    {
+      "id": "R06-F11",
+      "kind": "condition",
+      "statement": "在前置验证通过且已知说话人姓名非空时，若 model 不含 transcribe-diarize，脚本发出仅支持 diarize 的警告，但仍将姓名和参考 data URLs 放入 extra_body，不会因该警告停止或删除参数。dry-run 只打印 payload 并返回；正常分支继续向 audio.transcriptions.create 传入该 payload。SDK/API 是否接受、拒绝或如何处理该组合属于包外未知，不能据此补写成功结果、服务端错误或自动回退。",
+      "scope": {
+        "level": "block",
+        "target": "known-speaker warning and external API boundary"
+      },
+      "evidence": [
+        {
+          "file": "SKILL.md",
+          "start_line": 14,
+          "end_line": 14,
+          "quote": "3. Run the bundled `transcribe_diarize.py` CLI with sensible defaults (fast text transcription)."
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 169,
+          "end_line": 186,
+          "quote": "    if known_speaker_names:\n        payload[\"extra_body\"] = {\n            \"known_speaker_names\": known_speaker_names,\n            \"known_speaker_references\": known_speaker_refs,\n        }\n    return payload\n\n\ndef _run_one(\n    client: Any,\n    audio_path: Path,\n    payload: Dict[str, Any],\n) -> Any:\n    with audio_path.open(\"rb\") as audio_file:\n        return client.audio.transcriptions.create(\n            file=audio_file,\n            **payload,\n        )"
+        },
+        {
+          "file": "scripts/transcribe_diarize.py",
+          "start_line": 252,
+          "end_line": 264,
+          "quote": "    known_names, known_refs = _parse_known_speakers(args.known_speaker)\n    if known_names and \"transcribe-diarize\" not in args.model:\n        _warn(\"known-speaker references are only supported for gpt-4o-transcribe-diarize\")\n    payload = _build_payload(args, known_names, known_refs)\n\n    if args.dry_run:\n        print(json.dumps(payload, indent=2))\n        return\n\n    client = _create_client()\n\n    for path in audio_paths:\n        result = _run_one(client, path, payload)"
+        }
+      ],
+      "coverage_tags": [
+        "condition_preservation",
+        "cross_file_reference",
+        "local_constraint",
+        "data_flow",
+        "parameter_scope",
+        "code_boundary",
+        "must_not_infer"
+      ],
+      "status": "待共同复核"
+    }
+  ],
+  "acceptable_variants": [
+    "CLI 可黑盒表示，但输入音频、speaker data URLs、API 输出与写出路径不能仅藏在约束中。",
+    "模型选择可用分支或调用约束表达，保持默认值及不兼容参数条件即可。"
+  ],
+  "open_questions": [
+    "references/api.md:4 的单次请求 25 MB 上限与脚本 scripts/transcribe_diarize.py:145-152 的超限仅告警分别属于文档限制和已知客户端行为，按 R06-F09 分层保留；SDK/API 对具体超限请求的实际处理未由包内源码给出，保留为外部边界，不改写为客户端硬拒绝。",
+    "known-speaker 配合 model 不含 transcribe-diarize 时，警告后仍组装 payload 的客户端行为由 scripts/transcribe_diarize.py:252-264 明确给出，按 R06-F11 保留；SDK/API 是否接受该组合及其结果属于包外未知，不需要为静态复核发起真实调用。"
+  ],
+  "minimal_pair": null
+}

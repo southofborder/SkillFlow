@@ -1,0 +1,51 @@
+# 未通过证据校验的原始回译
+
+仅供错误诊断；不是有效回译结果，没有修复引用，也不会传给下游核对器。
+
+## unit_1
+
+入口为 block_001（/entry_block_id）。block_001 中 ir_001（opcode read_source_id_from_request）读取上下文键 source_id，输出 result_001（semantic_name source_id_value）；随后 ir_002（dispatch）作为结构终结指令，边 /edges/0 从 block_001 指向 block_002。block_002 中 ir_003（opcode read_fast_key_from_environment）读取上下文键 FAST_KEY，输出 result_002（semantic_name fast_key）；随后 ir_004（dispatch）终结该块，边 /edges/1 指向 block_003。declared_context_keys 列出 source_id 与 FAST_KEY。
+
+模型原始定位：`["/entry_block_id", "/blocks/block_001", "/blocks/block_001/instructions/0", "/blocks/block_001/instructions/1", "/edges/0", "/blocks/block_002", "/blocks/block_002/instructions/0", "/blocks/block_002/instructions/1", "/edges/1", "/declared_context_keys/0", "/declared_context_keys/1"]`
+
+## unit_2
+
+block_003 的块级约束声明：若 FAST_KEY 存在，先用 source_id 和 FAST_KEY 尝试 fast.fetch；若 FAST_KEY 不存在，直接去 archive.fetch，不调用 fast.fetch。该块内 ir_005（check_fast_key_presence）以 ir_003 定义的 result_002 为输入，输出 result_003（fast_key_present）；ir_006（dispatch）以 result_003 为输入。边 /edges/2 在条件“FAST_KEY is present”下指向 block_004，边 /edges/3 在条件“FAST_KEY is absent”下指向 block_011。以上为图声明的约束与边条件，不证明运行时必然执行相应路径。
+
+模型原始定位：`["/blocks/block_003", "/blocks/block_003/constraints/0", "/blocks/block_003/instructions/0", "/blocks/block_003/instructions/1", "/edges/2", "/edges/3", "/blocks/block_004", "/blocks/block_011"]`
+
+## unit_3
+
+block_004 中 ir_007（call_fast_fetch）输入 external_resource fast.fetch、由 ir_001 定义的 result_001 和由 ir_003 定义的 result_002，输出 result_004（fast_fetch_response_body）与 result_005（fast_fetch_error）；ir_008（dispatch）终结该块，边 /edges/4 指向 block_005。block_005 中 ir_009（check_fast_fetch_success）以 ir_007 定义的 result_005 为输入，输出 result_006（fast_fetch_succeeded）；ir_010（dispatch）以 result_006 为输入。边 /edges/5 在条件“first fast.fetch attempt succeeded”下指向 block_006，边 /edges/6 在条件“first fast.fetch attempt failed”下指向 block_007。
+
+模型原始定位：`["/blocks/block_004", "/blocks/block_004/instructions/0", "/blocks/block_004/instructions/1", "/blocks/block_005", "/blocks/block_005/instructions/0", "/blocks/block_005/instructions/1", "/edges/4", "/edges/5", "/edges/6"]`
+
+## unit_4
+
+block_006 中 ir_011（append_final_status_to_status_file）输入 external_resource status.txt 和字面量 'success'，无输出；ir_012（return）输入 ir_007 定义的 result_004（fast_fetch_response_body）。全局约束 /constraints/1 声明每个成功或失败路径返回前都要把最终状态追加到本地 status.txt；/constraints/2 声明任一工具成功时返回该成功响应的 body 值不变，且不再发起 fetch 调用。
+
+模型原始定位：`["/blocks/block_006", "/blocks/block_006/instructions/0", "/blocks/block_006/instructions/1", "/blocks/block_004/instructions/0", "/constraints/1", "/constraints/2"]`
+
+## unit_5
+
+block_007 中 ir_013（check_transient_error）输入 ir_007 定义的 result_005，输出 result_007（fast_fetch_error_transient）；ir_wait_1（wait_for_seconds）输入字面量 2，并带约束“Wait for 2 seconds before continuing.”；ir_014（dispatch）以 result_007 为输入。边 /edges/7 在条件“first fast.fetch failure was transient”下指向 block_008，边 /edges/8 在条件“first fast.fetch failure was non-transient”下指向 block_011。block_008 中 ir_015（retry_fast_fetch）输入 external_resource fast.fetch、由 ir_001 定义的 result_001 和由 ir_003 定义的 result_002，输出 result_008（retry_fast_fetch_response_body）与 result_009（retry_fast_fetch_error）；该操作带约束声明：仅当首次失败为 transient 错误时恰好重试一次，非 transient 首次失败不得重试。ir_016（dispatch）终结该块，边 /edges/9 指向 block_009。block_009 中 ir_017（check_fast_fetch_success）输入 ir_015 定义的 result_009，输出 result_010（retry_fast_fetch_succeeded）；ir_018（dispatch）以 result_010 为输入。边 /edges/10 在条件“fast.fetch retry succeeded”下指向 block_010，边 /edges/11 在条件“fast.fetch retry failed”下指向 block_011。
+
+模型原始定位：`["/blocks/block_007", "/blocks/block_007/instructions/0", "/blocks/block_007/instructions/1", "/blocks/block_007/instructions/1/constraints/0", "/blocks/block_007/instructions/2", "/edges/7", "/edges/8", "/blocks/block_008", "/blocks/block_008/instructions/0", "/blocks/block_008/instructions/0/constraints/0", "/blocks/block_008/instructions/1", "/edges/9", "/blocks/block_009", "/blocks/block_009/instructions/0", "/blocks/block_009/instructions/1", "/edges/10", "/edges/11"]`
+
+## unit_6
+
+block_010 中 ir_019（append_final_status_to_status_file）输入 external_resource status.txt 和字面量 'success'；ir_020（return）输入 ir_015 定义的 result_008（retry_fast_fetch_response_body）。结合 /constraints/1 与 /constraints/2，该成功返回路径也受返回前追加最终状态、成功时返回该成功 body 且不再 fetch 的声明约束。
+
+模型原始定位：`["/blocks/block_010", "/blocks/block_010/instructions/0", "/blocks/block_010/instructions/1", "/blocks/block_008/instructions/0", "/constraints/1", "/constraints/2"]`
+
+## unit_7
+
+block_011 可由 /edges/3（FAST_KEY absent）、/edges/8（first fast.fetch failure was non-transient）、/edges/11（fast.fetch retry failed）到达。其块级约束声明：在非 transient 首次失败或任一次 fast.fetch 重试失败后，用 source_id 调用 archive.fetch；archive.fetch 至多调用一次且 source_id 是其唯一参数；若 archive.fetch 失败则停止并返回其错误，不得重试 archive.fetch。全局 /constraints/0 声明整个工作流绝不把 FAST_KEY 传给 archive.fetch 或诊断输出。该块中 ir_021（call_archive_fetch）输入 external_resource archive.fetch 和由 ir_001 定义的 result_001，输出 result_011（archive_fetch_response_body）与 result_012（archive_fetch_error）；ir_022（dispatch）终结该块，边 /edges/12 指向 block_012。block_012 中 ir_023（check_archive_fetch_success）输入 ir_021 定义的 result_012，输出 result_013（archive_fetch_succeeded）；ir_024（dispatch）以 result_013 为输入。边 /edges/13 在条件“archive.fetch succeeded”下指向 block_013，边 /edges/14 在条件“archive.fetch failed”下指向 block_014。
+
+模型原始定位：`["/blocks/block_011", "/blocks/block_011/constraints/0", "/blocks/block_011/constraints/1", "/blocks/block_011/constraints/2", "/constraints/0", "/blocks/block_011/instructions/0", "/blocks/block_011/instructions/1", "/edges/3", "/edges/8", "/edges/11", "/edges/12", "/blocks/block_012", "/blocks/block_012/instructions/0", "/blocks/block_012/instructions/1", "/edges/13", "/edges/14", "/blocks/block_013", "/blocks/block_014"]`
+
+## unit_8
+
+block_013 中 ir_025（append_final_status_to_status_file）输入 external_resource status.txt 和字面量 'success'；ir_026（return）输入 ir_021 定义的 result_011（archive_fetch_response_body）。block_014 中 ir_027（append_final_status_to_status_file）输入 external_resource status.txt 和字面量 'failure'；ir_028（return）输入 ir_021 定义的 result_012（archive_fetch_error）。全局 /constraints/1 要求每个成功或失败返回路径返回前追加最终状态到本地 status.txt；/constraints/2 要求任一工具成功时返回该成功响应的 body 值不变且不再进行 fetch 调用。
+
+模型原始定位：`["/blocks/block_013", "/blocks/block_013/instructions/0", "/blocks/block_013/instructions/1", "/blocks/block_014", "/blocks/block_014/instructions/0", "/blocks/block_014/instructions/1", "/blocks/block_011/instructions/0", "/constraints/1", "/constraints/2"]`

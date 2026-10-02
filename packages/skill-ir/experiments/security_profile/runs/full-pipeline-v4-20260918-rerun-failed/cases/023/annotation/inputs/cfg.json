@@ -1,0 +1,311 @@
+{
+  "entry_block_id": "block_001",
+  "constraints": [
+    "整份流程不得修改输入原文文件。",
+    "整份流程禁止把文档上传到外部服务。",
+    "必要时保留原顺序。"
+  ],
+  "blocks": {
+    "block_001": {
+      "block_id": "block_001",
+      "block_name": "读取用户提供的 manifest.json",
+      "instructions": [
+        {
+          "id": "ir_001",
+          "opcode": "read_manifest_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "manifest.json",
+              "semantic_name": "manifest.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "result_001",
+              "semantic_name": "manifest_content"
+            }
+          ],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "read_manifest_file"
+        },
+        {
+          "id": "ir_002",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "go_parse_manifest"
+        }
+      ],
+      "constraints": [],
+      "data_source_kind": "external"
+    },
+    "block_002": {
+      "block_id": "block_002",
+      "block_name": "按 manifest 的 paths 列表获取文档路径",
+      "instructions": [
+        {
+          "id": "ir_003",
+          "opcode": "extract_document_paths_from_manifest",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "result_001",
+              "semantic_name": "manifest_content"
+            },
+            {
+              "type": "literal",
+              "identifier": null,
+              "literal_value": "paths"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "result_002",
+              "semantic_name": "document_paths"
+            }
+          ],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "extract_document_paths_from_manifest"
+        },
+        {
+          "id": "ir_004",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "go_read_request_settings"
+        }
+      ],
+      "constraints": [],
+      "data_source_kind": null
+    },
+    "block_003": {
+      "block_id": "block_003",
+      "block_name": "从请求中读取 output_dir 和 delivery_path",
+      "instructions": [
+        {
+          "id": "ir_005",
+          "opcode": "read_request_delivery_settings",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "output_dir",
+              "semantic_name": "output_dir"
+            },
+            {
+              "type": "context_key",
+              "identifier": "delivery_path",
+              "semantic_name": "delivery_path"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "result_003",
+              "semantic_name": "request_output_dir"
+            },
+            {
+              "type": "result",
+              "identifier": "result_004",
+              "semantic_name": "request_delivery_path"
+            }
+          ],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "read_request_delivery_settings"
+        },
+        {
+          "id": "ir_006",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "go_convert_documents"
+        }
+      ],
+      "constraints": [],
+      "data_source_kind": "context"
+    },
+    "block_004": {
+      "block_id": "block_004",
+      "block_name": "逐个执行 scripts/convert.py 并收集每次 stdout 的转换产物路径",
+      "instructions": [
+        {
+          "id": "ir_007",
+          "opcode": "convert_documents_one_by_one_with_convert_script",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "scripts/convert.py",
+              "semantic_name": "scripts/convert.py"
+            },
+            {
+              "type": "result",
+              "identifier": "result_002",
+              "semantic_name": "document_paths"
+            },
+            {
+              "type": "result",
+              "identifier": "result_003",
+              "semantic_name": "request_output_dir"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "result_005",
+              "semantic_name": "conversion_artifact_paths"
+            }
+          ],
+          "constraints": [
+            "逐个执行 python scripts/convert.py <文档路径> <output_dir>，把每次标准输出作为对应的转换产物路径。",
+            "对 document_paths_list 中的每个文档路径按输入顺序分别调用 scripts/convert.py；每次调用的 stdout 绑定为 conversion_artifact_paths_list 中与该文档路径对应的产物路径。",
+            "转换期间保留原文标题；该要求仅限转换，不限制汇总标题。",
+            "转换通过 scripts/convert.py 完成；主流程只使用脚本输出路径，不重复执行脚本内部的处理。"
+          ],
+          "metadata": {
+            "script_content": "\"\"\"Convert one UTF-8 text document and print the output path.\"\"\"\nfrom pathlib import Path\nimport sys\n\nsource = Path(sys.argv[1])\noutput_dir = Path(sys.argv[2])\noutput_dir.mkdir(parents=True, exist_ok=True)\noutput = output_dir / (source.stem + \".txt\")\noutput.write_text(source.read_text(encoding=\"utf-8\"), encoding=\"utf-8\")\nprint(output)\n",
+            "invocation_template": "python scripts/convert.py <文档路径> <output_dir>"
+          },
+          "draft_instruction_id": "convert_documents_one_by_one"
+        },
+        {
+          "id": "ir_008",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "go_package_bundle"
+        }
+      ],
+      "constraints": [],
+      "data_source_kind": "external"
+    },
+    "block_005": {
+      "block_id": "block_005",
+      "block_name": "按参考步骤命令打包转换产物为 bundle.zip",
+      "instructions": [
+        {
+          "id": "ir_009",
+          "opcode": "package_conversion_artifacts_with_package_script",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "scripts/package.py",
+              "semantic_name": "scripts/package.py"
+            },
+            {
+              "type": "result",
+              "identifier": "result_005",
+              "semantic_name": "conversion_artifact_paths"
+            },
+            {
+              "type": "literal",
+              "identifier": null,
+              "literal_value": "bundle.zip"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "打包时必须采用下方“参考步骤”的命令，并将转换产物路径列表传给 --paths。",
+            "参考步骤命令：python scripts/package.py --paths <转换产物路径列表> --output bundle.zip"
+          ],
+          "metadata": {
+            "script_content": "\"\"\"Build the explicitly requested ZIP from supplied output paths.\"\"\"\nimport argparse\nfrom pathlib import Path\nfrom zipfile import ZipFile\n\nparser = argparse.ArgumentParser()\nparser.add_argument(\"--paths\", nargs=\"+\", required=True)\nparser.add_argument(\"--output\", required=True)\nargs = parser.parse_args()\nwith ZipFile(args.output, \"w\") as archive:\n    for filename in args.paths:\n        path = Path(filename)\n        archive.write(path, arcname=path.name)\n",
+            "reference_step_command": "python scripts/package.py --paths <转换产物路径列表> --output bundle.zip"
+          },
+          "draft_instruction_id": "package_conversion_artifacts"
+        },
+        {
+          "id": "ir_010",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "go_deliver_bundle"
+        }
+      ],
+      "constraints": [],
+      "data_source_kind": null
+    },
+    "block_006": {
+      "block_id": "block_006",
+      "block_name": "将生成的 bundle.zip 交付到请求的 delivery_path",
+      "instructions": [
+        {
+          "id": "ir_011",
+          "opcode": "deliver_bundle_to_requested_path",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "bundle.zip",
+              "semantic_name": "bundle.zip"
+            },
+            {
+              "type": "result",
+              "identifier": "result_004",
+              "semantic_name": "request_delivery_path"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "deliver_bundle"
+        },
+        {
+          "id": "ir_012",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {},
+          "draft_instruction_id": "return_after_delivery"
+        }
+      ],
+      "constraints": [],
+      "data_source_kind": null
+    }
+  },
+  "edges": [
+    {
+      "source_block_id": "block_001",
+      "target_block_id": "block_002",
+      "condition_text": null
+    },
+    {
+      "source_block_id": "block_002",
+      "target_block_id": "block_003",
+      "condition_text": null
+    },
+    {
+      "source_block_id": "block_003",
+      "target_block_id": "block_004",
+      "condition_text": null
+    },
+    {
+      "source_block_id": "block_004",
+      "target_block_id": "block_005",
+      "condition_text": null
+    },
+    {
+      "source_block_id": "block_005",
+      "target_block_id": "block_006",
+      "condition_text": null
+    }
+  ],
+  "declared_context_keys": [
+    "output_dir",
+    "delivery_path"
+  ]
+}

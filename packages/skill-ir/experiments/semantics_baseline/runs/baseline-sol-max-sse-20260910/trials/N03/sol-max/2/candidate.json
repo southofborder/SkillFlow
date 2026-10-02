@@ -1,0 +1,275 @@
+{
+  "entry_block_ref": "read_records",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。"
+  ],
+  "declared_context_keys": [
+    "records"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_records",
+      "block_name": "Read the records to process",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_input_records",
+          "opcode": "read_records_from_context",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "input_records",
+              "semantic_name": "records to process"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_selection",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "partition_records",
+      "block_name": "Partition records by selection status",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "partition_by_selection",
+          "opcode": "partition_records_by_existing_selection",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "input_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_records",
+              "semantic_name": "selected records"
+            },
+            {
+              "type": "result",
+              "identifier": "has_selected_records",
+              "semantic_name": "whether any records are selected"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_on_selected_records",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "has_selected_records"
+            }
+          ],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notifications",
+      "block_name": "Send each selected record summary",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "extract_original_summaries",
+          "opcode": "extract_summary_field_values",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_record_summary_values",
+              "semantic_name": "original summary values from selected records"
+            }
+          ],
+          "constraints": [
+            "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "call_notify_send",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_record_summary_values",
+              "semantic_name": "body values"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "未选中的记录不调用 notify.send。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_after_notifications",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "skip_notifications",
+      "block_name": "Continue without sending notifications",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "dispatch_after_skip",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": [
+        "未选中的记录不调用 notify.send。"
+      ]
+    },
+    {
+      "block_ref": "count_processed_records",
+      "block_name": "Count the processed records",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "compute_processed_record_count",
+          "opcode": "count_processed_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "input_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "processed_record_count",
+              "semantic_name": "processed record count"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_count_file",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "write_count_file",
+      "block_name": "Write the processed count to count.txt",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "write_processed_count",
+          "opcode": "write_processed_count_to_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt"
+            },
+            {
+              "type": "result",
+              "identifier": "processed_record_count"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "处理完成后，将处理条数写入本地 count.txt。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "return_after_count_write",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_records",
+      "target_block_ref": "partition_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "partition_records",
+      "target_block_ref": "send_notifications",
+      "condition_text": "At least one record is selected."
+    },
+    {
+      "source_block_ref": "partition_records",
+      "target_block_ref": "skip_notifications",
+      "condition_text": "No records are selected."
+    },
+    {
+      "source_block_ref": "send_notifications",
+      "target_block_ref": "count_processed_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "skip_notifications",
+      "target_block_ref": "count_processed_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "count_processed_records",
+      "target_block_ref": "write_count_file",
+      "condition_text": null
+    }
+  ],
+  "diagnostics": [
+    "The package refers to records but does not explicitly name their runtime input key; records is used as the inferred context key.",
+    "The package distinguishes selected and unselected records but does not specify the selection criterion or the representation of selection status.",
+    "The phrase “处理条数” does not specify whether it means all input records, selected records, or successful notification calls; this candidate counts the input records processed by the workflow.",
+    "The scope of “字段取值要求不包含摘要生成、内容改写或额外格式转换。” is not explicit; it is attached to extraction of the summary field rather than promoted to a Skill-wide constraint."
+  ]
+}

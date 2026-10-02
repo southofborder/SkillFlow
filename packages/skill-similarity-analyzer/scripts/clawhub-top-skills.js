@@ -18,6 +18,7 @@ function printUsage() {
   console.log('  node scripts/clawhub-top-skills.js [--semantic-llm] [--phase list|download|list-download|group|all]');
   console.log('');
   console.log('Options:');
+  console.log('  --phase list-download      Prepare standalone Skill ZIP inputs without grouping');
   console.log('  --k <n>, -k <n>             Number of top skills to process');
   console.log('  --limit <n>                 Default: 10000');
   console.log(`  --root <dir>                Default: ${DEFAULT_ROOT}`);
