@@ -1,0 +1,296 @@
+{
+  "entry_block_ref": "read_events_file",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events_file",
+      "block_name": "Read event records from events.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_json",
+          "opcode": "read_events_json",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "events.json",
+              "semantic_name": "user-provided events file"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "records read from events.json"
+            }
+          ],
+          "constraints": [
+            "读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_selection",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "select_notification_records",
+      "block_name": "Select records eligible for notification",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_eligible_records",
+          "opcode": "select_notification_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "event records to evaluate"
+            },
+            {
+              "type": "literal",
+              "literal_value": true
+            },
+            {
+              "type": "literal",
+              "literal_value": 100
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_event_records",
+              "semantic_name": "records eligible for notification"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_parameter_extraction",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "extract_notification_parameters",
+      "block_name": "Extract recipient and body values",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "extract_notify_send_parameters",
+          "opcode": "extract_notify_send_parameters",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "selected_event_records",
+              "semantic_name": "selected records supplying notification parameters"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_recipient_values",
+              "semantic_name": "recipient field values for selected records"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_summary_values",
+              "semantic_name": "original summary field values used as body parameters"
+            }
+          ],
+          "constraints": [
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+          ],
+          "metadata": {
+            "parameter_mapping": {
+              "recipient": "selected record recipient field",
+              "body": "selected record summary field"
+            }
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_notification",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_selected_notifications",
+      "block_name": "Send notifications for selected records",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "call_notify_send",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify.send",
+              "semantic_name": "notification sending operation"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_recipient_values",
+              "semantic_name": "recipient parameters"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_summary_values",
+              "semantic_name": "body parameters"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "未选中的记录不调用 notify.send。"
+          ],
+          "metadata": {
+            "parameter_mapping": {
+              "recipient": "selected_recipient_values",
+              "body": "selected_summary_values"
+            }
+          }
+        },
+        {
+          "instruction_ref": "dispatch_to_count",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "count_processed_records",
+      "block_name": "Count processed event records",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "count_event_records",
+          "opcode": "count_processed_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "event records evaluated by the workflow"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "processed_record_count",
+              "semantic_name": "number of processed records"
+            }
+          ],
+          "constraints": [],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "dispatch_to_count_file",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "write_processing_count",
+      "block_name": "Write the processing count to count.txt",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "write_count_txt",
+          "opcode": "write_count_to_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt",
+              "semantic_name": "local count file"
+            },
+            {
+              "type": "result",
+              "identifier": "processed_record_count",
+              "semantic_name": "processing count to write"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "处理完成后，将处理条数写入本地 count.txt。"
+          ],
+          "metadata": {}
+        },
+        {
+          "instruction_ref": "return_after_processing",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": [],
+          "metadata": {}
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events_file",
+      "target_block_ref": "select_notification_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "select_notification_records",
+      "target_block_ref": "extract_notification_parameters",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "extract_notification_parameters",
+      "target_block_ref": "send_selected_notifications",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "send_selected_notifications",
+      "target_block_ref": "count_processed_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "count_processed_records",
+      "target_block_ref": "write_processing_count",
+      "condition_text": null
+    }
+  ],
+  "diagnostics": [
+    "“处理条数”未明确说明是全部已评估记录数还是仅选中并发送通知的记录数；此候选将其解释为 events.json 中经过条件评估的全部记录数。",
+    "源文件未指定 notify.send 的返回数据或整个流程的返回值，因此 notify.send 和最终 return 均未产生或返回结果。"
+  ]
+}

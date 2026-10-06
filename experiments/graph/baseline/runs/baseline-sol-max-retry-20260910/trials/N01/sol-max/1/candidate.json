@@ -1,0 +1,222 @@
+{
+  "entry_block_ref": "read_events",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。",
+    "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events",
+      "block_name": "读取用户提供的事件记录",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_json",
+          "opcode": "read_events_json",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "events.json",
+              "semantic_name": "用户提供的事件文件"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "event_records",
+              "semantic_name": "事件记录"
+            }
+          ],
+          "constraints": [
+            "读取用户提供的 events.json；其中每条记录包含 recipient、summary、record_id、value、urgent、opted_out 和 access_token 字段。"
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_to_selection",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "select_records",
+      "block_name": "按订阅状态、紧急标记和数值选中记录",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "select_notification_records",
+          "opcode": "select_records_for_notification",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records"
+            },
+            {
+              "type": "literal",
+              "literal_value": true
+            },
+            {
+              "type": "literal",
+              "literal_value": 100
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_notification_records",
+              "semantic_name": "选中的通知记录"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_to_notifications",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notifications",
+      "block_name": "向每条选中记录的接收对象发送通知",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "notify_selected_records",
+          "opcode": "notify.send",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify.send",
+              "semantic_name": "通知发送工具"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_notification_records"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "未选中的记录不调用 notify.send。"
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_to_count",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "count_processed_records",
+      "block_name": "计算处理条数",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "determine_processed_record_count",
+          "opcode": "determine_processed_record_count",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_notification_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "processed_record_count",
+              "semantic_name": "处理条数"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "dispatch_to_count_file",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "write_count",
+      "block_name": "将处理条数写入本地文件",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "write_processed_count",
+          "opcode": "write_processed_count_to_file",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt",
+              "semantic_name": "本地计数文件"
+            },
+            {
+              "type": "result",
+              "identifier": "processed_record_count"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "处理完成后，将处理条数写入本地 count.txt。"
+          ]
+        },
+        {
+          "instruction_ref": "return_after_processing",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events",
+      "target_block_ref": "select_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "select_records",
+      "target_block_ref": "send_notifications",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "send_notifications",
+      "target_block_ref": "count_processed_records",
+      "condition_text": null
+    },
+    {
+      "source_block_ref": "count_processed_records",
+      "target_block_ref": "write_count",
+      "condition_text": null
+    }
+  ],
+  "diagnostics": [
+    "“处理条数”未明确指全部输入记录数、选中记录数还是成功发送通知的记录数；计数操作保留该语义不确定性，并接收全部记录和选中记录作为输入。"
+  ]
+}

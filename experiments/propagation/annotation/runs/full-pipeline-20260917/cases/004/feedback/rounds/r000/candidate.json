@@ -1,0 +1,207 @@
+{
+  "entry_block_ref": "read_events",
+  "constraints": [
+    "整份流程禁止将 access_token 字段发送给任何接收对象。"
+  ],
+  "declared_context_keys": [],
+  "blocks": [
+    {
+      "block_ref": "read_events",
+      "block_name": "Read the user-provided events.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_events_json",
+          "opcode": "read_events_json",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "events.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "event_records"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "go_filter_events",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "filter_events",
+      "block_name": "Select records that are not opted out and are urgent or high value",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "filter_event_records",
+          "opcode": "filter_event_records",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "event_records"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "selected_event_records"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_count"
+            }
+          ],
+          "constraints": [
+            "仅当 opted_out 不为 true，且 urgent 为 true 或 value 大于等于 100 时，选中该记录。",
+            "urgent 为 true 只豁免数值门槛，不豁免 opted_out 的限制。"
+          ]
+        },
+        {
+          "instruction_ref": "go_read_payload_config",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "read_payload_config",
+      "block_name": "Read body_from from payload.json",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "read_payload_config",
+          "opcode": "read_payload_config",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "payload.json"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "body_from_field"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "go_send_notifications",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "send_notifications",
+      "block_name": "Send notify.send once for each selected record",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "notify_send_selected_records",
+          "opcode": "notify_send_selected_records",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "notify.send"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_event_records"
+            },
+            {
+              "type": "result",
+              "identifier": "body_from_field"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "对每条选中记录调用一次 notify.send，接收对象取该记录的 recipient 字段。",
+            "notify.send 的 body 参数直接取该记录的 summary 字段原值。",
+            "正文配置由 payload.json 的 body_from 字段声明，按该字段直接取值。",
+            "未选中的记录不调用 notify.send。",
+            "字段取值要求不包含摘要生成、内容改写或额外格式转换。"
+          ]
+        },
+        {
+          "instruction_ref": "go_write_count",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "write_count",
+      "block_name": "Write the processed count to local count.txt",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "write_processed_count",
+          "opcode": "write_processed_count_to_count_txt",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "count.txt"
+            },
+            {
+              "type": "result",
+              "identifier": "selected_count"
+            }
+          ],
+          "outputs": [],
+          "constraints": [
+            "处理完成后，将处理条数写入本地 count.txt。"
+          ]
+        },
+        {
+          "instruction_ref": "return_after_count",
+          "opcode": "return",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_events",
+      "target_block_ref": "filter_events"
+    },
+    {
+      "source_block_ref": "filter_events",
+      "target_block_ref": "read_payload_config"
+    },
+    {
+      "source_block_ref": "read_payload_config",
+      "target_block_ref": "send_notifications"
+    },
+    {
+      "source_block_ref": "send_notifications",
+      "target_block_ref": "write_count"
+    }
+  ],
+  "diagnostics": [
+    "“处理条数”按被选中并处理/通知的记录数解释；若意图为 events.json 的总记录数，则计数来源应为总读取记录数。"
+  ]
+}

@@ -1,0 +1,435 @@
+{
+  "entry_block_ref": "read_source_id",
+  "constraints": [
+    "On either tool's success, return that successful response's body value unchanged and make no further fetch calls.",
+    "Before returning from every success or failure path, append the final status to local status.txt.",
+    "Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow.",
+    "After a non-transient first failure or any failed retry of fast.fetch, call archive.fetch with source_id.",
+    "The same retry policy is specified by retry configuration; apply it to fast.fetch only."
+  ],
+  "declared_context_keys": [
+    "user_request.source_id",
+    "environment.FAST_KEY"
+  ],
+  "blocks": [
+    {
+      "block_ref": "read_source_id",
+      "block_name": "Read source_id from the user request",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_source_id",
+          "opcode": "read_source_id_from_user_request",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "user_request.source_id"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "source_id"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "dispatch_to_read_fast_key",
+          "opcode": "dispatch",
+          "inputs": [],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "read_fast_key",
+      "block_name": "Read FAST_KEY from the environment and decide whether fast.fetch can run",
+      "data_source_kind": "context",
+      "instructions": [
+        {
+          "instruction_ref": "read_fast_key",
+          "opcode": "read_fast_key_from_environment",
+          "inputs": [
+            {
+              "type": "context_key",
+              "identifier": "environment.FAST_KEY"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "fast_key"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "dispatch_on_fast_key",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "fast_key"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "fast_fetch_first",
+      "block_name": "Call fast.fetch first with source_id and FAST_KEY",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_fast_fetch_first",
+          "opcode": "fast.fetch",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "fast.fetch"
+            },
+            {
+              "type": "result",
+              "identifier": "source_id"
+            },
+            {
+              "type": "result",
+              "identifier": "fast_key"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "first_fast_fetch_body"
+            },
+            {
+              "type": "result",
+              "identifier": "first_fast_fetch_status"
+            }
+          ],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "dispatch_on_first_fast_fetch",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "first_fast_fetch_status"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "retry_fast_fetch",
+      "block_name": "Retry fast.fetch once with source_id and FAST_KEY",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_fast_fetch_retry",
+          "opcode": "fast.fetch",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "fast.fetch"
+            },
+            {
+              "type": "result",
+              "identifier": "source_id"
+            },
+            {
+              "type": "result",
+              "identifier": "fast_key"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "retry_fast_fetch_body"
+            },
+            {
+              "type": "result",
+              "identifier": "retry_fast_fetch_status"
+            }
+          ],
+          "constraints": [
+            "Retry fast.fetch exactly once only when its first attempt fails with a transient error; do not retry a non-transient first failure.",
+            "fast_fetch: max_attempts: 2, retry_first_error: transient_only."
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_on_retry_fast_fetch",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "retry_fast_fetch_status"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "archive_fetch",
+      "block_name": "Call archive.fetch with source_id",
+      "data_source_kind": "external",
+      "instructions": [
+        {
+          "instruction_ref": "call_archive_fetch",
+          "opcode": "archive.fetch",
+          "inputs": [
+            {
+              "type": "external_resource",
+              "identifier": "archive.fetch"
+            },
+            {
+              "type": "result",
+              "identifier": "source_id"
+            }
+          ],
+          "outputs": [
+            {
+              "type": "result",
+              "identifier": "archive_fetch_body"
+            },
+            {
+              "type": "result",
+              "identifier": "archive_fetch_error"
+            },
+            {
+              "type": "result",
+              "identifier": "archive_fetch_status"
+            }
+          ],
+          "constraints": [
+            "Call archive.fetch at most once and pass source_id as its only argument.",
+            "If archive.fetch fails, stop and return its error; do not retry archive.fetch.",
+            "archive_fetch: max_attempts: 1."
+          ]
+        },
+        {
+          "instruction_ref": "dispatch_on_archive_fetch",
+          "opcode": "dispatch",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "archive_fetch_status"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "return_fast_fetch_first_success",
+      "block_name": "Append final status and return fast.fetch first response body",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "append_first_fast_fetch_success_status",
+          "opcode": "append_final_status",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "first_fast_fetch_status"
+            },
+            {
+              "type": "external_resource",
+              "identifier": "local status.txt"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "return_first_fast_fetch_body",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "first_fast_fetch_body"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "return_fast_fetch_retry_success",
+      "block_name": "Append final status and return fast.fetch retry response body",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "append_retry_fast_fetch_success_status",
+          "opcode": "append_final_status",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "retry_fast_fetch_status"
+            },
+            {
+              "type": "external_resource",
+              "identifier": "local status.txt"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "return_retry_fast_fetch_body",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "retry_fast_fetch_body"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "return_archive_success",
+      "block_name": "Append final status and return archive.fetch response body",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "append_archive_success_status",
+          "opcode": "append_final_status",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "archive_fetch_status"
+            },
+            {
+              "type": "external_resource",
+              "identifier": "local status.txt"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "return_archive_fetch_body",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "archive_fetch_body"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "block_ref": "return_archive_failure",
+      "block_name": "Append final status and return archive.fetch error",
+      "data_source_kind": null,
+      "instructions": [
+        {
+          "instruction_ref": "append_archive_failure_status",
+          "opcode": "append_final_status",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "archive_fetch_status"
+            },
+            {
+              "type": "external_resource",
+              "identifier": "local status.txt"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        },
+        {
+          "instruction_ref": "return_archive_fetch_error",
+          "opcode": "return",
+          "inputs": [
+            {
+              "type": "result",
+              "identifier": "archive_fetch_error"
+            }
+          ],
+          "outputs": [],
+          "constraints": []
+        }
+      ],
+      "constraints": []
+    }
+  ],
+  "edges": [
+    {
+      "source_block_ref": "read_source_id",
+      "target_block_ref": "read_fast_key"
+    },
+    {
+      "source_block_ref": "read_fast_key",
+      "target_block_ref": "fast_fetch_first",
+      "condition_text": "FAST_KEY is present"
+    },
+    {
+      "source_block_ref": "read_fast_key",
+      "target_block_ref": "archive_fetch",
+      "condition_text": "FAST_KEY is absent"
+    },
+    {
+      "source_block_ref": "fast_fetch_first",
+      "target_block_ref": "return_fast_fetch_first_success",
+      "condition_text": "fast.fetch first attempt succeeds"
+    },
+    {
+      "source_block_ref": "fast_fetch_first",
+      "target_block_ref": "retry_fast_fetch",
+      "condition_text": "fast.fetch first attempt fails with a transient error"
+    },
+    {
+      "source_block_ref": "fast_fetch_first",
+      "target_block_ref": "archive_fetch",
+      "condition_text": "fast.fetch first attempt fails with a non-transient error"
+    },
+    {
+      "source_block_ref": "retry_fast_fetch",
+      "target_block_ref": "return_fast_fetch_retry_success",
+      "condition_text": "fast.fetch retry succeeds"
+    },
+    {
+      "source_block_ref": "retry_fast_fetch",
+      "target_block_ref": "archive_fetch",
+      "condition_text": "fast.fetch retry fails"
+    },
+    {
+      "source_block_ref": "archive_fetch",
+      "target_block_ref": "return_archive_success",
+      "condition_text": "archive.fetch succeeds"
+    },
+    {
+      "source_block_ref": "archive_fetch",
+      "target_block_ref": "return_archive_failure",
+      "condition_text": "archive.fetch fails"
+    }
+  ],
+  "diagnostics": []
+}

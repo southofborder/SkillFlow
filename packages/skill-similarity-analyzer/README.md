@@ -1,6 +1,6 @@
 ﻿# Skill Similarity Analyzer
 
-`skill-similarity-analyzer` downloads and groups OpenClaw Skill zip packages for independent corpus sampling. Grouping reads only each package's `SKILL.md` and optional `README.md`, then writes folders containing copies of the original zip packages. Selected packages can be analyzed individually with `skill-ir`.
+`skill-similarity-analyzer` downloads and groups OpenClaw Skill zip packages for independent corpus sampling. Grouping reads only each package's `SKILL.md` and optional `README.md`, then writes folders containing copies of the original zip packages. Selected packages can be analyzed individually with `skillflow`.
 
 This optional sampling utility is separate from the current Skill-IR analysis and controlled semantic review workflow. Its similarity scores are sampling aids, not semantic fidelity or security judgments.
 
@@ -120,21 +120,21 @@ Per-group manifest. It records:
 - `SKILL.md` and `README.md` entry paths inside each zip
 - pairwise similarity evidence inside the group
 
-## Analyze a Selected Package With `skill-ir`
+## Analyze a Selected Package With `skillflow`
 
 Install the current analyzer from the repository root:
 
 ```powershell
-python -m pip install -e packages/skill-ir
+python -m pip install -e .
 ```
 
 Choose one of the copied zip packages and pass that package to the analyzer:
 
 ```powershell
-python -m skill_ir analyze --input "D:\datasets\skill-groups\groups\group_001\skill-a.zip" --output "D:\datasets\skill-analysis\skill-a.json"
+python -m skillflow analyze --input "D:\datasets\skill-groups\groups\group_001\skill-a.zip" --output "D:\datasets\skill-analysis\skill-a.json"
 ```
 
-This command performs model-based extraction and uses the configured API credentials. The `--input` value is a single Skill zip or unpacked Skill package, not the grouping output root or `grouping.json`. Grouping and downloading do not invoke `skill-ir` automatically. See the [Skill-IR usage and review documentation](../skill-ir/README.md) for offline candidates, rendering, and controlled semantic review.
+This command performs model-based extraction and uses the configured API credentials. The `--input` value is a single Skill zip or unpacked Skill package, not the grouping output root or `grouping.json`. Grouping and downloading do not invoke `skillflow` automatically. See the [SkillFlow usage and review documentation](../../docs/architecture/implementation.md) for offline candidates, rendering, and controlled semantic review.
 
 ## ClawHub Top Skills Automation
 
@@ -312,6 +312,6 @@ node src/index.js group "D:\datasets\skill-zips" --output "D:\datasets\skill-gro
 - Only zip packages are analyzed. A raw unpacked Skill directory is not treated as a Skill input unless it contains zip packages to scan.
 - Only `SKILL.md` and optional `README.md` are read from each zip.
 - The analyzer does not execute package code.
-- The analyzer does not construct CFGs or invoke `skill-ir`.
+- The analyzer does not construct CFGs or invoke `skillflow`.
 - The analyzer does not detect over-exposure, data leakage, or risk paths.
 - Similarity groups support corpus selection independently of the main analysis and review workflow.
