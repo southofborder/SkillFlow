@@ -15,6 +15,7 @@ from skillflow.graph.audit.evidence import json_pointer
 from skillflow.graph.audit.evidence import normalize_cfg
 from skillflow.graph.audit.fixtures import prepare_cases
 from skillflow.common.paths import project_root, resolve_material_path
+from skillflow.common.source_evidence import resolve_pointer
 from skillflow.graph.audit.services import audit_source_controlled
 from skillflow.common.artifacts import ArtifactWriter
 from skillflow.graph.extraction.pipeline import analyze_skill
@@ -59,9 +60,8 @@ def test_feedback_renamed_compiled_ids_keep_literal_target_mapping(material):
     prompt = build_feedback_prompt(package, graph, audit)
     payload = json.loads(prompt.split(FEEDBACK_INSTRUCTIONS + "\n\n", 1)[1])
     location = payload["explicit_differences"][0]["suggestions"][0]["suggestion_targets"]
-    assert location == [{"graph_pointer": pointer, "value":
-                         normalize_cfg(cfg)["blocks"][renamed]["instructions"][0]["inputs"][0]}]
-    assert location[0]["value"]["literal_value"] == literal
+    assert location == [{"graph_pointer": pointer}]
+    assert resolve_pointer(payload["previous_cfg"], location[0]["graph_pointer"])["literal_value"] == literal
     assert payload["previous_cfg"] == normalize_cfg(cfg)
     assert payload["previous_cfg"]["blocks"][renamed]["instructions"][0]["id"] == "ir_renamed_907"
     assert old_id not in payload["previous_cfg"]["blocks"]

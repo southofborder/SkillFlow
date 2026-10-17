@@ -36,7 +36,7 @@ skillflow experiment --config experiments/configs/sol_max.json --output-dir resu
 src/skillflow/
   graph/          原 IR、提取、结构校验、受控核对 audit、反馈与建图实验
   propagation/    联合标注 annotation、聚焦审查 review、Data、规格与离线求解
-    contracts/    安全 profile、运行时／表示契约与固定 sink 边界规则
+    contracts/    联合 IR 语义、Task／需求、运行时／表示契约与固定 sink 边界规则
   common/         输入、LLM／SSE、调用记录、文件保存、实验保存与历史地址解析
   cli.py          skillflow 的 analyze / render / experiment 统一入口
 formal/           Lean 事实保持与结构证明
@@ -57,24 +57,15 @@ experiments/
 IR 不依赖 LLM、实验管理或命令行。结果输出模块消费已有分析结果。
 测试按相同职责分组，手工演示 CFG 位于 `tests/fixtures`。
 
-安全标注独立运行，不改变建图或反馈入口。其模型输入为完整可读 Skill、选定的完整
-CFG JSON 及固定执行模型；输出每条 IR 的 `operator`、`roles`、`effects`、`evidences`，
-以及图外的 `locations`、`transfer_specs`。当前安全标注为 v10：`operator` 是参与动作执行的主体，允许 `llm`、`agent_runtime`、
-`tool`、`human` 多值，仍与 roles 一样去重；旧字段 `actor` 不作为兼容别名。
-`effects` 按有依据的发生阶段排列，允许重复；证据以零起始 `effect_index` 对应每次出现。
-新增 `context_write` 表示创建、更新或删除共享运行时、会话或环境条目，普通结果定义不自动算上下文写入，
-模型实际接收内容仍使用 `model_observe`。纯控制或原样传递等没有适用效果时可有依据地
-保留空数组；确实无法完成必要判断时记录 semantic_failure。空效果不等于 nop 或入口／出口状态相同；删除上下文绑定
-也不自动表示读取旧内容。部分顺序用 order=partial 与程序生成的 precedence 计算，不能默认先保护后观察。
-固定执行模型为 `skillflow-abstract-runtime-v5`，所有 Skill 共用一份规则；独立运行使用 `skill-ir-security-profile-v11` / schema 11，业务标注为 v10。默认可能行为、明确机制和适用边界统一见[抽象运行时契约](../propagation/SkillFlow-统一抽象运行时契约.md)；
-位置声明保留 `kind/name/operand_refs/access_scope/retention`，状态位置仍使用 `kind/name`；安全标注与传播规格的证据编号统一为 `ref_id`。
-模型响应另带 `location_evidences`，校验后独立保存为 `audit/location-evidences.json`；业务结果和传播快照不复制该表。
-旧运行和旧标注均明确拒绝，不自动迁移或重新解释。
-联合标注本身不执行传播、风险评分或必要性判断；合法编译结果交给独立传播入口求值。使用方法见
-[标注规范](../propagation/Skill-IR安全语义标注规范.md) 与
-[30 图首次实验的历史记录](../../experiments/propagation/annotation/README.md)。历史标注保持原版本；当前入口不重解释或续跑旧记录。
+联合标注独立于构图入口，读取完整可读 Skill、CFG、运行时与表示契约，以及可选用户任务和策略。当前业务契约为 `security-profile-v12`，每条 IR 仅有一份 `ir_semantics`：`operator`、执行主体依据、`order`、有序 `events`、公开 `output_bindings` 和 `sensitivity`。原始模型材料还带处理模式；编译材料保留必要先后约束。事件直接携带 `effect` 和本次效果的依据，不再维护 `profiles`、`roles`、平行 `effects` 或 `effect_index`。效果仍允许重复，覆盖数量仍按 IR 去重统计。
 
-模型声明接收方、访问范围和留存性质，程序生成六类 sink 及固定 `exposure_level`，不让模型自由数字打分。编译业务材料为 profiles、locations、transfer_specs、sink_boundaries 四项；profile 仍四字段。纯任务内部工具和临时状态继续传播但不进入暴露清单，删除不交付旧内容。网络未知的工具参数用 null-effect 的 deliver → tool，不能以工具响应依赖代替请求交付。等级只表示边界范围和留存，具体数据敏感性和任务必要性留给 DOE。详见[Sink 边界与固定分级](../propagation/SkillFlow-Sink边界与固定分级.md)。
+无非空效果时，必须提供 `empty_effect_evidences`；有非空效果则省略它。空效果不表示 NOP 或入口等于出口。`operator` 仍是参与执行的主体，不等于接收边界。Task 要求的图中对应关系和可执行需求目标分开，模型不预测生成后的观察坐标或 Data ID。
+
+源文证据使用 `file/start_line/end_line/reason`，结构及规则证据使用 `ref_id/reason`，程序从冻结材料取出原文。模型不重复 `basis` 或 `quote`。请求视图只发送一次文本、CFG 与契约；短编号指向真实图位置，完整索引及摘要仍用于审计和恢复。位置属性及独立位置依据保持；原始响应不被压缩投影覆盖。
+
+运行时契约为 `skillflow-abstract-runtime-v6`，表示契约 v4；独立标注运行 `skill-ir-security-profile-v13`（格式 13）。所有 Skill 使用同一规则，明确局部机制、默认可能观察、条件消费与数据版本保持原意。非法或旧格式明确拒绝，不自动迁移。标注后编译观察、求解传播和反向需求，再追踪声明的敏感信息；不增加最终 DOE 模型调用。定位成立不能证明前端语义正确或完整。
+
+模型声明接收方的访问范围及留存性质，程序从实际交付和保存操作生成六类 sink 与固定 `exposure_level`，不按角色筛选。等级仅表示边界性质，不表示敏感性或必要性。任务内部临时流动继续传播，删除不交付旧内容，未知网络仍可采用工具边界。详见[标注规范](../propagation/Skill-IR安全语义标注规范.md)、[Sink 规范](../propagation/SkillFlow-Sink边界与固定分级.md)及[本轮字段收紧](field-tightening.md)。
 
 联合标注之后可独立执行[三任务聚焦审查](../propagation/SkillFlow-联合标注三任务聚焦审查.md)：
 检查无依据收窄、数据关系和观察／交付绑定。审查只读加载合法标注，每图一次调用，
@@ -110,13 +101,13 @@ python -m pytest tests/propagation/data -q
 示例只向标准输出打印注册表 JSON，并核对导出恢复一致性，不执行 Skill、不读取真实
 敏感数据，也不写产物。`build_demo()` 可供其他 Python 示例直接调用。
 
-独立的 `skillflow.propagation` 离线解释 v9 联合标注经观察编译后的 IR 传递规格，执行前向 may 求解。
+独立的 `skillflow.propagation` 离线解释 v12 联合标注经观察编译后的 IR 传递规格，执行前向 may 求解。
 单一 `events → atomic_ops` 序列描述效果内的读取、接收、传递、写入、选择、排除、覆盖、
 构造和计算；`output_bindings` 只登记公开结果别名。未知函数保留 possible 依赖，原样
 读取不因已知字段而自动缩小，不执行 Skill 或在传播中调用模型。
 
 `PropagationRecords` 在图外保存完整入口／出口状态与实际 Data 绑定，记录外壳升级为
-`skillflow-propagation-record-v9`。原子操作 inputs/outputs 直接保存有序的 Data 候选集合列表，不再复制 ref、位置索引或逐步骤 notes。紧凑快照只保留记录及材料摘要，恢复时必须显式提供原 CFG、四项业务标注、注册表和初始状态。
+`skillflow-propagation-record-v11`。原子操作 inputs/outputs 直接保存有序的 Data 候选集合列表，不再复制 ref、位置索引或逐步骤 notes。记录文件只保存逐 IR 记录，材料身份放在提交清单；恢复通过公共加载器取得原 CFG、所选标注、注册表和初始状态。
 工作队列重新求值替换静态记录，不增加实际运行次数；partial 候选次序及必要因果继续保留，已有观察不会被
 后续删减撤销。支持基本分支和稳定输入的重试；生成数据反馈明确停止为 unsupported_feedback，
 不以迭代上限冒充收敛。详见[算法与 IR 传递规格](../propagation/SkillFlow-传播算法与IR传递规格.md)
@@ -133,9 +124,7 @@ python -m pytest tests/propagation -q
 
 示例构造合成材料和手写规格，离线校验引文后实际求解；默认打印唯一业务结果，
 `--records-only` 只打印 IR 记录，`--output` 与正式运行共用保存流程。旧 `propagation_record_demo.py` 已删除。
-新运行仅以 `doe-input.json` 作为后续 DOE 的业务输入，内含完整源文、CFG、位置属性、sink 清单、执行主体／角色、扁平 Data 和紧凑记录；
-标注长文、身份键、证据及求解统计保存在 `audit/`。不再并行导出 `result.json`、`data.json` 或 `records.json`。
-离线重放写入 `replay/summary.json` 与报告，链接原主文件；不复制第二份业务结果。报告 MD／HTML 复用同一视图模型。
+传播保存 `data.json / records.json / sinks.json`；清单保存状态、覆盖、诊断和相对上游引用。审计只保存种子、登记身份和技术记录；不复制所选标注的源文、CFG、调用链或编译材料。DOE 从公共只读加载器取得材料。重放不保存第二份结果。报告 MD／HTML 复用同一视图模型。
 Python `propagate` 可注入 DataRegistry 和完整初始 FlowState；CLI 可配套提供 `--seed-data`
 与 `--seed-state`。显式初始状态包含缺失绑定的含义，不会在后续读取时重新自动造来源。
 
@@ -157,7 +146,7 @@ print(run.status, run.run_directory)
 
 ## 统一运行时契约与三例复测
 
-当前联合标注 v10 区分逻辑来源、实际读取、模型观察和明确取值；`receive` 可以在 `tool` 边界取得网络未知或本地的工具返回，不再强制等同于网络接收。它保留获取来源与请求依赖，纯计算仍使用 `compute`。标注运行为 `skill-ir-security-profile-v11`（格式 11），Data 为 v4，唯一业务交付为 `skillflow-doe-input-v7`，传播运行为 `skill-ir-propagation-v10`（格式 10）。表示契约为 v3、编译器为 v4；共享语义解释契约仍为 v4，核对和反馈仍为 v5。DOE 顶层 execution_model 只保存冻结契约 version/sha256；完整规则和推断证据在已有审计材料中。
+当前任务链采用独立 source-only Task v3、联合标注 schema v14、六类正向需求及逐项 realizations、编译器/映射 v8、四类覆盖审查 schema v6、需求结果 v3 和敏感结果 v3；标注运行 v17、审查运行 v10、一次修复运行 v9、DOE 运行 v4、pipeline v6。Data v4、记录 v11 与 runtime_contract v7 的传播语义保持。Task 的权威产物独立持有，标注 canonical JSON 仅保存 task_ref；加载器解析用于内存计算。具体协议、修复与保证边界以 [Task 提取](../doe/task-evidence.md)和[正式分析链](../doe/joint-pipeline.md)为准。
 
 来源整体不能被目标字段名称自动替代；明确局部接口、隔离机制和本地处理仍须尊重。整体观察不意味着调用参数也是整体。位置种子按实际 read/append 与值引用建立，不为未使用的上下文操作数额外制造叶子来源。详见[来源范围与工具返回通用修正](../history/skill-ir/SkillFlow-来源范围与工具返回通用修正.md)。
 
@@ -365,9 +354,9 @@ Prompt 对操作名和结束块还有两项提取偏好：
 回边与必经块等辅助信息。编译、完整性检查、绘图及实验管理均不自动导入它，
 包顶层也不导出它。这不是 effect 传播或审计实现。
 
-独立的 `python -m skillflow.graph.audit` 提供受控语义回述与完整源文核对（v5）：
+独立的 `python -m skillflow.graph.audit` 提供受控语义回述与完整源文核对（v6）：
 Lean 打印/解析受控文本，程序核验完整字段与定位，模型每案例只做一次原文—受控文本核对。
-核对与反馈共用版本化 IR 解释契约。v5 将七类检查点保留为阅读提示，由模型合理组织语义核对项；保守依赖说明仅在适用时填写，不将其余保留项自动称为精确。保守只允许依赖精度损失，不能掩盖明确错误。原图 IR 不增加字段。详见 [解释契约与逐项核对规范](../graph/Skill-IR解释契约与逐项语义核对规范.md)。`--suite semantics-v5-seven` 可运行 F01 五例与暂停批次001、010第0轮图的独立七例诊断。
+核对与反馈共用版本化 IR 解释契约 v4。当前 v6 响应使用文件行范围，保留图核对问题编号；原受控文本事实编号和分类保留。七类检查点保留为阅读提示，由模型合理组织语义核对项；保守依赖说明仅在适用时填写，不将其余保留项自动称为精确。保守只允许依赖精度损失，不能掩盖明确错误。原图 IR 不增加字段。详见 [解释契约与逐项核对规范](../graph/Skill-IR解释契约与逐项语义核对规范.md)。`--suite semantics-v5-seven` 可运行 F01 五例与暂停批次001、010第0轮图的独立七例诊断。
 它需要单独构建形式化打印器，不改变生产提取接口。使用方式与保证边界见
 [受控回述实验](../../experiments/graph/audit/README.md)。旧回溯运行代码已清理，历史产物保留。
 
@@ -388,11 +377,9 @@ python -m skillflow.graph.feedback replay --run-dir path/to/seeded-run
 [反馈闭环规范](../graph/CFG构建语义反馈闭环.md) 与
 [F01 首次反馈实验](../../experiments/graph/feedback/README.md)。
 
-反馈运行 v5 保留 `--max-audit-execution-retries 2`（默认 2，允许 0–5），与独立核对共用 `audit_execution`：仅核对发生明确的暂态传输失败时，使用同一 Prompt 创建独立记录的新尝试，默认退避 5 秒、10 秒。首个完整响应后停止，坏 JSON、证据错误、语义失败或语义差异不会触发通信重试。核对轮次、执行尝试、HTTP 尝试与两类修复分别计数；旧版运行不迁移，使用新目录。配置默认等待时间为 10 分钟，历史实验显式配置保持原样。合法保守项可通过且不触发修图，但结果与选择记录保留 `representation_summary`（保留项及其保守子集），不能当作严格语义等价或必定传递。
+反馈运行 v6 保留 `--max-audit-execution-retries 2`（默认 2，允许 0–5），与独立核对共用 `audit_execution`：仅核对发生明确的暂态传输失败时，使用同一 Prompt 创建独立记录的新尝试，默认退避 5 秒、10 秒。首个完整响应后停止，坏 JSON、证据错误、语义失败或语义差异不会触发通信重试。核对轮次、执行尝试、HTTP 尝试与两类修复分别计数；旧版运行不迁移，使用新目录。配置默认等待时间为 10 分钟，历史实验显式配置保持原样。合法保守项可通过且不触发修图，但结果与选择记录保留 `representation_summary`（保留项及其保守子集），不能当作严格语义等价或必定传递。
 
-独立 Security Profile 已提供动作标注与图外传递规格，Data 和 propagation 已提供基础
-传播求解及静态记录；一般数据反馈循环、必要性和 DOE 暴露判断仍属后续工作。模型核对
-结果和传播 complete 均不是形式化语义等价证明。
+联合 IR 语义与 Data 支持静态传播，DOE 已支持任务保持需求和敏感范围对照。一般生成数据反馈仍受能力限制；当前结果不是不可替代性、全局最小化或前端语义完整性证明。
 
 ## 验证与历史结果
 
@@ -409,12 +396,12 @@ python -m pytest tests -q
 `experiments/graph/baseline/`，交付输入和 CFG 图片分别在仓库直属的
 `dataset/skills/`、`result/ir-IPP/`。测试中的离线重编译不代表新一轮在线验证。
 
-## 处理段、字段关系与观察编译（标注 v10／编译 v4）
+## 处理段、字段关系与观察编译（标注 v12／编译 v6）
 
 一次联合标注输出处理段，编译器生成最终观察事件。`filter_items` 保留原集合成员，
 单层 `for_each` 保留同一元素的字段配对；不执行真实集合，不改变已有 CFG。
 参见[主规范](../propagation/SkillFlow-字段关系与观察编译.md)。
-业务标注 v10、标注运行 v11（格式 11）、Data v4、记录 v9、DOE v7、传播运行 v10（格式 10）；不迁移历史结果。
+业务标注 v12、标注运行 v13、Data v4、记录 v10、DOE 输入 v8、传播运行 v11；不迁移历史结果。
 原始处理段、编译响应及映射均在 audit 中，DOE 主文件只保留事实。
 
 当前 sink 三例验证使用 `tools/propagation/run_sink_pilot.py prepare/run/replay/summarize`；复用已核验最新三个 base 的冻结源包与 CFG，不重新提取或反馈，每例一次标注。新目录前缀为 `sink-boundaries-v1-`，已有实验保留原版本身份。

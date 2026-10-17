@@ -59,6 +59,7 @@ def test_annotation_cli_preparation_and_factory_share_explicit_json_config(monke
     monkeypatch.setattr(LlmConfig, "from_env", lambda **kwargs: base)
     seen = []
     def prepare(*args, **kwargs):
+        assert kwargs["task_run"] == tmp_path / "task"
         seen.append(("prepare", kwargs["config"]))
         return {"preparation_status": "ready"}
     def factory(config, **kwargs):
@@ -71,7 +72,7 @@ def test_annotation_cli_preparation_and_factory_share_explicit_json_config(monke
     monkeypatch.setattr(runner, "run_annotation", run)
     monkeypatch.setattr(recording, "streaming_factory", factory)
     assert cli.main(["prepare", "--input", str(tmp_path), "--analysis", str(tmp_path / "analysis.json"),
-                     "--run-dir", str(tmp_path / "run")]) == 0
+                     "--run-dir", str(tmp_path / "run"), "--task-run", str(tmp_path / "task")]) == 0
     assert cli.main(["run", "--run-dir", str(tmp_path / "run")]) == 0
     assert [stage for stage, _ in seen] == ["prepare", "factory", "run"]
     assert all(config == seen[0][1] and config["response_format"] == "json_object" for _, config in seen)

@@ -18,7 +18,7 @@ def location(kind="tool", scope="recipient", retention=None):
 
 
 def evidence():
-    return [{"basis": "cfg", "ref_id": "C001", "quote": "operation", "reason": "结构验收。"}]
+    return [{"target": {"path": []}, "reason": "结构验收。"}]
 
 
 def delivery(target="dst", inputs=None):
@@ -27,7 +27,12 @@ def delivery(target="dst", inputs=None):
 
 
 def spec(events):
-    return {"order": "fixed", "precedence": [], "events": events, "output_bindings": []}
+    result = {"operator": ["tool"], "operator_evidences": [{**evidence()[0], "value": "tool"}],
+              "order": "fixed", "precedence": [], "events": events, "output_bindings": [], "sensitivity": []}
+    if not any(event["effect"] is not None for outer in events
+               for event in (outer["body"] if outer.get("kind") == "for_each" else [outer])):
+        result["empty_effect_evidences"] = evidence()
+    return result
 
 
 @pytest.mark.parametrize("scope,retention,level", [
@@ -89,28 +94,28 @@ def test_zero_parameter_delivery_is_only_legal_for_unlabelled_tool():
 
 def test_repeated_body_observations_retain_actual_scope_and_coordinates():
     locations = {"dst": location("model_context")}
-    body = [{"effect_index": index, "atomic_ops": [delivery(inputs=[{"kind": "local", "name": "member"}])]}
+    body = [{"effect": "model_observe", "evidences": evidence(), "atomic_ops": [delivery(inputs=[{"kind": "local", "name": "member"}])]}
             for index in range(2)]
     scopes = [{"kind": "for_each", "collection": {"kind": "literal", "value": []},
                "item": "member", "body": body, "evidences": evidence()}]
-    profiles = {"ir_z": {"effects": ["model_observe", "model_observe"], "roles": []},
-                "ir_a": {"effects": ["model_observe"], "roles": []}}
-    specs = {"ir_z": spec(scopes), "ir_a": spec([{"effect_index": 0, "atomic_ops": [delivery()]}])}
-    result = derive_sink_boundaries(locations, specs, profiles)
+    specs = {"ir_z": spec(scopes), "ir_a": spec([{"effect": "model_observe", "evidences": evidence(), "atomic_ops": [delivery()]}])}
+    result = derive_sink_boundaries(locations, specs)
     assert [(item.instruction_id, item.event_index, item.body_event_index, item.scope) for item in result] == [
         ("ir_a", 0, None, None), ("ir_z", 0, 0, "element"), ("ir_z", 0, 1, "element")]
-    assert result == derive_sink_boundaries(locations, dict(reversed(list(specs.items()))), profiles)
+    assert result == derive_sink_boundaries(locations, dict(reversed(list(specs.items()))))
 
 
 def test_direct_compiled_payload_rejects_missing_or_tampered_sink():
+    from tests.propagation.annotation.helpers import material, valid_response
+    joint = valid_response(material())
     cfg = {"blocks": {"entry": {"instructions": [{"id": "call", "inputs": [], "outputs": []}]}}}
-    value = {"profiles": {"call": {"operator": ["tool"], "roles": [], "effects": [], "evidences": []}},
-             "locations": {"dst": location()},
-             "transfer_specs": {"call": spec([{"effect_index": None, "atomic_ops": [delivery(inputs=[])]}])}}
+    value = {"locations": {"dst": location()},
+             "ir_semantics": {"call": spec([{"effect": None, "atomic_ops": [delivery(inputs=[])]}])}}
+    value.update({key: joint[key] for key in ("task_ref", "realizations", "demands", "expressions")})
     with pytest.raises(ValueError):
         AnnotationPayload.model_validate(value)
     value["sink_boundaries"] = [item.model_dump(mode="json") for item in derive_sink_boundaries(
-        value["locations"], value["transfer_specs"], value["profiles"])]
+        value["locations"], value["ir_semantics"])]
     validate_specs(cfg, value)
     value["sink_boundaries"][0]["exposure_level"] = 1
     with pytest.raises(ValueError, match="deterministic"):
@@ -130,7 +135,8 @@ def test_sink_derived_dto_rejects_invalid_coordinates_and_grades(change):
 
 
 def test_raw_model_response_cannot_supply_program_sink_table():
-    raw = {"outcome": "completed", "profiles": {}, "locations": {}, "transfer_specs": {},
-           "location_evidences": {}, "sink_boundaries": []}
+    from tests.propagation.annotation.helpers import material, valid_raw_response
+    raw = valid_raw_response(material())
+    raw["sink_boundaries"] = []
     with pytest.raises(ValueError):
         RawAnnotationResponse.model_validate(raw)

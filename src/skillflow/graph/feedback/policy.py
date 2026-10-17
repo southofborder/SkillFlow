@@ -1,7 +1,7 @@
 """Stop decisions after structural, fidelity, and audit-response validation.
 
 This policy is not a semantic checker. Its input must already have passed the
-single-audit service's strict quote, evidence, and whole-unit coverage checks.
+single-audit service's strict source spans, nonempty-line coverage, and controlled-fact coverage checks.
 """
 
 from __future__ import annotations
@@ -60,12 +60,12 @@ def decide(
             "represented_ids": [item["id"] for item in business if item["status"] == "represented"],
             "conservative_ids": [item["id"] for item in business if item.get("conservative") is not None],
         },
-        "notice": "核对器通过仅表示本轮有效核对记录满足通过门槛；保守依赖保留精度损失，不表示已证明语义等价。",
+        "notice": "Review passing means only that the valid review record meets the passing threshold; conservative dependencies retain precision loss and do not prove semantic equivalence.",
     }
     if not business:
-        return {**result, "status": "semantic_failure", "reason": "核对记录只有背景项，没有业务语义核对项，未完成必要业务核对。"}
+        return {**result, "status": "semantic_failure", "reason": "The review contains only background items and no business-semantic items; the required business review is incomplete."}
     if actionable:
         if revision >= max_semantic_revisions:
-            return {**result, "status": "revision_limit", "reason": "明确差异仍存在，语义修复次数已用尽。"}
-        return {**result, "status": "revise", "reason": "存在明确差异；按当前图和本轮证据重新完整提取。"}
-    return {**result, "status": "audit_passed", "reason": "所有业务项均为 represented，且没有明确差异；未填写保守说明不代表精确保留。"}
+            return {**result, "status": "revision_limit", "reason": "Explicit differences remain and the semantic repair budget is exhausted."}
+        return {**result, "status": "revise", "reason": "Explicit differences remain; re-extract completely using the current graph and this round's evidence."}
+    return {**result, "status": "audit_passed", "reason": "All business items are represented and no explicit differences remain; absence of a conservative explanation does not imply exact preservation."}

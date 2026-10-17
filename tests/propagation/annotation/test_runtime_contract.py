@@ -1,3 +1,4 @@
+from tests.propagation.annotation.helpers import effects_of
 """Runtime identity and evidence transport checks, not a model truth oracle."""
 
 from copy import deepcopy
@@ -7,32 +8,32 @@ import pytest
 
 from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.contracts.runtime_contract import CONTRACT_VERSION
-from skillflow.propagation.contracts.runtime_contract import execution_model
-from skillflow.propagation.contracts.runtime_contract import execution_model_binding
-from skillflow.propagation.contracts.runtime_contract import validate_execution_model
-from skillflow.propagation.contracts.runtime_contract import validate_execution_model_binding
+from skillflow.propagation.contracts.runtime_contract import runtime_contract
+from skillflow.propagation.contracts.runtime_contract import runtime_contract_binding
+from skillflow.propagation.contracts.runtime_contract import validate_runtime_contract
+from skillflow.propagation.contracts.runtime_contract import validate_runtime_contract_binding
 from skillflow.propagation.material import checked_material
-from skillflow.propagation.material import check_evidence
+from skillflow.propagation.material import check_evidence, evidence_reference, model_material
 from skillflow.propagation.annotation.prompts import build_prompt
 from skillflow.propagation.annotation.report import render_report
-from tests.propagation.annotation.helpers import material
+from tests.propagation.annotation.helpers import material, semantics
 
 
 def test_one_isolated_contract_and_canonical_binding():
-    current = execution_model()
+    current = runtime_contract()
     assert set(current) == {"version", "rules"}
-    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v5"
+    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v7"
     assert [rule["id"] for rule in current["rules"]] == [f"EM{i:02}" for i in range(1, 16)]
-    binding = execution_model_binding(current)
+    binding = runtime_contract_binding(current)
     assert binding == {"version": CONTRACT_VERSION, "sha256": canonical_sha256(current)}
-    checked = validate_execution_model(current)
+    checked = validate_runtime_contract(current)
     checked["rules"][0]["text"] = "changed"
-    assert current == execution_model()
-    validated_binding = validate_execution_model_binding(binding)
+    assert current == runtime_contract()
+    validated_binding = validate_runtime_contract_binding(binding)
     validated_binding["sha256"] = "changed"
-    assert binding == execution_model_binding(execution_model())
+    assert binding == runtime_contract_binding(runtime_contract())
     current["rules"].clear()
-    assert len(execution_model()["rules"]) == 15
+    assert len(runtime_contract()["rules"]) == 15
 
 
 @pytest.mark.parametrize("change", [
@@ -46,14 +47,14 @@ def test_one_isolated_contract_and_canonical_binding():
     lambda model: model["rules"][0].update(extra="ignored?"),
 ])
 def test_altered_contract_cannot_be_silently_substituted(change):
-    model = execution_model()
+    model = runtime_contract()
     change(model)
     with pytest.raises(ValueError, match="runtime contract identity mismatch"):
-        validate_execution_model(model)
+        validate_runtime_contract(model)
     with pytest.raises(ValueError, match="runtime contract identity mismatch"):
-        execution_model_binding(model)
+        runtime_contract_binding(model)
     prepared = material()
-    prepared["execution_model"] = model
+    prepared["runtime_contract"] = model
     with pytest.raises(ValueError, match="runtime contract identity mismatch"):
         checked_material(prepared)
 
@@ -66,60 +67,66 @@ def test_altered_contract_cannot_be_silently_substituted(change):
 ])
 def test_invalid_or_old_bindings_are_rejected(binding):
     with pytest.raises(ValueError, match="runtime contract binding mismatch"):
-        validate_execution_model_binding(binding)
+        validate_runtime_contract_binding(binding)
 
 
 def test_binding_does_not_accept_extra_fields_or_return_shared_storage():
-    binding = execution_model_binding(execution_model())
+    binding = runtime_contract_binding(runtime_contract())
     binding["rules"] = []
     with pytest.raises(ValueError, match="runtime contract binding mismatch"):
-        validate_execution_model_binding(binding)
+        validate_runtime_contract_binding(binding)
 
 
 def test_prompt_transmits_one_authoritative_contract_and_exact_source():
     prepared = material()
     prompt = build_prompt(prepared)
-    instructions, encoded = prompt.split("\nINPUT_JSON\n", 1)
-    payload = json.loads(encoded)
-    assert payload == prepared
-    assert payload["execution_model"] == execution_model()
-    assert "sole authoritative runtime contract" in instructions
-    assert "Missing execution details covered by defaults permit normal annotation" in instructions
-    assert "not measured execution" in instructions
-    for rule in execution_model()["rules"]:
+    encoded = prompt.split("\nINPUT_JSON\n", 1)[1]
+    payload = json.JSONDecoder().raw_decode(encoded)[0]
+    instructions = prompt.split("<!-- SKILLFLOW_PROMPT:INPUT:BEGIN -->")[0] + prompt.split("<!-- SKILLFLOW_PROMPT:INPUT:END -->")[1]
+    assert payload == model_material(prepared)
+    assert payload["runtime_contract"] == runtime_contract()
+    assert "runtime_contract" in instructions
+    assert "default" in instructions and "cannot_assess" in instructions
+    assert "not execution facts" in instructions
+    for rule in runtime_contract()["rules"]:
         assert rule["text"] not in instructions
     assert "runtime" not in payload  # no per-Skill runtime selector
 
 
-def test_default_evidence_has_its_own_rule_quote_not_a_fabricated_source_quote():
+def test_default_evidence_resolves_exact_rule_without_model_written_quote():
     prepared = material()
-    rule = execution_model()["rules"][1]
-    quoted = "not to everything the tool internally read"
-    check_evidence({"basis": "execution_model", "ref_id": rule["id"], "quote": quoted}, prepared)
-    with pytest.raises(ValueError, match="quote"):
-        check_evidence({"basis": "execution_model", "ref_id": "EM02", "quote": "verified actual execution"}, prepared)
-    source_id = prepared["source_index"][0]["id"]
-    with pytest.raises(ValueError, match="quote"):
-        check_evidence({"basis": "source", "ref_id": source_id, "quote": quoted}, prepared)
+    rule = runtime_contract()["rules"][1]
+    evidence = {"rule_id": rule["id"], "reason": "The declared default applies here."}
+    check_evidence(evidence, prepared)
+    resolved = evidence_reference(evidence, prepared)
+    assert resolved["kind"] == "runtime_contract"
+    assert resolved["text"] == rule["text"]
+    with pytest.raises(ValueError, match="does not exist"):
+        check_evidence({**evidence, "rule_id": "not-a-rule"}, prepared)
+    with pytest.raises(ValueError):
+        check_evidence({**evidence, "basis": "runtime_contract", "quote": "fabricated"}, prepared)
+    source = {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
+              "reason": "Exact source identity, not an execution-rule claim."}
+    assert evidence_reference(source, prepared)["kind"] == "source"
+    assert evidence_reference(source, prepared)["text"] == prepared["source"]["files"][0]["content"].splitlines(keepends=True)[0]
 
 
 def test_report_distinguishes_contract_evidence_without_reason_keyword_inference():
     prepared = material()
-    rule = prepared["execution_model"]["rules"][2]
+    spec = semantics(prepared, "ir_read", operator=["llm"], effects=["model_observe"])
+    spec["events"][0]["evidences"] = [{"rule_id": "EM03", "reason": "Arbitrary prose; category is resolved from the typed rule table."}]
     result = {
-        "run_id": "contract", "status": "complete", "reason": "记录完整", "notice": "不是语义证明",
-        "graph_sha256": "graph", "execution_model": execution_model_binding(execution_model()),
-        "profiles": {"ir_read": {"operator": ["llm"], "roles": ["sink"], "effects": ["model_observe"],
-            "evidences": [{"field": "effects", "value": "model_observe", "effect_index": 0,
-                           "basis": "execution_model", "ref_id": "EM03", "quote": rule["text"],
-                           "reason": "测试任意理由文本，不据关键词判定事实。"}]}},
+        "run_id": "contract", "status": "complete", "reason": "Complete record", "notice": "Not a semantic proof",
+        "graph_sha256": "graph", "runtime_contract": runtime_contract_binding(runtime_contract()),
+        "ir_semantics": {"ir_read": spec},
     }
     report = render_report(result, prepared)
-    assert "静态可能性，不是执行轨迹" in report
-    assert CONTRACT_VERSION in report and result["execution_model"]["sha256"] in report
-    assert "契约依据，非实测" in report
+    assert "static possibilities under the contract, not an execution trace" in report
+    assert CONTRACT_VERSION in report and result["runtime_contract"]["sha256"] in report
+    assert prepared["runtime_contract"]["rules"][2]["text"] in report
+    assert "`EM03`" in report
     assert "泛化未决" not in report
-    assert result["profiles"]["ir_read"]["effects"] == ["model_observe"]
-    result["execution_model"]["sha256"] = "a" * 64
+    assert effects_of(result["ir_semantics"]["ir_read"]) == ["model_observe"]
+    result["runtime_contract"]["sha256"] = "a" * 64
     with pytest.raises(ValueError, match="runtime contract binding mismatch"):
         render_report(result, prepared)

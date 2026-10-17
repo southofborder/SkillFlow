@@ -132,9 +132,9 @@ def _reaching_memory(cfg, annotation, interpreter, reachable, roots, predecessor
             for loc, definitions in prior.items():
                 state.setdefault(loc, set()).update(definitions)
         for ir in cfg["blocks"][block]["instructions"]:
-            ops = [(e, b, o, op) for e, b, event in iter_scoped_events(annotation.transfer_specs[ir["id"]])
+            ops = [(e, b, o, op) for e, b, event in iter_scoped_events(annotation.ir_semantics[ir["id"]])
                    for o, op in enumerate(event.atomic_ops)]
-            spec = annotation.transfer_specs[ir["id"]]
+            spec = annotation.ir_semantics[ir["id"]]
             uncertain = spec.order == "partial"
             base_state = {loc: set(defs) for loc, defs in state.items()}
             snapshots[(ir["id"], "entry")] = base_state
@@ -199,7 +199,7 @@ def _generation_feedback(cfg, annotation, interpreter, reachable, roots, predece
 
         scoped_locals = {}
         for ir in instructions:
-            spec = annotation.transfer_specs[ir["id"]]
+            spec = annotation.ir_semantics[ir["id"]]
             for e, b, event in iter_scoped_events(spec):
                 for o, operation in enumerate(event.atomic_ops):
                     if hasattr(operation, "output"):
@@ -209,7 +209,7 @@ def _generation_feedback(cfg, annotation, interpreter, reachable, roots, predece
                 if getattr(event, "kind", None) == "for_each":
                     scoped_locals.setdefault((ir["id"], e), {})[(ir["id"], event.item)] = static_key(ir["id"], e, "element")
         for ir in instructions:
-            spec = annotation.transfer_specs[ir["id"]]
+            spec = annotation.ir_semantics[ir["id"]]
             for e, event in enumerate(spec.events):
                 if getattr(event, "kind", None) == "for_each":
                     node = static_key(ir["id"], e, "element")
@@ -252,7 +252,7 @@ def _generation_feedback(cfg, annotation, interpreter, reachable, roots, predece
                 findings.append({
                     "code": "unsupported_feedback", "blocks": sorted(blocks),
                     "operations": [positions[n] for n in sorted(component) if n in positions],
-                    "reason": "循环含生成数据的反馈依赖；本版不将无限版本压入同一身份。",
+                    "reason": "The loop contains feedback dependencies that generate data; this version does not collapse infinitely many versions into one identity.",
                 })
     return findings
 
@@ -340,7 +340,7 @@ def propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
                 pending_errors.pop(ir["id"], None)
             for ir in block_instructions:
                 try:
-                    record = interpreter.evaluate(ir, annotation.transfer_specs[ir["id"]], FlowState.from_mapping(state))
+                    record = interpreter.evaluate(ir, annotation.ir_semantics[ir["id"]], FlowState.from_mapping(state))
                     block_records[block_id][ir["id"]] = record
                     state = mapping(record.exit_state)
                     coverage[ir["id"]] = "processed"

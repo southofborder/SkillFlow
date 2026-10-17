@@ -13,6 +13,8 @@ import sys
 from threading import Event
 
 from skillflow.common.paths import project_root, resolve_material_path
+from tools.propagation.task_runs import bind_task_runs, task_owner, read_task_runs
+from tools.propagation.summaries import support_identity
 
 PACKAGE = project_root()
 ROOT = project_root()
@@ -26,21 +28,21 @@ from skillflow.common.recording import now
 from skillflow.common.recording import read_json
 from skillflow.common.recording import sha_file
 from skillflow.common.recording import streaming_factory
-from skillflow.propagation.contracts.runtime_contract import execution_model
-from skillflow.propagation.contracts.runtime_contract import execution_model_binding
-from skillflow.propagation.contracts.representation_contract import binding as representation_binding
+from skillflow.propagation.contracts.runtime_contract import runtime_contract
+from skillflow.propagation.contracts.runtime_contract import runtime_contract_binding
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION as PROFILE_VERSION
 from skillflow.propagation.annotation.runner import prepare_run
 from skillflow.propagation.annotation.runner import verify_prepared
 from skillflow.propagation.annotation.runner import _counts
+from skillflow.propagation.runner import load_propagation_materials
 
 # Share the existing single-case dispatch, accepted-response and zero-API replay
 # orchestration. Its historical plan()/output selection is never called here.
 from tools.propagation.run_runtime_pilot import public_config, run_case
-from tools.propagation.doe_changes import write_comparison
 
-IDENTITY = "skill-ir-sink-tightening-pilot3-v1"
-POLICY = {"planned_logical_calls": 3, "annotation_calls_per_case": 1,
+IDENTITY = "skill-ir-sink-tightening-pilot3-v4"
+POLICY = {"planned_initial_annotation_calls": 3, "initial_annotation_calls_per_case": 1,
+          "annotation_structural_corrections": "unlimited",
           "extract_cfg": False, "feedback_calls": 0, "review_calls": 0,
           "propagation_calls": 0, "automatic_quality_rerun": False,
           "uncertain_request_automatic_resend": False}
@@ -85,17 +87,16 @@ def inputs(directory):
     return receipt, cases
 
 
-def expected_manifest(directory):
+def expected_manifest(directory, task_runs=None):
     receipt, cases = inputs(directory)
-    return {"schema_version": 1, "identity": IDENTITY,
+    return {"schema_version": 4, "identity": IDENTITY,
             "bootstrap_sha256": canonical_sha256(receipt), "cases": cases,
+            "task_runs": bind_task_runs(directory, cases, task_runs),
             "profile_schema_version": PROFILE_VERSION,
-            "execution_model": execution_model_binding(execution_model()),
-            "representation_contract": representation_binding(),
+            "runtime_contract": runtime_contract_binding(runtime_contract()),
             "config": public_config(), "implementation": implementation_provenance(),
-            "driver_sha256": sha_file(Path(__file__)),
+            "tool_support": support_identity(), "driver_sha256": sha_file(Path(__file__)),
             "shared_driver_sha256": sha_file(Path(__file__).with_name("run_runtime_pilot.py")),
-            "comparison_driver_sha256": sha_file(Path(__file__).with_name("doe_changes.py")),
             "policy": POLICY}
 
 
@@ -117,9 +118,9 @@ def verify_case(directory, case, config):
         raise ValueError("new annotation is not bound to the frozen package and graph")
 
 
-def prepare(directory):
+def prepare(directory, *, task_runs=None):
     directory = checked_directory(directory)
-    expected = expected_manifest(directory)
+    expected = expected_manifest(directory, task_runs)
     with exclusive_run(directory):
         names = {p.name for p in directory.iterdir() if p.name != ".runner.lock"}
         if names != {"bootstrap.json", "frozen"}:
@@ -130,7 +131,7 @@ def prepare(directory):
             base.mkdir(parents=True)
             (base / "selected-analysis.json").write_bytes((frozen / "analysis.json").read_bytes())
             prepare_run(frozen / "package", base / "selected-analysis.json",
-                        run_dir=base / "annotation", config=expected["config"])
+                        run_dir=base / "annotation", config=expected["config"], task_run=task_owner(directory, expected, case["case_id"]))
             verify_case(directory, case, expected["config"])
         ArtifactWriter(()).json(directory / "manifest.json", {**expected, "prepared_at": now()})
         return summarize(directory)
@@ -143,16 +144,14 @@ def summarize(directory, *, replay=False):
         base = directory / "cases" / case["case_id"]
         path = base / ("replay/result.json" if replay else "result.json")
         result = read_json(path) if path.exists() else {"annotation": {"status": "not_run"}, "propagation": "not_run"}
-        if not replay:
-            write_comparison(base, case)
-        doe_path = base / "propagation/doe-input.json"
         committed = (base / "propagation/manifest.json").exists()
-        doe = read_json(doe_path) if committed else {}
+        facts = load_propagation_materials(base / "propagation") if committed else None
+        sinks = facts.sinks if facts is not None else []
         rows.append({"case_id": case["case_id"], "sample_id": case["sample_id"],
                      "annotation": result["annotation"]["status"], "annotation_reason": result["annotation"].get("reason"),
                      "propagation": result["propagation"], "propagation_error": result.get("propagation_error"),
-                     "sink_count": len(doe.get("sink_boundaries", [])),
-                     "sink_types": dict(Counter(sink["sink_type"] for sink in doe.get("sink_boundaries", []))),
+                     "sink_count": len(sinks),
+                     "sink_types": dict(Counter(sink["sink_type"] for sink in sinks)),
                      "counts": _counts(base / "annotation")})
     summary = {"identity": IDENTITY, "mode": "replay" if replay else "run", "cases": rows,
                "logical_calls": sum(row["counts"].get("logical_calls", 0) for row in rows),
@@ -160,16 +159,16 @@ def summarize(directory, *, replay=False):
                "annotation_statuses": dict(Counter(row["annotation"] for row in rows)),
                "propagation_statuses": dict(Counter(row["propagation"] for row in rows))}
     target, prefix = (directory / "replay", "../") if replay else (directory, "")
-    notice = "本次复用冻结源文和既有 CFG，每例一次联合标注；网络分类须有机制依据，可选参数保留原字段和控制关系，sink 类型与等级由程序生成。传播及重放不调用 API。等级不是敏感度、必要性或 DOE 结论；任务内部等级 0 和删除仍保留传播关系。"
+    notice = "本次复用冻结源文和既有 CFG，每例一次初始联合标注，结构纠正不限次数；网络分类须有机制依据，可选参数保留原字段和控制关系，sink 类型与等级由程序生成。传播及重放不调用 API。等级不是敏感度、必要性或 DOE 结论；任务内部等级 0 和删除仍保留传播关系。"
     lines = ["# Sink 收紧与可选参数：三例验证", "", notice, "", "| 样例 | 标注 | 传播 | Sink 位置 | 逻辑调用 | 审查入口 |", "|---|---|---|---:|---:|---|"]
     html = ["<h1>Sink 收紧与可选参数：三例验证</h1><p>" + notice + "</p>", "<table><tr><th>样例</th><th>标注</th><th>传播</th><th>Sink 位置</th><th>调用</th><th>审查入口</th></tr>"]
     for row in rows:
         number = row["case_id"]
         links = []
         for name, title in (("selected-analysis.json", "既有 CFG"), ("annotation/report.md", "标注和位置属性"),
-                            ("annotation/audit/raw-annotation.json", "原始响应"), ("annotation/sink-boundaries.json", "编译 sink 清单"),
-                            ("propagation/report.html", "数据与边界审查"), ("propagation/doe-input.json", "DOE 原始事实"),
-                            ("doe-input-change.html", "DOE 变化对照"), ("assistant-review.md", "助手复核")):
+                            ("annotation/audit/raw-annotation.json", "原始响应"), ("annotation/audit/compiled-response.json", "编译规格与 sink 清单"),
+                            ("propagation/report.html", "数据与边界审查"), ("propagation/data.json", "Data"), ("propagation/records.json", "操作记录"), ("propagation/sinks.json", "Sink"),
+                            ("assistant-review.md", "助手复核")):
             if (directory / "cases" / number / name).is_file() and (not name.startswith("propagation/") or (directory / "cases" / number / "propagation/manifest.json").is_file()):
                 links.append((prefix + "cases/" + number + "/" + name, title))
         cells = [number + " / " + row["sample_id"], row["annotation"], row["propagation"], str(row["sink_count"]), str(row["counts"].get("logical_calls", 0))]
@@ -222,10 +221,11 @@ def main(argv=None):
     parser.add_argument("command", choices=["prepare", "run", "replay", "summarize"])
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--env-file", type=Path)
+    parser.add_argument("--task-runs-json", type=Path, help="case ID -> completed independent Task run paths; preparation only")
     args = parser.parse_args(argv)
     if args.command != "run" and args.env_file:
         raise ValueError("only online run accepts an environment file")
-    result = prepare(args.run_dir) if args.command == "prepare" else summarize(args.run_dir) if args.command == "summarize" else execute(args.run_dir, replay=args.command == "replay", env_file=args.env_file)
+    result = prepare(args.run_dir, task_runs=read_task_runs(args.task_runs_json)) if args.command == "prepare" else summarize(args.run_dir) if args.command == "summarize" else execute(args.run_dir, replay=args.command == "replay", env_file=args.env_file)
     print(result["logical_calls"], result["annotation_statuses"], result["propagation_statuses"], flush=True)
     return 0 if args.command in {"prepare", "summarize"} or all(row["annotation"] == "complete" and row["propagation"] == "complete" for row in result["cases"]) else 1
 

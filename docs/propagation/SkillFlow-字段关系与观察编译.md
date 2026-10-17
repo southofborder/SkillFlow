@@ -8,9 +8,12 @@ CFG 保持原样。原文支持的“逐记录发送字段”可以在同一条�
 
 ```text
 模型原始标注（正常 outcome=completed）
-├─ profiles[IR]                    主体、角色、非观察效果、证据
+├─ task / demands / expressions      Global Task and demand declarations
 ├─ locations                       交互位置、操作数关联及 access_scope/retention
-├─ transfer_specs[IR]
+├─ ir_semantics[IR]
+│  ├─ operator / operator_evidences     Execution claims and their evidence
+│  ├─ empty_effect_evidences           Only when no non-null effect exists
+│  ├─ sensitivity[]                   Scoped sensitivity declarations
 │  ├─ order                       fixed / partial
 │  ├─ events[]
 │  │  ├─ processing                一段有明确处理方式的数据操作
@@ -27,11 +30,11 @@ CFG 保持原样。原文支持的“逐记录发送字段”可以在同一条�
 └─ location_evidences               独立位置证据
                   ↓ 程序编译
 编译标注
-├─ outcome / profiles / locations / transfer_specs / location_evidences
+├─ outcome / task / demands / expressions / locations / ir_semantics / location_evidences
 ├─ sink_boundaries[]                程序派生的类型、等级、目标和操作位置
-├─ transfer_specs[IR].order / precedence（程序生成约束）
-└─ transfer_specs[IR].events[]
-   ├─ EffectSpec                   effect_index + atomic_ops
+├─ ir_semantics[IR].order / precedence（程序生成约束）
+└─ ir_semantics[IR].events[]
+   ├─ EffectSpec                   effect + occurrence evidences + atomic_ops
    └─ ForEachSpec                  collection + item + body[EffectSpec]
                   ↓ 确定性传播
 DOE 事实
@@ -40,9 +43,9 @@ DOE 事实
 └─ sink_boundaries[]                只关联已经求值形成记录的边界操作
 ```
 
-模型不写 model_observe；编译后的 profile 仍只有 operator、roles、effects、evidences 四个字段。ProcessingSpec 是标注／编译输入，不向 CFG 或 Data 添加处理模式字段。观察映射、证据和编译摘要保存在审计目录，不塞进 DOE 的逐条业务事件。
+模型不写 model_observe。Compiled IR semantics retain one ordered event list; no parallel effects list or effect_index exists. ProcessingSpec 是标注／编译输入，不向 CFG 或 Data 添加处理模式字段。观察映射、证据和编译摘要保存在审计目录，不塞进 DOE 的逐条业务事件。
 
-当前编译器 v4 同时为生成的模型位置填写 recipient/null 属性，并沿用 EM12 的真实规则依据。模型不得手写 sink_boundaries；编译后的观察、交付和非删除保存由程序生成六类 sink 与固定等级，清单位置按真实编译数组定位。既有接收方位置属性冲突不能通过覆盖定义消除。详见[Sink 边界规范](SkillFlow-Sink边界与固定分级.md)。
+当前编译器 v7 同时为生成的模型位置填写 recipient/null 属性，并沿用 EM12 的真实规则依据。模型不得手写 sink_boundaries；编译后的观察、交付和非删除保存由程序生成六类 sink 与固定等级，清单位置按真实编译数组定位。既有接收方位置属性冲突不能通过覆盖定义消除。详见[Sink 边界规范](SkillFlow-Sink边界与固定分级.md)。
 
 ## 2. 三种处理模式
 
@@ -65,13 +68,13 @@ local 必须有 source/CFG 证据，不能只引用默认规则；其引文是�
 | 仅要求统计条数 | default + compute |
 | 明确本地 worker 内部计数，只有整数结果回传，输入记录不回传 | local + compute；returns 为计数结果 |
 
-这些示例锁定规则及编译后的数据版本，不声称离线测试能证明模型在真实输入上必然选对模式。权威运行时契约为 v5，统一规定默认、处理段和部分顺序的边界。
+这些示例锁定规则及编译后的数据版本，不声称离线测试能证明模型在真实输入上必然选对模式。权威运行时契约为 v7，统一规定默认、处理段和部分顺序的边界。
 
 同段相同外部符号引用及其消费条件共同去重；条件观察不能吞掉后续无条件观察。不同处理段、不同取得／返回版本分别保留。中间结果不是额外外部输入：例如模型段 `A → compute → T → build → C`，观察 A 不意味着程序要虚构对 T、C 的两次新模型调用。若下一段再接收 C，则按下一段边界重新记录。
 
 receive 的请求输入与响应不同。默认观察其返回值，不因为请求参与获取就自动观察请求参数。局部扫描整个文件、只返回匹配行时，内部扫描的整体与模型接收的行也不同。
 
-自动增加 model_observe 不机械增加 operator=llm 或 roles=sink。执行主体和角色保留模型原来的有据标注；model 模式要求 llm 是对显式模式的结构条件。
+自动增加 model_observe 不机械增加 operator=llm。执行主体保留模型原来的有据标注；model 模式要求 llm 是对显式模式的结构条件。
 
 ## 3. 选取字段不是生成摘要
 
@@ -126,13 +129,13 @@ filter_items 表达筛选记录且保留元素身份：
         "mode": "default",
         "returns": [],
         "events": [
-            {"effect_index": 0, "atomic_ops": [
+            {"effect": "transform", "atomic_ops": [
                 {"op": "select_part", "input": {"kind": "local", "name": "row"},
                  "path": ["recipient"], "output": "recipient"},
                 {"op": "select_part", "input": {"kind": "local", "name": "row"},
                  "path": ["summary"], "output": "body"},
             ]},
-            {"effect_index": 1, "atomic_ops": [
+            {"effect": None, "atomic_ops": [
                 {"op": "deliver", "inputs": [
                     {"kind": "local", "name": "recipient"},
                     {"kind": "local", "name": "body"},
@@ -143,7 +146,7 @@ filter_items 表达筛选记录且保留元素身份：
 }
 ```
 
-原始 effects 对应 transform、net_send；默认处理可能插入对 row 的观察。每个实例的两个字段都从**同一个 row** 选出。不能分别形成所有收件人集合和所有正文集合后任意笛卡尔组合。
+原始事件对应 transform 和无网络断言的工具交付；默认处理可能插入对 row 的观察。每个实例的两个字段都从**同一个 row** 选出。不能分别形成所有收件人集合和所有正文集合后任意笛卡尔组合。
 
 本轮仅支持一层作用域。collection 可来自当前 IR 的结果输入、字面值或已定义的外层 local。body 可使用 item、较早外层 local 和稳定输入，但不能 read、receive、write 或直接引用 context_key 输入；这些获取须在作用域外完成。body 的 local 不逃逸、不覆盖外层 local；不能被 IR output_bindings 引用。不同作用域可以分别使用相同的局部名字。
 
@@ -151,7 +154,7 @@ filter_items 表达筛选记录且保留元素身份：
 
 ## 5. 编译只维护一条时间线
 
-顺序是 `IR → 顶层段／作用域 → 效果事件 → atomic_ops`。程序插入观察后重新编号 effects，每个非空位置仍恰好对应一个事件。for_each body 的效果也参与同一遍历顺序。
+顺序是 `IR → 顶层段／作用域 → 效果事件 → atomic_ops`。程序插入观察事件；标签和逐次依据直接保存在该事件中，不另行维护效果编号。for_each body 的效果也参与同一遍历顺序。
 
 若原事件中包含 `read → select_part`，默认观察须插入 read 之后；编译可以切成：
 
@@ -163,24 +166,22 @@ transform        select_part whole → field
 
 切片保留原子操作顺序和真实交互。不是每个原子操作都强制新建效果；无需切片时原事件整体保留。真实 read/receive/deliver/write 保留其相应效果，纯数据切片按固定数据操作类型标 transform，原无标签 possible compute 保持无标签。新增 transform 引用具体操作依据，不能复制 net_send 标签当作变换依据。
 
-原始 IRTransferSpec 必填 order=fixed/partial。编译器产生 precedence，before/after 均为 event_index、op_index 和可空的 body_event_index；模型不填第二份顺序表。编译保留段内原子顺序、直接定义使用以及观察因果：模型输入先观察再处理，获取后才能观察返回，本地全部处理后才观察 returns。partial 的不同段可在原子步骤间交错，不把整段当不可分割的动作。作用域仍保持同一元素配对；需要跨作用域共享状态交错的规格明确拒绝。编译映射把每个编译事件定位回原始事件和操作范围，观察项注明模式与规则来源。
+原始 RawIRSemantics 必填 order=fixed/partial。编译器产生 precedence，before/after 均为 event_index、op_index 和可空的 body_event_index；模型不填第二份顺序表。编译保留段内原子顺序、直接定义使用以及观察因果：模型输入先观察再处理，获取后才能观察返回，本地全部处理后才观察 returns。partial 的不同段可在原子步骤间交错，不把整段当不可分割的动作。作用域仍保持同一元素配对；需要跨作用域共享状态交错的规格明确拒绝。编译映射把每个编译事件定位回原始事件和操作范围，观察项注明模式与规则来源。
 
 ## 6. 编译身份与 API
 
 `compile_response(raw, material)` 返回 `(validated_raw, compiled, mapping)`。原始响应禁止 model_observe；编译响应允许它。`validate_compiled_response` 只检查结构和引文，不能凭一个可解析的 JSON 证明它来自正确编译。
 
-完整运行还须保存原始接受响应、原始规范化标注、实际编译响应和映射；证书绑定编译器版本及这三份材料的摘要。恢复和重放重新编译后逐项比较，发现篡改拒绝继续。四项业务 payload 为 profiles/locations/transfer_specs/sink_boundaries；outcome 和位置证据留在完整响应中，证书在旁置审计材料中。
+完整运行还须保存原始接受响应、原始规范化标注、实际编译响应和映射；证书绑定编译器版本及这三份材料的摘要。恢复和重放重新编译后逐项比较，发现篡改拒绝继续。六项业务 payload 为 task/demands/expressions/locations/ir_semantics/sink_boundaries；outcome 和位置证据留在完整响应中，证书在旁置审计材料中。
 
 | 对象 | 当前版本 |
 |---|---|
-| 运行时契约 | skillflow-abstract-runtime-v5 |
-| 联合标注及运行 | security-profile-v10 / skill-ir-security-profile-v11 |
-| 观察编译器 | skillflow-processing-compiler-v4 |
-| 编译映射 | skillflow-processing-compilation-v4 |
-| Data | skillflow-data-v4 |
-| 传播记录 | skillflow-propagation-record-v9 |
-| DOE 输入 | skillflow-doe-input-v7 |
-| 传播运行 | skill-ir-propagation-v10 |
+| 运行时契约 | skillflow-abstract-runtime-v7 |
+| 联合标注及运行 | security-profile-v13 / skill-ir-security-profile-v16 |
+| 编译器及编译材料 | v7 |
+| Data | v4（未变化） |
+| 传播记录及传播运行 | v11 / v14 |
+| 对外阶段事实 | data.json / records.json / sinks.json；无 DOE 输入总包 |
 
 旧记录不自动迁移或重解释。CFG、生产提取和语义核对契约不因本轮增加字段。
 
@@ -215,11 +216,11 @@ ForEachRecord
 字段 origin 的路径规范化到同一个原整体，例如 `[ElementStep, "recipient"]` 与
 `[ElementStep, "summary"]` 共享前缀；不要求 part_of 总是直接指向中间元素。
 
-独立 DOE 加载校验结构、引用、成员关系和已声明空集合；不在缺少原规格时证明候选实例绝无遗漏。
+传播材料加载校验结构、引用、成员关系和已声明空集合；不在缺少原规格时证明候选实例绝无遗漏。
 完整运行摘要及重新传播负责发现删除一个形状仍合法的实例等篡改。
 
 离线示例：`python examples/propagation/processing_demo.py --output <新目录>`。
-它使用人工编写的处理段，执行真实编译、传播、DOE 保存及报告生成，不能冒充模型实测。
+它使用人工编写的处理段，执行真实编译与传播，导出 Data、记录、Sink 及报告，不能冒充模型实测或正式接受响应。
 
 ## 条件构造与观察
 

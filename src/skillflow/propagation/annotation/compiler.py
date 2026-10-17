@@ -6,6 +6,12 @@ implications of supplied typed modes, not their semantic correctness.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
+
+from pydantic import ValidationError
+
+from skillflow.common.validation import StructuralValidationError, structural_error
+from skillflow.common.source_evidence import json_pointer
 
 from skillflow.propagation.contracts.compatibility import TRANSFORM_OPERATIONS
 from skillflow.propagation.contracts.compatibility import INTERACTION_EFFECTS
@@ -15,18 +21,34 @@ from skillflow.propagation.contracts.specs import ReceiveOp
 from skillflow.propagation.contracts.specs import LocalRef
 from skillflow.propagation.contracts.specs import AlternativesRef
 from skillflow.propagation.contracts.specs import _validate_ref
-from skillflow.propagation.contracts.specs import IRTransferSpec
+from skillflow.propagation.contracts.specs import IRTransferSpec, IRSemantics, _has_effect
+from skillflow.propagation.contracts.paths import semantics_path, split_semantics_path
 from skillflow.propagation.contracts.specs import structural_precedence
 from skillflow.propagation.contracts.specs import position_value
+from skillflow.propagation.contracts.specs import compiled_operation
+from skillflow.propagation.contracts.joint import normalize_joint_semantics, goal_mapping
 from skillflow.propagation.contracts.uses import value_uses
 from skillflow.propagation.contracts.uses import request_precedence
 from skillflow.common.recording import canonical_sha256
-from skillflow.propagation.contracts.runtime_contract import execution_model_binding
+from skillflow.propagation.contracts.runtime_contract import runtime_contract_binding
 from skillflow.propagation.material import checked_material
 from skillflow.propagation.contracts.profiles import RawAnnotationResponse
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
 
-COMPILER_VERSION = "skillflow-processing-compiler-v4"
+COMPILER_VERSION = "skillflow-processing-compiler-v8"
+
+
+class InternalCompilationError(RuntimeError):
+    """A generated artifact violated an invariant after candidate validation."""
+
+
+@contextmanager
+def _generated_artifact(stage):
+    """Generated invariant failures must never request another model response."""
+    try:
+        yield
+    except (StructuralValidationError, ValidationError) as error:
+        raise InternalCompilationError(f"Generated {stage} failed validation: {error}") from error
 
 
 def compile_response(raw, material):
@@ -37,16 +59,19 @@ def compile_response(raw, material):
     raw = validate_raw_response(raw, material)
     parsed = RawAnnotationResponse.model_validate(raw)
     compiled = deepcopy(raw)
-    compiled["transfer_specs"] = {}
-    mapping = {"schema_version": "skillflow-processing-compilation-v4",
+    normalized = normalize_joint_semantics(raw, material)
+    compiled.pop("task_revision_id")
+    compiled.update(normalized)
+    compiled["ir_semantics"] = {}
+    mapping = {"schema_version": "skillflow-processing-compilation-v8",
                "compiler_version": COMPILER_VERSION,
-               "execution_model": execution_model_binding(material["execution_model"]),
-               "events": []}
-    rules = {rule["id"]: rule["text"] for rule in material["execution_model"]["rules"]}
-    mechanism = {"basis": "execution_model", "ref_id": "EM10", "quote": rules["EM10"],
-                 "reason": "程序按已声明处理模式及实际符号引用编译观察；不证明模式判断正确或真实执行已发生。"}
-    boundary_evidence = {"basis": "execution_model", "ref_id": "EM12", "quote": rules["EM12"],
-                         "reason": "程序生成的模型接收边界使用 recipient；未建模保存期限保持 null，不声明服务端不保存。"}
+               "runtime_contract": runtime_contract_binding(material["runtime_contract"]),
+               "events": [], "goals": goal_mapping(raw, normalized)}
+    rules = {rule["id"]: rule["text"] for rule in material["runtime_contract"]["rules"]}
+    mechanism = {"rule_id": "EM10",
+                 "reason": "The program compiles observations from declared processing modes and actual symbolic references; this does not prove the mode classification or that execution occurred."}
+    boundary_evidence = {"rule_id": "EM12",
+                         "reason": "The program-generated model boundary uses recipient; unmodeled retention stays null and does not assert that the service retains nothing."}
     model_location = None
 
     def context_location():
@@ -54,57 +79,54 @@ def compile_response(raw, material):
         if model_location is not None:
             return model_location
         identities = [(key, location) for key, location in compiled["locations"].items()
-                      if location["kind"] == "model_context" and location["name"] == "当前模型处理上下文"]
+                      if location["kind"] == "model_context" and location["name"] == "Current model processing context"]
         if identities:
             model_location = identities[0][0]
             existing = identities[0][1]
             if existing["access_scope"] != "recipient" or existing["retention"] is not None:
-                raise ValueError("compiled model location boundary attributes conflict with recipient/null")
+                raise structural_error("compiled_location_conflict", json_pointer("locations", model_location),
+                                       "compiled model location boundary attributes conflict with recipient/null")
         else:
             model_location = "__compiled_model_context__"
             if model_location in compiled["locations"]:
-                raise ValueError("reserved compiled model location conflicts with a supplied location")
+                raise structural_error("reserved_location", json_pointer("locations", model_location),
+                                       "reserved compiled model location conflicts with a supplied location")
             compiled["locations"][model_location] = {
-                "kind": "model_context", "name": "当前模型处理上下文", "operand_refs": [],
+                "kind": "model_context", "name": "Current model processing context", "operand_refs": [],
                 "access_scope": "recipient", "retention": None}
             compiled["location_evidences"][model_location] = [deepcopy(mechanism), deepcopy(boundary_evidence)]
         return model_location
 
     instructions = {ir["id"]: ir for block in material["cfg"]["blocks"].values() for ir in block["instructions"]}
-    for ir_id, spec in parsed.transfer_specs.items():
-        original = raw["profiles"][ir_id]
-        profile = compiled["profiles"][ir_id]
-        profile["effects"] = []
-        profile["evidences"] = [deepcopy(item) for item in original["evidences"] if item["field"] != "effects"]
+    for ir_id, spec in parsed.ir_semantics.items():
+        original = raw["ir_semantics"][ir_id]
         output_events = []
         known = {}
         causal_edges = set()
 
-        def emit(target, event_path, ops, effect, original_index, raw_path, operation_range,
+        def emit(target, event_path, ops, effect, original_event, raw_path, operation_range,
                  kind, mode, additional_evidence=None):
-            index = None if effect is None else len(profile["effects"])
-            target.append({"effect_index": index, "atomic_ops": deepcopy(ops)})
+            evidences = []
+            if effect is not None:
+                if additional_evidence is not None:
+                    evidences = additional_evidence
+                elif original_event is not None and effect == original_event.effect:
+                    evidences = [item.model_dump(mode="json") for item in original_event.evidences]
+                else:
+                    evidences = [item for op in ops for item in op["evidences"]]
+            event_value = {"effect": effect, "atomic_ops": deepcopy(ops)}
+            if effect is not None:
+                event_value["evidences"] = deepcopy(evidences)
+            target.append(event_value)
             mapping["events"].append({"instruction_id": ir_id, "raw_path": raw_path,
                                       "raw_atomic_range": operation_range,
                                       "compiled_path": event_path + [len(target) - 1],
                                       "kind": kind, "mode": mode})
-            if effect is None:
-                return
-            profile["effects"].append(effect)
-            if additional_evidence is not None:
-                evidences = additional_evidence
-            elif original_index is not None and effect == original["effects"][original_index]:
-                evidences = [item for item in original["evidences"]
-                             if item["field"] == "effects" and item["effect_index"] == original_index]
-            else:
-                evidences = [item for op in ops for item in op["evidences"]]
-            for item in evidences:
-                profile["evidences"].append({key: deepcopy(item[key]) for key in ("basis", "ref_id", "quote", "reason")}
-                | {"field": "effects", "value": effect, "effect_index": index})
 
         def processing(segment, target, event_path, raw_path, available):
             if segment.mode == "model" and "llm" not in original["operator"]:
-                raise ValueError(f"model processing requires llm operator: {ir_id}")
+                raise structural_error("model_operator", json_pointer("ir_semantics", ir_id, "operator"),
+                                       f"model processing requires llm operator: {ir_id}")
             segment_start = len(target)
             seen = set()
             local_defs = dict(available)
@@ -153,7 +175,7 @@ def compile_response(raw, material):
                 return ref
 
             for event_index, event in enumerate(segment.events):
-                old_effect = None if event.effect_index is None else original["effects"][event.effect_index]
+                old_effect = event.effect
                 path = raw_path + ["events", event_index]
                 pending = []
                 start = 0
@@ -164,7 +186,7 @@ def compile_response(raw, material):
                     whole = start == 0 and end == len(event.atomic_ops)
                     has_primary = any(op["op"] in INTERACTION_EFFECTS for op in pending)
                     effect = old_effect if whole or has_primary or old_effect is None else "transform"
-                    emit(target, event_path, pending, effect, event.effect_index, path, [start, end],
+                    emit(target, event_path, pending, effect, event, path, [start, end],
                          "retained" if whole else "slice", segment.mode)
                     pending = []
                 for position, op in enumerate(event.atomic_ops):
@@ -189,7 +211,7 @@ def compile_response(raw, material):
                                 observe(fresh, path, [position, position + 1], when=guard)
                     if not pending:
                         start = position
-                    pending.append(op.model_dump(mode="json"))
+                    pending.append(compiled_operation(op))
                     if segment.mode != "local" and isinstance(op, (ReadOp, ReceiveOp)):
                         flush(position + 1)
                         observe([{"kind": "local", "name": op.output}], path, [position, position + 1])
@@ -204,42 +226,50 @@ def compile_response(raw, material):
             # Preserve declared within-segment ordering and generated causal
             # edges at primitive-operation granularity. Different segments may
             # still interleave in partial-order evaluation.
-            is_body = len(event_path) > 3
-            outer = event_path[3] if is_body else None
+            _, relative_path = split_semantics_path(event_path)
+            is_body = len(relative_path) == 3 and relative_path[2] == "body"
+            outer = relative_path[1] if is_body else None
             positions = [(outer if is_body else e, e if is_body else None, o)
                          for e in range(segment_start, len(target))
                          for o in range(len(target[e]["atomic_ops"]))]
             causal_edges.update(zip(positions, positions[1:]))
 
         for position, event in enumerate(spec.events):
-            raw_path = ["transfer_specs", ir_id, "events", position]
+            raw_path = semantics_path(ir_id, "events", position)
             if isinstance(event, ProcessingSpec):
-                processing(event, output_events, ["transfer_specs", ir_id, "events"], raw_path, known)
+                processing(event, output_events, semantics_path(ir_id, "events"), raw_path, known)
             else:
                 body = []
                 body_known = {**known, event.item: -1}
                 index = len(output_events)
                 for body_position, segment in enumerate(event.body):
-                    processing(segment, body, ["transfer_specs", ir_id, "events", index, "body"],
+                    processing(segment, body, semantics_path(ir_id, "events", index, "body"),
                                raw_path + ["body", body_position], body_known)
                 output_events.append({"kind": "for_each", "collection": event.collection.model_dump(mode="json"),
                                       "item": event.item, "body": body,
+                                      "sensitivity": [item.model_dump(mode="json") for item in event.sensitivity],
                                       "evidences": [item.model_dump(mode="json") for item in event.evidences]})
-        if not profile["effects"]:
-            profile["evidences"].extend(deepcopy(item) for item in original["evidences"] if item["field"] == "effects")
         result_spec = {"order": spec.order, "precedence": [],
+            "sensitivity": [item.model_dump(mode="json") for item in spec.sensitivity],
             "events": output_events, "output_bindings": [item.model_dump(mode="json") for item in spec.output_bindings]}
-        typed = IRTransferSpec.model_validate(result_spec)
-        causal_edges |= structural_precedence(typed)
-        causal_edges |= request_precedence(typed)
+        with _generated_artifact(f"transfer structure for {ir_id}"):
+            typed = IRTransferSpec.model_validate(result_spec)
+            causal_edges |= structural_precedence(typed)
+            causal_edges |= request_precedence(typed)
         def coordinate(key):
             return (key[0], -1 if key[1] is None else key[1], key[2])
         result_spec["precedence"] = [{"before": position_value(before), "after": position_value(after)}
             for before, after in sorted(causal_edges, key=lambda pair: (coordinate(pair[0]), coordinate(pair[1])))]
-        compiled["transfer_specs"][ir_id] = result_spec
-    compiled["sink_boundaries"] = [boundary.model_dump(mode="json") for boundary in
-        derive_sink_boundaries(compiled["locations"], compiled["transfer_specs"], compiled["profiles"])]
-    compiled = validate_compiled_response(compiled, material)
+        result_spec.update(operator=deepcopy(original["operator"]),
+                           operator_evidences=deepcopy(original["operator_evidences"]))
+        if not _has_effect(typed.events):
+            result_spec["empty_effect_evidences"] = deepcopy(original["empty_effect_evidences"])
+        with _generated_artifact(f"IR semantics for {ir_id}"):
+            compiled["ir_semantics"][ir_id] = IRSemantics.model_validate(result_spec).model_dump(mode="json")
+    with _generated_artifact("sink boundaries and final compiled response"):
+        compiled["sink_boundaries"] = [boundary.model_dump(mode="json") for boundary in
+            derive_sink_boundaries(compiled["locations"], compiled["ir_semantics"])]
+        compiled = validate_compiled_response(compiled, material)
     mapping["raw_sha256"] = canonical_sha256(raw)
     mapping["compiled_sha256"] = canonical_sha256(compiled)
     return raw, compiled, mapping

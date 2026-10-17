@@ -43,15 +43,15 @@ def render_mermaid(cfg: ControlFlowGraph) -> str:
         ]
         if block.data_source_kind:
             description = (
-                "上下文读入" if block.data_source_kind == "context" else "外部数据读入"
+                "Context acquisition" if block.data_source_kind == "context" else "External acquisition"
             )
             label_lines.append(
-                f"<b>source · {block.data_source_kind}（{description}）</b>"
+                f"<b>source · {block.data_source_kind} ({description})</b>"
             )
         incoming = block.cross_block_result_ids()
         if incoming:
             label_lines.append(
-                "引用其他块的结果："
+                "Results referenced from other blocks: "
                 + ", ".join(
                     _result_label(identifier, result_semantic_names)
                     for identifier in incoming
@@ -63,7 +63,7 @@ def render_mermaid(cfg: ControlFlowGraph) -> str:
         produced = block.produced_result_ids()
         if produced:
             label_lines.append(
-                "产出："
+                "Outputs: "
                 + ", ".join(
                     _result_label(identifier, result_semantic_names)
                     for identifier in produced
@@ -74,7 +74,7 @@ def render_mermaid(cfg: ControlFlowGraph) -> str:
 
     for resource_name in resources:
         node_id = resource_nodes[resource_name]
-        label = f"external_resource: {_escape_label(resource_name)}<br/>资源标识"
+        label = f"external_resource: {_escape_label(resource_name)}<br/>Resource identifier"
         lines.append(f'  {node_id}(["{label}"])')
 
     for edge in cfg.edges:
@@ -154,9 +154,9 @@ def _instruction_label(instruction: Any) -> str:
     ]
     if instruction.inputs:
         prefix = (
-            "读取上下文："
+            "Read context: "
             if any(item.type is OperandType.CONTEXT_KEY for item in instruction.inputs)
-            else "输入："
+            else "Inputs: "
         )
         parts.append(
             prefix
@@ -164,7 +164,7 @@ def _instruction_label(instruction: Any) -> str:
         )
     if instruction.outputs:
         parts.append(
-            "产出："
+            "Outputs: "
             + ", ".join(_operand_label(operand) for operand in instruction.outputs)
         )
     return " · ".join(parts)
@@ -197,7 +197,7 @@ def _result_label(result_id: str, result_semantic_names: dict[str, str]) -> str:
 
     semantic_name = result_semantic_names.get(result_id)
     if semantic_name:
-        return f"{_escape_label(semantic_name)}（{_escape_label(result_id)}）"
+        return f"{_escape_label(semantic_name)} ({_escape_label(result_id)})"
     return _escape_label(result_id)
 
 

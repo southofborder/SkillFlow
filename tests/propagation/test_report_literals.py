@@ -11,15 +11,15 @@ import socket
 import pytest
 
 from skillflow.propagation import propagate
-from skillflow.propagation.handoff import load_doe_input
 from skillflow.propagation.report import _operands
 from skillflow.propagation.report import render_html
 from skillflow.propagation.report import render_markdown
-from skillflow.propagation.runner import load_propagation_run
+from skillflow.propagation.runner import load_propagation_materials
 from skillflow.propagation.runner import replay_propagation
 from skillflow.propagation.runner import save_propagation_run
+from tests.propagation.component_helpers import accepted_annotation
 from skillflow.common.recording import read_json
-from skillflow.propagation.material import prepare_material
+from tests.propagation.annotation.helpers import prepare_material
 from skillflow.propagation.annotation.services import compile_response
 from skillflow.propagation.annotation.services import to_payload
 
@@ -57,7 +57,7 @@ def literal_run_inputs():
         cfg, {"literals": ([], [], [input_ref(i) for i in range(len(LITERALS))])}, return_response=True)
     source, metadata = example["demo_source"]()
     annotation = to_payload(response)
-    material = prepare_material(source, cfg)
+    material = prepare_material(source, cfg, task_baseline=example["demo_task"](source))
     solved = propagate(cfg, annotation)
     assert solved.status == "complete"
     return material, metadata, response, annotation, solved
@@ -74,29 +74,28 @@ def test_literal_null_identifiers_survive_full_save_load_and_zero_api_replay(tmp
     material, metadata, response, annotation, solved = literal_run_inputs()
     authored_raw = deepcopy(response)
     authored_raw.pop("sink_boundaries")
-    for spec in authored_raw["transfer_specs"].values():
+    # Author the fixture's raw joint fields explicitly. The normalized Task
+    # identity and demand projection belong only to compiled business material.
+    authored_raw["task_revision_id"] = authored_raw.pop("task_ref")["task_sha256"]
+    assert authored_raw['demands'] == authored_raw['expressions'] == []
+    for spec in authored_raw["ir_semantics"].values():
         spec.pop("precedence")
     raw, compiled, compilation_map = compile_response(authored_raw, material)
     assert compiled == response
     directory = tmp_path / "literal-report-run"
-    result = save_propagation_run(
-        directory, material=material, source_metadata=metadata, annotation=annotation,
-        location_evidences=response["location_evidences"], solved=solved,
-        raw_annotation=raw, compilation_map=compilation_map,
-        provenance={"kind": "hand_authored_specification", "notice": "Explicit offline regression fixture."},
-    )
+    origin = accepted_annotation(tmp_path / 'annotation', material, raw)
+    result = save_propagation_run(directory, annotation_run=origin, solved=solved)
     assert (directory / "manifest.json").is_file()
-    assert load_doe_input(directory / "doe-input.json") == result
-    assert load_propagation_run(directory) == result
-    assert replay_propagation(directory) == result
+    assert load_propagation_materials(directory).records == result.records
+    assert replay_propagation(directory).records == result.records
     receipt = read_json(directory / "replay/summary.json")
     assert receipt["status"] == "matched" and receipt["model_calls"] == 0
     assert not (directory / "replay/doe-input.json").exists()
-    for ir in result["cfg"]["blocks"]["main"]["instructions"]:
+    for ir in result.cfg["blocks"]["main"]["instructions"]:
         if ir["id"] == "ir_literals":
             assert [operand["literal_value"] for operand in ir["inputs"]] == LITERALS
             assert all("identifier" in operand and operand["identifier"] is None for operand in ir["inputs"])
-    text = _operands(result["cfg"]["blocks"]["main"]["instructions"][0]["inputs"])
+    text = _operands(result.cfg["blocks"]["main"]["instructions"][0]["inputs"])
     assert "0: null, 1: true, 2: false, 3: 0, 4: [], 5: {}" in text
     assert '<tag>' in text
     for name, render in (("report.html", render_html), ("report.md", render_markdown)):

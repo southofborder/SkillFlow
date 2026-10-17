@@ -176,34 +176,34 @@ def test_render_mermaid_deduplicates_external_resource_nodes() -> None:
     assert (
         rendered.count("resource_node_001 -.->|external_resource| block_node_004") == 1
     )
-    assert "资源标识" in rendered
+    assert "Resource identifier" in rendered
     assert "alerts|api" not in rendered
 
 
 def test_render_mermaid_formats_operand_types_and_literal_values() -> None:
     rendered = render_mermaid(make_cfg())
 
-    assert "读取上下文：context_key:user_input" in rendered
+    assert "Read context: context_key:user_input" in rendered
     assert (
-        "输入：external_resource:alerts&#124;api, raw_message, "
+        "Inputs: external_resource:alerts&#124;api, raw_message, "
         "literal:{&quot;kind&quot;:&quot;urgent&quot;}" in rendered
     )
-    assert "产出：response" in rendered
+    assert "Outputs: response" in rendered
     assert "local_dep" not in rendered
 
 
 def test_render_mermaid_distinguishes_sources_and_value_references() -> None:
     rendered = render_mermaid(make_cfg())
 
-    assert "source · context（上下文读入）" in rendered
-    assert "source · external（外部数据读入）" in rendered
+    assert "source · context (Context acquisition)" in rendered
+    assert "source · external (External acquisition)" in rendered
     # The source produces a value and references none; its consumers reference
     # it by the identifier of that definition point.
     entry = box(rendered, "block_node_001")
-    assert "产出：raw_message" in entry
-    assert "引用其他块的结果：" not in entry
-    assert "引用其他块的结果：raw_message" in box(rendered, "block_node_002")
-    assert "引用其他块的结果：raw_message" in box(rendered, "block_node_003")
+    assert "Outputs: raw_message" in entry
+    assert "Results referenced from other blocks: " not in entry
+    assert "Results referenced from other blocks: raw_message" in box(rendered, "block_node_002")
+    assert "Results referenced from other blocks: raw_message" in box(rendered, "block_node_003")
     assert "class block_node_001,block_node_003 source;" in rendered
     assert "class block_node_001 entry;" in rendered
 
@@ -225,11 +225,11 @@ def test_render_mermaid_says_nothing_about_a_value_a_block_never_touches() -> No
 
     decision_line = box(rendered, "block_node_002")
     assert "raw_message" not in decision_line
-    assert "引用其他块的结果：" not in decision_line
-    assert "产出：" not in decision_line
+    assert "Results referenced from other blocks: " not in decision_line
+    assert "Outputs: " not in decision_line
     # The value still crosses it: the block that reads it two hops later is
     # unaffected by the fact that nothing carried it.
-    assert "引用其他块的结果：raw_message" in box(rendered, "block_node_003")
+    assert "Results referenced from other blocks: raw_message" in box(rendered, "block_node_003")
 
 
 def make_canonical_cfg() -> ControlFlowGraph:
@@ -311,15 +311,15 @@ def make_canonical_cfg() -> ControlFlowGraph:
 def test_render_mermaid_names_canonical_values_by_their_extractor_wording() -> None:
     rendered = render_mermaid(make_canonical_cfg())
 
-    assert "产出：raw_message（result_001）" in rendered
-    assert "输入：external_resource:alerts_api, raw_message（result_001）" in rendered
+    assert "Outputs: raw_message (result_001)" in rendered
+    assert "Inputs: external_resource:alerts_api, raw_message (result_001)" in rendered
     # An operand keeps its own wording; the summary lines have no operand to read
     # it off and look it up on the graph instead.
-    assert "产出：raw_message（result_001）" in box(rendered, "block_node_001")
-    assert "引用其他块的结果：raw_message（result_001）" in box(
+    assert "Outputs: raw_message (result_001)" in box(rendered, "block_node_001")
+    assert "Results referenced from other blocks: raw_message (result_001)" in box(
         rendered, "block_node_002"
     )
-    assert "产出：ack_status（result_002）" in box(rendered, "block_node_002")
+    assert "Outputs: ack_status (result_002)" in box(rendered, "block_node_002")
 
 
 def test_render_mermaid_omits_a_wording_that_repeats_the_name() -> None:
@@ -333,9 +333,9 @@ def test_render_mermaid_omits_a_wording_that_repeats_the_name() -> None:
     graph.blocks["block_001"].instructions[0].outputs[0].semantic_name = "result_001"
     graph.blocks["block_002"].instructions[0].inputs[1].semantic_name = "result_001"
     other = render_mermaid(graph)
-    assert "result_001（result_001）" not in other
-    assert "产出：result_001（result_001）" not in other
-    assert "产出：result_001" in other
+    assert "result_001 (result_001)" not in other
+    assert "Outputs: result_001 (result_001)" not in other
+    assert "Outputs: result_001" in other
 
 
 def test_render_mermaid_escapes_an_extractor_wording() -> None:
@@ -344,8 +344,8 @@ def test_render_mermaid_escapes_an_extractor_wording() -> None:
 
     rendered = render_mermaid(graph)
 
-    assert "产出：raw&#124;&quot;&lt;msg&gt;（result_001）" in rendered
-    assert "产出：raw&#124;&quot;&lt;msg&gt;（result_001）" in rendered
+    assert "Outputs: raw&#124;&quot;&lt;msg&gt; (result_001)" in rendered
+    assert "Outputs: raw&#124;&quot;&lt;msg&gt; (result_001)" in rendered
     assert 'raw|"<msg>' not in rendered
 
 
@@ -356,7 +356,7 @@ def test_render_mermaid_escapes_value_names() -> None:
 
     rendered = render_mermaid(cfg)
 
-    assert "产出：raw_message, extra&#124;&quot;&lt;key&gt;" in rendered
+    assert "Outputs: raw_message, extra&#124;&quot;&lt;key&gt;" in rendered
 
 
 def test_render_mermaid_keeps_apostrophes_readable() -> None:

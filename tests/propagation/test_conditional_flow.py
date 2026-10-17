@@ -20,10 +20,10 @@ from skillflow.propagation.models import AtomicOpRecord
 from skillflow.propagation.models import FlowState
 from skillflow.propagation.models import FlowLocation
 from skillflow.propagation.contracts.specs import AtomicOp
-from skillflow.propagation.contracts.specs import IRTransferSpec
+from skillflow.propagation.contracts.specs import IRSemantics
 
 
-EVIDENCE = [{"basis": "cfg", "ref_id": "g_1", "quote": "action", "reason": "测试定位"}]
+EVIDENCE = [{"target": {"path": []}, "reason": "测试定位"}]
 
 
 def literal(value):
@@ -43,13 +43,13 @@ def harness(events, outputs=None, *, order="fixed", precedence=None, inputs=None
     ir = {"id": "ir_action", "inputs": inputs or [], "outputs": [
         {"type": "result", "identifier": "result"}
     ] if outputs is not None else []}
-    spec = IRTransferSpec.model_validate({"order": order, "precedence": precedence or [],
-        "events": [{"effect_index": index, "atomic_ops": ops} for index, ops in enumerate(events)],
+    spec = IRSemantics.model_validate({"operator": [], "operator_evidences": [{**EVIDENCE[0], "value": None}], "order": order, "precedence": precedence or [],
+        "events": [{"effect": "transform", "evidences": EVIDENCE, "atomic_ops": ops} for index, ops in enumerate(events)],
         "output_bindings": [{"output_index": 0, "value": outputs, "evidences": EVIDENCE}] if outputs is not None else []})
     annotation = {"locations": {
         "model": {"kind": "model_context", "name": "model", "operand_refs": [], "access_scope": "recipient", "retention": None},
         "tool": {"kind": "tool", "name": "lookup", "operand_refs": [], "access_scope": "recipient", "retention": None}},
-        "profiles": {ir["id"]: {"effects": ["transform"] * len(events)}}}
+        "ir_semantics": {ir["id"]: spec.model_dump(mode="json")}}
     interpreter = TransferInterpreter({"blocks": {"b": {"instructions": [ir]}}}, annotation, registry)
     return registry, interpreter, ir, spec, state or FlowState()
 
@@ -199,7 +199,7 @@ def test_false_context_member_is_not_preseeded_as_a_new_source():
     registry, interpreter, ir, spec, _ = harness([[build([
         {"path": ["a"], "value": {"kind": "input", "index": 0}, "when": literal(False)}])]],
         local("request"), inputs=[{"type": "context_key", "identifier": "unused_context"}])
-    interpreter.annotation["transfer_specs"] = {ir["id"]: spec.model_dump(mode="json")}
+    interpreter.annotation["ir_semantics"] = {ir["id"]: spec.model_dump(mode="json")}
     assert interpreter.initial_locations() == set()
     assert len(registry) == 0
 

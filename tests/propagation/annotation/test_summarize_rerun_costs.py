@@ -47,9 +47,9 @@ def save_call(tool, root, relative, *, failed=False, attempts=1, usage=True, obs
 def lineage(tool, tmp_path, monkeypatch):
     parent, child = tmp_path / "parent", tmp_path / "child"
     parent.mkdir()
-    manifest = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": tool._prepare.PARENT_IDENTITY,
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": tool._prepare.PARENT_IDENTITY,
                 "config": {"model": "requested-model"}, "cases": []}
-    outcome = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": tool._prepare.PARENT_IDENTITY,
+    outcome = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": tool._prepare.PARENT_IDENTITY,
                "summary": {"cases": 30}, "cases": {}}
     for number in range(1, 31):
         identifier = f"{number:03}"
@@ -107,6 +107,19 @@ def test_reused_call_change_missing_or_extra_is_rejected(tool, lineage, change):
         save_call(tool, lineage.child, "cases/001/feedback/calls/r001/extraction/a001/call.json")
     with pytest.raises(ValueError, match="Reused call artifacts"):
         tool.summarize(lineage.child)
+
+
+def test_annotation_structural_corrections_are_distinct_logical_requests(tool, tmp_path):
+    root = tmp_path / "annotation-chain"
+    for number in (1, 2, 1000):
+        save_call(tool, root, f"cases/008/annotation/calls/annotation/a{number:03}/call.json")
+    files = tool.call_files(root, {"008"})
+    ledger = tool.validated_ledger(root, files, allow_uncertain=True)
+    records = tool.accounting_records(root, ledger, "requested-model")
+    result = tool.metrics(records)
+    assert result["logical_by_task"]["annotation"] == 3
+    assert result["annotation_stage_calls"] == 1
+    assert result["annotation_structural_corrections"] == 2
 
 
 @pytest.mark.parametrize("change", ["parent", "provenance"])

@@ -14,7 +14,7 @@ from tests.graph.audit.test_services import material, FakeClient
 def failure_response(response):
     finding = response["findings"][1]
     return {
-        "schema_version": 5, "contract_version": CONTRACT_VERSION,
+        "schema_version": 6, "contract_version": CONTRACT_VERSION,
         "outcome": "cannot_assess",
         "failure": {"reason": "源文的必要范围存在互斥要求，无法确定应保留哪一个。",
                     "source_refs": deepcopy(finding["source_refs"]),

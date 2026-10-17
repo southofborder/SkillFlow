@@ -85,10 +85,10 @@ build 的原子操作记录
 
 ## 5. 运行与版本
 
-当前版本：联合标注 v10、标注运行 v11、运行时契约 v5、表示契约 v3、编译器 v4、传播记录 v9、DOE 输入 v7、传播运行 v10；审查运行 v4、一次修复运行 v3，审查结果仍为 v2，Data 仍为 v4。新入口拒绝旧格式，不迁移或重写历史响应。
+当前联合标注 v13、编译器 v7、运行时 v7；Data v4 不变。完整运行版本和分阶段文件见[字段收紧规范](../architecture/field-tightening.md)。旧格式拒绝，不迁移历史材料。
 
 新版三例实验复用冻结源文与 CFG，每例一次联合标注，随后离线编译、传播和零 API 重放。不重新建图、不开展真实自动修复、不质量择优。API JSON Output 与提示词唯一对象要求共同使用；多余括号、重复键、完整但非法对象和截断继续严格拒绝，不剪裁或接受部分内容。
 
-规则权威来源为[统一运行时契约](../../src/skillflow/propagation/contracts/runtime_contract.py)和[表示契约](../../src/skillflow/propagation/contracts/representation_contract.py)。工程验收保证类型、引用、控制／载荷、编译与重放一致；实际网络分类、原字段关系和局部机制是否标对，以实测及助手复核为准。
+规则权威来源为[统一运行时契约](../../src/skillflow/propagation/contracts/runtime_contract.py)和[共享格式说明](../../src/skillflow/propagation/contracts/format_instructions.py)。工程验收保证类型、引用、控制／载荷、编译与重放一致；实际网络分类、原字段关系和局部机制是否标对，以实测及助手复核为准。
 
 可运行离线示例：`python examples/propagation/optional_request_demo.py`。它只构造人工分析记录并向标准输出打印 DOE JSON，没有模型、工具或真实 Skill 执行；其中存在旗标 false 时请求保留 query、完全省略 cutoff。

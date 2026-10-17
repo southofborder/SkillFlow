@@ -28,14 +28,14 @@ def tool():
 def parent(tool, tmp_path, monkeypatch):
     root = tmp_path / "parent-run"
     root.mkdir()
-    manifest = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": []}
-    result = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": {}, "summary": {"cases": 30}}
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": []}
+    result = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": {}, "summary": {"cases": 30}}
     for number in range(1, 31):
         identifier = f"{number:03}"
         failed = identifier in tool.EXPECTED_RERUN_CASES
         manifest["cases"].append({"case_id": identifier, "run_dir": f"cases/{identifier}", "package_path": f"inputs/{identifier}"})
         value = {"feedback": {"status": "audit_error" if failed else "audit_passed"},
-                 "annotation": {"status": "complete", "transfer_specs": {"ir": {"order": "partial"}} if identifier == "007" else {}}, "scheduler_error": None}
+                 "annotation": {"status": "complete", "ir_semantics": {"ir": {"order": "partial"}} if identifier == "007" else {}}, "scheduler_error": None}
         result["cases"][identifier] = value
         case = root / "cases" / identifier
         tool.write_json(case / "result.json", value)

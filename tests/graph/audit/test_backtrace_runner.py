@@ -17,18 +17,15 @@ from skillflow.graph.semantic_contract import contract_binding
 
 def answer(prompt):
     payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-    originals = {f["path"]: f["content"].splitlines() for f in payload["source_files"]}
-    source_refs = [{"unit_id": u["id"], "file": u["file"], "start_line": u["start_line"],
-                    "end_line": u["end_line"], "quote": "\n".join(originals[u["file"]][u["start_line"]-1:u["end_line"]])} for u in payload["source_units"]]
-    controlled = payload["required_coverage"]["reviewed_controlled_unit_ids"]
-    return {"schema_version": 5, "outcome": "completed", "contract_version": CONTRACT_VERSION,
+    source_refs = [{"file": item["path"], "start_line": 1,
+                    "end_line": len(item["lines"])} for item in payload["source_files"] if item["lines"]]
+    controlled = [u["id"] for u in payload["controlled_units"]]
+    return {"schema_version": 6, "outcome": "completed", "contract_version": CONTRACT_VERSION,
             "findings": [{"id": "finding_1", "kind": "semantic", "status": "represented",
              "source_requirement": "仅用于执行协议测试的原文引用，不是语义答案。",
              "actual_representation": "仅用于执行协议测试的受控记录引用。", "reason": "工程测试引用输入。",
              "source_refs": source_refs, "controlled_refs": [{"unit_id": key} for key in controlled],
-             "basis": ["explicit_graph"], "suggestions": []}],
-            "reviewed_source_unit_ids": payload["required_coverage"]["reviewed_source_unit_ids"],
-            "reviewed_controlled_unit_ids": controlled, "notes": []}
+             "basis": ["explicit_graph"], "suggestions": []}]}
 
 
 class FakeFactory:
@@ -65,13 +62,15 @@ def no_network(*args, **kwargs):
 
 def test_prepare_bound_inputs_and_single_task_inventory(prepared):
     manifest = runner.verify_run(prepared, live=True)
-    assert manifest["schema_version"] == 5
+    assert manifest["schema_version"] == 7
     assert all(manifest[key] == value for key, value in contract_binding().items())
     assert manifest["planned_logical_calls"] == 5
     assert [c["case_id"] for c in manifest["cases"]] == list(runner.CASE_IDS)
     assert all(c["fidelity_status"] == "passed" for c in manifest["cases"])
     assert len(list((prepared / "inputs").rglob("controlled.json"))) == 5
     assert not (prepared / "calls").exists()
+    assert not (prepared / "inputs/source.json").exists()
+    assert all((prepared / "inputs" / case["case_id"] / "source.json").is_file() for case in manifest["cases"])
     for path in (prepared / "inputs").rglob("*"):
         if path.is_file():
             raw = path.read_text(encoding="utf-8")
@@ -87,7 +86,7 @@ def test_exactly_five_calls_isolated_payload_and_offline_replay(prepared, monkey
     assert len(factory.prompts) == result["recorded_logical_calls"] == 5
     assert result["execution_status"] == "complete", result["stages"]
     assert set(result["stages"]) == set(runner.CASE_IDS)
-    allowed = {"source_files", "source_line_index", "source_units", "controlled_text", "controlled_units", "required_coverage"}
+    allowed = {"source_files", "controlled_text", "controlled_units"}
     for prompt in factory.prompts:
         payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
         assert set(payload) == allowed
@@ -134,7 +133,7 @@ def test_interruption_starts_no_calls(prepared):
     assert replay["recorded_execution_calls"] == 0
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 6])
 def test_old_version_rejected_without_migration(tmp_path, version):
     (tmp_path / "manifest.json").write_text(json.dumps({"schema_version": version}), encoding="utf-8")
     with pytest.raises(ValueError, match="Unsupported run version"):
@@ -230,16 +229,18 @@ def test_seven_suite_uses_independent_frozen_sources_and_exactly_seven_calls(tmp
     for case, prompt in zip(manifest["cases"], factory.prompts, strict=True):
         payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
         source = runner.read_json(directory / "inputs" / case["case_id"] / "source.json")
-        assert payload["source_files"] == [{key: item[key] for key in ("path", "content")} for item in source["files"]]
+        assert [{"path": item["path"], "content": "".join(line["text"] for line in item["lines"])}
+                for item in payload["source_files"]] == [
+            {key: item[key] for key in ("path", "content")} for item in source["files"]]
         assert not {"oracle_key", "case_id", "selection", "previous_audit", "graph"}.intersection(payload)
     assert result["evaluation"]["cases"]["c06"]["evaluation_status"] == "assistant_review_required"
     replay = runner.execute_run(directory, replay=True, client_factory=no_network, workers=1)
     assert replay["stages"] == result["stages"]
     assert replay["evaluation"] == result["evaluation"]
     report = (directory / "report.md").read_text(encoding="utf-8")
-    assert "保留项" in report and CONTRACT_VERSION in report
-    assert "七类检查记录" not in report and "精确保留" not in report
-    assert result["schema_version"] == 5
+    assert "Represented items" in report and CONTRACT_VERSION in report
+    assert "七类检查记录" not in report and "Exact preservation" not in report
+    assert result["schema_version"] == 7
     summary = result["stages"]["c01"]["result"]["representation_summary"]
     assert summary == {"represented_ids": ["finding_1"], "conservative_ids": []}
 
@@ -331,15 +332,15 @@ def test_conservative_report_preserves_rule_candidates_and_lost_precision():
                                 "lost_distinctions": ["尚未区分路径与选中结果"], "reason": "分支合流候选",
                                 "graph_refs": ["/blocks/b/instructions/0/inputs/0", "/blocks/b/instructions/0/inputs/1"]}}
     report = render_suggestions("example", {"status": "complete", "result": {"findings": [finding]}})
-    assert all(text in report for text in ("DEP-MERGE", "a, b", "尚未区分路径与选中结果", "保守保留"))
-    assert "精确保留" not in report and "核对类别" not in report
+    assert all(text in report for text in ("DEP-MERGE", "a, b", "尚未区分路径与选中结果", "Conservative retention"))
+    assert "Exact preservation" not in report and "核对类别" not in report
 
 
 def test_semantic_failure_report_cannot_look_like_no_findings():
     from skillflow.graph.audit.report import render_suggestions
     report = render_suggestions("example", {"status": "semantic_failure", "reason": "源文要求相互冲突。"})
     assert "源文要求相互冲突" in report
-    assert "模型没有报告业务差异" not in report
+    assert "The model reported no business differences" not in report
 
 
 def test_parallel_interruption_replays_other_already_accepted_case_independently(prepared):

@@ -29,7 +29,7 @@ def _write_or_print(text: str, output: str | None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="skillflow", description="Construct and inspect SkillFlow graphs."
+        prog="skillflow", description="Construct graphs and run recorded SkillFlow analysis."
     )
     parser.add_argument(
         "--env-file",
@@ -49,10 +49,46 @@ def main(argv: list[str] | None = None) -> int:
     experiment = commands.add_parser("experiment", help="Run a versioned experiment")
     experiment.add_argument("--config", required=True)
     experiment.add_argument("--output-dir")
+    pipeline = commands.add_parser("pipeline", help="Source-only Task extraction, fixed-Task annotation, bounded review, propagation and DOE")
+    stages = pipeline.add_subparsers(dest="pipeline_command", required=True)
+    prepare = stages.add_parser("prepare", help="Freeze a Skill and an existing CFG without model calls")
+    prepare.add_argument("--input", required=True)
+    prepare.add_argument("--analysis", required=True)
+    prepare.add_argument("--run-dir", required=True)
+    prepare.add_argument("--request-file", type=Path)
+    execute = stages.add_parser("run", help="Execute or resume the prepared chain")
+    execute.add_argument("--run-dir", required=True)
+    replay = stages.add_parser("replay", help="Rebuild saved stage decisions with zero API calls")
+    replay.add_argument("--run-dir", required=True)
+    for command in (prepare, execute):
+        command.add_argument("--env-file", default=argparse.SUPPRESS)
     for command in (analyze, render, experiment):
         command.add_argument("--env-file", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
+        if args.command == "pipeline":
+            from skillflow.pipeline import prepare_analysis_run, run_analysis, replay_analysis
+            if args.pipeline_command == "replay":
+                if args.env_file is not None:
+                    parser.error("Offline pipeline replay does not accept --env-file")
+                result = replay_analysis(args.run_dir)
+            else:
+                from skillflow.propagation.annotation.config import annotation_public_config
+                config = LlmConfig.from_env(env_file=args.env_file)
+                public = annotation_public_config(config)
+                secrets = (config.api_key,) if config.api_key else ()
+                if args.pipeline_command == "prepare":
+                    result = prepare_analysis_run(args.input, args.analysis, run_dir=args.run_dir,
+                        config=public, secrets=secrets,
+                        user_request=None if args.request_file is None else args.request_file.read_bytes().decode("utf-8-sig"))
+                    print(result["preparation_status"], Path(args.run_dir).resolve())
+                    return 0 if result["preparation_status"] == "ready" else 1
+                from skillflow.common.recording import streaming_factory
+                factory, secrets = streaming_factory(public, env_file=args.env_file)
+                result = run_analysis(args.run_dir, config=public, client_factory=factory, secrets=secrets,
+                                      progress=lambda message: print(message, flush=True))
+            print(result["status"], result["reason"], Path(args.run_dir).resolve(), flush=True)
+            return 0 if result["status"] == "complete" else 130 if result["status"] == "interrupted" else 1
         if args.command == "render":
             _write_or_print(render_mermaid(load_analysis_cfg(args.input)), args.output)
             return 0

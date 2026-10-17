@@ -24,10 +24,10 @@ def test_audit_uses_shared_evidence_contracts_and_validation():
 
     assert issubclass(models.Finding, shared.StrictRecord)
     assert models.Finding.model_fields["source_refs"].annotation == list[shared.SourceRef]
-    for name in ("_fail", "_unique", "_exact", "_json_object",
-                 "_checked_source", "_digest", "_validate_source_ref"):
+    for name in ("_fail", "_unique", "_json_object",
+                 "_checked_source", "_digest", "validate_source_ref", "nonempty_source_lines"):
         assert getattr(services, name) is getattr(shared, name)
-    assert prompts.source_units is shared.source_units
+    assert prompts.source_lines is shared.source_lines
     with pytest.raises(shared.ResponseValidationError):
         services._json_object('{"duplicate": 1, "duplicate": 2}')
 
@@ -54,9 +54,7 @@ def test_frozen_source_is_validated_without_mutating_content():
     before = deepcopy(original)
     assert shared._checked_source(original) == before
     assert original == before
-    units = shared.source_units(original)
-    assert [(u["start_line"], u["end_line"]) for u in units] == [(1, 1), (3, 7)]
-    assert units[1]["text"] == "```text\n甲\n\n乙\n```"
+    assert shared.extract_source_lines(original["files"][0]["content"], 3, 7) == "```text\r\n甲\r\n\r\n乙\r\n```\r\n"
     assert original["files"][0]["content"].count("\r\n") == 7
 
 
@@ -81,16 +79,14 @@ def test_strict_json_rejects_ambiguous_or_non_json_responses(raw):
         shared._json_object(raw)
 
 
-def test_quote_validation_uses_exact_file_lines_and_normalized_newlines():
-    units = {unit["id"]: unit for unit in shared.source_units(source())}
-    valid = {"unit_id": "src_002", "file": "SKILL.md", "start_line": 4,
-             "end_line": 6, "quote": "甲\r\n\r\n乙"}
-    shared._validate_source_ref(valid, units)
-    for key, value in (("quote", "丙"), ("file", "other.md"), ("start_line", 2),
-                       ("end_line", 8), ("unit_id", "missing")):
+def test_span_validation_uses_exact_file_lines_without_paragraph_restriction():
+    files = {item["path"]: item["content"] for item in source()["files"]}
+    valid = {"file": "SKILL.md", "start_line": 4, "end_line": 6}
+    assert shared.validate_source_ref(valid, files).model_dump() == valid
+    for key, value in (("file", "other.md"), ("start_line", 0), ("end_line", 8)):
         invalid = {**valid, key: value}
-        with pytest.raises(shared.ResponseValidationError):
-            shared._validate_source_ref(invalid, units)
+        with pytest.raises(ValueError):
+            shared.validate_source_ref(invalid, files)
 
 
 def test_source_contracts_remain_strict_and_preserve_order():
@@ -99,5 +95,22 @@ def test_source_contracts_remain_strict_and_preserve_order():
     with pytest.raises(ValidationError):
         shared.SourceBundle.model_validate({**source(), "oracle": "do not accept"})
     with pytest.raises(ValidationError):
-        shared.SourceRef.model_validate({"unit_id": "src_001", "file": "SKILL.md",
-                                         "start_line": 3, "end_line": 1, "quote": "甲"})
+        shared.SourceRef.model_validate({"file": "SKILL.md", "start_line": 3, "end_line": 1})
+
+
+@pytest.mark.parametrize("change", [
+    {"unit_id": "src_001"}, {"quote": "首段"}, {"start_line": True},
+    {"end_line": False}, {"start_line": 0}, {"start_line": 3, "end_line": 2},
+])
+def test_compact_source_refs_reject_old_fields_and_invalid_lines(change):
+    with pytest.raises(ValidationError):
+        shared.SourceRef.model_validate({"file": "SKILL.md", "start_line": 1, "end_line": 1, **change})
+
+
+def test_cross_paragraph_source_span_is_valid_without_generated_unit_ids():
+    files = {item["path"]: item["content"] for item in source()["files"]}
+    span = {"file": "SKILL.md", "start_line": 1, "end_line": 7}
+    assert shared.validate_source_ref(span, files).model_dump() == span
+    assert shared.nonempty_source_lines(files) == {("SKILL.md", n) for n in (1, 3, 4, 6, 7)}
+    assert not hasattr(shared, "source_units")
+    assert not hasattr(shared, "_validate_source_ref")

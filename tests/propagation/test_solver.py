@@ -87,9 +87,9 @@ def test_solver_and_records_require_explicit_business_projection(as_model):
     with pytest.raises(ValueError, match="location_evidences"):
         propagate(cfg, response, initial_registry=registry, initial_state=state)
     with pytest.raises(ValueError, match="location_evidences"):
-        PropagationRecords(cfg, response, registry, profile_schema_version="security-profile-v10", annotation_cfg_sha256=cfg_sha256(cfg))
+        PropagationRecords(cfg, response, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg))
     payload = to_payload(response)
-    assert set(payload) == {"profiles", "locations", "transfer_specs", "sink_boundaries"}
+    assert set(payload) == {"ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions"}
     assert propagate(cfg, payload, initial_registry=registry, initial_state=state).status == "complete"
 
 
@@ -194,10 +194,10 @@ def test_solver_clones_seed_registry_and_state_and_replays_without_network(monke
     result = propagate(cfg, annotation, initial_registry=registry, initial_state=state)
     assert result.status == "complete"
     assert before == (registry.to_dict(), state.model_dump(mode="json"), cfg, annotation)
-    restored = PropagationRecords.from_json(result.records.to_json(), cfg=result.records.cfg,
+    restored = PropagationRecords.from_records(result.records.records_dict(), cfg=result.records.cfg,
         annotation=annotation, data_registry=result.registry, initial_data=result.initial_data,
         initial_state=result.initial_state)
-    assert restored.to_dict() == result.records.to_dict()
+    assert restored.records_dict() == result.records.records_dict()
 
 
 def branch_case():
@@ -239,7 +239,7 @@ def test_fifo_lifo_have_identical_canonical_data_and_records():
     fifo, lifo = propagate(cfg, annotation, schedule="fifo"), propagate(cfg, annotation, schedule="lifo")
     assert fifo.status == lifo.status == "complete"
     assert fifo.registry.to_dict() == lifo.registry.to_dict()
-    assert fifo.records.to_dict() == lifo.records.to_dict()
+    assert fifo.records.records_dict() == lifo.records.records_dict()
     assert fifo.coverage == lifo.coverage
 
 
@@ -273,7 +273,7 @@ def test_stable_copy_and_retry_loops_terminate_without_per_iteration_id_growth(m
     assert result.status == "complete", result.diagnostics
     assert result.stats["block_evaluations"] < 8
     assert len(result.registry) == (2 if mode == "retry" else 1)
-    assert propagate(cfg, annotation, schedule="lifo").records.to_dict() == result.records.to_dict()
+    assert propagate(cfg, annotation, schedule="lifo").records.records_dict() == result.records.records_dict()
 
 
 def test_generation_feedback_stops_before_claiming_a_finite_solution():
@@ -420,7 +420,7 @@ def test_pending_write_cannot_emit_schedule_dependent_downstream_data():
     fifo, lifo = propagate(cfg, annotation, schedule="fifo"), propagate(cfg, annotation, schedule="lifo")
     assert fifo.status == lifo.status == "complete"
     assert fifo.registry.to_dict() == lifo.registry.to_dict()
-    assert fifo.records.to_dict() == lifo.records.to_dict()
+    assert fifo.records.records_dict() == lifo.records.records_dict()
 
 
 def test_missing_final_binding_cannot_leave_stale_success_record():

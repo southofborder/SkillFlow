@@ -53,7 +53,7 @@ def reviewed_merge():
                                    "definition_ref": "/blocks/origin_b/instructions/0/outputs/0"}]}
     seal(document)
     response = {
-        "schema_version": 5, "outcome": "completed", "contract_version": CONTRACT_VERSION,
+        "schema_version": 6, "outcome": "completed", "contract_version": CONTRACT_VERSION,
         "findings": [{
             "id": "binding", "kind": "semantic", "status": "represented",
             "conservative": {"rule_id": "DEP-MERGE", "candidate_fact_ids": ["left", "right"],
@@ -62,13 +62,10 @@ def reviewed_merge():
             "source_requirement": "后续依赖实际响应。",
             "actual_representation": "保留可能来源集合，未宣称两者同时使用。",
             "reason": "本记录仅测试依赖保守表示的证据协议。",
-            "source_refs": [{"unit_id": "src_001", "file": "SKILL.md", "start_line": 1,
-                             "end_line": 1, "quote": content}],
+            "source_refs": [{"file": "SKILL.md", "start_line": 1, "end_line": 1}],
             "controlled_refs": [{"unit_id": "left"}, {"unit_id": "right"}],
             "basis": ["explicit_graph"], "suggestions": [],
         }],
-        "reviewed_source_unit_ids": ["src_001"],
-        "reviewed_controlled_unit_ids": ["left", "right"], "notes": [],
     }
     return source, document, response
 
@@ -90,7 +87,7 @@ def test_source_contract_keeps_acquisition_and_value_without_security_assumption
     instructions = source_controlled_prompt(source, document).split("\nINPUT_JSON\n", 1)[0]
     normalized = " ".join(instructions.split())
     assert CONTRACT_VERSION == "skill-ir-semantic-contract-v4"
-    assert '"schema_version":5' in instructions
+    assert '"schema_version":6' in instructions
     for phrase in (
         "source entry from the acquired value",
         "neither a whole-container read nor model visibility",
@@ -260,7 +257,7 @@ def test_unlinked_definition_retains_location_boundary_without_name_guessing(rev
     seal(document)
     checked = validate_audit(response, source, document)
     assert checked["findings"][0]["conservative"]["rule_id"] == "DEP-MERGE"
-    assert "保守候选的依据" in checked["coverage_notice"]
+    assert "Grounding of conservative candidates" in checked["coverage_notice"]
 
 
 @pytest.fixture(scope="module")
@@ -292,7 +289,6 @@ def _response_for_actual_units(response, document, candidate_ids):
                             if unit["id"] not in candidate_ids],
         "basis": ["interpretation"], "suggestions": [],
     })
-    response["reviewed_controlled_unit_ids"] = [unit["id"] for unit in document["units"]]
     return response
 
 
@@ -392,7 +388,6 @@ def test_legitimate_renaming_and_storage_reorder_preserve_mapping(reviewed_merge
         old, new = unit["id"], f"unique_fact_{index * 71}"
         unit["id"] = new
         unit["text"] = unit["text"].replace(old, new)
-        response["reviewed_controlled_unit_ids"][index] = new
         response["findings"][0]["controlled_refs"][index]["unit_id"] = new
         response["findings"][0]["conservative"]["candidate_fact_ids"][index] = new
     document["units"].reverse()

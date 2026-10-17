@@ -61,20 +61,20 @@ def test_partial_order_is_loadable_without_generic_unresolved(tmp_path):
     class Partial(FakeClient):
         def complete(self, prompt):
             response = super().complete(prompt)
-            response["transfer_specs"]["ir_filter"]["order"] = "partial"
+            response["ir_semantics"]["ir_filter"]["order"] = "partial"
             return response
     directory, _, _ = _completed(tmp_path, Partial())
     loaded = load_annotation_run(directory)
     assert loaded["result"]["status"] == "complete"
-    assert loaded["compiled_annotation"]["transfer_specs"]["ir_filter"]["order"] == "partial"
+    assert loaded["compiled_annotation"]["ir_semantics"]["ir_filter"]["order"] == "partial"
     assert "unresolved" not in loaded["compiled_annotation"]
 
 
 @pytest.mark.parametrize("name", [
-    "inputs/package/SKILL.md", "inputs/material.json", "inputs/cfg.json", "inputs/prompt.txt",
+    "inputs/package/SKILL.md", "inputs/runtime-contract.json", "inputs/user-request.json", "inputs/cfg.json", "inputs/prompt.txt",
     "audit/raw-annotation.json", "audit/compiled-response.json", "audit/compilation-map.json",
-    "audit/location-evidences.json", "profiles.json", "locations.json", "transfer-specs.json", "sink-boundaries.json",
-    "inputs/repair-context.json", "validation.json", "result.json", "manifest.json",
+    "audit/location-evidences.json",
+    "validation.json", "result.json", "manifest.json",
     "calls/annotation/a001/call.json", "calls/annotation/a001/transport.json",
     "calls/annotation/a001/response.json", "calls/annotation/a001/prompt.txt",
 ])
@@ -114,7 +114,7 @@ def test_rehashed_compilation_cannot_override_accepted_response(tmp_path):
     directory, _, _ = _completed(tmp_path)
     path = directory / "audit/raw-annotation.json"
     annotation = json.loads(path.read_text(encoding="utf-8"))
-    annotation["profiles"]["ir_read"]["evidences"][0]["reason"] = "改写理由"
+    annotation["ir_semantics"]["ir_read"]["operator_evidences"][0]["reason"] = "改写理由"
     path.write_text(json.dumps(annotation, ensure_ascii=False), encoding="utf-8")
     result_path = directory / "result.json"
     result = json.loads(result_path.read_text(encoding="utf-8"))
@@ -129,7 +129,7 @@ def test_read_rejects_mid_verification_change(tmp_path, monkeypatch):
     original = loading.compile_response
     def changing(*args):
         compiled = original(*args)
-        path = directory / "profiles.json"
+        path = directory / "audit/compiled-response.json"
         path.write_bytes(path.read_bytes() + b"\n")
         return compiled
     monkeypatch.setattr(loading, "compile_response", changing)
@@ -147,3 +147,27 @@ def test_historical_three_v8_annotations_rejected_without_changes():
         with pytest.raises(runner.RunIdentityError, match="Unsupported"):
             load_annotation_run(directory)
         assert before == _bytes(directory)
+
+
+@pytest.mark.parametrize("module_name,function_name", [
+    ("skillflow.propagation.annotation.loading", "_read"),
+    ("skillflow.propagation.annotation.runner", "_files"),
+    ("skillflow.propagation.review.runner", "_files"),
+    ("skillflow.propagation.review.runner", "_call_files"),
+    ("skillflow.propagation.review.runner", "_readonly_inventory"),
+])
+def test_artifact_readers_validate_paths_before_consuming_bytes(tmp_path, monkeypatch, module_name, function_name):
+    """Even byte-identical linked artifacts must pass the shared no-link guard."""
+    import importlib
+    module = importlib.import_module(module_name)
+    file = tmp_path / "inputs/value.json"
+    file.parent.mkdir()
+    file.write_text("{}", encoding="utf-8")
+    seen = []
+    def deny(path):
+        seen.append(path)
+        raise ValueError("Run references cannot follow links or reparse points")
+    monkeypatch.setattr(module, "checked_run_path", deny)
+    with pytest.raises(ValueError, match="links"):
+        getattr(module, function_name)(file if function_name == "_read" else tmp_path)
+    assert seen == [file]

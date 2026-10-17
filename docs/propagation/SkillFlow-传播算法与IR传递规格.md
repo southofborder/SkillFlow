@@ -3,10 +3,10 @@
 
 ## 当前处理段与字段关系
 
-当前联合标注先生成 `model/local/default` 处理段，再由程序编译观察、最终效果及证据索引。
+当前联合标注先生成 `model/local/default` 处理段，再由程序编译观察、最终效果及对应依据。
 原始标注、编译结果和位置映射分开保存并绑定摘要；恢复与离线重放重新编译核对。
 `local` 需要源文／CFG 机制依据与明确的回传列表；`model` 需要执行主体包含 llm。
-程序不因观察接收方是模型就自动增加执行主体或角色。新规则见
+程序不因观察接收方是模型就自动增加执行主体。新规则见
 [字段关系与观察编译](SkillFlow-字段关系与观察编译.md)。
 
 新增 `filter_items`、`subset_view` 和单层 `for_each`。逐元素作用域保留 collection/element 及
@@ -16,7 +16,7 @@
 
 
 本规范描述独立的第二阶段：完整 Skill 与选定 CFG 在同一次安全标注调用中产生
-Security Profiles、位置声明与 IR 传递规格；随后程序离线解释规格，计算 Data、逐 IR
+统一 IR 语义、位置声明与任务／需求／敏感性声明；随后程序离线解释规格，计算 Data、逐 IR
 入口／出口状态和效果记录。传播过程中不调用 LLM，不执行 Skill、工具或嵌入代码，
 不判断风险、必要性或 DOE，也不修改原图。
 
@@ -27,32 +27,20 @@ CFG 与源文已证明等价，也不表示模型标注或数据暴露判断已�
 
 ## 1. 一次标注与单一阶段顺序
 
-安全标注 v9 的已编译业务材料 `AnnotationPayload` 严格包含四部分：
+联合标注 v13 的已编译业务 `AnnotationPayload` 严格包含：
 
 ```text
-profiles[ir_id]        operator、roles、effects、evidences
-locations[location_id] kind、name、operand_refs、access_scope、retention
-transfer_specs[ir_id]  events、output_bindings
-sink_boundaries[]     编译操作位置、目标、类型和固定边界暴露等级
+task / demands / expressions 全局任务与规范化反向需求
+ir_semantics[ir_id]         执行主体、依据、事件、输出绑定、敏感声明与顺序
+locations[location_id]     kind、name、operand_refs、access_scope、retention
+sink_boundaries[]          编译操作位置、目标、类型和固定边界暴露等级
 ```
 
-同一次模型调用返回原始 `RawAnnotationResponse`，只填写 profiles、locations、transfer_specs 及依据，程序检查并编译为 `AnnotationResponse`，生成 sink_boundaries。两种形式都必须包含 `outcome="completed"` 和
-`location_evidences[location_id]`。它是单独的位置身份审计表，键与 locations 完全一致，
-每个位置至少一条有效证据。`validate_response` 返回完整响应；显式调用 `to_payload`
-取得四部分业务材料后才可传给传播器或记录容器。直接传入完整响应会报错，不静默删字段。
+原始模型响应使用处理段；程序校验后编译为直接事件并生成 sink 清单。完整响应还带 outcome 和独立 location_evidences；后者必须精确覆盖位置。通过 `to_payload` 显式投影业务字段，求解器不静默删除额外字段。
 
-每份 profile 自身仍只有原来的四个字段。`IRTransferSpec` 是绑定当前 IR 的传播前
-规格；`transfer` 的确定性解释过程计算实际状态；`IRFlowRecord` 保存传播后的结果。
-模型不输出 Data ID、传播候选集合、传播路径或风险结论。
+事件直接保存 effect、非空效果的 evidences 和有序 atomic_ops。重复标签就是不同阶段，不再维护第二份 effects 或 effect_index。原子操作次序、中间值和部分顺序因果保持。没有非空效果的 IR 必须提供 empty_effect_evidences；有非空效果时禁止该字段。执行主体证据独立保留，不因观察目标是模型而自动增加 llm。
 
-规格中的 `events` 顺序是唯一操作顺序，每项包含 `effect_index` 和有序的
-`atomic_ops`。非空索引逐一对应 profile 的有序 effects，重复效果不合并。原子操作
-的先后与中间值均在这里表达，不另设平行的 transfers/results/update 时间线。
-
-`output_bindings` 只将当前 IR 的公开 output 绑定到已经存在的值，必须恰好覆盖所有
-真实输出。别名登记不自动成为上下文写入。空 effects 的原样传递可以只用该绑定；
-确有未解释结果关系时，可有 `effect_index=null` 的保守 compute 项，只允许 possible
-依赖，或者使用指向 tool 边界的 receive/deliver 分别记录工具返回与参数交付；不借此隐藏已有安全效果。
+`output_bindings` 只绑定每个真实公开输出，不能藏入计算或上下文写入。无标签事件 effect=null 支持 possible compute 或工具交付／获取，不能隐藏已知网络或写入。空效果的原样传递和普通 return 仍可能改变状态或保留任务结果。
 
 ## 2. 符号值、位置与原子操作
 
@@ -99,8 +87,7 @@ sink_boundaries[]     编译操作位置、目标、类型和固定边界暴露�
 | `build` | `container`、`parts`、`output` | 明确构造 object／list，不将候选并集当作组合 |
 | `compute` | `inputs`、`dependencies`、`output` | 不解释开放函数，保存 derived／possible 依赖 |
 
-操作和输出绑定仍附 `basis、ref_id、quote、reason` 证据；字段成员是所属操作的参数，
-位置身份依据单独保存。Profile 证据同样使用 `ref_id`，三级证据校验没有被删除。
+操作和输出绑定使用 file/start_line/end_line/reason、target/reason 或 rule_id/reason。原文由程序提取；CFG target 使用真实 IR／块身份及相对路径，规则使用 EM 编号，不再维护别名注册表。效果分类与原子关系的依据职责均保留，位置依据单独保存；字段成员仍是所属操作参数。
 `read.location`、`receive.location` 仍表示业务位置，不是证据编号。
 `compute.dependencies` 与输入逐项对应；
 `possible` 不导致停止或请求人工判定，也不意味着整份输入明文保留在结果中。
@@ -190,17 +177,13 @@ python examples/propagation/propagation_demo.py --output path/to/new-authored-de
 
 Python 使用 `propagate(cfg, to_payload(validated_response), initial_registry=..., initial_state=...)`。求解入口不导入在线客户端。`--seed-state` 是完整状态，不是自动种子的局部覆盖；其中 Data ID 必须来自配套注册表。只给 Data 快照时，不按 description 或内容名称猜测位置。
 
-新版运行仅以 `doe-input.json` 交付业务结果。其 source 保存完整可读源文、行号索引、全部文件清单与未解释内容边界；cfg 保留原控制条件和限制；locations、actions、扁平 Data、紧凑 IR 记录、求解状态、覆盖、必要先后约束与诊断都在同一文件。DOE 消费者无需再读注册表身份键、模型证据长文或运行清单。
+正式传播只保存 data.json、records.json、sinks.json，状态、覆盖、诊断及摘要位于 manifest。源文、CFG、位置、执行主体及联合声明由 manifest.upstream 引用本次标注运行，规则全文只在上游保存；不再交付总包或再次复制输入。
 
-原子记录的 inputs/outputs 是按参数顺序排列的 Data 候选集合列表，JSON 为二维数组。事件和操作次序由列表位置表达，不再复制 ref、effect_index、op_index 或逐步 notes；程序仍按对应规格严格核验位置、类型、参数数量和输出形状。原规格参数和引用保留在审计材料，可按 IR／事件／操作位置回查。算法保留的前后版本、原样传递、强弱更新和保守候选都没有改变。
+原子 records 的 inputs/outputs 仍是按参数顺序排列的 Data 候选集合。事件和操作位置、字段处理、前后版本、原样传递、强弱更新和保守候选没有改变。程序按对应编译规格校验位置、类型、参数数量、输出形状及 sink 清单，原始引用通过编译映射回查。
 
-完整标注、位置依据、初始数据、注册表身份、输入材料与求解统计放入 `audit/`。正式实验和手工示例共用 `save_propagation_run`，统一组装业务结果、审计材料和中文报告；文件落盘验证完成后才提交 manifest。手工示例明确标识为人工编写，不伪造模型调用。
+公开 load_propagation_materials 返回经过完整验证的内存材料。反向需求使用对应原始和编译规格，不从已删除的符号副本反猜。运行只在 audit 保存原始种子、有效初始种子、最终身份和技术统计；重放比较阶段文件，不保存第二份最终 Data。报告 MD／HTML 共用展示模型。
 
-真实标注进入传播时，从实际接受响应重新核验原始响应及编译清单，再分别检查四项业务投影和位置证据表。恢复与重放显式提供 CFG、标注、Data 注册表及种子，核验紧凑记录摘要；缺失引用、篡改引文或只重算摘要不能冒充原接受响应。DOE 的 sink 清单仅关联形成记录的操作；尚未求值部分由覆盖及诊断说明，不伪造 Data 版本。
-
-新运行不再并行导出 result.json、data.json、records.json 或 resolved-seed.json。重放离线重算并对比原 doe-input，仅写 `replay/summary.json` 与报告，不复制第二份主结果。报告 MD／HTML 共用一份视图，默认展示业务数据和 IN／OUT 差异，原标注证据折叠展示。
-
-版本绑定：安全标注 `security-profile-v10`、运行 `skill-ir-security-profile-v11`（格式 11）、执行模型 `skillflow-abstract-runtime-v5`、Data `skillflow-data-v4`、传播记录 `skillflow-propagation-record-v9`、业务交付 `skillflow-doe-input-v7`、传播运行 `skill-ir-propagation-v10`（格式 10）。DOE 顶层 execution_model 只保存实际冻结规则的 version/sha256，完整规则保留在既有审计材料；组装必须显式传入本次 execution_model，不能替换成当前默认。Data 和原图字段保持；默认规则见[统一运行时契约](SkillFlow-统一抽象运行时契约.md)。旧版本不自动迁移；通用入口使用新目录，历史轮次经批准的三例原位替换另见[编译规范](SkillFlow-字段关系与观察编译.md)，不能将它解释为续跑旧身份。
+现行接口、目录、版本和完整性规则见[传播记录规范](SkillFlow-传播记录结构与更新规则.md)及[字段收紧规范](../architecture/field-tightening.md)。历史响应、旧报告和固定交付物不迁移，不重算身份冒充新运行。
 
 ## 6. 验收边界
 

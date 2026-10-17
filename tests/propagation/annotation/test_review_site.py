@@ -1,3 +1,4 @@
+from tests.propagation.annotation.helpers import effects_of
 """Offline review payload, SVG identity mapping and script-free source display."""
 
 from skillflow.common.paths import project_root, resolve_material_path
@@ -21,24 +22,42 @@ site = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(site)
 
 
+def source_evidence(reason="原文依据"):
+    return {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1, "reason": reason}
+
+
 def case(identifier="001"):
-    return {
+    value = {
         "case_id": identifier, "sample_id": "N01", "basename": identifier + "-样例", "skill_name": "样例",
         "feedback_status": "audit_passed", "feedback_reason": "模型判定保留，不是证明", "selected_revision": 0,
         "annotation_status": "complete", "annotation_reason": "记录完整", "graph_sha256": "frozen-graph",
         "cfg": {"entry_block_id": "b<&>\"", "blocks": {"b<&>\"": {"block_id": "b<&>\"", "block_name": "中文块",
             "instructions": [{"id": "ir<&>\"", "opcode": "return", "inputs": [], "outputs": [],
                               "metadata": {"script": "</script><script>alert('never')</script>"}}]}}, "edges": []},
-        "source": {"files": [{"path": "SKILL.md", "content": "中文全文\n</script><img src=x onerror=alert(1)>\n"}],
-                   "units": [{"id": "src_1", "file": "SKILL.md", "start_line": 1, "end_line": 3}]},
-        "profiles": {"ir<&>\"": {"operator": ["tool"], "roles": ["source", "sink"],
-            "effects": ["fs_read", "model_observe"], "evidences": [{"field": "effects", "value": "fs_read", "effect_index": 0,
-            "basis": "source", "ref_id": "src_1", "quote": "中文全文", "reason": "原文依据"}]}},
-        "locations": {}, "transfer_specs": {}, "sink_boundaries": [],
+        "source": {"files": [{"path": "SKILL.md", "content": "中文全文\n</script><img src=x onerror=alert(1)>\n"}]},
+        "ir_semantics": {'ir<&>"': {
+            "operator": ["tool"], "operator_evidences": [{**source_evidence(), "value": "tool"}],
+            "order": "fixed", "precedence": [], "sensitivity": [], "output_bindings": [],
+            "events": [
+                {"effect": "fs_read", "evidences": [source_evidence()], "atomic_ops": [
+                    {"op": "read", "location": "storage", "output": "content", "evidences": [source_evidence()]}]},
+                {"effect": "model_observe", "evidences": [source_evidence()], "atomic_ops": [
+                    {"op": "deliver", "inputs": [{"kind": "local", "name": "content"}], "target": "model", "evidences": [source_evidence()]}]},
+            ]}},
+        "locations": {}, "sink_boundaries": [],
+        "demands": [], "expressions": [],
         "audit": {"findings": [{"id": "combined", "kind": "semantic", "status": "represented", "conservative": None}]},
         "png_file": "ir-IPP/001-样例.png", "svg_file": "render/001-样例.svg",
         "suggestions_file": "suggestions/001-样例.md",
     }
+    from tests.propagation.annotation.helpers import authored_task, source_bundle
+    from skillflow.propagation.contracts.task import task_reference
+    baseline = authored_task(source_bundle(value["source"]["files"][0]["content"]))
+    value["task"] = baseline.model_dump(mode="json")
+    value["task_ref"] = task_reference(baseline)
+    value["realizations"] = [{"requirement_id": "R001", "status": "unmapped", "bindings": [], "gaps": [
+        {"reason": "此人工展示样例未声明需求起点。", "evidences": value["task"]["requirements"][0]["evidences"]}]}]
+    return value
 
 
 def svg():
@@ -51,7 +70,11 @@ def svg():
 
 
 def export(tmp_path, cases=None):
-    material = {"schema_version": 5, "identity": "skill-ir-full-pipeline-delivery-v5", "profile_schema_version": "security-profile-v10", "run_id": "offline-fixture", "cases": cases if cases is not None else [case()]}
+    material = {"schema_version": 8, "identity": "skill-ir-full-pipeline-delivery-v8", "profile_schema_version": "security-profile-v14", "run_id": "offline-fixture", "cases": cases if cases is not None else [case()]}
+    # Failed authored fixtures carry no successful semantic payload.
+    for entry in material["cases"]:
+        if entry["annotation_status"] != "complete":
+            entry.update(ir_semantics={}, locations={}, sink_boundaries=[], task=None, task_ref=None, realizations=[], demands=[], expressions=[])
     path = tmp_path / "review-data.json"
     path.write_text(json.dumps(material, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "render").mkdir(exist_ok=True)
@@ -71,7 +94,7 @@ def test_page_embeds_complete_source_profiles_and_states_without_fetch(tmp_path)
     html = output.read_text(encoding="utf-8")
     result = embedded_data(html)["cases"][0]
     assert result["source"] == source["source"]
-    assert result["cfg"] == source["cfg"] and result["profiles"] == source["profiles"]
+    assert result["cfg"] == source["cfg"] and result["ir_semantics"] == source["ir_semantics"]
     assert "unresolved" not in result
     assert result["feedback_status"] == "audit_passed" and result["annotation_status"] == "complete"
     assert "fetch(" not in html and "XMLHttpRequest" not in html and "innerHTML" not in html
@@ -98,7 +121,7 @@ def test_review_refuses_old_profile_exports(tmp_path, field, value):
 def audit_case(tmp_path):
     item = case()
     item["locations"] = {"model": {"kind": "model_context", "name": "agent", "operand_refs": [], "access_scope": "recipient", "retention": None}}
-    table = {"model": [{"basis": "source", "ref_id": "src_1", "quote": "中文全文", "reason": "定位边界依据"}]}
+    table = {"model": [source_evidence("定位边界依据")]}
     audit = tmp_path / "audit/001/location-evidences.json"
     audit.parent.mkdir(parents=True)
     audit.write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
@@ -120,7 +143,7 @@ def test_review_embeds_separate_audit_without_changing_business_locations(tmp_pa
 
 def test_review_rejects_tampered_location_audit(tmp_path):
     item, table, path = audit_case(tmp_path)
-    table["model"][0]["quote"] = "changed"
+    table["model"][0]["reason"] = "changed"
     path.write_text(json.dumps(table), encoding="utf-8")
     with pytest.raises(ValueError, match="audit digest mismatch"):
         site.build_review_site(export(tmp_path, [item]), tmp_path / "review/index.html")
@@ -136,8 +159,8 @@ def test_review_rejects_old_embedded_location_contract(tmp_path, field, value):
 
 def test_review_rejects_old_evidence_location_even_with_current_header(tmp_path):
     item = case()
-    evidence = next(iter(item["profiles"].values()))["evidences"][0]
-    evidence["location"] = evidence.pop("ref_id")
+    evidence = next(iter(item["ir_semantics"].values()))["operator_evidences"][0]
+    evidence["location"] = evidence.pop("file")
     with pytest.raises(ValueError):
         site.build_review_site(export(tmp_path, [item]), tmp_path / "review/index.html")
 
@@ -145,11 +168,11 @@ def test_review_rejects_old_evidence_location_even_with_current_header(tmp_path)
 @pytest.mark.parametrize("location", ["profile", "evidence", "unresolved"])
 def test_review_v5_header_does_not_accept_old_actor_records(tmp_path, location):
     item = case()
-    profile = next(iter(item["profiles"].values()))
+    profile = next(iter(item["ir_semantics"].values()))
     if location == "profile":
         profile["actor"] = profile.pop("operator")
     elif location == "evidence":
-        profile["evidences"][0].update(field="actor", value="tool", effect_index=None)
+        profile["operator_evidences"][0].update(field="actor")
     else:
         item["unresolved"] = [{"instruction_id": 'ir<&>"', "field": "actor", "reason": "legacy"}]
     with pytest.raises(ValueError):
@@ -158,13 +181,13 @@ def test_review_v5_header_does_not_accept_old_actor_records(tmp_path, location):
 
 def test_review_template_explains_empty_effects_and_operator(tmp_path):
     item = case()
-    profile = next(iter(item["profiles"].values()))
-    profile["effects"] = []
-    profile["evidences"][0].update(value=None, effect_index=None, reason="没有适用效果；不表示没有数据绑定")
+    profile = next(iter(item["ir_semantics"].values()))
+    profile["events"] = []
+    profile["empty_effect_evidences"] = [source_evidence("没有适用效果；不表示没有数据绑定")]
     html = site.build_review_site(export(tmp_path, [item]), tmp_path / "review/index.html").read_text(encoding="utf-8")
     assert "执行主体（operator）" in html
     assert "不等于空操作，也不表示入口与出口状态相同" in html
-    assert next(iter(embedded_data(html)["cases"][0]["profiles"].values()))["effects"] == []
+    assert effects_of(next(iter(embedded_data(html)["cases"][0]["ir_semantics"].values()))) == []
 
 
 def test_execution_origin_is_visible_and_not_a_new_semantic_status(tmp_path):
@@ -248,12 +271,12 @@ def test_svg_must_bind_all_clickable_operations_to_actual_cfg(changed):
 
 
 def test_no_cfg_case_remains_failure_without_fallback(tmp_path):
-    failed = {**case(), "cfg": None, "audit": None, "svg_file": None, "profiles": {},
+    failed = {**case(), "cfg": None, "audit": None, "svg_file": None, "ir_semantics": {},
               "feedback_status": "extraction_error", "annotation_status": "not_run"}
     path = site.build_review_site(export(tmp_path, [failed]), tmp_path / "review/index.html")
     result = embedded_data(path.read_text(encoding="utf-8"))["cases"][0]
     assert result["cfg"] is result["audit"] is result["svg"] is None
-    assert result["profiles"] == {} and result["annotation_status"] == "not_run"
+    assert result["ir_semantics"] == {} and result["annotation_status"] == "not_run"
 
 
 def test_thirty_case_order_and_independent_state_selection(tmp_path):
@@ -293,6 +316,40 @@ def test_inline_script_has_valid_javascript_syntax(tmp_path):
     path.write_text(code, encoding="utf-8")
     checked = subprocess.run([executable, "--check", str(path)], capture_output=True, text=True)
     assert checked.returncode == 0, checked.stderr
+
+
+def test_source_range_display_uses_frozen_physical_lines_and_preserves_endings(tmp_path):
+    executable = shutil.which("node")
+    if executable is None:
+        pytest.skip("Node unavailable for offline line-boundary verification")
+    text = site.TEMPLATE.read_text(encoding="utf-8")
+    function = text.split("function sourceLines(", 1)[1].split("\nfunction evidenceText(", 1)[0]
+    examples = ["", "one", "one\n", "a\r\n\r\nb", "\n", "a\rb\vc\fd\x1ce\x1df\x1eg\x85h\u2028i\u2029"]
+    checks = [{"text": value, "expected": value.splitlines(keepends=True)} for value in examples]
+    code = "function sourceLines(" + function + "\nconst checks=" + json.dumps(checks) + ";\n"
+    code += "for(const c of checks){if(JSON.stringify(sourceLines(c.text))!==JSON.stringify(c.expected))throw Error(c.text)}"
+    script = tmp_path / "source-lines.js"
+    script.write_text(code, encoding="utf-8")
+    result = subprocess.run([executable, str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "source?.units" not in text
+
+
+def test_source_display_keeps_skill_and_user_request_namespaces_distinct(tmp_path):
+    executable = shutil.which("node")
+    if executable is None:
+        pytest.skip("Node unavailable for offline source resolution")
+    text = site.TEMPLATE.read_text(encoding="utf-8")
+    functions = "function sourceFiles(" + text.split("function sourceFiles(", 1)[1].split("\nfunction appendLocationDeclarations(", 1)[0]
+    value = {"source": {"files": [{"path": "task/user-request.txt", "content": "Skill file\r\nsecond"}]},
+             "user_request": "User request\r\nsecond"}
+    code = functions + "\nconst c=" + json.dumps(value) + ";\n"
+    code += 'if(evidenceText({file:"skill/task/user-request.txt",start_line:1,end_line:1},c)!=="Skill file\\r\\n")throw Error("skill");\n'
+    code += 'if(evidenceText({file:"task/user-request.txt",start_line:1,end_line:1},c)!=="User request\\r\\n")throw Error("task");\n'
+    script = tmp_path / "source-resolution.js"
+    script.write_text(code, encoding="utf-8")
+    result = subprocess.run([executable, str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_long_execution_diagnostic_is_folded_without_changing_data(tmp_path):
@@ -363,21 +420,24 @@ def test_local_browser_interaction_keeps_source_inert_and_statuses_separate(tmp_
     if not (executable.is_file() and browser.is_file() and (modules / "playwright/package.json").is_file()):
         pytest.skip("Optional local Edge and Playwright are unavailable")
     first, location_table, _ = audit_case(tmp_path)
-    first["transfer_specs"] = {'ir<&>"': {"order": "partial", "precedence": [], "events": [{"effect_index": 0, "atomic_ops": [
-        {"op": "deliver", "inputs": [{"kind": "literal", "value": "fixture"}],
-         "target": "model", "evidences": location_table["model"]}]}], "output_bindings": []}}
-    profile = first["profiles"]['ir<&>"']
-    profile["effects"] = ["model_observe", "transform", "model_observe", "context_write"]
-    profile["evidences"][0].update(value="model_observe", effect_index=0)
-    for index, value in enumerate(profile["effects"][1:], 1):
-        profile["evidences"].append({**profile["evidences"][0], "value": value,
-                                    "effect_index": index, "basis": "cfg", "ref_id": "g_fixture"})
+    profile = first["ir_semantics"]['ir<&>"']
+    profile["order"] = "partial"
+    value = {"kind": "literal", "value": "fixture"}
+    operations = [
+        {"op": "deliver", "inputs": [value], "target": "model"},
+        {"op": "compute", "inputs": [value], "dependencies": ["derived"], "output": "result"},
+        {"op": "deliver", "inputs": [{"kind": "local", "name": "result"}], "target": "model"},
+        {"op": "write", "target": "context", "mode": "replace", "input": value},
+    ]
+    profile["events"] = [{"effect": label, "evidences": [source_evidence()],
+                           "atomic_ops": [{**operation, "evidences": [source_evidence()]}]}
+                          for label, operation in zip(["model_observe", "transform", "model_observe", "context_write"], operations)]
     first["assistant_review"] = {"reviewer": "assistant", "human_confirmed": False, "status": "reviewed",
         "reviews": [{"revision": 0, "graph_sha256": "frozen-graph", "matches_selected_graph": True,
                      "assessment": "独立助手复核合成记录", "observations": []},
                     {"revision": 1, "graph_sha256": "another-graph", "matches_selected_graph": False,
                      "assessment": "其他图的复核不能当成当前结论", "observations": []}]}
-    failed = {**case("002"), "cfg": None, "svg_file": None, "profiles": {}, "audit": None,
+    failed = {**case("002"), "cfg": None, "svg_file": None, "ir_semantics": {}, "audit": None,
               "feedback_status": "extraction_error", "annotation_status": "not_run"}
     unknown = {**case("003"), "feedback_status": "semantic_failure", "annotation_status": "semantic_failure"}
     page_path = site.build_review_site(export(tmp_path, [first, failed, unknown]), tmp_path / "review/index.html")
@@ -408,13 +468,13 @@ try {
  await page.locator('.case').click();
  await page.locator('svg [data-ir-id]').click();
  if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('ir<&>"')&&t.includes('model_observe · 模型观察')&&t.includes('原文依据')))throw Error('actual ID and evidence');
- if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('1. model_observe')&&t.includes('2. transform')&&t.includes('3. model_observe')&&t.includes('步骤 3（索引 2）')&&t.includes('部分顺序')))throw Error('ordered effects occurrence evidence');
- if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('执行主体（operator）')&&t.includes('4. context_write · 上下文写入')&&t.includes('步骤 4（索引 3）')))throw Error('v3 operator and context write');
+ if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('1. model_observe')&&t.includes('2. transform')&&t.includes('3. model_observe')&&t.includes('部分顺序')))throw Error('ordered effects occurrence evidence');
+ if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('执行主体（operator）')&&t.includes('4. context_write · 上下文写入')))throw Error('v3 operator and context write');
  if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('model · model_context · agent')&&t.includes('operand_refs')))throw Error('v5 business location');
  const locationAudit=page.locator('details.location-audit');
  if(await locationAudit.count()!==1||await locationAudit.getAttribute('open')!==null)throw Error('audit initially folded');
  await locationAudit.locator('summary').click();
- if(!await locationAudit.innerText().then(t=>t.includes('位置证据审计（独立保存）')&&t.includes('src_1')&&t.includes('定位边界依据')))throw Error('separate location audit');
+ if(!await locationAudit.innerText().then(t=>t.includes('位置证据审计（独立保存）')&&t.includes('skill/SKILL.md')&&t.includes('定位边界依据')))throw Error('separate location audit');
  const before=await page.locator('#zoom-value').innerText();await page.click('#zoom-in');
  if(await page.locator('#zoom-value').innerText()===before)throw Error('zoom');
  const box=await page.locator('#viewport').boundingBox();
@@ -422,7 +482,7 @@ try {
  await page.mouse.move(box.x+12,box.y+12);await page.mouse.down();await page.mouse.move(box.x+95,box.y+55);await page.mouse.up();
  if(await page.locator('#graph-stage').getAttribute('style')===old)throw Error('pan');
  await page.getByRole('button',{name:'定位完整源文',exact:true}).first().click();
- if(await page.locator('.source-line').count()!==3)throw Error('full source');
+ if(await page.locator('.source-line').count()!==2)throw Error('full source');
  if(await page.locator('#detail-panel img').count())throw Error('injected HTML');
  if(!await page.locator('#detail-panel').innerText().then(t=>t.includes('</script><img src=x onerror=alert(1)>')))throw Error('literal source content');
  await page.getByRole('tab',{name:'语义核对'}).click();

@@ -1,3 +1,4 @@
+from tests.propagation.annotation.helpers import authored_prepare_run as prepare_run
 """Offline provenance checks for the new staged delivery; never call a model."""
 
 from skillflow.common.paths import project_root, resolve_material_path
@@ -16,10 +17,11 @@ from skillflow.common.inputs.snapshot import freeze_input
 from skillflow.common.inputs.snapshot import read_snapshot
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.recording import sha_file
-from skillflow.propagation.annotation.runner import prepare_run
+from skillflow.propagation.annotation.runner import result_snapshot
+from tools.propagation.summaries import case_summary
 from skillflow.propagation.annotation.runner import run_annotation
 from skillflow.propagation.annotation.runner import compilation_certificate
-from skillflow.propagation.material import prepare_material
+from tests.propagation.annotation.helpers import prepare_material
 from skillflow.propagation.annotation.services import to_payload
 from skillflow.propagation.annotation.services import compile_response
 from skillflow.graph.semantic_contract import contract_binding
@@ -59,8 +61,9 @@ def case(tmp_path, exporter):
                  "feedback_status": "audit_error", "auditor_passed": False, **contract_binding()}
     exporter.write_json(root / "selected-analysis.json", {"cfg": cfg})
     exporter.write_json(root / "selection.json", selection)
-    prepare_run(feedback_dir / "inputs/package", root / "selected-analysis.json", run_dir=root / "annotation")
-    material = prepare_material(source, cfg)
+    context = {"user_request": "Read the configuration and return the selected value."}
+    prepare_run(feedback_dir / "inputs/package", root / "selected-analysis.json", run_dir=root / "annotation", **context)
+    material = prepare_material(source, cfg, **context)
     annotation = run_annotation(root / "annotation", client=FakeClient())
     assert annotation["status"] == "complete"
     binding = {"status": "passed", "source_sha256": source["source_sha256"],
@@ -83,9 +86,16 @@ def case(tmp_path, exporter):
 
 def commit(exporter, case):
     root, result = case["root"], case["result"]
-    exporter.write_json(root / "result.json", result)
+    exporter.write_json(root / "result.json", case_summary(result, owner=root, annotation_run=root / "annotation"))
     exporter.write_json(root / "feedback/result.json", result["feedback"])
-    exporter.write_json(root / "annotation/result.json", result["annotation"])
+    exporter.write_json(root / "annotation/result.json", result_snapshot(result["annotation"]))
+    compiled_path = root / "annotation/audit/compiled-response.json"
+    if compiled_path.exists():
+        compiled = exporter.read_json(compiled_path)
+        for field in ("task_ref", "realizations", "demands", "expressions", "ir_semantics", "locations", "sink_boundaries"):
+            if field in result["annotation"]:
+                compiled[field] = deepcopy(result["annotation"][field])
+        exporter.write_json(compiled_path, compiled)
     exporter.write_json(root / "source-binding.json", result["source_binding"])
     for row in result["feedback"].get("rounds", []):
         if row.get("graph_sha256") == canonical_sha256(result["feedback"]["last_valid_cfg"]):
@@ -93,7 +103,7 @@ def commit(exporter, case):
 
 
 def load(exporter, case):
-    return exporter.load_case(case["run_dir"], case["item"], case["result"], case["skills"])
+    return exporter.load_case(case["run_dir"], case["item"], case_summary(case["result"], owner=case["root"], annotation_run=case["root"] / "annotation"), case["skills"])
 
 
 def test_location_audit_is_bound_and_separate_from_business_payload(exporter, case):
@@ -103,6 +113,11 @@ def test_location_audit_is_bound_and_separate_from_business_payload(exporter, ca
     assert row["annotation_audit"]["sha256"] == case["result"]["annotation"]["location_evidences_sha256"]
     assert all(set(location) == {"kind", "name", "operand_refs", "access_scope", "retention"} for location in row["locations"].values())
     assert row["sink_boundaries"] == case["result"]["annotation"]["sink_boundaries"]
+    assert row["task"]["basis"] == "user_request"
+    assert row["demands"] == case["result"]["annotation"]["demands"]
+    assert row["expressions"] == case["result"]["annotation"]["expressions"]
+    assert row["user_request"] == case["material"]["user_request"]
+    assert not (case["root"] / "annotation/inputs/semantic-context.json").exists()
 
 
 def test_export_rejects_modified_separate_location_audit(exporter, case):
@@ -117,7 +132,7 @@ def test_export_rejects_modified_separate_location_audit(exporter, case):
 def test_export_revalidates_audit_refs_after_digest_change(exporter, case):
     path = case["root"] / "annotation/audit/location-evidences.json"
     audit = exporter.read_json(path)
-    next(iter(audit.values()))[0]["ref_id"] = "missing_reference"
+    next(iter(audit.values()))[0]["target"] = {"instruction_id": "missing", "path": []}
     exporter.write_json(path, audit)
     case["result"]["annotation"]["location_evidences_sha256"] = canonical_sha256(audit)
     commit(exporter, case)
@@ -130,10 +145,10 @@ def display_lineage(exporter, tmp_path):
     directory = tmp_path / "child-display"
     cases = [{"case_id": f"{i:03}", "sample_id": sample, "basename": f"{i:03}-skill"}
              for i, sample in enumerate(exporter.SAMPLE_IDS, 1)]
-    manifest = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": exporter.IDENTITY, **contract_binding(),
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(),
                 "cases": cases, "renderer": {"path": "unused-renderer"}}
     exporter.write_json(directory / "manifest.json", manifest)
-    value = {"schema_version": 4, "identity": "skill-ir-explicit-failed-case-rerun-v4",
+    value = {"schema_version": exporter.RERUN_FORMAT_VERSION, "identity": exporter.RERUN_IDENTITY,
              "child_run": {"path": str(directory), "run_id": directory.name},
              "parent_run": {"path": str(tmp_path / "parent-display"), "run_id": "parent-display",
                             "manifest_sha256": sha_file(directory / "manifest.json")},
@@ -206,7 +221,7 @@ def test_origin_is_display_only_and_plain_runs_remain_unchanged(exporter, case, 
     assert "parent-display" in exporter.suggestions(reused)
     assert exporter.render_samples({"cases": [reused]}) == before
     assert exporter.render_samples({"cases": [rerun]}) == before
-    result = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": exporter.IDENTITY, **contract_binding(),
+    result = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(),
               "cases": {c["case_id"]: {} for c in cases}}
     exporter.write_json(directory / "experiment-result.json", result)
     monkeypatch.setattr(exporter._png, "check_inventory", lambda *_: None)
@@ -221,8 +236,9 @@ def test_valid_profile_bound_to_actual_latest_graph_and_source(exporter, case):
     assert row["kind"] == "cfg" and row["selected_revision"] == 0
     assert row["feedback_status"] == "audit_error" and row["annotation_status"] == "complete"
     assert row["audit"] is None  # Never borrow earlier/historical valid findings.
-    assert row["profiles"] == case["result"]["annotation"]["profiles"]
-    assert row["annotation_evidence_index"]["instruction_index"] == case["material"]["instruction_index"]
+    assert row["ir_semantics"] == case["result"]["annotation"]["ir_semantics"]
+    assert "annotation_evidence_index" not in row
+    assert row["runtime_contract"] == case["material"]["runtime_contract"]
     assert "没有合法的完整语义核对记录" in exporter.suggestions(row)
     assert "不是助手或人工确认" in exporter.suggestions(row)
 
@@ -241,7 +257,7 @@ def test_export_refuses_legacy_annotation_even_with_valid_digest(exporter, case,
         case["result"]["annotation"]["profile_schema_version"] = "security-profile-v2"
         commit(exporter, case)
     else:
-        profile = case["result"]["annotation"]["profiles"]["ir_read"]
+        profile = case["result"]["annotation"]["ir_semantics"]["ir_read"]
         profile["actor"] = profile.pop("operator")
         commit(exporter, case)
     with pytest.raises(ValueError):
@@ -259,9 +275,9 @@ def test_corrupted_provenance_or_profile_is_rejected(exporter, case, change):
     elif change == "profile_digest":
         result["annotation"]["graph_sha256"] = "0" * 64
     elif change == "profile_ir":
-        result["annotation"]["profiles"]["invented_ir"] = result["annotation"]["profiles"].pop("ir_read")
+        result["annotation"]["ir_semantics"]["invented_ir"] = result["annotation"]["ir_semantics"].pop("ir_read")
     elif change == "evidence":
-        result["annotation"]["profiles"]["ir_read"]["evidences"][0]["quote"] = "not an actual quote"
+        result["annotation"]["ir_semantics"]["ir_read"]["operator_evidences"][0]["quote"] = "not an actual quote"
     else:
         result["source_binding"]["package_bytes_sha256"] = "0" * 64
     commit(exporter, case)
@@ -306,32 +322,35 @@ def test_legacy_unresolved_cannot_hide_in_current_compilation(exporter, case):
 def test_failed_annotation_never_exports_profiles(exporter, case):
     case["result"]["annotation"]["status"] = "invalid_response"
     commit(exporter, case)
-    with pytest.raises(ValueError, match="must not export"):
+    with pytest.raises(ValueError, match="decision differs|must not export"):
         load(exporter, case)
-    case["result"]["annotation"]["profiles"] = {}
+    case["result"]["annotation"]["ir_semantics"] = {}
     case["result"]["annotation"]["locations"] = {}
-    case["result"]["annotation"]["transfer_specs"] = {}
+    case["result"]["annotation"]["ir_semantics"] = {}
+    case["result"]["annotation"].update(sink_boundaries=[], task_ref=None, realizations=[], demands=[], expressions=[])
     commit(exporter, case)
-    assert load(exporter, case)["profiles"] == {}
+    # Clearing business fields cannot turn an accepted success into a saved failure.
+    with pytest.raises(ValueError, match="decision differs|compiled|accepted"):
+        load(exporter, case)
 
 
 def test_no_cfg_has_failure_card_and_no_fake_graph(exporter, case, tmp_path):
     directory = tmp_path / "unstarted"
     root = directory / "cases/001"
     result = {"feedback": {"status": "not_run", "reason": "批次中断，未开始"}, "selection": None,
-              "source_binding": None, "annotation": {"status": "not_run", "reason": "没有新图", "profiles": {}, "locations": {}, "transfer_specs": {}, "sink_boundaries": []}}
-    exporter.write_json(root / "result.json", result)
-    row = exporter.load_case(directory, case["item"], result, case["skills"])
+              "source_binding": None, "annotation": {"status": "not_run", "reason": "没有新图", "ir_semantics": {}, "locations": {}, "ir_semantics": {}, "sink_boundaries": []}}
+    exporter.write_json(root / "result.json", case_summary(result, owner=root, annotation_run=root / "annotation"))
+    row = exporter.load_case(directory, case["item"], case_summary(result, owner=root, annotation_run=root / "annotation"), case["skills"])
     sample = exporter.render_samples({"cases": [row]})["samples"][0]
-    assert row["cfg"] is None and row["graph_sha256"] is None and row["profiles"] == {}
+    assert row["cfg"] is None and row["graph_sha256"] is None and row["ir_semantics"] == {}
     assert sample["cfg"] is None and sample["failure"]["reason"] == "批次中断，未开始"
     assert "没有借用旧图" in exporter.suggestions(row)
 
 
 def test_numbering_and_complete_batch_required(exporter, case, monkeypatch):
-    manifest = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": exporter.IDENTITY, **contract_binding(),
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(),
                 "renderer": {"path": "unused"}, "cases": [case["item"]]}
-    result = {"schema_version": 10, "profile_schema_version": "security-profile-v10", "identity": exporter.IDENTITY, **contract_binding(), "cases": {"001": case["result"]}}
+    result = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(), "cases": {"001": case["result"]}}
     exporter.write_json(case["run_dir"] / "manifest.json", manifest)
     exporter.write_json(case["run_dir"] / "experiment-result.json", result)
     with pytest.raises(ValueError, match="thirty-case"):
@@ -367,7 +386,7 @@ def _tiny_png(rgb=b"\xff\xff\xff"):
 
 def test_export_stages_exact_pairs_and_binds_actual_png_bytes(exporter, case, tmp_path, monkeypatch):
     row = load(exporter, case)
-    plan = {"schema_version": 5, "profile_schema_version": "security-profile-v10", "cases": [row], "run_id": "run", "manifest_sha256": "m", "experiment_result_sha256": "r"}
+    plan = {"schema_version": 8, "profile_schema_version": "security-profile-v14", "cases": [row], "run_id": "run", "manifest_sha256": "m", "experiment_result_sha256": "r"}
     monkeypatch.setattr(exporter, "build_export_plan", lambda *args, **kwargs: deepcopy(plan))
     def render(command, **kwargs):
         args = dict(zip(command[2::2], command[3::2]))
@@ -390,7 +409,7 @@ def test_export_stages_exact_pairs_and_binds_actual_png_bytes(exporter, case, tm
     before = sha_file(case["zip"])
     manifest = exporter.export(case["run_dir"], staging, skills_dir=case["skills"], node_modules=tmp_path)
     assert manifest["published"] is False and manifest["visual_review"] == "pending"
-    assert manifest["schema_version"] == 5 and manifest["profile_schema_version"] == "security-profile-v10"
+    assert manifest["schema_version"] == 8 and manifest["profile_schema_version"] == "security-profile-v14"
     assert sha_file(case["zip"]) == before
     assert exporter.validate_staging(plan, staging)[0]["kind"] == "cfg"
     png = staging / row["png_file"]
@@ -456,7 +475,7 @@ def test_execution_only_review_requires_no_actual_graph(exporter, case, tmp_path
     exporter.write_json(path, value)
     with pytest.raises(ValueError, match="Execution-only review requires no selected or valid graph"):
         exporter._assistant_review(path.parent, case["run_dir"], case["item"], case["result"], row)
-    empty_row = {**row, "cfg": None, "selected_revision": None, "graph_sha256": None, "audit": None, "profiles": {}}
+    empty_row = {**row, "cfg": None, "selected_revision": None, "graph_sha256": None, "audit": None, "ir_semantics": {}}
     empty_result = {"feedback": {"status": "extraction_error"}, "selection": None}
     review = exporter._assistant_review(path.parent, case["run_dir"], case["item"], empty_result, empty_row)
     assert review["status"] == "execution_only" and review["human_confirmed"] is False
@@ -500,7 +519,7 @@ def test_long_execution_diagnostics_are_summarized_without_touching_evidence(exp
     assert "原始运行记录" in text and "审查页也可展开全文" in text
     assert row["cfg"] == case["result"]["feedback"]["last_valid_cfg"]
     assert row["source"]["files"] == case["source"]["files"]
-    assert row["profiles"] == case["result"]["annotation"]["profiles"]
+    assert row["ir_semantics"] == case["result"]["annotation"]["ir_semantics"]
     failure = exporter.render_samples({"cases": [{**row, "cfg": None}]})["samples"][0]["failure"]
     assert failure["reason"] == summary  # Failure cards are readable, not diagnostic dumps.
 

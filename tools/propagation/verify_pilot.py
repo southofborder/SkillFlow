@@ -14,8 +14,9 @@ from skillflow.common.paths import project_root, resolve_material_path
 PACKAGE = project_root()
 REPOSITORY = project_root()
 
-from skillflow.propagation.runner import load_propagation_run
+from skillflow.propagation.runner import load_propagation_materials
 from skillflow.common.recording import canonical_sha256
+from tools.propagation.run_pilot import IDENTITY, FORMAT_VERSION, POLICY
 
 
 def read(path):
@@ -33,7 +34,8 @@ def verify(directory):
                if not (REPOSITORY / relative).is_file() or sha(REPOSITORY / relative) != digest]
     rows, case_counts = [], {}
     manifest = read(directory / "manifest.json")
-    if manifest.get("identity") != "skill-ir-source-boundaries-pilot3-v4" or manifest.get("schema_version") != 4:
+    if (manifest.get("identity") != IDENTITY or manifest.get("schema_version") != FORMAT_VERSION
+            or manifest.get("policy") != POLICY):
         raise ValueError("unsupported propagation pilot version")
     for case in manifest["cases"]:
         base = directory / "cases" / case["case_id"]
@@ -74,15 +76,14 @@ def verify(directory):
                                     if expected_skip else "没有已提交的传播运行，不能声称重放通过")})
             continue
         try:
-            business = load_propagation_run(propagation)
+            business = load_propagation_materials(propagation)
             checked = read(propagation / "replay/summary.json")
             propagation_manifest = read(propagation / "manifest.json")
-            rows.append({"case": case["case_id"], "stage": "propagation", "status": business["status"], "equal":
+            rows.append({"case": case["case_id"], "stage": "propagation", "status": business.status, "equal":
                          checked.get("status") == "matched" and checked.get("model_calls") == 0
                          and checked.get("differences") == []
-                         and checked.get("doe_input_sha256") == propagation_manifest["doe_input_sha256"]
-                         and checked.get("doe_input_sha256") == canonical_sha256(business),
-                         "result_sha256": sha(propagation / "doe-input.json"), "replay_summary": checked})
+                         and checked.get("manifest_sha256") == propagation_manifest["manifest_sha256"],
+                         "result_sha256": sha(propagation / "manifest.json"), "replay_summary": checked})
         except (OSError, ValueError, KeyError) as error:
             rows.append({"case": case["case_id"], "stage": "propagation", "status": "verification_error",
                          "equal": False, "reason": f"{type(error).__name__}: {error}"})
@@ -101,19 +102,21 @@ def verify(directory):
             except (OSError, ValueError) as error:
                 visual[name] = {"status": "verification_error", "reason": f"{type(error).__name__}: {error}"}
     summary = read(directory / "summary.json")
-    planned = manifest["policy"]["planned_logical_calls"]
+    planned = manifest["policy"]["planned_initial_annotation_calls"]
     def bounded(value, maximum):
         return type(value) is int and 0 <= value <= maximum
+    def nonnegative(value):
+        return type(value) is int and value >= 0
     def within_case(row):
         counts = row.get("call_counts", {})
-        return (bounded(row.get("logical_calls"), 21)
+        return (nonnegative(row.get("logical_calls"))
                 and counts == case_counts.get(row["case_id"])
                 and bounded(counts.get("extraction_logical_calls"), 16)
                 and bounded(counts.get("audit_logical_calls"), 4)
-                and bounded(counts.get("annotation_logical_calls"), 1)
+                and nonnegative(counts.get("annotation_logical_calls"))
                 and bounded(counts.get("audit_execution_calls"), 12)
                 and bounded(counts.get("audit_execution_retries"), 8)
-                and bounded(counts.get("total_execution_calls"), 29)
+                and nonnegative(counts.get("total_execution_calls"))
                 and bounded(counts.get("semantic_revisions"), 3)
                 and bounded(counts.get("structural_repairs"), 12)
                 and row["logical_calls"] == counts["total_logical_calls"]
@@ -122,7 +125,7 @@ def verify(directory):
                 + counts["audit_execution_calls"] + counts["annotation_logical_calls"])
     listed_cases = [row.get("case_id") for row in summary["cases"]]
     expected_cases = [row["case_id"] for row in manifest["cases"]]
-    call_budget_ok = (listed_cases == expected_cases and planned == 63 and bounded(summary.get("logical_calls"), planned)
+    call_budget_ok = (listed_cases == expected_cases and planned == 3 and nonnegative(summary.get("logical_calls"))
                       and all(within_case(row) for row in summary["cases"])
                       and summary["logical_calls"] == sum(row["logical_calls"] for row in summary["cases"]))
     guard_path = directory / "verification/network-guard.json"
@@ -134,7 +137,8 @@ def verify(directory):
         "changed_protected_files": changed, "replay_comparisons": rows,
         "credential_pattern_files": credential_files, "visual_checks": visual,
         "logical_calls": summary["logical_calls"],
-        "planned_logical_calls": planned, "call_budget_ok": call_budget_ok,
+        "planned_initial_annotation_calls": planned, "annotation_structural_corrections": "unlimited",
+        "call_budget_ok": call_budget_ok,
         "http_attempts": sum(http) if all(type(value) is int for value in http) else None,
         "offline_network_guard": guard, "offline_network_guard_passed": guard_ok,
         "passed": (not changed and not credential_files and all(row["equal"] is not False for row in rows)

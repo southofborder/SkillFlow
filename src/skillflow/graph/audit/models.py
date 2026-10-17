@@ -27,7 +27,6 @@ Status = Literal[
 
 class ControlledRef(StrictRecord):
     unit_id: Text
-    quote: Text | None = None
 
 
 class Suggestion(StrictRecord):
@@ -89,13 +88,10 @@ class Finding(StrictRecord):
 
 
 class AuditResult(StrictRecord):
-    schema_version: Literal[5]
+    schema_version: Literal[6]
     contract_version: Literal["skill-ir-semantic-contract-v4"]
     outcome: Literal["completed"]
     findings: list[Finding] = Field(min_length=1)
-    reviewed_source_unit_ids: list[Text]
-    reviewed_controlled_unit_ids: list[Text]
-    notes: list[Text]
 
     @model_validator(mode="after")
     def record_identity(self) -> "AuditResult":
@@ -120,7 +116,7 @@ class AuditFailure(StrictRecord):
 
 
 class CannotAssessAudit(StrictRecord):
-    schema_version: Literal[5]
+    schema_version: Literal[6]
     contract_version: Literal["skill-ir-semantic-contract-v4"]
     outcome: Literal["cannot_assess"]
     failure: AuditFailure

@@ -13,6 +13,10 @@ import threading
 
 
 from skillflow.common.paths import project_root, resolve_material_path
+from tools.propagation.task_runs import bind_task_runs, task_owner, read_task_runs
+from tools.propagation.summaries import support_identity
+from skillflow.propagation.annotation.loading import load_annotation_attempt
+from tools.propagation.summaries import annotation_summary
 
 ROOT = project_root() / "experiments/propagation/annotation"
 PACKAGE_ROOT = project_root()
@@ -28,7 +32,10 @@ from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
 from skillflow.propagation.annotation.config import annotation_config
 
 
-IDENTITY = "skill-ir-security-profile-review30-v6"
+IDENTITY = "skill-ir-security-profile-review30-v10"
+FORMAT_VERSION = 10
+LIMITS = {"annotation_stages_per_case": 1, "structural_attempt_limit": None,
+          "logical_calls_per_case": None, "logical_calls_total": None}
 BASELINE = PACKAGE_ROOT / "experiments/graph/baseline"
 BASELINE_RUN = BASELINE / "runs/baseline-deepseek-v4-flash-max-20260910"
 SAMPLE_IDS = tuple(f"{group}{index:02}" for group in "NQFDR" for index in range(1, 7))
@@ -85,15 +92,17 @@ def _case_identity(item):
     }
 
 
-def _verified_manifest(directory, plan, config, workers, writer):
+def _verified_manifest(directory, plan, config, workers, writer, task_runs=None):
     expected = {
-        "schema_version": 6, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION,
-        "driver": {"path": Path(__file__).resolve().relative_to(REPOSITORY_ROOT).as_posix(), "sha256": sha_file(Path(__file__))},
+        "schema_version": FORMAT_VERSION, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION,
+        "tool_support": support_identity(),
+                "driver": {"path": Path(__file__).resolve().relative_to(REPOSITORY_ROOT).as_posix(), "sha256": sha_file(Path(__file__))},
         "source_selector": {"path": (REPOSITORY_ROOT / "tools/graph/baseline/review_set_source.py").relative_to(REPOSITORY_ROOT).as_posix(),
                             "sha256": sha_file(REPOSITORY_ROOT / "tools/graph/baseline/review_set_source.py")},
         "config": config, "workers": workers,
-        "limits": {"logical_calls_per_case": 1, "logical_calls_total": 30},
+        "limits": LIMITS,
         "cases": [_case_identity(item) for item in plan],
+        "task_runs": bind_task_runs(directory, [_case_identity(item) for item in plan], task_runs),
         "review_policy": "Assistant review after execution; no oracle or past verdict is used as model input.",
     }
     path = directory / "manifest.json"
@@ -108,13 +117,13 @@ def _verified_manifest(directory, plan, config, workers, writer):
 
 
 def _missing(status, reason):
-    return {"status": status, "reason": reason, "profiles": {}, "locations": {}, "transfer_specs": {}, "sink_boundaries": [],
+    return {"status": status, "reason": reason, "ir_semantics": {}, "locations": {}, "sink_boundaries": [],
             "validation": {"status": "not_run", "errors": []}, "counts": {}}
 
 
 def partial_order_count(outcome):
     """Count typed partial-order IRs, not generic pending judgments."""
-    return sum(spec.get("order") == "partial" for spec in outcome.get("transfer_specs", {}).values())
+    return sum(spec.get("order") == "partial" for spec in outcome.get("ir_semantics", {}).values())
 
 
 def _summary(outcomes):
@@ -123,17 +132,18 @@ def _summary(outcomes):
     counts = Counter()
     unknown_counts = []
     for identifier, outcome in outcomes.items():
-        for profile in outcome.get("profiles", {}).values():
-            effect_counts.update(set(profile["effects"]))
+        for profile in outcome.get("ir_semantics", {}).values():
+            from skillflow.propagation.contracts.specs import IRSemantics, iter_effect_events
+            effect_counts.update({event.effect for event in iter_effect_events(IRSemantics.model_validate(profile)) if event.effect is not None})
         observed = outcome.get("counts", {})
         if not observed and outcome["status"] not in {"not_run", "prepared"}:
             unknown_counts.append(identifier)
-        for field in ("logical_calls", "http_attempts", "http_retries"):
+        for field in ("logical_calls", "stage_calls", "structural_corrections", "http_attempts", "http_retries"):
             value = observed.get(field)
             if type(value) is int:
                 counts[field] += value
     return {"cases": len(outcomes), "statuses": dict(statuses), "effects": dict(effect_counts),
-            "profiles": sum(len(item.get("profiles", {})) for item in outcomes.values()),
+            "ir_semantics": sum(len(item.get("ir_semantics", {})) for item in outcomes.values()),
             "partial_order_ir_count": sum(partial_order_count(item) for item in outcomes.values()),
             "known_counts": dict(counts), "unavailable_count_cases": unknown_counts}
 
@@ -142,10 +152,10 @@ def experiment_report(result, manifest):
     summary = result["summary"]
     clean = lambda value: str(value).replace("|", "\\|").replace("\n", "<br>")
     lines = ["# 30 图 Security Profile 首次标注", "",
-             "输入采用已冻结的 30 个 Skill 和既有选定 CFG：29 个第 1 轮，F03 第 3 轮。每例一次独立逻辑标注调用。", "",
-             "标注只描述动作的执行主体（operator）、roles、effects 和 evidences；本轮不传播数据，不判断风险、必要性或 DOE。", "",
+             "输入采用已冻结的 30 个 Skill 和既有选定 CFG：29 个第 1 轮，F03 第 3 轮。每例一个独立联合标注阶段；结构纠正不限次数，逻辑请求与结构纠正分别计数。", "",
+             "标注只描述动作的执行主体（operator）、有序事件和逐项依据；本轮不传播数据，不判断风险、必要性或 DOE。", "",
              "## 执行概况", "", f"模式：{result['mode']}；案例数：{summary['cases']}；状态分布：{clean(summary['statuses'])}。", "",
-             f"有效保存的 profile 数：{summary['profiles']}；部分顺序 IR：{summary['partial_order_ir_count']}；已知调用计数：{clean(summary['known_counts'])}。", "",
+             f"有效保存的 profile 数：{summary['ir_semantics']}；部分顺序 IR：{summary['partial_order_ir_count']}；已知调用计数：{clean(summary['known_counts'])}。", "",
              "计数只汇总已保存的观测值；缺少调用计数的案例不按零调用认定：" + (", ".join(summary["unavailable_count_cases"]) or "无") + "。", "",
              "## 逐例结果", "", "| 编号／样例 | 原轮次 | 状态 | profile／IR | 部分顺序 IR | 原因 |", "|---|---:|---|---:|---:|---|"]
     for case in manifest["cases"]:
@@ -155,20 +165,20 @@ def experiment_report(result, manifest):
         if result["mode"] == "replay":
             link = f"../cases/{identifier}/replay/report.md"
         lines.append(f"| [{identifier} · {case['sample_id']} · {case['basename']} ]({link}) | {case['repetition']} | "
-                     f"{STATUS_LABELS.get(outcome['status'], outcome['status'])} | {len(outcome.get('profiles', {}))}/{case['instruction_count']} | "
+                     f"{STATUS_LABELS.get(outcome['status'], outcome['status'])} | {len(outcome.get('ir_semantics', {}))}/{case['instruction_count']} | "
                      f"{partial_order_count(outcome)} | {clean(outcome.get('reason', ''))} |")
     lines += ["", "## 效果分布", "", "一条 IR 可具有多个 effects；以下为各标签对应的 IR 数，不是数据量或风险分数。", "",
               "| effect | IR 数 |", "|---|---:|"]
     lines += [f"| {effect}" + ("（上下文写入）" if effect == "context_write" else "")
               + f" | {summary['effects'][effect]} |" for effect in EFFECTS]
     lines += ["", "## 复核边界", "",
-              "effects=[] 表示没有已记录的适用效果，不等于空操作，也不表示入口与出口状态相同。程序只验证四字段契约、ID 覆盖、定位和引文。complete 表示标注记录完整，不保证模型的分类或推断正确。", "",
-              "助手复核尚待逐例完成，记录应另外保存为 assistant-review.md；本自动报告不冒充人工确认。重点检查模型观察、多主体／多角色、网络双向效果及声明与实际变换的区别。", "",
+              "effects=[] 表示没有已记录的适用效果，不等于空操作，也不表示入口与出口状态相同。程序验证 IR 语义、ID 覆盖、定位及证据引用。complete 表示标注记录完整，不保证模型的分类或推断正确。", "",
+              "助手复核尚待逐例完成，记录应另外保存为 assistant-review.md；本自动报告不冒充人工确认。重点检查模型观察、多执行主体、网络双向效果及声明与实际变换的区别。", "",
               "源包内的可读代码只作为文本提供，没有执行。二进制及未解释内容边界见逐例记录。", ""]
     return "\n".join(lines)
 
 
-def execute(directory, *, mode="run", env_file=None, workers=None):
+def execute(directory, *, mode="run", env_file=None, workers=None, task_runs=None):
     from skillflow.propagation.annotation.runner import prepare_run
     from skillflow.propagation.annotation.runner import run_annotation
     from skillflow.propagation.annotation.runner import replay_run
@@ -190,14 +200,14 @@ def execute(directory, *, mode="run", env_file=None, workers=None):
     stop_event = threading.Event()
     with exclusive_run(directory):
         prior = read_json(directory / "manifest.json") if (directory / "manifest.json").exists() else None
-        if prior is not None and (prior.get("schema_version") != 6 or prior.get("identity") != IDENTITY
+        if prior is not None and (prior.get("schema_version") != FORMAT_VERSION or prior.get("identity") != IDENTITY
                                   or prior.get("profile_schema_version") != SCHEMA_VERSION):
             raise ValueError("Unsupported security-profile experiment version; use a new directory")
         selected_workers = workers if workers is not None else (prior["workers"] if prior else 3)
         config = prior["config"] if mode == "replay" else public_config()
         # No client or credentials are needed to validate provenance or prepare all cases.
         writer = ArtifactWriter(())
-        manifest = _verified_manifest(directory, plan, config, selected_workers, writer)
+        manifest = _verified_manifest(directory, plan, config, selected_workers, writer, task_runs)
         outcomes = {}
         ready = []
         output = directory / "replay" if mode == "replay" else directory
@@ -209,7 +219,7 @@ def execute(directory, *, mode="run", env_file=None, workers=None):
                 prior_outcomes = read_json(directory / "progress.json")
 
         def save_progress():
-            writer.json(output / "progress.json", {key: outcomes[key] for key in sorted(outcomes)})
+            writer.json(output / "progress.json", {key: annotation_summary(outcomes[key], owner=directory / "cases" / key, annotation_run=directory / "cases" / key) for key in sorted(outcomes)})
 
         for case in manifest["cases"]:
             identifier = case["case_id"]
@@ -225,7 +235,7 @@ def execute(directory, *, mode="run", env_file=None, workers=None):
                     if (prior_outcomes.get(identifier, {}).get("status") == "not_run"
                             and not any((case_dir / "calls").rglob("call.json"))):
                         verify_prepared(case_dir, config=config, replay=True)
-                        outcomes[identifier] = prior_outcomes[identifier]
+                        outcomes[identifier] = _missing("not_run", prior_outcomes[identifier]["reason"])
                         continue
                     print(f"{identifier} {case['sample_id']}：离线重放", flush=True)
                     outcomes[identifier] = replay_run(case_dir)
@@ -236,9 +246,9 @@ def execute(directory, *, mode="run", env_file=None, workers=None):
                         prepared = verify_prepared(case_dir, config=config)
                     else:
                         prepared = prepare_run(resolve_material_path(case["package_path"], base=REPOSITORY_ROOT), resolve_material_path(case["analysis_path"], base=REPOSITORY_ROOT),
-                                               run_dir=case_dir, config=config)
+                                               run_dir=case_dir, config=config, task_run=task_owner(directory, manifest, identifier))
                     if prepared["preparation_status"] != "ready":
-                        outcomes[identifier] = read_json(case_dir / "result.json") if (case_dir / "result.json").exists() else _missing(
+                        outcomes[identifier] = load_annotation_attempt(case_dir)["result"] if (case_dir / "result.json").exists() else _missing(
                             "input_error", prepared.get("preparation_error", "输入准备失败"))
                     elif mode == "prepare":
                         outcomes[identifier] = _missing("prepared", "输入、结构和模型材料已离线准备")
@@ -261,7 +271,7 @@ def execute(directory, *, mode="run", env_file=None, workers=None):
                 identifier = case["case_id"]
                 if stop_event.is_set():
                     return _missing("not_run", "此前已中断，未启动后续案例")
-                print(f"{identifier} {case['sample_id']}：开始唯一标注调用", flush=True)
+                print(f"{identifier} {case['sample_id']}：开始联合标注阶段", flush=True)
                 try:
                     outcome = run_annotation(directory / case["run_dir"], client_factory=factory, config=config,
                                              secrets=secrets, stop_event=stop_event,
@@ -301,9 +311,9 @@ def execute(directory, *, mode="run", env_file=None, workers=None):
             if case["case_id"] not in outcomes:
                 outcomes[case["case_id"]] = _missing("not_run", "此前已中断，未启动后续案例")
         outcomes = {case["case_id"]: outcomes[case["case_id"]] for case in manifest["cases"]}
-        result = {"schema_version": 6, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION, "mode": mode, "cases": outcomes,
+        result = {"schema_version": FORMAT_VERSION, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION, "mode": mode, "cases": outcomes,
                   "summary": _summary(outcomes), "assistant_review": "pending", "user_confirmed": False}
-        writer.json(output / "experiment-result.json", result)
+        writer.json(output / "experiment-result.json", {**result, "cases": {key: annotation_summary(value, owner=directory / "cases" / key, annotation_run=directory / "cases" / key) for key, value in outcomes.items()}})
         writer.text(output / "report.md", experiment_report(result, manifest))
         save_progress()
         return result
@@ -314,6 +324,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("prepare", "run", "replay"):
         command = commands.add_parser(name)
+        command.add_argument("--task-runs-json", type=Path, help="case ID -> completed independent Task run paths")
         command.add_argument("--run-dir", type=Path, required=True)
         if name != "replay":
             command.add_argument("--workers", type=int, default=None, help="并行案例上限，首次默认 3；恢复须保持一致")
@@ -321,7 +332,7 @@ def main(argv=None):
             command.add_argument("--env-file", type=Path)
     args = parser.parse_args(argv)
     result = execute(args.run_dir, mode=args.command, env_file=getattr(args, "env_file", None),
-                     workers=getattr(args, "workers", None))
+                     workers=getattr(args, "workers", None), task_runs=read_task_runs(args.task_runs_json))
     print(json.dumps(result["summary"], ensure_ascii=False), flush=True)
     errors = {"input_error", "invalid_response", "execution_error", "semantic_failure", "interrupted", "not_run"}
     return int(any(case["status"] in errors for case in result["cases"].values()))

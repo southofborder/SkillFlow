@@ -1,18 +1,37 @@
 # SkillFlow
 
 SkillFlow develops task-related static data minimization analysis for Agent Skills.
-**Skill-IR** implements graph construction, controlled source comparison, bounded
+**SkillFlow** implements graph construction, controlled source comparison, bounded
 CFG feedback, joint security and transfer annotation, focused review with one
 annotation repair, and deterministic data propagation.
 
-**Sensitivity, task necessity, and Data Over-Exposure (DOE) judgment are the next
-stage.** Propagation exports factual `doe-input.json` files without DOE conclusions.
+A source-only Task extraction now establishes the preservation baseline before
+receiving a CFG, annotation, payload or DOE result. The grounded annotation
+references that exact sealed Task revision and declares realizations, positive
+demands, expressions, processing and sensitivity. A full-source review must
+account for every source range, Task requirement, demand seed and actual IR.
+[The recorded pipeline](docs/doe/joint-pipeline.md) supports one semantic repair
+round: annotation-only repair keeps Task immutable; Task errors use an isolated
+source-only revision followed by a fresh complete annotation and review.
+
+The normal path has three semantic calls, annotation repair five, and Task
+revision plus rebuilding six. Structural correction is recorded separately.
+The deterministic backend traces each seed to its derivations and every sink.
+Unexpressed constraints remain visible limitations; they are not executable
+checks or proof of necessity. Propagation facts and historical runs remain
+immutable. Engineering tests and real-model error-detection experiments are
+reported separately; neither parsing nor review acceptance proves completeness.
+Conservative retention is not indispensability; supported local reductions do
+not establish global minimality. The [sink preparation guide](docs/doe/SkillFlow-DOE离线切片与审查材料.md)
+describes the retained internal read-only association algorithm.
 The legacy SFG/FCG engine, DOE scorer, and their pipeline were removed on 2026-09-15.
 There is no compatibility entry point.
 
-[中文说明](README-CH.md) · [Representation contract and one repair](docs/propagation/SkillFlow-表示契约与一次标注修复.md) · [Documentation](docs/README.md)
+The [field-tightening guide](docs/architecture/field-tightening.md) documents the single `ir_semantics` contract, shared evidence extraction, compact model requests and derivation-backed DOE result rows. Audit identities, data versions and all preservation demands remain available. This is an offline engineering change; historical model results are not migrated.
 
-The [architecture and migration acceptance guide](docs/architecture/SkillFlow-架构与迁移验收.md) explains the current layout and historical identity boundaries. The [migration review page](experiments/migrations/layout-v1-20261002-215752/index.html) links the three unchanged DOE files and new-layout offline acceptance. Final full regression passed: 2509 tests, with no failures, errors, or skips; see the [test receipt](experiments/migrations/layout-v1-20261002-215752/verification/python-tests.json).
+[中文说明](README-CH.md) · [Representation guidance and one repair](docs/propagation/SkillFlow-表示契约与一次标注修复.md) · [Documentation](docs/README.md)
+
+The [architecture and migration acceptance guide](docs/architecture/SkillFlow-架构与迁移验收.md) explains the current layout and historical identity boundaries. The [migration review page](experiments/migrations/layout-v1-20261002-215752/index.html) links the three unchanged DOE files and new-layout offline acceptance. The migration-time full regression passed: 2509 tests, with no failures, errors, or skips; see the [test receipt](experiments/migrations/layout-v1-20261002-215752/verification/python-tests.json).
 
 ## Current workflow
 
@@ -23,10 +42,14 @@ Skill directory / ZIP
   → Lean-generated controlled retelling with actual-text roundtrip checks
   → one model comparison of complete source and controlled text
   → bounded CFG feedback for explicit differences
-  → joint security and transfer annotation, with compiled observations
-  → focused review; one full annotation repair and fresh review when needed
-  → deterministic propagation and doe-input.json
-  → DOE judgment (next stage)
+  → independent source-only Task extraction and sealed baseline
+  → Task realizations, demands, processing, and sensitivity
+  → compiled observations and sink boundaries
+  → source / requirement / seed / IR review
+  → one repair round; isolated Task revision and rebuilding when needed
+  → deterministic propagation: data.json / records.json / sinks.json
+  → evidenced Task goals, backward information demands, and sink comparisons
+  → sensitivity tracking and deterministic sink-specific DOE comparisons
 ```
 
 Structural acceptance does not prove source coverage or execution safety.
@@ -46,6 +69,8 @@ python -m skillflow.graph.feedback --help
 python -m skillflow.propagation.annotation --help
 python -m skillflow.propagation.review --help
 python -m skillflow.propagation --help
+python -m skillflow.doe --help
+python -m skillflow pipeline --help
 python -m skillflow analyze --input examples/graph/simple_skill --output tmp/analysis.json
 python -m skillflow render --input tmp/analysis.json --output tmp/graph.mmd
 ```
@@ -77,13 +102,23 @@ accepted under the latest workflow.
 
 ## Layout and verification
 
+Task v3 contains source-only requirements and complete physical-line accounting.
+Graph bindings belong to realizations, and compiled goals preserve per-seed
+provenance. Instructions are English; explanations and reports are Chinese.
+See [Task evidence and isolation](docs/doe/task-evidence.md).
+
+```shell
+python -m skillflow pipeline prepare --input path/to/skill --analysis path/to/analysis.json --run-dir new-run
+python -m examples.doe.joint_analysis_demo --show annotation
+```
+
 | Path | Purpose |
 | --- | --- |
-| `src/skillflow/` | graph, propagation, and common responsibilities |
+| `src/skillflow/` | graph, propagation, deterministic DOE analysis, and common responsibilities |
 | `formal/`, `tests/`, `tools/` | Proofs, regression tests, and repository experiment tools |
 | `dataset/skills/` | 30 frozen evaluation input ZIPs |
 | `result/ir-IPP/` | 30 matching CFG PNGs; model outputs, not ground truth |
-| `result/suggestions/`, `result/advice_for_doe/` | Existing per-sample and condensed reviews; the latter's historical name does not mean a DOE analyzer is implemented |
+| `result/suggestions/`, `result/advice_for_doe/` | Existing per-sample and condensed reviews; these historical files are not current deterministic DOE outputs |
 | `packages/skill-similarity-analyzer/` | Independent ClawHub downloading and grouping utility, outside the semantic audit workflow |
 | `shared/`, `test/` | JavaScript support and tests used by that utility |
 | `docs/`, `experiments/legacy_sfg_doe/` | Current specifications and preserved historical records |

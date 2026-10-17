@@ -1,0 +1,180 @@
+# 全流程字段与材料收紧（2026-10-13）
+
+当前实现按“构图 → 联合语义标注 → 传播 → DOE”组织。CFG 类型、生产提取 Prompt、Data 内容形态和 DOE 结论种类不变。本轮只做离线实现与验证；历史响应不迁移。
+
+## 1. 按流程查看字段
+
+标记：**M** 是模型填写的声明；**P** 是程序计算或派生；**A** 只用于运行审计。引用合法不代表解释正确。
+
+```text
+联合标注输入
+├─ source [P]                    完整可读源文件，原文只冻结一次；模型视图按物理行显示
+├─ cfg [P]                       本次使用的真实图，沿用已有图身份
+├─ runtime_contract [P]          影响读取、观察、工具边界的默认运行规则
+└─ user_request [输入]           独立用户请求全文；没有时为 null
+
+联合标注成功响应 [M]
+├─ outcome                      请求协议：completed；无法完成时返回单独失败分支
+├─ task                         为什么执行任务、必须保持什么
+│  ├─ purpose                   text / evidences
+│  └─ requirements[]
+│     ├─ id / text               要求编号与内容
+│     ├─ evidences[]             file / start_line / end_line / reason
+│     └─ bindings[]              target / reason：要求在真实图中的一般对应位置
+├─ demands[]                    要求从哪里进入反向计算；不重复要求正文
+│  ├─ requirement_id            引用 task.requirements
+│  ├─ target                    真实 CFG 对象
+│  ├─ preserve                  value / presence / cardinality / shape / truth /
+│  │                            action / constraint / prohibit
+│  ├─ path                      需要保留的信息路径
+│  ├─ expected / expected_path  有明确原值关系时指明所需来源；不从实际过量载荷反推
+│  └─ reason                    说明这项需求如何服务于已有要求
+├─ expressions[]                需要显式计算含义的控制位置
+│  └─ target / expression / evidences
+├─ ir_semantics[ir_id]           每条 IR 的单份语义声明
+│  ├─ operator / operator_evidences
+│  ├─ empty_effect_evidences    确认无适用效果时的依据
+│  ├─ order                     fixed / partial；保留可计算的候选顺序
+│  ├─ events[]                  唯一有序结构：处理段或单层 for_each
+│  │  ├─ processing             mode / returns / evidences / events
+│  │  │  └─ event               effect / evidences / atomic_ops
+│  │  └─ for_each               collection / item / evidences / body / sensitivity
+│  ├─ output_bindings[]         公开输出槽位 → 已有 ValueRef；普通 return 无虚构输出
+│  └─ sensitivity[]             value / path / property / label / evidences
+├─ locations[location_id]        kind / name / operand_refs / access_scope / retention
+└─ location_evidences            位置 ID → 依据；旁置审计，不复制到传播 Data
+
+原子操作上的可选语义 [M]
+├─ demands[]                    requirement_id / target / preserve / path /
+│                               expected / expected_path / reason
+│  └─ target                    self、input(index)、output：当前原子操作的槽位
+└─ expression                   expression / evidences：只挂载到受支持的计算或筛选
+
+编译结果 [P]
+├─ task                         增加程序确定的 basis 与 Task 版本
+├─ demands / expressions        归一化已有声明，生成内部身份及操作关联
+├─ ir_semantics                 编译观察和必要的 precedence，不改变原始接受响应
+├─ locations                    包含程序生成的模型边界
+└─ sink_boundaries              潜在 sink 模板；尚不是实际求值清单
+```
+
+Task 的 bindings 是一般对应关系，可以指向图、块、约束或 metadata。demands 是可执行的保持需求，值需求必须有真实值位置。两者不能合并：例如“正文必须取该元素的 note 原值”，即使当前实际发送了整条元素，需求也仍然只来自规定的 note。
+
+敏感性中的 `property` 保持原名；它与需求的 `preserve` 不是为了字面统一而全局替换。Data 的稳定登记键也保持其原身份含义。
+
+语义审查单独返回问题清单，不再次标注全部业务：
+
+```text
+审查成功响应 [M]
+├─ outcome                      completed：本次完成审查，不等于证明语义正确
+├─ reviewed_ir_ids              声明检查过的真实 IR；程序检查覆盖
+└─ findings[]
+   ├─ target_ids                审查器专用的候选／编译观察定位编号
+   ├─ explanation               具体差异及其影响
+   ├─ evidences                 与上面相同的三类依据
+   └─ suggestion                建议修改；不直接执行修改
+
+无法完成响应 [M；请求协议]
+├─ outcome                      cannot_assess
+└─ failure                      reason / 已有目标或 IR 定位 / evidences
+```
+
+失败分支不会生成正常的空问题清单。审查 findings 的编号由程序按位置生成；需要一次修复时返回完整新联合标注，之后重新进行独立审查。审查阶段的定位编号仅服务于待审候选，不恢复已删除的全图地址索引。
+
+## 2. 引用只有三种业务形式
+
+源文依据由程序提取，不再让模型重复提供 quote、段落编号或摘要：
+
+```json
+{"file":"skill/SKILL.md","start_line":5,"end_line":8,"reason":"These lines require the original note value."}
+```
+
+CFG 对象直接使用真实身份：
+
+```json
+{"target":{"instruction_id":"ir_calibrate","side":"input","index":0},"reason":"This is the supplied sensor value."}
+```
+
+```json
+{"target":{"instruction_id":"ir_calibrate","path":["constraints",0]},"reason":"The constraint fixes the required tolerance."}
+```
+
+```json
+{"rule_id":"EM10","reason":"This processing segment uses the contract default visibility boundary."}
+```
+
+图级对象用 `{"path":["edges",1]}`；块对象用 `{"block_id":"b2","path":[]}`。不能从图根路径绕行到 IR，也不能用 `outputs/0/identifier` 这类名称字符串冒充值位置。字符串键和整数下标不同，布尔值不是合法下标。
+
+`ValueRef.input.index` 指所属 IR 的输入；`operation.demands.target.input.index` 指当前原子操作的消费槽位。它们分别校验。审查阶段的候选／观察编号继续存在，因为它们定位的是待审声明，而不是再造一张 CFG 地址表。
+
+CFG 源文核对要求 findings 的引用范围并集覆盖所有非空物理行。空行可以不引用；失败分支只检查已给出的依据。覆盖是机械门槛，不证明自然语言语义完整。受控回述与 Lean 的图事实编号保留。
+
+## 3. 各阶段保存自己的产物
+
+```text
+annotation / refinement
+├─ inputs                       源包由首次标注冻结一次；修复明确引用该输入所有者
+├─ calls                        实际 Prompt、原始响应、JSON 修整回执、结构纠正链
+├─ audit                        合法原标注、编译结果、映射及位置依据
+└─ result.json [A]              协议状态、最终调用及阶段摘要，不再次保存整份标注业务
+
+propagation
+├─ data.json                    Data[]：id / content / origin / annotations
+├─ records.json                 IR → entry_state / events / exit_state / order / precedence
+│  └─ atomic_ops                op / inputs / outputs / endpoints / changes
+│                              build 的 members 和条件观察控制槽按既有契约保留
+├─ sinks.json                   实际求值 sink 的操作坐标、目标、类型、等级
+├─ manifest.json [A]             上游相对地址、身份、状态、覆盖、诊断、文件摘要
+└─ audit [A]                    原始种子、有效初始种子、登记身份索引、技术统计
+
+doe
+├─ doe-result.json               仅 DOE 自己生成的推导及每个 sink 的信息范围判断
+│  ├─ schema_version / status
+│  ├─ derivations               共享 demand / sensitivity 推导
+│  ├─ sinks[]                   边界、实际载荷、相关要求、data_reviews、限制引用
+│  │  └─ data_reviews[]         操作／载荷槽、敏感推导引用、需求引用、结论、理由、缩减
+│  └─ diagnostics / coverage    分析缺口及声明覆盖边界
+├─ manifest.json [A]             引用对应传播运行并绑定身份
+└─ audit [A]                    定位索引与未在结果中保存的需求恢复信息
+```
+
+不再生成 `doe-input.json` 或其替代总包。传播不复制标注的源码、CFG、响应、编译或调用链；DOE 不复制整个传播或标注。`load_propagation_materials()` 返回经过校验的内存组件，没有整包 JSON 序列化入口。
+
+原文以输入快照 v2 保存：`inputs/package/` 持有原文件字节，`snapshot.json` 持有输入边界与校验信息。解码文本、物理行展示和模型材料按需生成，不再另存 `source.json` 或 `material.json` 全量副本。直接提供候选材料的离线测试可以拥有一份没有原包的源文组件，但不能同时保存两个来源副本。
+
+标注的 `audit/compiled-response.json` 是编译业务内容的保存位置；不再独立导出 `ir-semantics.json`、`locations.json`、`sink-boundaries.json`。审查和修复引用其实际阶段，汇总保存阶段状态与身份，不嵌套复制发现或标注。加载器核验后重建内存对象，供报告和分析使用。原始响应、合法原候选和编译结果仍分别保留：它们代表不同阶段，不能通过去重抹掉模型实际返回内容与程序变更的区别。
+
+修复不另存 `repair-context.json`，而是从明确的原候选和初审阶段重建并核验上下文。审查 `result.json` 不保存 `resolved_findings`，防止一次针对根对象的发现又复制整份标注；定位展开仅在内存和展示时生成。DOE 的 `audit/index.json` 只保存声明编号对应的 IR、作用域和声明下标，声明正文与证据仍由所选标注持有。
+
+上游地址相对于当前阶段目录。整棵分析目录可以搬迁；单独搬走阶段而丢失上游会明确失败。普通读取验证材料身份；重新求解额外要求实现身份匹配。最终 Data、初始 Data 和登记身份仍分别保存，因为它们不是同一内容版本。
+
+## 4. 删除与保留对照
+
+| 删除的重复组织 | 保留的能力与责任 |
+|---|---|
+| source_units、source_index、段落编号 | 文件＋物理行；实际换行与不可读输入边界 |
+| graph_index、instruction_index、task_targets 地址表 | 直接 CFG 引用；程序按需建立临时查找 |
+| execution_model 名称、representation_contract 材料 | runtime_contract；共用 Schema／格式说明各负其责 |
+| semantic_context、policies、策略文件入口 | user_request：独立任务请求或 null |
+| task_goals、task_expressions、需求 property、target_id | demands、expressions、preserve、直接 target |
+| DOE 输入总包、record-materials 外壳、整套上游副本 | 分阶段文件、上游身份绑定、公共严格加载 |
+| 切片／Task／需求／敏感性独立实验 prepare/replay 及调度 | 底层算法测试与正式 pipeline、标注、审查、传播、DOE 入口 |
+| 四套重复实验运行生命周期测试包装 | 正式 DOE 的篡改、提交中断、恢复、搬迁、零 API 重放测试 |
+
+没有删除 Data 内容关系、`origin.inputs` 次序、`derived/possible` 区别、条件控制槽、逐元素配对、强弱更新、状态中间变化或下游需求。没有敏感声明不表示全部内容不敏感；没有建立过量也不表示不可替代性已证明。
+
+## 5. 当前版本与命令
+
+Task v2；联合标注 v13／运行 v16；运行时 v7；编译器及材料 v7；审查契约 v5／运行 v9；一次修复运行 v8；传播记录 v11／运行 v14；正式 DOE 运行 v3；pipeline／三例调度 v5；图核对及反馈运行 v7。Data、最终 DOE 结果、图核对响应 schema 6 和图语义解释契约 v4 保持。DOE 输入格式退役，没有新版本或兼容别名。
+
+```console
+python -m skillflow pipeline prepare --input <skill> --analysis <cfg> --run-dir <run> [--request-file <request.txt>]
+python -m skillflow pipeline run --run-dir <run>
+python -m skillflow pipeline replay --run-dir <run>
+python -m skillflow.doe run --propagation-run <propagation> --run-dir <doe>
+python -m skillflow.doe replay --run-dir <doe>
+```
+
+本轮不执行上述在线 run。完整原始响应与受限 JSON 修整回执保留；每次调用记录也纳入结构纠正链摘要。结构纠正不限次数，语义修复最多一次，恢复不重发已经接受的响应。
+
+验收数字、历史摘要核对与材料大小见[离线验收报告](field-tightening-verification.md)。字节与字符仅衡量材料体积，不冒充模型 tokenizer 的精确 token 数。

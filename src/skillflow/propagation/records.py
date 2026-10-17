@@ -1,7 +1,7 @@
 """External, replaceable static IR records; no transfer rules or execution.
 
 The supplied annotation must already have passed the security-profile service's
-quote checks. Here we recheck its v10 structure, coverage and occurrence evidence,
+evidence checks. Here we recheck its current structure, coverage and occurrence evidence,
 not the truth of annotations or the meaning of caller-supplied data bindings.
 """
 
@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import TypeAdapter
 
 from skillflow.common.source_evidence import _require_json
 from skillflow.common.source_evidence import canonical_graph_sha256
@@ -21,9 +20,7 @@ from skillflow.propagation.data import is_definitely_empty_collection
 from skillflow.graph.ir.cfg import ControlFlowGraph
 from skillflow.graph.validation import checked_cfg
 from skillflow.propagation.contracts.profiles import AnnotationPayload
-from skillflow.propagation.contracts.profiles import PROFILE_FIELDS
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION as PROFILE_SCHEMA_VERSION
-from skillflow.common.source_evidence import _json_object
 
 from skillflow.propagation.models import FlowLocation
 from skillflow.propagation.models import FlowState
@@ -37,7 +34,7 @@ from skillflow.propagation.conditions import guard_truths
 from skillflow.propagation.conditions import payload_input_indices
 from skillflow.propagation.conditions import validate_record_consumption
 
-SCHEMA_VERSION = "skillflow-propagation-record-v9"
+SCHEMA_VERSION = "skillflow-propagation-record-v11"
 
 
 class PropagationRecordError(ValueError):
@@ -73,49 +70,20 @@ def _annotation_payload(annotation: AnnotationPayload | dict) -> dict:
         # Reparse dumped fields: a Pydantic instance may have been mutated.
         annotation = annotation.model_dump(mode="python")
     if type(annotation) is not dict:
-        raise PropagationRecordError("annotation must include profiles, locations and transfer_specs")
+        raise PropagationRecordError("annotation must include task, demands, expressions, locations, ir_semantics and sink_boundaries")
     _require_json(annotation, "")
     return AnnotationPayload.model_validate(annotation).model_dump(mode="json")
 
 
 def _validate_annotation(annotation: dict, expected: set[str]) -> None:
-    actual = set(annotation["profiles"])
+    actual = set(annotation["ir_semantics"])
     if actual != expected:
         raise PropagationRecordError(
             f"profile coverage mismatch: missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}"
         )
-    for ir_id, profile in annotation["profiles"].items():
-        supported = set()
-        for evidence in profile["evidences"]:
-            field, value = evidence["field"], evidence["value"]
-            if value is None:
-                if profile[field]:
-                    raise PropagationRecordError(f"invalid empty-field evidence: {ir_id}/{field}")
-            elif value not in profile[field]:
-                raise PropagationRecordError(f"evidence label absent from profile: {ir_id}/{field}/{value}")
-            supported.add((field, value, evidence["effect_index"]))
-        for field in PROFILE_FIELDS:
-            for index, value in enumerate(profile[field]):
-                occurrence = index if field == "effects" else None
-                if (field, value, occurrence) not in supported:
-                    raise PropagationRecordError(f"missing label occurrence evidence: {ir_id}/{field}/{index}")
-            if not profile[field] and (field, None, None) not in supported:
-                raise PropagationRecordError(f"empty field lacks evidence: {ir_id}/{field}")
-
-
-class _Snapshot(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    schema_version: Literal["skillflow-propagation-record-v9"]
-    profile_schema_version: Literal["security-profile-v10"]
-    annotation_cfg_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    cfg_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    annotation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    data_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    initial_data_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    initial_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    records: dict[str, IRFlowRecord]
-    complete: bool
+    # The merged strict type checks operator coverage, each effect's own
+    # evidence, and the conditional absence-of-effects declaration.
+    AnnotationPayload.model_validate(annotation)
 
 
 class PropagationRecords:
@@ -123,8 +91,8 @@ class PropagationRecords:
 
     CFG and annotation are copied. The DataRegistry is deliberately live so a
     later description refinement keeps its identity and existing observations.
-    Exports bind its current digest; material payloads are supplied explicitly
-    on load, so records never introduce a second serialized Data authority.
+    The owning run binds material digests; this component stores only IR records
+    and never introduces a second serialized Data authority.
     """
 
     def __init__(
@@ -135,7 +103,7 @@ class PropagationRecords:
         initial_state: FlowState | None = None,
     ) -> None:
         if profile_schema_version != PROFILE_SCHEMA_VERSION:
-            raise PropagationRecordError("requires explicit security-profile-v10 annotation identity")
+            raise PropagationRecordError("requires explicit security-profile-v14 annotation identity")
         if not isinstance(data_registry, DataRegistry):
             raise PropagationRecordError("data_registry must be a DataRegistry")
         self._cfg = _graph_payload(cfg)
@@ -212,7 +180,7 @@ class PropagationRecords:
     def effect_order_known(self, ir_id: str) -> bool:
         """Whether the specification asserts fixed order, not its truth."""
         self._require_ir(ir_id)
-        return self._annotation["transfer_specs"][ir_id]["order"] == "fixed"
+        return self._annotation["ir_semantics"][ir_id]["order"] == "fixed"
 
     def _check_location(self, location: FlowLocation) -> None:
         if location.kind == "result" and location.name not in self._result_ids:
@@ -230,7 +198,7 @@ class PropagationRecords:
             for binding in state.bindings:
                 self._check_location(binding.location)
                 check_data(binding.data_ids)
-        transfer = self._annotation["transfer_specs"][ir_id]
+        transfer = self._annotation["ir_semantics"][ir_id]
         if record.order != transfer["order"] or [item.model_dump(mode="json") for item in record.precedence] != transfer["precedence"]:
             raise PropagationRecordError("record order/precedence differs from compiled transfer specification")
         specifications = transfer["events"]
@@ -239,8 +207,7 @@ class PropagationRecords:
         def validate_effect(event, spec, position):
             if not isinstance(event, EffectEvent):
                 raise PropagationRecordError(f"effect record required at {ir_id}/{position}")
-            effect_index = spec["effect_index"]
-            expected_effect = None if effect_index is None else self._annotation["profiles"][ir_id]["effects"][effect_index]
+            expected_effect = spec["effect"]
             if event.effect != expected_effect:
                 raise PropagationRecordError(f"event position/label mismatch at {ir_id}/{position}")
             if len(event.atomic_ops) != len(spec["atomic_ops"]):
@@ -350,90 +317,26 @@ class PropagationRecords:
         if require_complete and not self.is_complete:
             raise PropagationRecordError(f"incomplete IR coverage: {sorted(set(self._instructions) - set(self._records))}")
 
-    def to_dict(self) -> dict:
-        self.validate()
-        data = self._data_registry.to_dict()
-        return deepcopy({
-            "schema_version": SCHEMA_VERSION,
-            "profile_schema_version": PROFILE_SCHEMA_VERSION,
-            "annotation_cfg_sha256": self._annotation_cfg_sha256,
-            "cfg_sha256": _digest(self._cfg),
-            "annotation_sha256": _digest(self._annotation),
-            "data_sha256": _digest(data),
-            "initial_data_sha256": _digest(self._initial_data),
-            "initial_state_sha256": _digest(self._initial_state.model_dump(mode="json")),
-            "records": self.records_dict(),
-            "complete": self.is_complete,
-        })
-
     def records_dict(self) -> dict[str, dict]:
         """Return detached JSON records; array positions locate events and ops."""
         return {
             ir_id: self._records[ir_id].model_dump(mode="json") for ir_id in sorted(self._records)
         }
 
-    def to_json(self, *, indent: int | None = 2) -> str:
-        return json.dumps(self.to_dict(), ensure_ascii=True, sort_keys=True, allow_nan=False, indent=indent)
-
     @classmethod
-    def from_dict(
-        cls, payload: dict, *, cfg: ControlFlowGraph | dict,
-        annotation: AnnotationPayload | dict, data_registry: DataRegistry,
-        initial_data: DataRegistry | dict, initial_state: FlowState | dict,
-    ) -> "PropagationRecords":
-        """Attach a compact snapshot to explicit materials and verify every digest.
+    def from_records(cls, records, *, cfg, annotation, data_registry, initial_data, initial_state):
+        """Restore pure records after the owning run verified artifact identities.
 
-        The supplied registry remains the one live Data authority. Digests check
-        material identity, not the semantic truth of either records or rules.
+        This method validates material relationships. It does not manufacture
+        expected digests from supplied values or interpret an old snapshot.
         """
-        if type(payload) is not dict:
-            raise PropagationRecordError("snapshot must be a JSON object")
-        _require_json(payload, "")
-        snapshot = _Snapshot.model_validate(payload)
-        if not isinstance(data_registry, DataRegistry):
-            raise PropagationRecordError("data_registry must be a DataRegistry")
-        materials = {
-            "cfg": _graph_payload(cfg),
-            "annotation": _annotation_payload(annotation),
-            "data": data_registry.to_dict(),
-            "initial_data": initial_data.to_dict() if isinstance(initial_data, DataRegistry) else initial_data,
-            "initial_state": initial_state.model_dump(mode="json") if isinstance(initial_state, FlowState) else initial_state,
-        }
-        for field, value in materials.items():
-            if _digest(value) != getattr(snapshot, field + "_sha256"):
-                raise PropagationRecordError(f"{field} identity does not match supplied material")
-        store = cls(
-            materials["cfg"], materials["annotation"], data_registry,
-            profile_schema_version=snapshot.profile_schema_version,
-            annotation_cfg_sha256=snapshot.annotation_cfg_sha256,
-            initial_data=materials["initial_data"], initial_state=FlowState.model_validate(materials["initial_state"]),
-        )
-        # Require the exported representation to retain the same identities;
-        # importing must not silently reinterpret a malformed source snapshot.
-        if _digest(store._cfg) != snapshot.cfg_sha256:
-            raise PropagationRecordError("CFG snapshot is not its validated representation")
-        if _digest(store._annotation) != snapshot.annotation_sha256:
-            raise PropagationRecordError("annotation snapshot is not its validated representation")
-        if _digest(store.data_registry.to_dict()) != snapshot.data_sha256:
-            raise PropagationRecordError("data snapshot is not its validated representation")
-        if (_digest(store._initial_data) != snapshot.initial_data_sha256
-                or _digest(store._initial_state.model_dump(mode="json")) != snapshot.initial_state_sha256):
-            raise PropagationRecordError("seed snapshot is not its validated representation")
-        for ir_id, record in snapshot.records.items():
-            store.put(ir_id, record)
-        store.validate(require_complete=snapshot.complete)
-        if snapshot.complete != store.is_complete:
-            raise PropagationRecordError("snapshot complete flag disagrees with actual IR coverage")
+        if type(records) is not dict:
+            raise PropagationRecordError("records must be an IR-to-record object")
+        _require_json(records, "")
+        store = cls(cfg, annotation, data_registry, profile_schema_version=PROFILE_SCHEMA_VERSION,
+                    annotation_cfg_sha256=cfg_sha256(cfg), initial_data=initial_data,
+                    initial_state=FlowState.model_validate(initial_state))
+        for ir_id, record in records.items():
+            store.put(ir_id, IRFlowRecord.model_validate(record))
+        store.validate()
         return store
-
-    @classmethod
-    def from_json(
-        cls, text: str, *, cfg: ControlFlowGraph | dict,
-        annotation: AnnotationPayload | dict, data_registry: DataRegistry,
-        initial_data: DataRegistry | dict, initial_state: FlowState | dict,
-    ) -> "PropagationRecords":
-        if type(text) is not str:
-            raise PropagationRecordError("JSON input must be a string")
-        return cls.from_dict(_json_object(text), cfg=cfg, annotation=annotation,
-                             data_registry=data_registry, initial_data=initial_data,
-                             initial_state=initial_state)

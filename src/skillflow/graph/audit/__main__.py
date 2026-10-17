@@ -13,25 +13,25 @@ from skillflow.graph.audit.runner import public_config
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="受控语义回述与完整源文核对 v5：语义比较与事实校验，每案例一次逻辑调用")
+    parser = argparse.ArgumentParser(description="Controlled retelling and complete-source review v7: semantic comparison and fact checks, one logical call per case")
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("prepare", "run", "replay"):
         command = commands.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=name == "replay")
-        command.add_argument("--renderer", type=Path, help="已证明的 Lean 受控打印器可执行文件")
+        command.add_argument("--renderer", type=Path, help="Proven Lean controlled-printer executable")
         if name != "replay":
             command.add_argument("--suite", choices=tuple(SUITES), default=None,
-                                 help="默认 f01-five；semantics-v5-seven 加入暂停批次 001、010 第0轮原图")
+                                 help="Default: f01-five; semantics-v5-seven also includes the paused-batch 001 and 010 round-zero graphs")
             command.add_argument("--max-audit-execution-retries", type=int, default=None)
         if name == "run":
             command.add_argument("--env-file", type=Path)
             command.add_argument("--workers", type=int, default=2)
     args = parser.parse_args(argv)
-    directory = args.run_dir or experiment_root() / "runs" / ("controlled-v5-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    directory = args.run_dir or experiment_root() / "runs" / ("controlled-v7-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
     if args.command == "prepare":
         manifest = prepare_run(directory, executable=args.renderer, suite=args.suite or "f01-five",
                                max_audit_execution_retries=2 if args.max_audit_execution_retries is None else args.max_audit_execution_retries)
-        print(f"离线准备完成：{directory.resolve()}", flush=True)
+        print(f"Offline preparation complete: {directory.resolve()}", flush=True)
         from skillflow.graph.audit.runner import read_json
         review = read_json(directory / "verification/review30.json")
         return 0 if all(c["fidelity_status"] == "passed" for c in manifest["cases"]) and all(s["status"] == "passed" for s in review["samples"]) else 1
@@ -50,8 +50,8 @@ def main(argv=None):
         factory, secrets = streaming_factory(public_config(), env_file=args.env_file)
         result = execute_run(directory, client_factory=factory, secrets=secrets, workers=args.workers, executable=args.renderer,
                              progress=lambda value: print(value, flush=True))
-    print(f"{result['execution_status']}；已记录 {result['recorded_logical_calls']}/{result['planned_logical_calls']} 次逻辑调用；"
-          f"{result['recorded_execution_calls']} 次执行，{result['http_attempts']} 次 HTTP 尝试；{directory.resolve()}", flush=True)
+    print(f"{result['execution_status']}; recorded {result['recorded_logical_calls']}/{result['planned_logical_calls']} logical calls; "
+          f"{result['recorded_execution_calls']} executions, {result['http_attempts']} HTTP attempts; {directory.resolve()}", flush=True)
     return 0 if result["execution_status"] == "complete" else 1
 
 

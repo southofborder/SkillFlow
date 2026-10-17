@@ -16,6 +16,8 @@ import stat
 import sys
 
 from skillflow.common.paths import project_root, resolve_material_path
+from tools.propagation.summaries import restore_annotation, support_identity
+from skillflow.propagation.annotation.runner import result_snapshot
 
 HERE = Path(__file__).resolve()
 PACKAGE_ROOT = project_root()
@@ -30,8 +32,9 @@ from skillflow.common.recording import validated_trace
 from skillflow.graph.semantic_contract import contract_binding
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
 
-PARENT_IDENTITY = "skill-ir-full-feedback-security-profile-review30-v10"
-IDENTITY = "skill-ir-explicit-failed-case-rerun-v4"
+from tools.propagation.annotation.run_full_pipeline import IDENTITY as PARENT_IDENTITY, FORMAT_VERSION as PARENT_FORMAT_VERSION
+IDENTITY = "skill-ir-explicit-failed-case-rerun-v7"
+FORMAT_VERSION = 7
 AUTHORIZATION = "失败的全部重跑一下"
 EXPECTED_RERUN_CASES = tuple(["008", "009"] + [f"{number:03}" for number in range(18, 31)])
 FEEDBACK_ERRORS = {"extraction_error", "fidelity_error", "audit_error", "execution_error", "input_error", "semantic_failure"}
@@ -121,11 +124,13 @@ def validate_parent(parent):
     parent = Path(parent)
     manifest, outcome = read_json(parent / "manifest.json"), read_json(parent / "experiment-result.json")
     for value in (manifest, outcome):
-        if (value.get("schema_version") != 10 or value.get("identity") != PARENT_IDENTITY
+        if (value.get("schema_version") != PARENT_FORMAT_VERSION or value.get("identity") != PARENT_IDENTITY
                 or value.get("profile_schema_version") != SCHEMA_VERSION):
             raise ValueError("Unsupported parent run identity")
         if any(value.get(key) != expected for key, expected in contract_binding().items()):
             raise ValueError("Parent semantic contract mismatch")
+    if manifest.get("tool_support") != support_identity():
+        raise ValueError("Scheduler support implementation changed since the parent run")
     if manifest["implementation"] != implementation_provenance():
         raise ValueError("Sealed implementation changed since the parent run")
     driver = safe_child(REPOSITORY_ROOT, manifest["driver"]["path"])
@@ -146,7 +151,7 @@ def validate_parent(parent):
         if read_json(directory / "feedback/result.json") != row["feedback"]:
             raise ValueError("Parent feedback differs from case result")
         annotation = directory / "annotation/result.json"
-        if annotation.exists() and read_json(annotation) != row["annotation"]:
+        if annotation.exists() and read_json(annotation) != result_snapshot(restore_annotation(row["annotation"], owner=directory)):
             raise ValueError("Parent annotation differs from case result")
         if case["source_inventory_sha256"] != canonical_sha256(case["source_inventory"]):
             raise ValueError("Parent corpus inventory digest mismatch")
@@ -241,7 +246,7 @@ def prepare(parent, destination):
         if inventory(parent) != before:
             raise ValueError("Parent run changed while preparing the rerun")
         provenance = {
-            "schema_version": 4, "identity": IDENTITY,
+            "schema_version": FORMAT_VERSION, "identity": IDENTITY,
             "authorization": {"user_request": AUTHORIZATION,
                 "scope": "所有失败案例在新目录从源包完整重跑；此前已接受、格式错误或不确定的失败案例也在本次明确授权之内。",
                 "quality_selection": False, "successful_cases_rerun": False},
@@ -259,7 +264,7 @@ def prepare(parent, destination):
             "cost_accounting": {
                 "identity": "origin_run_id + relative call path；完整复制的成功调用沿用父origin_id，新失败案例调用使用子run的origin_id。",
                 "unique_execution_calls": "父parent_call_ledger全部条目 + 子run仅rerun_cases的新calls条目；不能将子run30例总计再次全加。",
-                "logical_units": "每个来源run内：extraction按call路径、audit按case+revision、annotation按case；不同run的新请求独立计数。",
+                "logical_units": "每个来源run内：extraction按call路径、audit按case+revision、annotation按call路径；不同run的新请求独立计数。",
                 "http_attempts_and_usage": "每个唯一origin只汇总一次transport；父失败DNS/不完整流仍计入；未知用量保留未知，不能按prompt或response相同去重。",
                 "parent_execution_calls": len(ledger),
                 "parent_http_attempts": sum(entry["http_attempts"] for entry in ledger) if all(entry["http_attempts"] is not None for entry in ledger) else None,

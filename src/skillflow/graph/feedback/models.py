@@ -52,8 +52,8 @@ class RoundResult(BaseModel):
 class FeedbackResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[5] = 5
-    identity: Literal["skill-ir-semantic-feedback-v5"] = "skill-ir-semantic-feedback-v5"
+    schema_version: Literal[7] = 7
+    identity: Literal["skill-ir-semantic-feedback-v7"] = "skill-ir-semantic-feedback-v7"
     contract_version: str
     contract_sha256: str
     representation_summary: dict[str, list[str]]

@@ -43,13 +43,13 @@ def run_http(tmp_path, monkeypatch, kind="valid"):
         if kind == "unsupported":
             raise urllib.error.HTTPError(req.full_url, 400, "unsupported", {}, io.BytesIO(b"response_format unsupported"))
         annotation = fake.complete(payload["messages"][0]["content"])
-        if kind == "quote":
-            annotation["profiles"]["ir_read"]["evidences"][0]["quote"] = "NONEXISTENT_QUOTE"
+        if kind == "quote" and len(sent) == 1:
+            annotation["ir_semantics"]["ir_read"]["operator_evidences"][0]["quote"] = "NONEXISTENT_QUOTE"
         content = json.dumps(annotation)
-        if kind == "extra_brace":
+        if kind in {"extra_brace", "truncated_extra_brace"} and len(sent) == 1:
             content += "}"
         return Response({"model": "offline-returned", "choices": [{
-            "finish_reason": "length" if kind == "truncated" else "stop",
+            "finish_reason": "length" if kind in {"truncated", "truncated_extra_brace"} else "stop",
             "message": {"content": content}}]})
 
     monkeypatch.setattr("urllib.request.urlopen", request)
@@ -61,22 +61,27 @@ def run_http(tmp_path, monkeypatch, kind="valid"):
 
 @pytest.mark.parametrize("kind,status,error_kind", [
     ("valid", "complete", None),
-    ("extra_brace", "invalid_response", "json_format"),
-    ("quote", "invalid_response", "structure_or_evidence"),
+    ("extra_brace", "complete", None),
+    ("quote", "complete", None),
     ("truncated", "execution_error", "output_truncated"),
+    ("truncated_extra_brace", "execution_error", "output_truncated"),
     ("unsupported", "execution_error", "execution"),
 ])
 def test_actual_json_request_and_classified_outcome_replay_without_new_http(tmp_path, monkeypatch, kind, status, error_kind):
     directory, result, sent = run_http(tmp_path, monkeypatch, kind)
     assert result["status"] == status, result["reason"]
     assert result["error_kind"] == error_kind
-    assert len(sent) == 1
+    expected_calls = 2 if kind == "quote" else 1
+    assert len(sent) == expected_calls
+    assert result["counts"]["structural_corrections"] == expected_calls - 1
+    assert result["counts"]["json_normalizations"] == int(kind == "extra_brace")
+    assert (directory / runner.CALL_PATH / "normalization.json").exists() == (kind == "extra_brace")
     assert sent[0]["response_format"] == {"type": "json_object"}
     assert result["request_validation"]["observed"] is True
     assert read_json(directory / "manifest.json")["config"]["response_format"] == "json_object"
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
     assert runner.replay_run(directory) == result
-    assert len(sent) == 1
+    assert len(sent) == expected_calls
 
 
 @pytest.mark.parametrize("change", ["missing_parameter", "altered_hash", "saved_validation"])
@@ -84,7 +89,7 @@ def test_accepted_request_identity_cannot_be_resealed_to_bypass_replay(tmp_path,
     directory, result, _ = run_http(tmp_path, monkeypatch)
     trace_path = directory / runner.CALL_PATH / "transport.json"
     if change == "saved_validation":
-        saved = deepcopy(result)
+        saved = runner.result_snapshot(result)
         saved["request_validation"]["observed"] = False
         (directory / "result.json").write_text(json.dumps(saved), encoding="utf-8")
     else:

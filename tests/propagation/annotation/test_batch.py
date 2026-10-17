@@ -1,6 +1,9 @@
+from tests.propagation.annotation.helpers import effects_of
+from tests.propagation.annotation.helpers import semantics, material as fixture_material
 """Pinned corpus selection and bounded isolated one-call batch scheduling."""
 
 from skillflow.common.paths import project_root, resolve_material_path
+from skillflow.common.recording import canonical_sha256
 
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
@@ -37,16 +40,16 @@ def stubbed(driver, pinned_plan, monkeypatch):
     created_clients = []
 
     def result(identifier, status="complete"):
-        return {"status": status, "reason": "", "profiles": {
-            f"ir_{identifier}": {"operator": ["tool", "llm"], "roles": ["source", "sink"],
-                                "effects": ["net_send", "net_receive", "model_observe"], "evidences": []}},
+        return {"status": status, "reason": "", "ir_semantics": {
+            f"ir_{identifier}": semantics(fixture_material(), "ir_filter", operator=["tool", "llm"],
+                                       effects=["net_send", "net_receive", "model_observe"])},
                  "validation": {"status": "passed"},
-                "counts": {"logical_calls": 1, "http_attempts": 1, "http_retries": 0}}
+                "counts": {"logical_calls": 1, "stage_calls": 1, "structural_corrections": 0, "http_attempts": 1, "http_retries": 0}}
 
     def prepare(source, analysis, *, run_dir, config=None, **kwargs):
         prepared.append((source, analysis, run_dir, config))
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
+        (run_dir / "manifest.json").write_text(json.dumps({"manifest_sha256": canonical_sha256({})}), encoding="utf-8")
         return {"preparation_status": "ready"}
 
     def run(run_dir, **kwargs):
@@ -65,6 +68,10 @@ def stubbed(driver, pinned_plan, monkeypatch):
                              verify_prepared=lambda *args, **kwargs: {"preparation_status": "ready"})
     monkeypatch.setitem(sys.modules, "skillflow.propagation.annotation.runner", runner)
     monkeypatch.setattr(driver, "build_plan", lambda: pinned_plan)
+    monkeypatch.setattr(driver, "bind_task_runs", lambda directory, cases, supplied=None: {
+        case["case_id"]: {"path": "explicit-authored-task-" + case["case_id"], "manifest_sha256": "a" * 64}
+        for case in cases})
+    monkeypatch.setattr(driver, "task_owner", lambda directory, manifest, identity: Path("explicit-authored-task-" + identity))
     import skillflow.common.recording as recording
 
     def factory(config, *, env_file=None):
@@ -96,7 +103,8 @@ def test_prepare_freezes_all_selected_cases_without_credentials_or_client(driver
     assert not stubbed.executed and not stubbed.created_clients
     manifest = driver.read_json(tmp_path / "prepared/manifest.json")
     assert manifest["workers"] == 3
-    assert manifest["limits"] == {"logical_calls_per_case": 1, "logical_calls_total": 30}
+    assert manifest["limits"] == driver.LIMITS
+    assert manifest["limits"]["structural_attempt_limit"] is None
     for case, (source, analysis, _, _) in zip(manifest["cases"], stubbed.prepared):
         assert source == driver.REPOSITORY_ROOT / case["package_path"]
         assert analysis == driver.REPOSITORY_ROOT / case["analysis_path"]
@@ -250,12 +258,12 @@ def test_manifest_identity_changes_refuse_resume(driver, stubbed, tmp_path, fiel
 
 def test_effect_coverage_counts_each_ir_once_but_preserves_steps(driver):
     effects = ["model_observe", "context_write", "transform", "model_observe", "context_write"]
-    outcome = {"status": "complete", "profiles": {"ir": {"effects": effects}}}
+    outcome = {"status": "complete", "ir_semantics": {"ir": semantics(fixture_material(), "ir_filter", effects=effects)}}
     result = driver._summary({"001": outcome})
     assert result["effects"]["model_observe"] == 1
     assert result["effects"]["transform"] == 1
     assert result["effects"]["context_write"] == 1
-    assert outcome["profiles"]["ir"]["effects"] == effects
+    assert effects_of(outcome["ir_semantics"]["ir"]) == effects
 
 
 def test_output_cannot_overlap_frozen_baseline_or_delivery(driver, stubbed):
@@ -275,7 +283,7 @@ def test_report_keeps_semantic_failure_and_error_separate_from_record_complete(d
             result["failure"] = {"reason": "必要判断存在明确材料冲突"}
         if path.name == "002":
             result["status"] = "invalid_response"
-            result["profiles"] = {}
+            result["ir_semantics"] = {}
         return result
 
     stubbed.runner.run_annotation = run

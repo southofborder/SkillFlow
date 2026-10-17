@@ -11,6 +11,7 @@ import pytest
 from skillflow.common.artifacts import ArtifactWriter
 from skillflow.common.inputs.snapshot import freeze_input
 from skillflow.common.inputs.snapshot import read_snapshot
+from skillflow.propagation.annotation import load_prepared_material
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.recording import read_json
 from skillflow.graph.semantic_contract import contract_binding
@@ -33,13 +34,19 @@ def plan(driver):
 
 
 @pytest.fixture
-def wired(driver, plan, monkeypatch):
+def wired(driver, plan, monkeypatch, tmp_path):
     import skillflow.graph.feedback.runner as feedback_runner
     import skillflow.propagation.annotation.runner as annotation_runner
     import skillflow.common.recording as recording
     executed, annotated, clients = [], [], []
     behavior = {"status": "audit_passed", "graph": graph(), "revision": 0}
     monkeypatch.setattr(driver, "build_plan", lambda: plan[:2])
+    from tests.propagation.annotation.helpers import authored_task_run
+    from tools.propagation.task_runs import bind_task_runs
+    task_owners = {f"{row['index']:03}": authored_task_run(row["package_path"],
+        run_dir=tmp_path / ("independent-task-" + str(row["index"]))) for row in plan[:2]}
+    monkeypatch.setattr(driver, "bind_task_runs", lambda directory, cases, supplied=None:
+        bind_task_runs(directory, cases, task_owners if not (directory / "manifest.json").exists() else supplied))
     monkeypatch.setattr(driver, "_renderer_identity", lambda renderer: {"path": "test-printer", "sha256": "test"})
 
     def refine(source, *, run_dir, **kwargs):
@@ -68,8 +75,8 @@ def wired(driver, plan, monkeypatch):
 
     def annotate(run_dir, **kwargs):
         annotated.append((run_dir, kwargs))
-        value = {"status": "complete", "reason": "", "profiles": {"ir_read": {}},
-                 "counts": {"logical_calls": 1, "http_attempts": 1, "http_retries": 0,
+        value = {"status": "complete", "reason": "", "ir_semantics": {"ir_read": {}},
+                 "counts": {"logical_calls": 1, "stage_calls": 1, "structural_corrections": 0, "http_attempts": 1, "http_retries": 0,
                             "http_attempts_observed": True}}
         ArtifactWriter(()).json(run_dir / "result.json", value)
         return value
@@ -91,8 +98,8 @@ def test_pinned_source_plan_discards_baseline_graph_identity(driver, plan):
     cases = [driver._source_case(item) for item in plan]
     assert [case["case_id"] for case in cases] == [f"{i:03}" for i in range(1, 31)]
     assert all("cfg" not in case and "analysis_path" not in case and "repetition" not in case for case in cases)
-    assert driver.LIMITS["logical_calls_total"] == 630
-    assert driver.LIMITS["execution_calls_total"] == 870
+    assert driver.LIMITS["logical_calls_total"] is None
+    assert driver.LIMITS["execution_calls_total"] is None
 
 
 def test_new_timeout_does_not_rewrite_historical_baseline_config(driver):
@@ -105,11 +112,11 @@ def test_new_timeout_does_not_rewrite_historical_baseline_config(driver):
 
 def test_from_source_stage_order_no_initial_graph_and_exact_source_binding(driver, wired, tmp_path):
     result = driver.execute(tmp_path / "live", workers=1)
-    assert result["schema_version"] == 10
-    assert result["profile_schema_version"] == "security-profile-v10"
+    assert result["schema_version"] == 14
+    assert result["profile_schema_version"] == "security-profile-v14"
     assert result["contract_sha256"] == contract_binding()["contract_sha256"]
     manifest = read_json(tmp_path / "live/manifest.json")
-    assert manifest["profile_schema_version"] == "security-profile-v10"
+    assert manifest["profile_schema_version"] == "security-profile-v14"
     assert manifest["contract_version"] == contract_binding()["contract_version"]
     assert result["summary"]["feedback_statuses"] == {"audit_passed": 2}
     assert result["summary"]["annotation_statuses"] == {"complete": 2}
@@ -134,9 +141,16 @@ def test_from_source_stage_order_no_initial_graph_and_exact_source_binding(drive
         assert annotation_dir.parent == feedback_dir.parent
         binding = read_json(feedback_dir.parent / "source-binding.json")
         assert binding["status"] == "passed"
-        material = read_json(annotation_dir / "inputs/material.json")
-        assert material["source"] == read_json(feedback_dir / "inputs/source.json")
+        material = load_prepared_material(annotation_dir)
+        assert material["source"] == read_snapshot(feedback_dir)[1]
+        assert not (feedback_dir / "inputs/source.json").exists()
+        assert not (annotation_dir / "inputs/source.json").exists()
         assert material["cfg"] == wired.behavior["graph"]
+        saved_case = read_json(annotation_dir.parent / "result.json")
+        assert not {"ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions"}.intersection(saved_case["annotation"])
+        assert saved_case["annotation"]["run"]["path"] == "annotation"
+        aggregate = read_json(tmp_path / "live/experiment-result.json")
+        assert aggregate["cases"][annotation_dir.parent.name]["annotation"] == saved_case["annotation"]
     assert result["summary"]["counts"]["total_logical_calls"] == 6
     assert result["summary"]["counts"]["total_execution_calls"] == 6
 
@@ -290,6 +304,19 @@ def test_replay_refuses_env_file_and_old_batch_identity(driver, wired, tmp_path,
 def test_per_case_call_budget_is_enforced(driver):
     with pytest.raises(AssertionError, match="budget"):
         driver._counts({"counts": {"extraction_logical_calls": 17}}, {"status": "not_run", "counts": {}})
+
+
+def test_annotation_structural_corrections_are_unbounded_and_counted_separately(driver):
+    counts = driver._counts({"status": "audit_passed", "counts": {
+        "extraction_logical_calls": 16, "audit_logical_calls": 4,
+        "audit_execution_calls": 12, "audit_execution_retries": 8}},
+        {"status": "complete", "counts": {
+            "logical_calls": 1001, "stage_calls": 1, "structural_corrections": 1000}})
+    assert counts["annotation_stage_calls"] == 1
+    assert counts["annotation_structural_corrections"] == 1000
+    assert counts["total_logical_calls"] == 1021
+    assert counts["total_execution_calls"] == 1029
+    assert driver.LIMITS["annotation_structural_attempt_limit"] is None
 
 
 def test_audit_execution_retries_are_separate_from_logical_rounds_and_bounded(driver):

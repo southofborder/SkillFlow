@@ -29,7 +29,7 @@ from skillflow.propagation.models import ForEachRecord
 from skillflow.propagation.models import ForEachInstance
 from skillflow.propagation.models import BuildMemberRecord
 from skillflow.propagation.contracts.specs import AtomicOp
-from skillflow.propagation.contracts.specs import IRTransferSpec
+from skillflow.propagation.contracts.specs import IRSemantics
 from skillflow.propagation.contracts.specs import value_refs
 from skillflow.propagation.contracts.specs import iter_effect_events
 from skillflow.propagation.conditions import guard_truths
@@ -132,8 +132,8 @@ class TransferInterpreter:
         locations = set()
         for block in self.cfg["blocks"].values():
             for ir in block["instructions"]:
-                spec = self.annotation["transfer_specs"][ir["id"]]
-                typed_spec = IRTransferSpec.model_validate(spec)
+                spec = self.annotation["ir_semantics"][ir["id"]]
+                typed_spec = IRSemantics.model_validate(spec)
                 for event in typed_spec.events:
                     if getattr(event, "kind", None) == "for_each":
                         locations.update(self.referenced_context_locations(ir, event.collection))
@@ -400,9 +400,7 @@ class TransferInterpreter:
             state[FlowLocation(kind="result", name=operand["identifier"])] = ids
 
     def _effect_record(self, ir, event, operations):
-        index = event.effect_index
-        effects = self.annotation["profiles"][ir["id"]]["effects"]
-        return EffectEvent(effect=None if index is None else effects[index], atomic_ops=operations)
+        return EffectEvent(effect=event.effect, atomic_ops=operations)
 
     def _for_each(self, ir, event_index, event, state, locals_, *, uncertain):
         collections = self.resolve(event.collection, ir, state, locals_,

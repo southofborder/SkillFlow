@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import nullcontext
 from pathlib import Path
-import shutil
 from threading import Event
 
 from skillflow.common.artifacts import ArtifactWriter
-from skillflow.common.artifacts import call_metrics
 from skillflow.common.runs import exclusive_run
+from skillflow.common.upstream import checked_run_path, make_run_reference, resolve_run_reference
 from skillflow.common.recording import RecordingClient
 from skillflow.common.recording import SavedResponseClient
 from skillflow.common.recording import SavedCallFailure
@@ -20,16 +20,17 @@ from skillflow.common.recording import now
 from skillflow.common.recording import read_json
 from skillflow.common.recording import sha_file
 from skillflow.common.recording import streaming_factory
-from skillflow.common.recording import validated_trace
-from skillflow.common.recording import verify_request_identity
 from skillflow.propagation.annotation.config import annotation_config
 from skillflow.propagation.annotation.config import PUBLIC_CONFIG_FIELDS
 from skillflow.propagation.annotation.loading import load_annotation_run
+from skillflow.propagation.annotation.inputs import (read_component, write_material_parts,
+    read_material_parts, load_prepared_material)
 from skillflow.propagation.annotation.runner import _text
 from skillflow.propagation.annotation.runner import compilation_certificate
 from skillflow.propagation.annotation.services import compile_response
-from skillflow.common.source_evidence import _json_object
 from skillflow.common.semantic_failure import SemanticFailure
+from skillflow.common.json_normalization import NORMALIZATION_VERSION
+from skillflow.common.structural_correction import ResponseChain, ResponseChainError, chain_counts
 from skillflow.propagation.review.material import prepare_review_material
 from skillflow.propagation.review.material import checked_review_material
 from skillflow.propagation.review.models import SCHEMA_VERSION
@@ -38,9 +39,12 @@ from skillflow.propagation.review.prompts import build_prompt
 from skillflow.propagation.review.services import validate_response
 from skillflow.propagation.review.services import resolve_findings
 
-IDENTITY = "skill-ir-annotation-review-v4"
-FORMAT_VERSION = 4
+IDENTITY = "skill-ir-annotation-review-v10"
+FORMAT_VERSION = 10
 CALL_PATH = "calls/review/a001"
+POLICY = {"semantic_reviews": 1, "semantic_repairs": 0, "structural_corrections": "unlimited",
+          "json_normalization": NORMALIZATION_VERSION,
+          "sidecar_only": True, "automatic_resend_after_acceptance": False}
 
 
 class RunIdentityError(ValueError):
@@ -67,12 +71,12 @@ def _config(value):
 
 
 def _files(directory):
-    return {p.relative_to(directory).as_posix(): sha_file(p)
+    return {p.relative_to(directory).as_posix(): sha_file(checked_run_path(p))
             for p in sorted((directory / "inputs").rglob("*")) if p.is_file()}
 
 
 def _call_files(directory):
-    return {p.relative_to(directory).as_posix(): sha_file(p)
+    return {p.relative_to(directory).as_posix(): sha_file(checked_run_path(p))
             for p in sorted(directory.rglob("*")) if p.is_file()}
 
 
@@ -83,8 +87,8 @@ def prepare_run(annotation_run, *, run_dir, config=None, secrets=(),
     Authorship/mutations are outside model material. A candidate never replaces
     the accepted upstream response. No model client is constructed here.
     """
-    source = Path(annotation_run).resolve()
-    directory = Path(run_dir).resolve()
+    source = checked_run_path(annotation_run)
+    directory = checked_run_path(run_dir)
     if directory == source or directory.is_relative_to(source) or source.is_relative_to(directory):
         raise ValueError("Review and upstream run directories must not overlap")
     if (raw_annotation is None) != (authored_metadata is None):
@@ -102,18 +106,13 @@ def prepare_run(annotation_run, *, run_dir, config=None, secrets=(),
     with exclusive_run(directory):
         if any(p.name != ".runner.lock" for p in directory.iterdir()):
             raise RunIdentityError("Prepare requires a new or empty review directory")
-        # Preserve original bytes, accepted calls and producer hashes separately.
-        shutil.copytree(source, directory / "inputs/upstream", ignore=lambda path, names: (
-            set(names) & {".runner.lock", "replay", "report.md", "report.html"}
-            if Path(path).resolve() == source else set()))
-        frozen = load_annotation_run(directory / "inputs/upstream")
-        if frozen["upstream_identity"] != original["upstream_identity"]:
-            raise RunIdentityError("Upstream annotation changed while being frozen")
-        writer.json(directory / "inputs/candidate.json", candidate)
-        writer.json(directory / "inputs/candidate-compilation.json", {
-            "compiled": compiled, "mapping": mapping,
-            "certificate": compilation_certificate(raw, compiled, mapping)})
-        writer.json(directory / "inputs/material.json", material)
+        upstream_reference = make_run_reference(directory, source)
+        if load_annotation_run(source)["upstream_identity"] != original["upstream_identity"]:
+            raise RunIdentityError("Upstream annotation changed while being referenced")
+        if raw_annotation is not None:
+            writer.json(directory / "inputs/candidate.json", candidate)
+        writer.json(directory / "inputs/targets.json", material["target_index"])
+        writer.json(directory / "inputs/observations.json", material["observations"])
         _text(directory / "inputs/prompt.txt", prompt, writer)
         manifest = _seal({
             "identity": IDENTITY, "schema_version": FORMAT_VERSION,
@@ -121,21 +120,21 @@ def prepare_run(annotation_run, *, run_dir, config=None, secrets=(),
             "created_at": now(), "config": public,
             "implementation": implementation_provenance(),
             "upstream_identity": original["upstream_identity"],
-            "upstream_path": str(source),
+            "upstream": upstream_reference,
             "candidate_origin": "accepted_annotation" if raw_annotation is None else "authored_candidate",
             "authored_metadata": deepcopy(authored_metadata),
             "material_sha256": canonical_sha256(material), "prompt_sha256": canonical_sha256(prompt),
-            "candidate_sha256": canonical_sha256(candidate), "files": _files(directory),
+            "candidate_sha256": canonical_sha256(candidate),
+            "compilation": compilation_certificate(raw, compiled, mapping), "files": _files(directory),
             "preparation_status": "ready",
-            "policy": {"planned_logical_calls": 1, "automatic_repairs": 0,
-                       "sidecar_only": True, "automatic_resend_after_acceptance": False},
+            "policy": POLICY,
         })
         writer.json(directory / "manifest.json", manifest)
         return manifest
 
 
 def prepare_candidate_run(material, raw_annotation, *, run_dir, provenance,
-                          config=None, secrets=()):
+                          config=None, secrets=(), upstream_run=None):
     """Freeze a new explicitly authored/reconstructed candidate, never a fake call.
 
     Provenance remains external to the model prompt. The caller supplies audited
@@ -144,7 +143,7 @@ def prepare_candidate_run(material, raw_annotation, *, run_dir, provenance,
     """
     if not isinstance(provenance, dict) or not provenance:
         raise ValueError("Explicit candidate requires nonempty provenance")
-    directory = Path(run_dir).resolve()
+    directory = checked_run_path(run_dir)
     public = _config(config)
     writer = ArtifactWriter(tuple(secrets))
     prepared = prepare_review_material(material, raw_annotation)
@@ -156,13 +155,18 @@ def prepare_candidate_run(material, raw_annotation, *, run_dir, provenance,
     with exclusive_run(directory):
         if any(p.name != ".runner.lock" for p in directory.iterdir()):
             raise RunIdentityError("Prepare requires a new or empty review directory")
-        writer.json(directory / "inputs/annotation-material.json", material)
+        upstream_reference = None
+        if upstream_run is None:
+            write_material_parts(directory, material, writer, authored_task=True)
+        else:
+            owner = checked_run_path(upstream_run)
+            if load_prepared_material(owner) != material:
+                raise RunIdentityError("Explicit review material differs from its owner")
+            upstream_reference = make_run_reference(directory, owner)
         writer.json(directory / "inputs/provenance.json", provenance)
         writer.json(directory / "inputs/candidate.json", raw_annotation)
-        writer.json(directory / "inputs/candidate-compilation.json", {
-            "compiled": compiled, "mapping": mapping,
-            "certificate": compilation_certificate(raw, compiled, mapping)})
-        writer.json(directory / "inputs/material.json", prepared)
+        writer.json(directory / "inputs/targets.json", prepared["target_index"])
+        writer.json(directory / "inputs/observations.json", prepared["observations"])
         _text(directory / "inputs/prompt.txt", prompt, writer)
         manifest = _seal({
             "identity": IDENTITY, "schema_version": FORMAT_VERSION,
@@ -171,43 +175,51 @@ def prepare_candidate_run(material, raw_annotation, *, run_dir, provenance,
             "implementation": implementation_provenance(),
             "upstream_identity": {"material_sha256": canonical_sha256(material),
                                   "provenance_sha256": canonical_sha256(provenance)},
-            "upstream_path": None, "candidate_origin": "explicit_candidate",
+            "upstream": upstream_reference, "candidate_origin": "explicit_candidate",
+            "task_origin": "authored_fixture" if upstream_run is None else "referenced",
             "authored_metadata": deepcopy(provenance),
             "material_sha256": canonical_sha256(prepared),
             "prompt_sha256": canonical_sha256(prompt),
             "candidate_sha256": canonical_sha256(raw_annotation),
+            "compilation": compilation_certificate(raw, compiled, mapping),
             "files": _files(directory), "preparation_status": "ready",
-            "policy": {"planned_logical_calls": 1, "automatic_repairs": 0,
-                       "sidecar_only": True, "automatic_resend_after_acceptance": False},
+            "policy": POLICY,
         })
         writer.json(directory / "manifest.json", manifest)
         return manifest
 
 
-def _verify(directory, config):
+def _verify(directory, config, *, check_implementation=True):
     manifest = read_json(directory / "manifest.json")
     _unseal(manifest)
     if (manifest.get("identity") != IDENTITY or manifest.get("schema_version") != FORMAT_VERSION
-            or manifest.get("review_schema_version") != SCHEMA_VERSION):
+            or manifest.get("review_schema_version") != SCHEMA_VERSION or manifest.get("policy") != POLICY):
         raise RunIdentityError("Unsupported annotation-review run version")
-    if manifest["implementation"] != implementation_provenance():
+    if check_implementation and manifest["implementation"] != implementation_provenance():
         raise RunIdentityError("Review implementation identity changed; use a new run")
     if manifest["config"] != _config(config):
         raise RunIdentityError("Review request configuration changed")
     if manifest["files"] != _files(directory):
         raise RunIdentityError("Frozen review input inventory or bytes changed")
     if manifest["candidate_origin"] == "explicit_candidate":
-        upstream = {"material": read_json(directory / "inputs/annotation-material.json")}
+        upstream = {"material": (load_prepared_material(resolve_run_reference(directory, manifest["upstream"]))
+                                 if manifest.get("upstream") is not None else read_material_parts(directory))}
         provenance = read_json(directory / "inputs/provenance.json")
         if canonical_sha256(provenance) != manifest["upstream_identity"]["provenance_sha256"]:
             raise RunIdentityError("Explicit candidate provenance changed")
         if manifest["authored_metadata"] != provenance:
             raise RunIdentityError("Candidate authorship changed")
     else:
-        upstream = load_annotation_run(directory / "inputs/upstream")
+        try:
+            upstream = load_annotation_run(resolve_run_reference(directory, manifest["upstream"]))
+        except (OSError, ValueError) as exc:
+            raise RunIdentityError("Upstream annotation verification failed: " + str(exc)) from exc
         if upstream["upstream_identity"] != manifest["upstream_identity"]:
             raise RunIdentityError("Upstream material identity changed")
-    candidate = read_json(directory / "inputs/candidate.json")
+    candidate = (upstream["raw_annotation"] if manifest["candidate_origin"] == "accepted_annotation"
+                 else read_component(directory / "inputs/candidate.json"))
+    if manifest["candidate_origin"] == "accepted_annotation" and (directory / "inputs/candidate.json").exists():
+        raise RunIdentityError("Accepted review must not duplicate its upstream candidate")
     if canonical_sha256(candidate) != manifest["candidate_sha256"]:
         raise RunIdentityError("Candidate annotation changed")
     if manifest["candidate_origin"] == "accepted_annotation":
@@ -216,13 +228,12 @@ def _verify(directory, config):
     elif manifest["candidate_origin"] not in {"authored_candidate", "explicit_candidate"} or manifest["authored_metadata"] is None:
         raise RunIdentityError("Invalid candidate provenance")
     raw, compiled, mapping = compile_response(candidate, upstream["material"])
-    if read_json(directory / "inputs/candidate-compilation.json") != {
-            "compiled": compiled, "mapping": mapping,
-            "certificate": compilation_certificate(raw, compiled, mapping)}:
+    if manifest.get("compilation") != compilation_certificate(raw, compiled, mapping):
         raise RunIdentityError("Candidate compilation or observation mapping changed")
-    material = checked_review_material(read_json(directory / "inputs/material.json"))
-    if material != prepare_review_material(upstream["material"], candidate):
-        raise RunIdentityError("Review material differs from the frozen candidate")
+    material = prepare_review_material(upstream["material"], candidate)
+    if (canonical_sha256(read_component(directory / "inputs/targets.json")) != canonical_sha256(material["target_index"])
+            or canonical_sha256(read_component(directory / "inputs/observations.json")) != canonical_sha256(material["observations"])):
+        raise RunIdentityError("Review targets or observations differ from the frozen candidate")
     prompt = build_prompt(material)
     if (canonical_sha256(material) != manifest["material_sha256"]
             or canonical_sha256(prompt) != manifest["prompt_sha256"]
@@ -231,22 +242,15 @@ def _verify(directory, config):
     return manifest, material, prompt
 
 
+def load_prepared_review_material(run_dir):
+    """Rebuild the reviewer view from its owner, candidate and checked coordinates."""
+    directory = checked_run_path(run_dir)
+    config = read_component(directory / "manifest.json")["config"]
+    return _verify(directory, config, check_implementation=False)[1]
+
+
 def _counts(directory):
-    call = directory / CALL_PATH
-    exists = (call / "call.json").is_file()
-    counts = {"logical_calls": int(exists), "http_attempts": 0, "http_retries": 0,
-              "returned_models": [], "known_token_usage": {}, "record_integrity_errors": []}
-    if exists:
-        try:
-            trace = validated_trace(call / "transport.json")
-            metrics = call_metrics(trace)
-            counts.update({k: metrics[k] for k in ("http_attempts", "http_retries", "known_token_usage")})
-            counts["http_attempts_observed"] = bool(trace) and all(
-                t.get("http_attempts_observed") is not False for t in trace)
-            counts["returned_models"] = sorted({t["returned_model"] for t in trace if t.get("returned_model")})
-        except Exception as error:
-            counts["record_integrity_errors"].append(str(error))
-    return counts
+    return chain_counts(directory, "calls/review")
 
 
 def _base_result(manifest):
@@ -254,16 +258,35 @@ def _base_result(manifest):
             "review_schema_version": SCHEMA_VERSION, "run_id": manifest["run_id"],
             "upstream_identity": manifest["upstream_identity"],
             "material_sha256": manifest["material_sha256"],
-            "status": "interrupted", "reason": "尚未完成审查。", "error_kind": None, "failure": None,
+            "status": "interrupted", "reason": "Review has not completed.", "error_kind": None, "failure": None,
             "review": None, "summary": None, "resolved_findings": [],
-            "request_validation": None, "validation": {"status": "not_run", "errors": []},
-            "counts": {}, "notice": "旁置审查不改变原标注状态；未发现问题不等于语义正确性证明。"}
+            "request_validation": None, "response_chain": None, "accepted_call": None,
+            "validation": {"status": "not_run", "errors": []},
+            "counts": {}, "notice": "Sidecar review does not change the annotation; no reported issue is not proof of semantic correctness."}
+
+
+def result_snapshot(result):
+    """Persist review findings once; resolved target values are a computed view."""
+    return {key: deepcopy(value) for key, value in result.items() if key != "resolved_findings"}
 
 
 def run_review(run_dir, *, client=None, client_factory=None, config=None, env_file=None,
                secrets=(), stop_event=None, replay=False, progress=None):
-    """Review once; a recorded accepted or uncertain request is never resent."""
-    directory = Path(run_dir).resolve()
+    """Run or replay with strict producer implementation identity."""
+    return _run_review(run_dir, client=client, client_factory=client_factory, config=config, env_file=env_file,
+        secrets=secrets, stop_event=stop_event, replay=replay, progress=progress)
+
+
+def _run_review(run_dir, *, client=None, client_factory=None, config=None, env_file=None,
+               secrets=(), stop_event=None, replay=False, progress=None, read_only=False):
+    """Review once semantically; mechanically invalid responses are corrected.
+
+    Each correction has its own durable request. Accepted and uncertain requests
+    are read from storage, never resent, including during an interrupted chain.
+    """
+    if read_only and not replay:
+        raise ValueError("Read-only verification requires saved-response replay")
+    directory = checked_run_path(run_dir)
     if not (directory / "manifest.json").is_file():
         raise RunIdentityError("No prepared annotation-review manifest exists")
     if replay and (client is not None or client_factory is not None):
@@ -273,8 +296,8 @@ def run_review(run_dir, *, client=None, client_factory=None, config=None, env_fi
     config = read_json(directory / "manifest.json")["config"] if config is None else config
     writer = ArtifactWriter(tuple(secrets))
     stopping = stop_event or Event()
-    with exclusive_run(directory):
-        manifest, material, prompt = _verify(directory, config)
+    with (nullcontext() if read_only else exclusive_run(directory)):
+        manifest, material, prompt = _verify(directory, config, check_implementation=not read_only)
         config = manifest["config"]
         result = _base_result(manifest)
         boundary_path = directory / "execution-boundary.json"
@@ -283,57 +306,52 @@ def run_review(run_dir, *, client=None, client_factory=None, config=None, env_fi
         if (directory / "result.json").is_file():
             existing = _unseal(read_json(directory / "result.json"))
         stage = "input"
-        call_dir = directory / CALL_PATH
+        chain = None
         local_failure = replay and boundary and boundary["kind"] == "local_error"
         try:
             if local_failure:
-                # No request existed. Reproduce the saved local execution error,
-                # not an invented missing-response interruption.
+                if boundary["result_fields"].get("response_chain") is not None:
+                    paused = ResponseChain(directory, prefix="calls/review", base_prompt=prompt,
+                        request_kind="review", config=config, writer=writer,
+                        validate=lambda response: validate_response(response, material),
+                        replay=True, read_only=True, interruption=boundary["cursor"])
+                    try:
+                        paused.run()
+                    except KeyboardInterrupt:
+                        pass
+                    else:
+                        raise RunIdentityError("Local failure boundary unexpectedly completed its response chain")
+                    if paused.snapshot() != boundary["result_fields"]["response_chain"]:
+                        raise RunIdentityError("Local failure response-chain preparation changed")
                 result.update(boundary["result_fields"])
                 raise _LocalFailureReplay()
             if replay and boundary and boundary["kind"] == "interrupted":
-                if boundary.get("call_files") != _call_files(call_dir):
+                if boundary.get("call_files") != _call_files(directory / "calls/review"):
                     raise RunIdentityError("Interrupted call material changed")
-                if boundary.get("request_validation") is not None:
-                    check = verify_request_identity(call_dir, config, prompt=prompt)
-                    if check != boundary["request_validation"]:
-                        raise RunIdentityError("Interrupted request identity changed")
-                    result["request_validation"] = check
-                raise KeyboardInterrupt(boundary["reason"])
-            if stopping.is_set():
-                raise KeyboardInterrupt("用户中断；不启动新的审查调用。")
             if writer.clean(prompt) != prompt:
                 raise ValueError("A credential overlaps review prompt")
             if not replay:
                 writer.json(boundary_path, _seal({"kind": "running"}))
-            exists = (call_dir / "call.json").is_file()
-            if replay and not exists:
-                raise KeyboardInterrupt("没有已保存调用；离线重放不会创建请求。")
             stage = "call"
-            if exists:
-                selected = SavedResponseClient(call_dir, writer)
-            else:
-                factory = client_factory or (injected_factory(client) if client is not None else None)
-                if factory is None:
-                    factory, loaded_secrets = streaming_factory(config, env_file=env_file)
-                    writer = ArtifactWriter(tuple(set(secrets) | set(loaded_secrets)))
-                selected = RecordingClient(call_dir, factory, writer)
-            if progress:
-                progress("读取已有审查响应" if exists else "开始唯一一次聚焦审查")
-            if stopping.is_set():
-                raise KeyboardInterrupt("用户中断；不启动新的审查调用。")
-            response = selected.complete(prompt)
-            recovered = SavedResponseClient(call_dir, writer).complete(prompt)
-            if response != recovered:
-                raise ResponseIntegrityError("Actual and saved review responses differ")
-            result["request_validation"] = verify_request_identity(call_dir, config, prompt=prompt)
-            if stopping.is_set():
-                raise KeyboardInterrupt("用户中断；已接受响应保留，恢复时不重发。")
-            stage = "parse"
-            parsed = _json_object(recovered)
-            stage = "validate"
-            review = validate_response(parsed, material)
-            result.update(status="complete", reason="聚焦审查响应的格式、定位、引文和声明覆盖校验通过。",
+            factory = client_factory or (injected_factory(client) if client is not None else None)
+            factory_provider = None
+            if factory is None and not replay:
+                def factory_provider(call_writer):
+                    selected_factory, loaded_secrets = streaming_factory(config, env_file=env_file)
+                    call_writer.secrets = tuple(set(call_writer.secrets) | set(loaded_secrets))
+                    return selected_factory
+            def validate_candidate(response):
+                nonlocal stage
+                stage = "validate"
+                return validate_response(response, material)
+            chain = ResponseChain(directory, prefix="calls/review", base_prompt=prompt,
+                request_kind="review", config=config, writer=writer, validate=validate_candidate,
+                client_factory=factory, factory_provider=factory_provider,
+                stop_event=stopping, replay=replay, read_only=read_only,
+                progress=progress, recording_client=RecordingClient, saved_client=SavedResponseClient,
+                interruption=boundary.get("cursor") if replay and boundary and boundary["kind"] == "interrupted" else None)
+            review = chain.run()
+            result.update(status="complete", reason="Review structure, references, evidence and declared coverage passed validation.",
                           review=review.model_dump(mode="json"), summary=review_summary(review),
                           resolved_findings=resolve_findings(review, material),
                           validation={"status": "passed", "errors": []})
@@ -343,49 +361,49 @@ def run_review(run_dir, *, client=None, client_factory=None, config=None, env_fi
                           validation={"status": "passed", "errors": []})
         except RunIdentityError:
             raise
+        except ResponseChainError as error:
+            raise RunIdentityError(str(error)) from error
         except _LocalFailureReplay:
             pass
         except KeyboardInterrupt as error:
             result.update(status="interrupted", reason=writer.clean(str(error)), error_kind="interrupted")
-            if (call_dir / "transport.json").exists():
-                result["request_validation"] = verify_request_identity(call_dir, config, prompt=prompt)
         except Exception as error:
-            if (call_dir / "transport.json").is_file() and result["request_validation"] is None:
-                try:
-                    result["request_validation"] = verify_request_identity(call_dir, config, prompt=prompt)
-                except ResponseIntegrityError as identity_error:
-                    if existing or replay:
-                        raise RunIdentityError("Saved review request identity changed") from identity_error
-                    error = identity_error
+            if isinstance(error, ResponseIntegrityError) and (existing or replay):
+                raise RunIdentityError("Saved review request identity changed") from error
             typ = error.error_type if isinstance(error, SavedCallFailure) else type(error).__name__
             interrupted = typ == "KeyboardInterrupt"
             kind = ("interrupted" if interrupted else "output_truncated" if typ == "OutputTruncatedError"
                     else "incomplete_transport" if str(error).startswith("Incomplete SSE response:")
                     else "request_identity" if typ == "ResponseIntegrityError"
-                    else {"input": "input", "call": "execution", "parse": "json_format",
-                          "validate": "structure_or_evidence"}[stage])
-            result.update(status="interrupted" if interrupted else "invalid_response" if stage in {"parse", "validate"}
-                          else "input_error" if stage == "input" else "execution_error",
+                    else "input" if stage == "input" else "execution")
+            result.update(status="interrupted" if interrupted else "input_error" if stage == "input" else "execution_error",
                           error_kind=kind, reason=writer.clean(str(error)),
                           validation={"status": "failed", "errors": [writer.clean(str(error))]})
             if interrupted:
                 result["validation"] = {"status": "not_run", "errors": []}
+        if chain is not None:
+            result["response_chain"] = chain.snapshot()
+            result["accepted_call"] = chain.accepted_call
+            result["request_validation"] = chain.request_validation
         result["counts"] = writer.clean(_counts(directory))
-        if existing and (replay or existing["status"] == "complete") and existing != result:
+        if existing and (replay or existing["status"] == "complete") and canonical_sha256(existing) != canonical_sha256(result_snapshot(result)):
             raise RunIdentityError("Saved review result differs from replayed accepted response")
         if not replay:
             saved_boundary = {"kind": "interrupted" if result["status"] == "interrupted" else "finished",
-                              "reason": result["reason"], "request_validation": result["request_validation"]}
+                              "reason": result["reason"], "request_validation": result["request_validation"],
+                              "cursor": chain.cursor if chain is not None else None}
             if result["status"] == "interrupted":
-                saved_boundary["call_files"] = _call_files(call_dir)
-            if result["status"] in {"input_error", "execution_error"} and not (call_dir / "call.json").exists():
+                saved_boundary["call_files"] = _call_files(directory / "calls/review")
+            if result["status"] in {"input_error", "execution_error"} and (
+                    chain is None or not (directory / chain.cursor["call"] / "call.json").exists()):
                 saved_boundary.update(kind="local_error", result_fields={key: result[key] for key in (
-                    "status", "reason", "error_kind", "validation", "request_validation")})
+                    "status", "reason", "error_kind", "validation", "request_validation", "response_chain", "accepted_call")})
             writer.json(boundary_path, _seal(saved_boundary))
         output = directory / "replay" if replay else directory
         from skillflow.propagation.review.report import write_reports
-        write_reports(output, result, material, writer=writer)
-        writer.json(output / "result.json", _seal(result))
+        if not read_only:
+            write_reports(output, result, material, writer=writer)
+            writer.json(output / "result.json", _seal(result_snapshot(result)))
         if progress:
             progress(result["status"] + "：" + result["reason"])
         return result
@@ -393,6 +411,33 @@ def run_review(run_dir, *, client=None, client_factory=None, config=None, env_fi
 
 def replay_run(run_dir):
     return run_review(run_dir, replay=True)
+
+
+def _readonly_inventory(directory):
+    """Bind protocol records, not generated reports or derivative replay output."""
+    return {p.relative_to(directory).as_posix(): sha_file(checked_run_path(p))
+            for p in sorted(directory.rglob("*")) if p.is_file()
+            and "replay" not in p.relative_to(directory).parts
+            and p.name not in {".runner.lock", "report.html", "report.md"}}
+
+
+def load_review_run(run_dir):
+    """Read a supported review by revalidating its saved response, without writes."""
+    from skillflow.propagation.annotation.loading import _read
+    directory = checked_run_path(run_dir)
+    before = _readonly_inventory(directory)
+    manifest = _read(directory / "manifest.json")
+    saved = _unseal(_read(directory / "result.json"))
+    producer = manifest.get("implementation", {})
+    if (not producer.get("files") or canonical_sha256(producer["files"]) != producer.get("sha256")):
+        raise RunIdentityError("Saved review producer identity is invalid")
+    result = _run_review(directory, replay=True, read_only=True)
+    if canonical_sha256(result_snapshot(result)) != canonical_sha256(saved) or _readonly_inventory(directory) != before:
+        raise RunIdentityError("Saved review decision or files differ from checked response")
+    return {"manifest": manifest, "result": result,
+            "material": load_prepared_review_material(directory),
+            "upstream_identity": {"identity": IDENTITY, "schema_version": FORMAT_VERSION,
+                                  "implementation": producer, "files": before}}
 
 
 class _LocalFailureReplay(Exception):

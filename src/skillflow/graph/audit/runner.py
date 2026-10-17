@@ -1,4 +1,4 @@
-"""Version 5: contract-bound, independent full-source audits and offline replay."""
+"""Version 6: contract-bound, independent full-source audits and offline replay."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +28,7 @@ def experiment_root():
     return project_root() / "experiments/graph/audit"
 def pinned_config():
     return project_root() / "experiments/graph/baseline/deepseek-v4-flash.json"
-IDENTITY = "skill-ir-controlled-source-audit-v5"
+IDENTITY = "skill-ir-controlled-source-audit-v7"
 CASE_IDS = tuple(f"c{i:02}" for i in range(1, 6))
 SUITES = {"f01-five": CASE_IDS, "semantics-v5-seven": CASE_IDS + ("c06", "c07")}
 PAUSED_SELECTION = (
@@ -103,7 +103,6 @@ def prepare_run(directory: Path, *, executable: Path | None = None, review30: bo
         (directory / (relative + ".txt")).write_bytes(document["text"].encode("utf-8"))
         files[relative + ".txt"] = sha_file(directory / (relative + ".txt"))
 
-    save("inputs/source.json", prepared["source"])
     cases = []
     for case in prepared["cases"]:
         identifier = case["case_id"]
@@ -147,7 +146,7 @@ def prepare_run(directory: Path, *, executable: Path | None = None, review30: bo
             review_rows.append(row)
     save("verification/review30.json", {"enabled": review30, "manifest_sha256": sha_file(review_manifest), "samples": review_rows})
     manifest = {
-        "schema_version": 5, "identity": IDENTITY, "created_at": now(), "run_id": directory.name,
+        "schema_version": 7, "identity": IDENTITY, "created_at": now(), "run_id": directory.name,
         "suite": suite, **contract_binding(),
         "planned_logical_calls": len(cases), "config": public_config(),
         "implementation": implementation_provenance(), "input_provenance": prepared["provenance"],
@@ -161,16 +160,16 @@ def prepare_run(directory: Path, *, executable: Path | None = None, review30: bo
     }
     manifest["manifest_sha256"] = canonical_sha256(manifest)
     writer.json(directory / "manifest.json", manifest)
-    writer.text(directory / "README.md", "# 受控语义回述与源文核对 v5\n\n完整原文与受控文本按统一契约核对。每案例一次逻辑调用，暂态传输执行重试单独计数。\n"
-                "prepare 不联网；run 输出 report.md；replay 仅离线读取新版记录。\n")
+    writer.text(directory / "README.md", "# Controlled retelling and source review v7\n\nThe complete source and controlled text are compared under one contract. Each case has one logical call; transient transport execution retries are counted separately.\n"
+                "prepare is offline; run writes report.md; replay reads current-format records offline.\n")
     return manifest
 
 
 def verify_run(directory: Path, *, live: bool) -> dict:
     from skillflow.common.audit_execution import AUDIT_RETRY_POLICY
     manifest = read_json(directory / "manifest.json")
-    if manifest.get("schema_version") != 5 or manifest.get("identity") != IDENTITY:
-        raise ValueError("Unsupported run version; v5 does not replay or migrate historical records")
+    if manifest.get("schema_version") != 7 or manifest.get("identity") != IDENTITY:
+        raise ValueError("Unsupported run version; v7 does not replay or migrate historical records")
     unsigned = deepcopy(manifest)
     if unsigned.pop("manifest_sha256", None) != canonical_sha256(unsigned):
         raise ValueError("Prepared run manifest digest mismatch")
@@ -318,7 +317,7 @@ def execute_run(directory: Path, *, client_factory=None, secrets=(), replay=Fals
                 client = RetryingAuditClient(
                     execute=single_execution, retries=manifest["policy"]["max_audit_execution_retries"],
                     call_path=call_path, persist=persist, wait_for_retry=wait_for_retry,
-                    notify=(lambda decision: progress(f"{identifier}: 暂态传输失败，执行重试 {decision['attempt']}")) if progress else None,
+                    notify=(lambda decision: progress(f"{identifier}: Transient transport failure; execution retry {decision['attempt']}")) if progress else None,
                 )
                 parsed = audit_source_controlled(source, document, client)
                 result = {"status": "complete", "result": parsed, "fidelity_status": "passed"}
@@ -384,7 +383,7 @@ def execute_run(directory: Path, *, client_factory=None, secrets=(), replay=Fals
                           "usage": trace[-1].get("usage") if trace else None,
                           "http_attempts": len(trace[-1].get("http_attempts", [])) if trace else 0})
         logical_count = len({call["case_id"] for call in calls})
-        result = {"schema_version": 5, "identity": IDENTITY, "run_id": manifest["run_id"],
+        result = {"schema_version": 7, "identity": IDENTITY, "run_id": manifest["run_id"],
                   "suite": manifest["suite"], **contract_binding(),
                   "mode": "replay" if replay else "run", "finished_at": now(),
                   "planned_logical_calls": len(identifiers), "recorded_logical_calls": logical_count,
@@ -409,7 +408,10 @@ def execute_run(directory: Path, *, client_factory=None, secrets=(), replay=Fals
             state["state_sha256"] = canonical_sha256(state)
             writer.json(execution_state_path, state)
         writer.json(output / "report.json", result)
-        writer.text(output / "report.md", render_report(result))
+        sources = {identifier: read_json(directory / "inputs" / identifier / "source.json")
+                   for identifier in ordered}
+        writer.text(output / "report.md", render_report(result, sources=sources))
         for identifier, stage in ordered.items():
-            writer.text(output / "suggestions" / f"{identifier}.md", render_suggestions(identifier, stage))
+            writer.text(output / "suggestions" / f"{identifier}.md",
+                        render_suggestions(identifier, stage, source=sources[identifier]))
         return result

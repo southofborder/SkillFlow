@@ -1,3 +1,4 @@
+from skillflow.propagation.contracts.references import cfg_instructions
 """Sidecar review calls are bounded, recoverable and isolated from upstream facts."""
 from copy import deepcopy
 import io
@@ -29,18 +30,23 @@ def forbidden(*args, **kwargs):
 
 
 def material_from_prompt(prompt):
-    return json.loads(prompt.split(DELIMITER, 1)[1])
+    from skillflow.common.structural_correction import CORRECTION_MARKER
+    from tests.propagation.annotation.helpers import material_from_model_payload
+    from skillflow.propagation.review.material import prepare_review_material
+    value = json.JSONDecoder().raw_decode(prompt.split(CORRECTION_MARKER, 1)[0].split(DELIMITER, 1)[1])[0]
+    return prepare_review_material(material_from_model_payload(value), value['raw_annotation'])
 
 
 def response_for(material, *, finding=False):
-    response = {"outcome": "completed", "reviewed_ir_ids": list(material["instruction_index"]), "findings": []}
+    from tests.propagation.review.test_core import empty_response
+    response = empty_response(material)
     if finding:
-        target = next(t for t in material["target_index"] if t["pointer"] == "/profiles/ir_read")
+        target = next(t for t in material["target_index"] if t["pointer"] == "/ir_semantics/ir_read")
         response["findings"] = [{
-            "id": "F01", "target_ids": [target["id"]], "status": "issue",
+            "domain": "annotation",
+            "target_ids": [target["id"]],
             "explanation": "范围说明可能遗漏读取内容与回传值的区分，影响观察范围。",
-            "evidences": [{"basis": "cfg", "ref_id": material["instruction_index"]["ir_read"]["ref_id"],
-                           "quote": "read_local_config"}],
+            "evidences": [{"target": {"instruction_id": "ir_read", "path": []}, "reason": "The operation locates the read."}],
             "suggestion": "依据源文机制分别描述读取与回传范围。",
         }]
     return response
@@ -95,9 +101,14 @@ def test_single_call_resume_and_zero_api_replay_preserve_upstream(tmp_path, monk
 
 
 @pytest.mark.parametrize("kind", ["bad_json", "duplicate_key", "extra_brace", "quote", "coverage", "target"])
-def test_invalid_response_replays_failure_without_repair_or_second_call(tmp_path, monkeypatch, kind):
+def test_invalid_response_is_corrected_and_replays_without_resending(tmp_path, monkeypatch, kind):
     directory, _, _ = prepared(tmp_path)
+    attempts = 0
     def invalid(response, material):
+        nonlocal attempts
+        attempts += 1
+        if attempts > 1:
+            return response
         if kind == "bad_json":
             return "{invalid"
         if kind == "duplicate_key":
@@ -115,15 +126,17 @@ def test_invalid_response_replays_failure_without_repair_or_second_call(tmp_path
         return response
     client = ReviewClient(invalid)
     result = runner.run_review(directory, client=client)
-    assert result["status"] == "invalid_response"
-    assert result["summary"] is None and result["review"] is None
-    assert result["validation"]["status"] == "failed"
-    expected_kind = "json_format" if kind in {"bad_json", "duplicate_key", "extra_brace"} else "structure_or_evidence"
-    assert result["error_kind"] == expected_kind
+    assert result["status"] == "complete", result
+    assert result["summary"] == "no_material_issue"
+    assert result["validation"]["status"] == "passed"
+    assert result["counts"]["structural_corrections"] == (0 if kind == "extra_brace" else 1)
+    assert result["counts"]["json_normalizations"] == int(kind == "extra_brace")
     monkeypatch.setattr(runner, "streaming_factory", forbidden)
     assert runner.run_review(directory, client_factory=forbidden) == result
     assert runner.replay_run(directory) == result
-    assert len(client.prompts) == 1
+    expected_calls = 1 if kind == "extra_brace" else 2
+    assert len(client.prompts) == expected_calls
+    assert result["response_chain"]["accepted_call"] == f"calls/review/a{expected_calls:03d}"
 
 
 @pytest.mark.parametrize("stop_point", ["before", "after_acceptance", "progress"])
@@ -173,20 +186,18 @@ def test_uncertain_request_never_falls_through_to_online_factory(tmp_path, monke
 
 @pytest.mark.parametrize("target", ["candidate", "material", "prompt", "upstream", "config", "implementation", "result"])
 def test_changed_identity_refuses_without_network_or_result_overwrite(tmp_path, monkeypatch, target):
-    directory, _, _ = prepared(tmp_path)
+    directory, upstream, _ = prepared(tmp_path)
     result = runner.run_review(directory, client=ReviewClient())
     kwargs = {}
     if target == "candidate":
         (directory / "inputs/candidate.json").write_text("{}", encoding="utf-8")
     elif target == "material":
-        path = directory / "inputs/material.json"
-        material = read_json(path)
-        material["observations"] = []
-        path.write_text(json.dumps(material) + "\n", encoding="utf-8")
+        path = directory / "inputs/observations.json"
+        path.write_text("[]", encoding="utf-8")
     elif target == "prompt":
         (directory / "inputs/prompt.txt").write_text("changed", encoding="utf-8")
     elif target == "upstream":
-        (directory / "inputs/upstream/audit/raw-annotation.json").write_text("{}", encoding="utf-8")
+        (upstream / "audit/raw-annotation.json").write_text("{}", encoding="utf-8")
     elif target == "config":
         kwargs["config"] = {"model": "changed-model"}
     elif target == "implementation":
@@ -194,7 +205,7 @@ def test_changed_identity_refuses_without_network_or_result_overwrite(tmp_path, 
     elif target == "result":
         changed = deepcopy(result)
         changed["summary"] = "issues_found"
-        (directory / "result.json").write_text(json.dumps(runner._seal(changed)), encoding="utf-8")
+        (directory / "result.json").write_text(json.dumps(runner._seal(runner.result_snapshot(changed))), encoding="utf-8")
     before = (directory / "result.json").read_bytes()
     monkeypatch.setattr(runner, "streaming_factory", forbidden)
     with pytest.raises(runner.RunIdentityError):
@@ -202,13 +213,13 @@ def test_changed_identity_refuses_without_network_or_result_overwrite(tmp_path, 
     assert (directory / "result.json").read_bytes() == before
 
 
-def test_frozen_upstream_survives_changes_to_original_run(tmp_path, monkeypatch):
+def test_referenced_upstream_requires_unchanged_original_run(tmp_path, monkeypatch):
     directory, upstream, _ = prepared(tmp_path)
     (upstream / "result.json").write_text("changed after freeze", encoding="utf-8")
-    result = runner.run_review(directory, client=ReviewClient())
-    assert result["status"] == "complete"
     monkeypatch.setattr(runner, "streaming_factory", forbidden)
-    assert runner.replay_run(directory) == result
+    with pytest.raises(ValueError):
+        runner.run_review(directory, client_factory=forbidden)
+    assert not (directory / "inputs/upstream").exists()
 
 
 def test_freezing_preserves_skill_files_named_like_generated_reports(tmp_path):
@@ -221,7 +232,8 @@ def test_freezing_preserves_skill_files_named_like_generated_reports(tmp_path):
     analysis = tmp_path / "analysis.json"
     analysis.write_text(json.dumps({"cfg": graph()}), encoding="utf-8")
     upstream = tmp_path / "annotation"
-    assert annotation_runner.prepare_run(source, analysis, run_dir=upstream)["preparation_status"] == "ready"
+    from tests.propagation.annotation.helpers import authored_prepare_run
+    assert authored_prepare_run(source, analysis, run_dir=upstream)["preparation_status"] == "ready"
     assert annotation_runner.run_annotation(upstream, client=FakeClient())["status"] == "complete"
     directory = tmp_path / "review"
     runner.prepare_run(upstream, run_dir=directory)
@@ -233,7 +245,7 @@ def test_freezing_preserves_skill_files_named_like_generated_reports(tmp_path):
 
 def test_authored_metadata_and_upstream_opinions_never_enter_prompt(tmp_path):
     def edit(raw):
-        raw["profiles"]["ir_read"]["evidences"][0]["reason"] = "根据当前获取动作描述进行判断。"
+        raw["ir_semantics"]["ir_read"]["operator_evidences"][0]["reason"] = "根据当前获取动作描述进行判断。"
         return raw
     directory, upstream, manifest = prepared(
         tmp_path, raw_edit=edit,
@@ -248,7 +260,8 @@ def test_authored_metadata_and_upstream_opinions_never_enter_prompt(tmp_path):
     accepted = read_json(upstream / "audit/raw-annotation.json")
     candidate = read_json(directory / "inputs/candidate.json")
     assert accepted != candidate
-    assert read_json(directory / "inputs/upstream/audit/raw-annotation.json") == accepted
+    assert not (directory / "inputs/upstream").exists()
+    assert read_json(upstream / "audit/raw-annotation.json") == accepted
     assert material_from_prompt(prompt)["raw_annotation"] == candidate
 
 
@@ -299,7 +312,7 @@ def run_http(tmp_path, monkeypatch, kind="valid"):
         if kind == "unsupported":
             raise urllib.error.HTTPError(req.full_url, 400, "unsupported", {}, io.BytesIO(b"response_format unsupported"))
         response = response_for(material_from_prompt(payload["messages"][0]["content"]))
-        content = json.dumps(response) + ("}" if kind == "extra_brace" else "")
+        content = json.dumps(response) + ("}" if kind == "extra_brace" and len(sent) == 1 else "")
         return Response({"model": "offline-review-returned", "choices": [{
             "finish_reason": "length" if kind == "truncated" else "stop", "message": {"content": content}}]})
     monkeypatch.setattr("urllib.request.urlopen", request)
@@ -310,19 +323,21 @@ def run_http(tmp_path, monkeypatch, kind="valid"):
 
 
 @pytest.mark.parametrize("kind,status,error_kind", [
-    ("valid", "complete", None), ("extra_brace", "invalid_response", "json_format"),
+    ("valid", "complete", None), ("extra_brace", "complete", None),
     ("truncated", "execution_error", "output_truncated"), ("unsupported", "execution_error", "execution"),
 ])
 def test_json_output_actual_request_and_failure_replay(tmp_path, monkeypatch, kind, status, error_kind):
     directory, result, sent = run_http(tmp_path, monkeypatch, kind)
     assert result["status"] == status, result["reason"]
     assert result["error_kind"] == error_kind
-    assert len(sent) == 1
+    expected_calls = 1
+    assert result["counts"]["json_normalizations"] == int(kind == "extra_brace")
+    assert len(sent) == expected_calls
     assert sent[0]["response_format"] == {"type": "json_object"}
     assert result["request_validation"]["observed"] is True
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
     assert runner.replay_run(directory) == result
-    assert len(sent) == 1
+    assert len(sent) == expected_calls
 
 
 @pytest.mark.parametrize("change", ["missing_parameter", "altered_hash", "saved_validation"])
@@ -330,7 +345,7 @@ def test_http_request_identity_cannot_be_resealed_to_bypass_replay(tmp_path, mon
     directory, result, _ = run_http(tmp_path, monkeypatch)
     if change == "saved_validation":
         result["request_validation"]["observed"] = False
-        (directory / "result.json").write_text(json.dumps(runner._seal(result)), encoding="utf-8")
+        (directory / "result.json").write_text(json.dumps(runner._seal(runner.result_snapshot(result))), encoding="utf-8")
     else:
         path = directory / runner.CALL_PATH / "transport.json"
         trace = read_json(path)
@@ -353,19 +368,19 @@ def test_report_escapes_html_and_preserves_finding_order(tmp_path):
     directory, _, _ = prepared(tmp_path)
     def findings(response, material):
         first = response_for(material, finding=True)["findings"][0]
-        first["id"] = "finding_z"
         first["explanation"] = '<script>alert("x")</script> & 原始值'
         second = deepcopy(first)
-        second.update(id="finding_a", status="issue", suggestion="保留已知顺序。", explanation="已知顺序被颠倒。")
-        return {"outcome": "completed", "reviewed_ir_ids": response["reviewed_ir_ids"], "findings": [first, second]}
+        second.update(suggestion="保留已知顺序。", explanation="已知顺序被颠倒。")
+        return {**response, "findings": [first, second]}
     result = runner.run_review(directory, client=ReviewClient(findings))
-    material = read_json(directory / "inputs/material.json")
+    assert result["status"] == "complete"
+    material = runner.load_prepared_review_material(directory)
     model = display_model(result, material)
     html, markdown = render_html(model), render_markdown(model)
     assert "<script>" not in html and "&lt;script&gt;" in html
-    assert html.index("finding_z") < html.index("finding_a")
-    assert markdown.index("finding_z") < markdown.index("finding_a")
-    assert "<b>有明确问题</b>" in html
+    assert html.index("F001") < html.index("F002")
+    assert markdown.index("F001") < markdown.index("F002")
+    assert "<b>Material issues found</b>" in html
 
 
 def test_offline_replay_rejects_client_injection(tmp_path):

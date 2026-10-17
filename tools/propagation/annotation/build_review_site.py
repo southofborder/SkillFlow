@@ -23,6 +23,7 @@ from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.contracts.profiles import AnnotationPayload
 from skillflow.propagation.contracts.profiles import AnnotationResponse
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
+from tools.propagation.annotation.export_full_pipeline import EXPORT_IDENTITY, EXPORT_FORMAT_VERSION
 
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -117,8 +118,8 @@ def build_review_site(data_path: Path, output_path: Path, *, assets_root: Path |
     data_path, output_path = Path(data_path).resolve(), Path(output_path).resolve()
     root = Path(assets_root).resolve() if assets_root is not None else data_path.parent
     payload = json.loads(data_path.read_text(encoding="utf-8"))
-    if (payload.get("schema_version") != 5 or payload.get("profile_schema_version") != SCHEMA_VERSION
-            or payload.get("identity") != "skill-ir-full-pipeline-delivery-v5"
+    if (payload.get("schema_version") != EXPORT_FORMAT_VERSION or payload.get("profile_schema_version") != SCHEMA_VERSION
+            or payload.get("identity") != EXPORT_IDENTITY
             or not isinstance(payload.get("cases"), list)):
         raise ValueError("Unsupported review export version")
     material = deepcopy(payload)
@@ -133,8 +134,11 @@ def build_review_site(data_path: Path, output_path: Path, *, assets_root: Path |
         # Validate the actual embedded contract too: a new manifest cannot turn
         # old actor profiles into operator profiles. Full quote verification is
         # performed by the exporter; this page never reinterprets old records.
-        business = {key: case[key] for key in ("profiles", "locations", "transfer_specs", "sink_boundaries")}
-        AnnotationPayload.model_validate(business)
+        business = {key: case[key] for key in ("ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")}
+        if case.get("annotation_status") == "complete":
+            AnnotationPayload.model_validate(business)
+        elif any(business.values()):
+            raise ValueError("Failed annotation cannot carry a successful business payload")
         evidence_audit = case.get("annotation_audit")
         if evidence_audit is not None:
             audit_path = _contained_file(root, evidence_audit["file"])

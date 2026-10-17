@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import runpy
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 from skillflow.common.artifacts import ArtifactWriter
@@ -25,32 +26,37 @@ def test_pilot_does_not_publish_uncommitted_main_file(tmp_path, monkeypatch):
     tool, writer = load_tool('run_pilot'), ArtifactWriter(())
     monkeypatch.setattr(tool, 'PINS', {'001': ('N01', '', '')})
     base = tmp_path / 'cases/001/propagation'
-    writer.json(base / 'doe-input.json', {'status': 'complete'})
+    writer.json(base / 'data.json', {'status': 'complete'})
     writer.text(base / 'report.html', '<p>not committed</p>')
     summary = tool.summarize(tmp_path, writer)
     row = summary['cases'][0]
     assert row['propagation'] == 'uncommitted' and not row['propagation_committed']
-    assert 'propagation/doe-input.json' not in (tmp_path / 'report.md').read_text(encoding='utf-8')
+    assert 'propagation/data.json' not in (tmp_path / 'report.md').read_text(encoding='utf-8')
     assert 'propagation/report.html' not in (tmp_path / 'index.html').read_text(encoding='utf-8')
 
 
 def test_pilot_validates_committed_main_file_and_links_it(tmp_path, monkeypatch):
     tool = load_tool('run_pilot')
     monkeypatch.setattr(tool, 'PINS', {'001': ('N01', '', '')})
-    demo = runpy.run_path(str(project_root() / 'examples/propagation/propagation_demo.py'))
     base = tmp_path / 'cases/001/propagation'
-    demo['save_demo'](base)
-    summary = tool.summarize(tmp_path, ArtifactWriter(()))
+    writer = ArtifactWriter(())
+    writer.json(base / 'manifest.json', {'committed': True})
+    writer.json(base / 'data.json', [])
+    writer.json(base / 'records.json', {})
+    writer.json(base / 'sinks.json', [])
+    monkeypatch.setattr(tool, 'load_propagation_materials', lambda *a: SimpleNamespace(status='complete', diagnostics=[]))
+    summary = tool.summarize(tmp_path, writer)
     row = summary['cases'][0]
     assert row['propagation'] == 'complete' and row['propagation_committed']
-    assert 'propagation/doe-input.json' in (tmp_path / 'report.md').read_text(encoding='utf-8')
-    value = read_json(base / 'doe-input.json')
-    value['status'] = 'incomplete'
-    ArtifactWriter(()).json(base / 'doe-input.json', value)
-    summary = tool.summarize(tmp_path, ArtifactWriter(()))
+    assert 'propagation/data.json' in (tmp_path / 'report.md').read_text(encoding='utf-8')
+    def reject(*args):
+        raise ValueError('component identity mismatch')
+    monkeypatch.setattr(tool, 'load_propagation_materials', reject)
+    summary = tool.summarize(tmp_path, writer)
     assert summary['cases'][0]['propagation'] == 'execution_error'
     assert not summary['cases'][0]['propagation_committed']
-    assert 'propagation/doe-input.json' not in (tmp_path / 'report.md').read_text(encoding='utf-8')
+    assert 'propagation/data.json' not in (tmp_path / 'report.md').read_text(encoding='utf-8')
+
 
 
 def test_pilot_replay_missing_manifest_never_starts_new_propagation(tmp_path, monkeypatch):
@@ -62,16 +68,18 @@ def test_pilot_replay_missing_manifest_never_starts_new_propagation(tmp_path, mo
     monkeypatch.setattr(tool, 'run_propagation', lambda *a, **kw: pytest.fail('replay started a new solve'))
     with pytest.raises(ValueError, match='no committed manifest'):
         tool.run_case(tmp_path, case, config={}, renderer=None, factory=None, secrets=(), stopping=Event(), replay=True)
-    assert not (tmp_path / 'cases/001/propagation/doe-input.json').exists()
+    assert not (tmp_path / 'cases/001/propagation/data.json').exists()
 
 
 def test_render_demo_delegates_to_shared_save(tmp_path):
     tool = load_tool('render_demo')
     result = tool.generate(tmp_path / 'demo')
-    assert result['schema_version'] == 'skillflow-doe-input-v7'
-    assert read_json(tmp_path / 'demo/doe-input.json') == result
-    assert read_json(tmp_path / 'demo/audit/provenance.json')['kind'] == 'hand_authored_specification'
-    assert not (tmp_path / 'demo/result.json').exists()
+    assert result.status == 'complete'
+    assert read_json(tmp_path / 'demo/data.json') == result.data
+    assert read_json(tmp_path / 'demo/records.json') == result.records
+    assert 'not a committed propagation run' in (tmp_path / 'demo/NOTICE.txt').read_text(encoding='utf-8')
+    assert not (tmp_path / 'demo/manifest.json').exists()
+    assert not (tmp_path / 'demo/doe-input.json').exists()
     with pytest.raises(ValueError, match='new or empty'):
         tool.generate(tmp_path / 'demo')
 
@@ -80,8 +88,8 @@ def verification_fixture(directory, *, status='invalid_response'):
     writer = ArtifactWriter(())
     writer.json(directory / 'verification/protected-before.json', {})
     writer.json(directory / 'manifest.json', {
-        'schema_version': 4, 'identity': 'skill-ir-source-boundaries-pilot3-v4',
-        'cases': [{'case_id': '001'}], 'policy': {'planned_logical_calls': 63},
+        'schema_version': load_tool('run_pilot').FORMAT_VERSION, 'identity': load_tool('run_pilot').IDENTITY,
+        'cases': [{'case_id': '001'}], 'policy': load_tool('run_pilot').POLICY,
     })
     result = {'status': status, 'reason': '非法标注证据，保持原始失败', 'counts': {'logical_calls': 1}}
     for path in ('annotation/result.json', 'annotation/replay/result.json'):
@@ -109,7 +117,7 @@ def stage_row(result, name):
 def test_verifier_accepts_preserved_annotation_failure_without_doe_or_visuals(tmp_path, monkeypatch, status):
     verification_fixture(tmp_path, status=status)
     tool = load_tool('verify_pilot')
-    monkeypatch.setattr(tool, 'load_propagation_run', lambda *a: pytest.fail('failed annotation has no propagation to load'))
+    monkeypatch.setattr(tool, 'load_propagation_materials', lambda *a: pytest.fail('failed annotation has no propagation to load'))
     result = tool.verify(tmp_path)
     assert result['passed'] and result['call_budget_ok']
     assert stage_row(result, 'annotation')['status'] == status
@@ -152,7 +160,7 @@ def test_verifier_usable_annotation_without_committed_doe_does_not_pass(tmp_path
 
 def test_verifier_rejects_partial_doe_and_preserves_visual_failure(tmp_path):
     writer = verification_fixture(tmp_path)
-    writer.json(tmp_path / 'cases/001/propagation/doe-input.json', {'status': 'complete'})
+    writer.json(tmp_path / 'cases/001/propagation/data.json', {'status': 'complete'})
     writer.json(tmp_path / 'offline-demo/visual-review/checks.json', {'status': 'failed', 'reason': '文本溢出'})
     result = load_tool('verify_pilot').verify(tmp_path)
     assert not result['passed']
@@ -184,6 +192,24 @@ def test_verifier_requires_network_guard_and_distinct_call_budgets(tmp_path):
     assert not load_tool('verify_pilot').verify(tmp_path)['call_budget_ok']
 
 
+def test_verifier_allows_unlimited_annotation_corrections_but_keeps_graph_limits(tmp_path):
+    writer = verification_fixture(tmp_path)
+    summary = read_json(tmp_path / 'summary.json')
+    counts = summary['cases'][0]['call_counts']
+    counts.update(annotation_logical_calls=37, total_logical_calls=39, total_execution_calls=39)
+    summary.update(logical_calls=39)
+    summary['cases'][0]['logical_calls'] = 39
+    for path in ('result.json', 'replay/result.json'):
+        record = read_json(tmp_path / 'cases/001' / path)
+        record['counts'] = counts
+        writer.json(tmp_path / 'cases/001' / path, record)
+    writer.json(tmp_path / 'summary.json', summary)
+    assert load_tool('verify_pilot').verify(tmp_path)['call_budget_ok']
+    counts['extraction_logical_calls'] = 17
+    writer.json(tmp_path / 'summary.json', summary)
+    assert not load_tool('verify_pilot').verify(tmp_path)['call_budget_ok']
+
+
 def test_case_uses_new_snapshot_and_continues_diagnostic_graph(tmp_path, monkeypatch):
     tool = load_tool('run_pilot')
     case = {'case_id': '010', 'sample_id': 'Q04', 'source_inventory': {},
@@ -195,7 +221,7 @@ def test_case_uses_new_snapshot_and_continues_diagnostic_graph(tmp_path, monkeyp
         assert item['package_path'] == str(tmp_path / 'cases/010/source/inputs/package')
         return {'feedback': {'status': 'semantic_failure'}, 'annotation': {'status': 'complete'}}
     monkeypatch.setattr(tool._shared, '_case', shared)
-    monkeypatch.setattr(tool, 'run_propagation', lambda ann, **kw: seen.append((ann, kw)) or {'status': 'complete'})
+    monkeypatch.setattr(tool, 'run_propagation', lambda ann, **kw: seen.append((ann, kw)) or SimpleNamespace(status='complete'))
     tool.run_case(tmp_path, case, config={}, renderer=None, factory=object(), secrets=(), stopping=Event())
     assert len(seen) == 2 and seen[1][0] == tmp_path / 'cases/010/annotation'
 
@@ -229,6 +255,7 @@ def test_prepare_freezes_sources_without_model_or_old_cfg(tmp_path, monkeypatch)
     manifest = {'schema_version': tool.FORMAT_VERSION, 'identity': tool.IDENTITY, 'cases': [case],
                 'renderer': {'path': 'printer'}, 'config': {}, 'policy': tool.POLICY}
     monkeypatch.setattr(tool, 'expected_manifest', lambda *a: manifest)
+    monkeypatch.setattr(tool, 'bind_task_runs', lambda *a: {'001': {'path':'explicit-authored-task','manifest_sha256':'a'*64}})
     monkeypatch.setattr(tool, 'streaming_factory', lambda *a, **kw: pytest.fail('prepare created online client'))
     monkeypatch.setattr(tool._shared, '_case', lambda *a, **kw: pytest.fail('prepare ran feedback'))
     directory = tmp_path / 'new-run'

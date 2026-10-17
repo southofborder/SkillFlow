@@ -1,3 +1,4 @@
+from tests.propagation.annotation.helpers import effects_of
 """Explicit calculable order and observation causality; no semantic oracle."""
 from copy import deepcopy
 import pytest
@@ -5,7 +6,7 @@ import pytest
 from skillflow.propagation.data import DataRegistry
 from skillflow.propagation import propagate
 from skillflow.propagation.interpreter import TransferInterpreter
-from skillflow.propagation.contracts.specs import IRTransferSpec
+from skillflow.propagation.contracts.specs import IRSemantics
 from skillflow.propagation.contracts.specs import precedence_closure
 from skillflow.propagation.contracts.specs import schedule_dependencies
 from skillflow.propagation.annotation.services import compile_response
@@ -13,38 +14,38 @@ from skillflow.propagation.annotation.services import validate_raw_response
 from skillflow.propagation.annotation.services import validate_compiled_response
 from skillflow.propagation.annotation.services import to_payload
 from skillflow.common.semantic_failure import SemanticFailure
-from tests.propagation.annotation.helpers import material, valid_raw_response, profile
+from tests.propagation.annotation.helpers import material, valid_raw_response, semantics
 
 
 def candidate():
     prepared = material()
     raw = valid_raw_response(prepared)
-    raw['transfer_specs']['ir_filter']['events'][0]['mode'] = 'default'
+    raw['ir_semantics']['ir_filter']['events'][0]['mode'] = 'default'
     return prepared, raw
 
 
 def test_partial_observation_causality_is_explicit_and_survives_propagation():
     prepared, raw = candidate()
-    for spec in raw['transfer_specs'].values():
+    for spec in raw['ir_semantics'].values():
         spec['order'] = 'partial'
-    raw['transfer_specs']['ir_read']['events'][0]['mode'] = 'default'
+    raw['ir_semantics']['ir_read']['events'][0]['mode'] = 'default'
     checked, compiled, mapping = compile_response(raw, prepared)
-    assert mapping['compiler_version'].endswith('-v4')
+    assert mapping['compiler_version'].endswith('-v8')
     for ir, before, after in [('ir_read', (0,None,0), (1,None,0)),
                               ('ir_filter', (0,None,0), (1,None,0))]:
-        spec = IRTransferSpec.model_validate(compiled['transfer_specs'][ir])
+        spec = IRSemantics.model_validate(compiled['ir_semantics'][ir])
         assert after in precedence_closure(spec)[before]
         assert spec.precedence
     result = propagate(prepared['cfg'], to_payload(compiled))
     assert result.status == 'complete', result.diagnostics
     assert result.records.get('ir_filter').order == 'partial'
-    assert result.records.get('ir_filter').precedence == IRTransferSpec.model_validate(compiled['transfer_specs']['ir_filter']).precedence
+    assert result.records.get('ir_filter').precedence == IRSemantics.model_validate(compiled['ir_semantics']['ir_filter']).precedence
     assert not result.diagnostics
 
 
 def test_local_returns_after_every_operation_without_original_observation():
     prepared, raw = candidate()
-    spec = raw['transfer_specs']['ir_filter']
+    spec = raw['ir_semantics']['ir_filter']
     spec['order'] = 'partial'
     segment = spec['events'][0]
     segment['mode'] = 'local'
@@ -54,16 +55,16 @@ def test_local_returns_after_every_operation_without_original_observation():
     second.update(inputs=[{'kind':'literal','value':1}], output='irrelevant')
     segment['events'][0]['atomic_ops'].append(second)
     _, compiled, _ = compile_response(raw, prepared)
-    spec = IRTransferSpec.model_validate(compiled['transfer_specs']['ir_filter'])
+    spec = IRSemantics.model_validate(compiled['ir_semantics']['ir_filter'])
     closure = precedence_closure(spec)
     assert (1,None,0) in closure[(0,None,1)]
-    assert compiled['profiles']['ir_filter']['effects'] == ['transform','model_observe']
+    assert effects_of(compiled['ir_semantics']['ir_filter']) == ['transform','model_observe']
     assert spec.events[1].atomic_ops[0].inputs[0].name == 'stage_0'
 
 
 def test_partial_segments_interleave_at_primitive_operations():
     prepared, raw = candidate()
-    spec = raw['transfer_specs']['ir_filter']
+    spec = raw['ir_semantics']['ir_filter']
     spec['order'] = 'partial'
     segment = spec['events'][0]
     segment['mode'] = 'local'
@@ -73,14 +74,12 @@ def test_partial_segments_interleave_at_primitive_operations():
     second = deepcopy(first); second['output'] = 'a2'
     segment['events'][0]['atomic_ops'].append(second)
     other = deepcopy(segment)
-    other['events'][0]['effect_index'] = 1
     other['events'][0]['atomic_ops'] = [deepcopy(first)]
     other['events'][0]['atomic_ops'][0]['output'] = 'b'
     spec['events'].append(other)
     spec['output_bindings'][0]['value'] = {'kind':'local','name':'a2'}
-    raw['profiles']['ir_filter'] = profile(prepared,'ir_filter', operator=['agent_runtime'], roles=['transformer'], effects=['transform','transform'])
     _, compiled, _ = compile_response(raw, prepared)
-    typed = IRTransferSpec.model_validate(compiled['transfer_specs']['ir_filter'])
+    typed = IRSemantics.model_validate(compiled['ir_semantics']['ir_filter'])
     deps = schedule_dependencies(typed)
     assert deps[(0,1)] == {(0,0)} and not deps[(1,0)]
     interpreter = TransferInterpreter(prepared['cfg'],to_payload(compiled),DataRegistry('interleaving'))
@@ -102,7 +101,7 @@ def test_partial_segments_interleave_at_primitive_operations():
 def test_compiled_precedence_rejects_illegal_coordinates(mutation):
     prepared, raw = candidate()
     _, compiled, _ = compile_response(raw,prepared)
-    spec = compiled['transfer_specs']['ir_filter']
+    spec = compiled['ir_semantics']['ir_filter']
     edge = spec['precedence'][0]
     if mutation=='duplicate': spec['precedence'].append(deepcopy(edge))
     if mutation=='nonexistent': edge['after']['op_index']=99
@@ -115,21 +114,21 @@ def test_compiled_precedence_rejects_illegal_coordinates(mutation):
 @pytest.mark.parametrize('field',['order','outcome'])
 def test_required_order_and_outcome_cannot_be_omitted(field):
     prepared, raw = candidate()
-    if field=='order': raw['transfer_specs']['ir_filter'].pop('order')
+    if field=='order': raw['ir_semantics']['ir_filter'].pop('order')
     else: raw.pop('outcome')
     with pytest.raises(ValueError): validate_raw_response(raw,prepared)
 
 
 def test_semantic_failure_is_separate_validated_and_never_completed():
     prepared, raw = candidate()
-    evidence = raw['transfer_specs']['ir_filter']['events'][0]['evidences']
+    evidence = raw['ir_semantics']['ir_filter']['events'][0]['evidences']
     failure = {'outcome':'cannot_assess','failure':{'reason':'必要关系超出当前可表达边界。','instruction_ids':['ir_filter'],'evidences':evidence}}
     with pytest.raises(SemanticFailure): validate_raw_response(failure,prepared)
     for change in ['quote','id','normal_fields']:
         altered=deepcopy(failure)
         if change=='quote': altered['failure']['evidences'][0]['quote']='fabricated'
         if change=='id': altered['failure']['instruction_ids']=['absent']
-        if change=='normal_fields': altered['profiles']={}
+        if change=='normal_fields': altered['ir_semantics']={}
         with pytest.raises(ValueError): validate_raw_response(altered,prepared)
 
 

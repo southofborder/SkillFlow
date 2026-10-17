@@ -1,12 +1,11 @@
 """Single-call source/controlled-text review and strict offline response parsing.
 
-Evidence positions and explicit unit coverage are checked deterministically.
+Evidence positions, nonempty source lines and controlled facts are checked deterministically.
 Semantic judgments remain model proposals, not program-established entailments.
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import re
 from typing import Any, Protocol
@@ -15,16 +14,14 @@ from skillflow.graph.semantic_contract import contract_binding
 from skillflow.common.semantic_failure import SemanticFailure
 from skillflow.common.source_evidence import _checked_source
 from skillflow.common.source_evidence import _digest
-from skillflow.common.source_evidence import _exact
 from skillflow.common.source_evidence import _fail
 from skillflow.common.source_evidence import _json_object
 from skillflow.common.source_evidence import _unique
-from skillflow.common.source_evidence import _validate_source_ref
+from skillflow.common.source_evidence import nonempty_source_lines, validate_source_ref
 
 from skillflow.graph.audit.models import AuditResult
 from skillflow.graph.audit.models import CannotAssessAudit
 from skillflow.graph.audit.prompts import source_controlled_prompt
-from skillflow.graph.audit.prompts import source_units
 
 
 class CompletionClient(Protocol):
@@ -161,37 +158,32 @@ def _checked_conservative(
 def validate_audit(raw: Any, source: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
     source = _checked_source(source)
     document = _checked_document(document)
-    paragraphs = {unit["id"]: unit for unit in source_units(source)}
+    files = {entry["path"]: entry["content"] for entry in source["files"]}
     units = {unit["id"]: unit for unit in document["units"]}
     payload = _json_object(raw)
     if payload.get("outcome") == "cannot_assess":
         failure = CannotAssessAudit.model_validate(payload).model_dump(mode="json")["failure"]
         for ref in failure["source_refs"]:
-            _validate_source_ref(ref, paragraphs)
+            validate_source_ref(ref, files)
         for ref in failure["controlled_refs"]:
             if ref["unit_id"] not in units:
                 _fail(f"controlled unit does not exist: {ref['unit_id']}")
-            if ref["quote"] is not None and ref["quote"] not in units[ref["unit_id"]]["text"]:
-                _fail(f"controlled quote does not match unit: {ref['unit_id']}")
         failure["graph_refs"] = _mapped_graph_refs([ref["unit_id"] for ref in failure["controlled_refs"]], units)
         raise SemanticFailure(failure)
     parsed = AuditResult.model_validate(payload).model_dump(mode="json")
     result_identities = _result_identities(document["derived_links"])
-    _exact(parsed["reviewed_source_unit_ids"], set(paragraphs), "reviewed_source_unit_ids")
-    _exact(parsed["reviewed_controlled_unit_ids"], set(units), "reviewed_controlled_unit_ids")
     _unique([finding["id"] for finding in parsed["findings"]], "finding ids")
-    seen_source: set[str] = set()
+    seen_source: set[tuple[str, int]] = set()
     seen_controlled: set[str] = set()
     for finding in parsed["findings"]:
         for ref in finding["source_refs"]:
-            _validate_source_ref(ref, paragraphs)
-            seen_source.add(ref["unit_id"])
+            span = validate_source_ref(ref, files)
+            seen_source.update((span.file, number)
+                               for number in range(span.start_line, span.end_line + 1))
         for ref in finding["controlled_refs"]:
             unit_id = ref["unit_id"]
             if unit_id not in units:
                 _fail(f"controlled unit does not exist: {unit_id}")
-            if ref["quote"] is not None and ref["quote"] not in units[unit_id]["text"]:
-                _fail(f"controlled quote does not match unit: {unit_id}")
             seen_controlled.add(unit_id)
         finding["graph_refs"] = _mapped_graph_refs(
             [ref["unit_id"] for ref in finding["controlled_refs"]], units)
@@ -199,11 +191,11 @@ def validate_audit(raw: Any, source: dict[str, Any], document: dict[str, Any]) -
         for suggestion in finding["suggestions"]:
             _unique(suggestion["target_ids"], "suggestion target_ids")
             suggestion["graph_refs"] = _mapped_graph_refs(suggestion["target_ids"], units)
-    if seen_source != set(paragraphs):
-        _fail(f"findings do not cover source units: {sorted(set(paragraphs) - seen_source)}")
+    missing = nonempty_source_lines(files) - seen_source
+    if missing:
+        _fail(f"findings do not cover nonempty source lines: {sorted(missing)}")
     if seen_controlled != set(units):
         _fail(f"findings do not cover controlled units: {sorted(set(units) - seen_controlled)}")
-    parsed["source_units"] = deepcopy(list(paragraphs.values()))
     parsed["graph_sha256"] = document["graph_sha256"]
     parsed.update(contract_binding())
     parsed["representation_summary"] = {
@@ -212,9 +204,9 @@ def validate_audit(raw: Any, source: dict[str, Any], document: dict[str, Any]) -
         "conservative_ids": [f["id"] for f in parsed["findings"] if f["conservative"] is not None],
     }
     parsed["coverage_notice"] = (
-        "定位、引文与单元覆盖已检查；这不是语义等价或语义完整性的证明。"
-        "保守候选的依据及语义覆盖仍属于模型判断，不是程序证明。"
-        "未填写保守说明不代表精确保留。")
+        "Source spans, nonempty physical-line coverage and controlled-fact ID coverage were checked; this is not proof of semantic equivalence or completeness. "
+        "Grounding of conservative candidates and semantic coverage remain model judgments, not program proofs. "
+        "Absence of a conservative explanation does not imply exact preservation.")
     return parsed
 
 

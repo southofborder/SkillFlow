@@ -17,10 +17,12 @@ from skillflow.propagation.models import ForEachRecord
 from skillflow.propagation.records import PropagationRecords
 from skillflow.propagation.solver import propagate
 from skillflow.propagation.material import checked_cfg
+from tests.propagation.annotation.helpers import prepare_material
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
+from tests.propagation.annotation.helpers import source_bundle, with_task_semantics
 
 
-EVIDENCE = {"basis": "cfg", "ref_id": "G.fixture", "quote": "fixture", "reason": "人工构造的离线结构测试。"}
+EVIDENCE = {"target": {"path": []}, "reason": "人工构造的离线结构测试。"}
 
 
 def local(name):
@@ -35,13 +37,10 @@ def operation(op, **kwargs):
     return {"op": op, **kwargs, "evidences": [deepcopy(EVIDENCE)]}
 
 
-def profile(effects):
-    result = {"operator": ["agent_runtime"], "roles": [], "effects": effects, "evidences": []}
-    for field in ("operator", "roles", "effects"):
-        for index, value in enumerate(result[field] or [None]):
-            result["evidences"].append({**EVIDENCE, "field": field, "value": value,
-                                       "effect_index": index if field == "effects" and value else None})
-    return result
+def semantics_fields(effects):
+    return {"operator": ["agent_runtime"],
+            "operator_evidences": [{**EVIDENCE, "value": "agent_runtime"}],
+            **({} if effects else {"empty_effect_evidences": [deepcopy(EVIDENCE)]}), "sensitivity": []}
 
 
 def fixture(*, filtered=False, uncertain=False, body=None, effects=None):
@@ -56,33 +55,36 @@ def fixture(*, filtered=False, uncertain=False, body=None, effects=None):
         "edges": [{"source_block_id": "source", "target_block_id": "main"}]})
     offset = int(filtered)
     if body is None:
-        body = [{"effect_index": offset, "atomic_ops": [
+        body = [{"effect": "transform", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [
                     operation("select_part", input=local("item"), path=["recipient"], output="recipient"),
                     operation("select_part", input=local("item"), path=["payload"], output="payload")]},
-                {"effect_index": offset + 1, "atomic_ops": [
+                {"effect": "net_send", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [
                     operation("deliver", inputs=[local("recipient"), local("payload"), local("recipient")], target="service")]}]
     processing_effects = (["transform"] if filtered else []) + (effects or ["transform", "net_send"])
-    events = ([{"effect_index": 0, "atomic_ops": [operation("filter_items", input=input_ref(), predicate="keep == true", output="selected")]}]
+    events = ([{"effect": "transform", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [operation("filter_items", input=input_ref(), predicate="keep == true", output="selected")]}]
               if filtered else [])
     events.append({"kind": "for_each", "collection": local("selected") if filtered else input_ref(),
                    "item": "item", "body": body, "evidences": [deepcopy(EVIDENCE)]})
-    annotation = {"profiles": {key: profile(labels) for key, labels in {
-        "ir_read": ["context_read"], "ir_dispatch": [], "ir_process": processing_effects, "ir_return": []}.items()},
+    annotation = {
         "locations": {"collection": {"kind": "runtime_context", "name": "collection", "operand_refs": [],
                                      "access_scope": "task", "retention": "task"},
                       "service": {"kind": "remote", "name": "service", "operand_refs": [],
                                   "access_scope": "recipient", "retention": None},
                       "model": {"kind": "model_context", "name": "model", "operand_refs": [],
                                 "access_scope": "recipient", "retention": None}},
-        "transfer_specs": {
-            "ir_read": {"order": "fixed", "precedence": [], "events": [{"effect_index": 0, "atomic_ops": [operation("read", location="collection", output="value")]}],
+        "ir_semantics": {
+            "ir_read": {**semantics_fields(True), "order": "fixed", "precedence": [], "events": [{"effect": "context_read", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [operation("read", location="collection", output="value")]}],
                         "output_bindings": [{"output_index": 0, "value": local("value"), "evidences": [deepcopy(EVIDENCE)]}]},
-            "ir_dispatch": {"order": "fixed", "precedence": [], "events": [], "output_bindings": []},
-            "ir_process": {"order": "fixed", "precedence": [], "events": events, "output_bindings": []},
-            "ir_return": {"order": "fixed", "precedence": [], "events": [], "output_bindings": []}}}
-    annotation["transfer_specs"]["ir_process"]["order"] = "partial" if uncertain else "fixed"
+            "ir_dispatch": {**semantics_fields(False), "order": "fixed", "precedence": [], "events": [], "output_bindings": []},
+            "ir_process": {**semantics_fields(True), "order": "fixed", "precedence": [], "events": events, "output_bindings": []},
+            "ir_return": {**semantics_fields(False), "order": "fixed", "precedence": [], "events": [], "output_bindings": []}}}
+    annotation["ir_semantics"]["ir_process"]["order"] = "partial" if uncertain else "fixed"
     annotation["sink_boundaries"] = [row.model_dump(mode="json") for row in
-        derive_sink_boundaries(annotation["locations"], annotation["transfer_specs"], annotation["profiles"])]
+        derive_sink_boundaries(annotation["locations"], annotation["ir_semantics"])]
+    material = prepare_material(source_bundle(
+        "Read the input collection and process its members. Preserve the declared "
+        "member fields, ordering and recipient/payload pairing.\n"), cfg)
+    with_task_semantics(material, annotation)
     return cfg, annotation
 
 
@@ -173,9 +175,9 @@ def test_all_static_members_removed_can_complete_empty_scope_without_fabricated_
     scope = result.records.get("ir_process").events[int(filtered)]
     assert scope.instances == [] and len(scope.collections) == 1
     result.records.validate(require_complete=True)
-    restored = PropagationRecords.from_dict(result.records.to_dict(), cfg=result.records.cfg, annotation=annotation,
+    restored = PropagationRecords.from_records(result.records.records_dict(), cfg=result.records.cfg, annotation=annotation,
         data_registry=result.registry, initial_data=result.initial_data, initial_state=result.initial_state)
-    assert restored.to_dict() == result.records.to_dict()
+    assert restored.records_dict() == result.records.records_dict()
     assert all(data.origin.part_of is None for data in [result.registry.get(entry["data"]["id"])
                                                       for entry in result.registry.to_dict()["records"]])
 
@@ -234,9 +236,9 @@ def test_missing_member_field_keeps_nested_diagnostic_and_does_not_drop_candidat
 
 def test_uncertain_effect_order_keeps_raw_and_clean_versions_per_member():
     body = [
-        {"effect_index": 0, "atomic_ops": [operation("deliver", inputs=[local("item")], target="model")]},
-        {"effect_index": 1, "atomic_ops": [operation("exclude_parts", input=local("item"), paths=[["secret"]], output="clean")]},
-        {"effect_index": 2, "atomic_ops": [operation("deliver", inputs=[local("clean")], target="model")]},
+        {"effect": "model_observe", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [operation("deliver", inputs=[local("item")], target="model")]},
+        {"effect": "transform", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [operation("exclude_parts", input=local("item"), paths=[["secret"]], output="clean")]},
+        {"effect": "model_observe", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [operation("deliver", inputs=[local("clean")], target="model")]},
     ]
     _, _, result, _ = solve(None, None, body=body, effects=["model_observe", "transform", "model_observe"], uncertain=True)
     assert result.status == "complete", result.diagnostics
@@ -253,11 +255,11 @@ def test_uncertain_effect_order_keeps_raw_and_clean_versions_per_member():
 def test_records_snapshot_roundtrip_and_scope_reference_validation():
     cfg, annotation, result, _ = solve(None, filtered=True)
     assert result.status == "complete", result.diagnostics
-    snapshot = result.records.to_dict()
-    assert snapshot["schema_version"] == "skillflow-propagation-record-v9"
-    restored = PropagationRecords.from_dict(snapshot, cfg=result.records.cfg, annotation=annotation,
+    snapshot = result.records.records_dict()
+    assert set(snapshot) == set(result.coverage)
+    restored = PropagationRecords.from_records(snapshot, cfg=result.records.cfg, annotation=annotation,
         data_registry=result.registry, initial_data=result.initial_data, initial_state=result.initial_state)
-    assert restored.to_dict() == snapshot
+    assert restored.records_dict() == snapshot
     # Validation reads Data relationships; it must not create fresh member or
     # part identities while checking an already completed record.
     data_before = result.registry.to_dict()
@@ -301,7 +303,7 @@ def test_worklist_order_and_control_cycle_reach_same_stable_member_records():
 def test_member_scope_cannot_escape_as_public_output():
     cfg, annotation = fixture()
     cfg["blocks"]["main"]["instructions"][0]["outputs"] = [{"type": "result", "identifier": "escaped"}]
-    annotation["transfer_specs"]["ir_process"]["output_bindings"] = [
+    annotation["ir_semantics"]["ir_process"]["output_bindings"] = [
         {"output_index": 0, "value": local("payload"), "evidences": [deepcopy(EVIDENCE)]}]
     with pytest.raises(ValueError, match="undefined local"):
         propagate(cfg, annotation)
@@ -311,8 +313,7 @@ def test_filter_result_feedback_is_still_rejected_before_solving():
     cfg, annotation = fixture(filtered=True)
     cfg["blocks"]["main"]["instructions"][-1]["opcode"] = "dispatch"
     cfg["edges"].append({"source_block_id": "main", "target_block_id": "source"})
-    annotation["profiles"]["ir_process"] = profile(["transform", "transform", "net_send", "context_write"])
-    annotation["transfer_specs"]["ir_process"]["events"].append({"effect_index": 3, "atomic_ops": [
+    annotation["ir_semantics"]["ir_process"]["events"].append({"effect": "context_write", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [
         operation("write", target="collection", mode="replace", input=local("selected"))]})
     result = propagate(cfg, annotation)
     assert result.status == "unsupported_feedback"
@@ -326,7 +327,7 @@ def test_full_collection_scope_input_can_seed_a_context_operand():
     cfg["blocks"]["main"]["instructions"][0]["inputs"] = [{"type": "context_key", "identifier": "collection"}]
     cfg["blocks"]["main"]["data_source_kind"] = "context"
     cfg["blocks"]["main"]["instructions"][0]["outputs"] = [{"type": "result", "identifier": "read_again"}]
-    annotation["transfer_specs"]["ir_process"]["output_bindings"] = [
+    annotation["ir_semantics"]["ir_process"]["output_bindings"] = [
         {"output_index": 0, "value": input_ref(), "evidences": [deepcopy(EVIDENCE)]}]
     # for_each reads the collection input; the body only consumes its item.
     result = propagate(cfg, annotation)
@@ -337,6 +338,6 @@ def test_full_collection_scope_input_can_seed_a_context_operand():
 def test_scope_body_has_no_dynamic_context_reads_or_shared_writes():
     cfg, annotation = fixture()
     cfg["blocks"]["main"]["instructions"][0]["inputs"].append({"type": "context_key", "identifier": "collection"})
-    annotation["transfer_specs"]["ir_process"]["events"][0]["body"][1]["atomic_ops"][0]["inputs"] = [input_ref(1)]
+    annotation["ir_semantics"]["ir_process"]["events"][0]["body"][1]["atomic_ops"][0]["inputs"] = [input_ref(1)]
     with pytest.raises(ValueError, match="context"):
         propagate(cfg, annotation)

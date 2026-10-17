@@ -2,7 +2,7 @@
 
 当前流程是：**完整 Skill 与 CFG → 统一抽象运行时契约 → 一次联合标注处理方式及字段关系 → 程序编译观察 → 确定性传播**。所有 Skill 共用一份契约，不为每个 Skill 选择运行时，也不要求逐例动态验证。
 
-唯一权威英文规则定义位于 [`runtime_contract.py`](../../src/skillflow/propagation/contracts/runtime_contract.py)，当前版本为 `skillflow-abstract-runtime-v5`。`execution_model()` 返回隔离副本；`execution_model_binding(model)` 返回版本与规则全文的规范化 SHA-256。模型材料中的 `execution_model` 只注入一次规则，证据仍使用 `basis="execution_model"` 和 EM 编号。本规范解释其含义；实际英文规则决定模型输入。处理规格及编译细节统一见[字段关系与观察编译](SkillFlow-字段关系与观察编译.md)。
+唯一权威英文规则定义位于 [`runtime_contract.py`](../../src/skillflow/propagation/contracts/runtime_contract.py)，当前版本为 `skillflow-abstract-runtime-v7`。`runtime_contract()` 返回隔离副本；`runtime_contract_binding(model)` 返回版本与规则全文的规范化 SHA-256。模型材料中的 `runtime_contract` 只注入一次规则，证据使用独立 `rule_id` 与真实 EM 编号，不再由模型填写 basis 或 quote。本规范解释其含义；实际英文规则决定模型输入。处理规格及编译细节统一见[字段关系与观察编译](SkillFlow-字段关系与观察编译.md)。
 
 ## 1. 规则与保证边界
 
@@ -19,7 +19,7 @@
 | EM07 | 上下文写入 | 只有改变后续可读上下文内容／绑定才是 context_write。结果登记不自动构成写入；原样保存不自动 transform，删除不自动读取旧内容。 |
 | EM08 | 符号传递边界 | 没有明确缩减则保留相关范围。possible 依赖不等于明文包含；来源内容未知不等于地址未知；登记 Data 不自动形成交付。 |
 | EM09 | 获取与计算不同 | 检索返回保留获取边界、请求输入及可能依赖。网络明确使用 remote/net_receive；网络未定的工具获取使用 tool/无标签 receive。纯计算仍是 compute。 |
-| EM10 | 处理模式的确定性编译 | 模型标注 model/local/default 模式，程序按实际引用插入观察。model 要求原 operator 包含 llm；local 要有机制依据及显式 returns；default 应用既有保守默认。编译不证明模式判断正确，也不机械补 operator/roles。 |
+| EM10 | 处理模式的确定性编译 | 模型标注 model/local/default 模式，程序按实际引用插入观察。model 要求原 operator 包含 llm；local 要有机制依据及显式 returns；default 应用既有保守默认。编译不证明模式判断正确，也不机械补 operator。 |
 | EM11 | 元素作用域与筛选 | filter_items 保留可能被选中元素的身份，不执行自然语言谓词。for_each 用同一元素绑定关联各字段和参数，是分析作用域，不是新增 CFG 循环或运行次数。summary 字段不自动成为摘要生成。 |
 | EM12 | 接收范围与留存默认 | 位置新增 access_scope/retention。工具部署未说明保留外部接收可能性但不补网络标签；上下文默认任务内临时；文件默认任务内持久，明确临时和清理机制才能降低留存；模型、远端和用户默认另一接收主体。 |
 | EM13 | 交付与 sink 分类 | tool 请求交付与返回获取分别表达。程序编译观察后按边界属性生成六类 sink 和固定暴露等级；任务内部临时流动、删除和普通 return 不虚构内容交付，等级不表示敏感性或 DOE。 |
@@ -47,26 +47,26 @@ CFG 提取与源文核对只保留原文行为和约束。逻辑来源不等于�
 
 联合标注读取完整源文、CFG 与契约，输出原始处理规格，不自行输出 `model_observe`。它必须判断模式、局部机制、字段路径和数据关系；名称或 opcode 不能替代判断。指令正文英文，理由中文，引文保留原语言。默认、opaque、possible 和可求值的 partial 均正常完成。不能完成必要判断时返回独立 cannot_assess/failure，经校验记录 semantic_failure，不用空业务结果冒充通过。
 
-编译器检查原始结构、编号和引文，按类型规则插入观察，建立原始位置到编译位置的映射，再检查编译结构。它不理解任意英文理由，也不能证明 local 依据充分、model 判断真实或源文已经被完整覆盖。将模型参与写入 operator、将动作标为 sink，仍须标注方独立给出依据；接收方是模型不会自动改变这两个字段。
+编译器检查原始结构、编号和引文，按类型规则插入观察，建立原始位置到编译位置的映射，再检查编译结构。它不解释自由文本理由，也不能证明 local 依据充分、model 判断真实或源文已经被完整覆盖。将模型参与写入 operator 仍须标注方独立给出依据；接收方是模型不会自动增加执行主体。sink 清单由程序按实际交付及边界规则生成，不再使用角色标签。
 
-模型标注位置访问范围与留存性质，程序再从具体交付和非删除写入生成 sink 清单及 exposure_level；清单不按 roles 筛选。边界默认、明确例外和六类等级见[Sink 边界主规范](SkillFlow-Sink边界与固定分级.md)，不在这里另建一套分类规则。任务内部上下文写入仍传播，但不自动成为暴露 sink；工具参数交付和工具返回后的观察分别绑定。
+模型标注位置访问范围与留存性质，程序再从具体交付和非删除写入生成 sink 清单及 exposure_level；清单由实际操作及边界性质派生。边界默认、明确例外和六类等级见[Sink 边界主规范](SkillFlow-Sink边界与固定分级.md)，不在这里另建一套分类规则。任务内部上下文写入仍传播，但不自动成为暴露 sink；工具参数交付和工具返回后的观察分别绑定。
 
 传播器执行编译后的规格，不追加 LLM 调用，不按 opcode 补关系。稳定后的记录是静态可能性，不是执行日志。`complete` 不代表行为必然发生、语义完整或不存在 DOE。
 
 ## 4. 版本与身份
 
-DOE 文件顶层保存一次契约绑定：
+标注材料保存全文，标注运行清单保存契约绑定：
 
 ```json
-"execution_model": {
-  "version": "skillflow-abstract-runtime-v5",
+"runtime_contract": {
+  "version": "skillflow-abstract-runtime-v7",
   "sha256": "实际冻结规则全文的规范化摘要"
 }
 ```
 
-完整规则在标注材料和传播审计目录中保存。完整运行加载同时核验原始响应、重新编译结果、映射与摘要；只验证编译结构不等于验证编译来源。普通业务读取允许按当前支持的契约加载，重新求解还需源码身份一致。旧记录不迁移、不重新计算摘要掩盖变化。
+完整规则只在标注材料保存；传播引用对应上游运行，不复制规则。完整运行加载同时核验原始响应、重新编译结果、映射与摘要；只验证编译结构不等于验证编译来源。普通业务读取允许按当前支持的契约加载，重新求解还需源码身份一致。旧记录不迁移、不重新计算摘要掩盖变化。
 
-当前版本：联合标注 `security-profile-v10`、标注运行 `skill-ir-security-profile-v11`（格式 11），Data `skillflow-data-v4`，传播记录 `skillflow-propagation-record-v9`，DOE 输入 `skillflow-doe-input-v7`，传播运行 `skill-ir-propagation-v10`（格式 10）。表示契约为 v3，编译器为 v4，语义核对响应仍为 v5。v3 将泛化未决改为可求值部分顺序或明确任务失败；v4 补齐位置属性和交付边界，不把静态可能性升级为实测行为。
+当前运行时为 v7；完整版本矩阵和阶段产物见[字段收紧规范](../architecture/field-tightening.md)。独立表示契约材料已移除，Schema 和共用格式说明承载格式职责，运行时只定义影响分析行为的默认规则。Data 保持 v4，旧材料不兼容迁移。
 
 `abstract-runtime-v1-*` 三例试验及当时的 `run_runtime_pilot.py` 调度属于 v1 历史材料。当前调度已经更新，不能用新契约重解释旧模型响应；先前处理段试验使用 v2，实际结果以相应运行材料为准。历史一轮经明确批准只原位替换 `processing-v1-20260928-204710` 内三例派生产物，保留经核验的选定 CFG，并建立新运行身份；这不构成旧响应的迁移或重新解释。
 

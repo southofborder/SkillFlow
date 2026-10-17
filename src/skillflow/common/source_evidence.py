@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -35,11 +35,9 @@ class SourceBundle(StrictRecord):
 
 
 class SourceRef(StrictRecord):
-    unit_id: Text
     file: Text
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
-    quote: Text
 
     @model_validator(mode="after")
     def ordered_lines(self) -> "SourceRef":
@@ -110,56 +108,6 @@ def _checked_source(source: dict[str, Any]) -> dict[str, Any]:
 def _digest(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _validate_source_ref(ref: dict[str, Any], paragraphs: dict[str, dict[str, Any]]) -> None:
-    unit = paragraphs.get(ref["unit_id"])
-    if unit is None:
-        _fail(f"source unit does not exist: {ref['unit_id']}")
-    if ref["file"] != unit["file"]:
-        _fail(f"source reference file does not match unit: {ref['unit_id']}")
-    if ref["start_line"] < unit["start_line"] or ref["end_line"] > unit["end_line"]:
-        _fail(f"source reference lines are outside unit: {ref['unit_id']}")
-    lines = unit["text"].splitlines()
-    a, b = ref["start_line"] - unit["start_line"], ref["end_line"] - unit["start_line"] + 1
-    quote = ref["quote"].replace("\r\n", "\n").replace("\r", "\n")
-    if quote not in "\n".join(lines[a:b]):
-        _fail(f"source quote does not match specified lines: {ref['unit_id']}")
-
-
-def source_units(source: dict[str, Any]) -> list[dict[str, Any]]:
-    """Index blank-line separated paragraphs, preserving fenced-code blocks.
-
-All original files remain in the prompt. This is only a location index: it does
-not identify which paragraphs are requirements or what their semantics are.
-"""
-    units: list[dict[str, Any]] = []
-    for entry in source["files"]:
-        lines = entry["content"].splitlines()
-        start: int | None = None
-        fence: str | None = None
-        for number, line in enumerate(lines, 1):
-            stripped = line.lstrip()
-            marker = re.match(r"(`{3,}|~{3,})", stripped)
-            if start is None and line.strip():
-                start = number
-            if marker:
-                value = marker.group(1)
-                if fence is None:
-                    fence = value
-                elif value[0] == fence[0] and len(value) >= len(fence):
-                    fence = None
-            if not line.strip() and fence is None and start is not None:
-                units.append({"id": f"src_{len(units) + 1:03d}", "file": entry["path"],
-                              "start_line": start, "end_line": number - 1,
-                              "text": "\n".join(lines[start - 1:number - 1])})
-                start = None
-        if start is not None:
-            units.append({"id": f"src_{len(units) + 1:03d}", "file": entry["path"],
-                          "start_line": start, "end_line": len(lines),
-                          "text": "\n".join(lines[start - 1:])})
-    return units
-
 
 
 def json_pointer(*parts: str | int) -> str:
@@ -235,3 +183,45 @@ def resolve_pointer(document: Any, pointer: str) -> Any:
         except (IndexError, KeyError) as error:
             raise ValueError("JSON pointer does not exist") from error
     return current
+
+
+def source_lines(text: str) -> list[str]:
+    """Return source lines with original endings, using Python's splitlines boundary.
+
+    This is a physical-text index, not sentence or requirement segmentation.
+    A final newline terminates its line without introducing an extra empty line.
+    """
+    if type(text) is not str:
+        raise ValueError("source text must be a string")
+    return text.splitlines(keepends=True)
+
+
+def extract_source_lines(text: str, start_line: int, end_line: int) -> str:
+    """Extract an inclusive one-based span without normalizing its text or endings."""
+    lines = source_lines(text)
+    if (type(start_line) is not int or type(end_line) is not int
+            or start_line < 1 or end_line < start_line or end_line > len(lines)):
+        raise ValueError("source line range must be inclusive, one-based, and within the file")
+    return "".join(lines[start_line - 1:end_line])
+
+
+def validate_source_ref(ref: dict[str, Any], files: Mapping[str, str]) -> SourceRef:
+    """Validate a file and inclusive physical-line range, without semantic claims.
+
+    Ranges may span blank lines and paragraph boundaries. The same line
+    definition is used for model input, evidence extraction and coverage.
+    """
+    parsed = SourceRef.model_validate(ref)
+    if parsed.file not in files:
+        _fail(f"source reference file does not exist: {parsed.file}")
+    try:
+        extract_source_lines(files[parsed.file], parsed.start_line, parsed.end_line)
+    except ValueError as error:
+        _fail(f"invalid source reference {parsed.file}:{parsed.start_line}-{parsed.end_line}: {error}")
+    return parsed
+
+
+def nonempty_source_lines(files: Mapping[str, str]) -> set[tuple[str, int]]:
+    """Return physical locations requiring coverage; no paragraph IDs are created."""
+    return {(path, number) for path, text in files.items()
+            for number, line in enumerate(source_lines(text), 1) if line.strip()}

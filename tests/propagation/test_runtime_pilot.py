@@ -48,6 +48,12 @@ def prepared(pilot, tmp_path, monkeypatch):
                       "source_inventory": {item["path"]: {"bytes": item["size"], "sha256": item["raw_sha256"]}
                                            for item in metadata["files"]}})
     monkeypatch.setattr(pilot, "plan", lambda: deepcopy(cases))
+    from tests.propagation.annotation.helpers import authored_task_run
+    from tools.propagation.task_runs import bind_task_runs
+    task = authored_task_run(package, run_dir=tmp_path / "independent-task")
+    task_owners = {case["case_id"]: task for case in cases}
+    monkeypatch.setattr(pilot, "bind_task_runs", lambda directory, rows, supplied=None:
+        bind_task_runs(directory, rows, task_owners if not (directory / "manifest.json").exists() else supplied))
     run = tmp_path / "processing-v1-test"
     pilot.prepare(run)
     return pilot, run
@@ -59,7 +65,8 @@ def test_real_pins_check_frozen_selection_source_and_round_cfg(pilot):
     assert all("source-boundaries-v1-20260928-112118" in case["analysis"] for case in cases)
     assert len({case["graph_sha256"] for case in cases}) == 3
     assert pilot.POLICY["extract_cfg"] is False
-    assert pilot.POLICY["planned_logical_calls"] == 3
+    assert pilot.POLICY["planned_initial_annotation_calls"] == 3
+    assert pilot.POLICY["annotation_structural_corrections"] == "unlimited"
     assert pilot.public_config()["response_format"] == "json_object"
 
 
@@ -73,7 +80,7 @@ def test_refresh_verifies_only_frozen_skeleton_without_deleting(prepared, tmp_pa
             (destination / name).write_bytes((previous / "cases" / case["case_id"] / name).read_bytes())
     preserved = {path: path.read_bytes() for path in target.rglob("selected-analysis.json")}
     manifest = pilot.prepare(target)
-    assert manifest["schema_version"] == 4 and manifest["prepared_at"]
+    assert manifest["schema_version"] == pilot.FORMAT_VERSION and manifest["prepared_at"]
     assert all(path.read_bytes() == value for path, value in preserved.items())
     assert not list(target.rglob("call.json")) and not list(target.rglob("doe-input.json"))
 
@@ -133,18 +140,19 @@ def test_runtime_pilot_refuses_previous_outer_identity_before_calls(prepared, mo
         pilot.execute(run)
 
 
-def test_bad_completed_response_does_not_rerun_or_stop_other_cases(prepared):
+def test_bad_response_is_corrected_and_accepted_calls_are_not_resent(prepared):
     pilot, run = prepared
     calls = []
-    class Bad:
+    good = FakeClient()
+    class Corrected:
         def complete(self, prompt):
             calls.append(prompt)
-            return "{}"
-    first = pilot.execute(run, client_factory=injected_factory(Bad()))
-    assert first["annotation_statuses"] == {"invalid_response": 3}
-    assert all(not (run / "cases" / n / "propagation/doe-input.json").exists() for n in ("001", "010", "013"))
-    pilot.execute(run, client_factory=lambda: pytest.fail("no quality retry"))
-    assert len(calls) == 3
+            return "{}" if len(calls) % 2 else good.complete(prompt)
+    first = pilot.execute(run, client_factory=injected_factory(Corrected()))
+    assert first["annotation_statuses"] == {"complete": 3}
+    assert all((run / "cases" / n / "propagation/data.json").exists() for n in ("001", "010", "013"))
+    pilot.execute(run, client_factory=lambda *_: pytest.fail("accepted requests must not be resent"))
+    assert len(calls) == 6
 
 
 def test_saved_semantic_failure_without_call_uses_local_replay(prepared, monkeypatch):
@@ -194,9 +202,9 @@ def test_existing_prepare_and_material_tampering_fail(prepared):
 def test_contract_and_source_identity_change_reject_before_client(prepared, monkeypatch):
     pilot, run = prepared
     original = pilot.expected_manifest
-    def changed():
-        manifest = original()
-        manifest["execution_model"]["sha256"] = "0" * 64
+    def changed(*args, **kwargs):
+        manifest = original(*args, **kwargs)
+        manifest["runtime_contract"]["sha256"] = "0" * 64
         return manifest
     monkeypatch.setattr(pilot, "expected_manifest", changed)
     with pytest.raises(ValueError, match="identity changed"):
@@ -260,3 +268,75 @@ def test_historical_selection_mismatch_is_not_reinterpreted(pilot, monkeypatch):
     monkeypatch.setattr(pilot, "read_json", changed)
     with pytest.raises(ValueError, match="historical source/selection/graph"):
         pilot.plan()
+
+
+def test_pinned_package_receipt_checks_all_raw_members_without_loading_old_snapshot(tmp_path):
+    from skillflow.common.inputs.snapshot import inspect_input, read_snapshot
+    from tools.propagation.pinned_inputs import verify_historical_byte_receipt
+    package = tmp_path / "source"
+    package.mkdir()
+    (package / "SKILL.md").write_bytes(b"# Source\r\nValue.\r\n")
+    (package / "opaque.bin").write_bytes(b"\x00original")
+    run = tmp_path / "old"
+    receipt = freeze_input(package, run, ArtifactWriter(()))
+    receipt["schema_version"] = 1
+    receipt["snapshot_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "snapshot_sha256"})
+    ArtifactWriter(()).json(run / "inputs/snapshot.json", receipt)
+    with pytest.raises(ValueError, match="unsupported input snapshot version"):
+        read_snapshot(run)
+    _, source, observed = inspect_input(run / "inputs/package")
+    verify_historical_byte_receipt(receipt, observed)
+    assert source["files"][0]["content"] == "# Source\r\nValue.\r\n"
+    assert not (run / "inputs/source.json").exists()
+    (run / "inputs/package/opaque.bin").write_bytes(b"\x00changed")
+    with pytest.raises(ValueError, match="historical package bytes"):
+        verify_historical_byte_receipt(receipt, inspect_input(run / "inputs/package")[2])
+    altered = deepcopy(receipt)
+    altered["root_name"] = "tampered"
+    with pytest.raises(ValueError, match="receipt digest"):
+        verify_historical_byte_receipt(altered, observed)
+
+
+def test_historical_notice_wording_is_preserved_but_not_a_content_identity(tmp_path):
+    from skillflow.common.inputs.snapshot import inspect_input
+    from tools.propagation.pinned_inputs import verify_historical_byte_receipt
+    package = tmp_path / "source"
+    package.mkdir()
+    (package / "SKILL.md").write_text("# Frozen source\nRetain the raw content.\n", encoding="utf-8")
+    (package / "opaque.bin").write_bytes(b"\x00opaque")
+    (package / "helper.py").write_text("print('example')\n", encoding="utf-8")
+    observed = inspect_input(package)[2]
+    receipt = deepcopy(observed)
+    receipt["boundaries"]["notice"] = "历史生产者说明；原始文件保持不变。"
+    receipt["snapshot_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "snapshot_sha256"})
+    original = deepcopy(receipt)
+    verify_historical_byte_receipt(receipt, observed)
+    assert receipt == original
+    receipt["boundaries"]["notice"] = "Edited historical wording"
+    with pytest.raises(ValueError, match="receipt digest"):
+        verify_historical_byte_receipt(receipt, observed)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda boundary: boundary.update(binary_files=[]),
+    lambda boundary: boundary.update(uninterpreted_code_files=[]),
+    lambda boundary: boundary.update(new_boundary=["SKILL.md"]),
+    lambda boundary: boundary.pop("binary_files"),
+    lambda boundary: boundary.update(notice=None),
+])
+def test_historical_receipt_still_rejects_changed_content_boundaries(tmp_path, mutation):
+    from skillflow.common.inputs.snapshot import inspect_input
+    from tools.propagation.pinned_inputs import verify_historical_byte_receipt
+    package = tmp_path / "source"
+    package.mkdir()
+    (package / "SKILL.md").write_text("# Frozen source\n", encoding="utf-8")
+    (package / "opaque.bin").write_bytes(b"\x00opaque")
+    (package / "helper.py").write_text("print('example')\n", encoding="utf-8")
+    observed = inspect_input(package)[2]
+    receipt = deepcopy(observed)
+    mutation(receipt["boundaries"])
+    # Re-seal this synthetic fixture to exercise content comparison independently
+    # of digest tampering. No historical receipt on disk is rewritten.
+    receipt["snapshot_sha256"] = canonical_sha256({k: v for k, v in receipt.items() if k != "snapshot_sha256"})
+    with pytest.raises(ValueError, match="historical package bytes|boundary receipt"):
+        verify_historical_byte_receipt(receipt, observed)

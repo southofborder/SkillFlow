@@ -16,7 +16,7 @@ from skillflow.propagation.contracts.uses import request_pairs
 from skillflow.propagation.contracts.uses import active_value_uses
 
 
-EVIDENCE = [{"basis": "source", "ref_id": "s1", "quote": "call", "reason": "真实关系的结构示例。"}]
+EVIDENCE = [{"target": {"path": []}, "reason": "真实关系的结构示例。"}]
 TERM = {"kind": "input", "index": 0}
 FLAG = {"kind": "input", "index": 1}
 LOCAL = {"kind": "local", "name": "request"}
@@ -28,7 +28,7 @@ def atom(kind, **values):
 
 def spec(operations, *, order="fixed", precedence=None):
     return IRTransferSpec.model_validate({"order": order, "precedence": precedence or [],
-        "events": [{"effect_index": None, "atomic_ops": operations}], "output_bindings": []})
+        "events": [{"effect": None, "atomic_ops": operations}], "output_bindings": []})
 
 
 def test_build_uses_preserve_field_and_guard_position_without_changing_updates():
@@ -108,8 +108,8 @@ def test_multiple_equivalent_unconsumed_requests_are_not_fifo():
 
 def test_partial_unique_pair_adds_request_cause_and_rejects_response_before_request():
     typed = IRTransferSpec.model_validate({"order": "partial", "precedence": [],
-        "events": [{"effect_index": None, "atomic_ops": [atom("deliver", target="tool", inputs=[TERM])]},
-                   {"effect_index": None, "atomic_ops": [atom("receive", location="tool", inputs=[TERM], output="response")]}],
+        "events": [{"effect": None, "atomic_ops": [atom("deliver", target="tool", inputs=[TERM])]},
+                   {"effect": None, "atomic_ops": [atom("receive", location="tool", inputs=[TERM], output="response")]}],
         "output_bindings": []})
     assert request_pairs(typed) == {(1, None, 0): (0, None, 0)}
     assert ((0, None, 0), (1, None, 0)) in precedence_edges(typed)
@@ -122,7 +122,7 @@ def test_partial_unique_pair_adds_request_cause_and_rejects_response_before_requ
 
 def test_partial_repeated_requests_without_unique_order_are_rejected():
     typed = IRTransferSpec.model_validate({"order": "partial", "precedence": [],
-        "events": [{"effect_index": None, "atomic_ops": [op]} for op in [
+        "events": [{"effect": None, "atomic_ops": [op]} for op in [
             atom("deliver", target="tool", inputs=[TERM]), atom("deliver", target="tool", inputs=[TERM]),
             atom("receive", location="tool", inputs=[TERM], output="a"), atom("receive", location="tool", inputs=[TERM], output="b")]],
         "output_bindings": []})
@@ -139,7 +139,7 @@ def test_raw_partial_segment_keeps_serial_request_order_before_compilation():
                   atom("receive", location="tool", inputs=[TERM], output="two")]
     raw = RawIRTransferSpec.model_validate({"order": "partial", "events": [{
         "kind": "processing", "mode": "default", "evidences": EVIDENCE,
-        "events": [{"effect_index": None, "atomic_ops": [operation]} for operation in operations]}],
+        "events": [{"effect": None, "atomic_ops": [operation]} for operation in operations]}],
         "output_bindings": []})
     assert request_pairs(flatten_raw_spec(raw)) == {(1, None, 0): (0, None, 0), (3, None, 0): (2, None, 0)}
 
@@ -155,7 +155,7 @@ def test_zero_argument_request_cannot_be_consumed_twice(order):
     typed = IRTransferSpec.model_validate({"order": order, "precedence": [
         {"before": {"event_index": 0, "op_index": 0}, "after": {"event_index": 1, "op_index": 0}},
         {"before": {"event_index": 1, "op_index": 0}, "after": {"event_index": 2, "op_index": 0}}],
-        "events": [{"effect_index": None, "atomic_ops": [operation]} for operation in [
+        "events": [{"effect": None, "atomic_ops": [operation]} for operation in [
             atom("deliver", target="tool", inputs=[]),
             atom("receive", location="tool", inputs=[], output="one"),
             atom("receive", location="tool", inputs=[], output="two")]],

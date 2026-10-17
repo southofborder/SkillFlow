@@ -20,7 +20,7 @@ def compare_expectation(expected, audit):
     """Evidence/status matches are review candidates, not a semantic proof or score."""
     if audit.get("status") != "complete":
         return {"oracle_finding_id": expected["oracle_finding_id"], "status": audit.get("status", "execution_error"),
-                "candidate_finding_ids": [], "note": "核对未产生有效结果，不能计为语义漏报或通过。"}
+                "candidate_finding_ids": [], "note": "Review produced no valid result; this is neither a semantic miss nor a pass."}
     candidates = []
     for finding in audit["result"]["findings"]:
         if finding.get("kind", "semantic") != "semantic":
@@ -34,7 +34,7 @@ def compare_expectation(expected, audit):
     return {"oracle_finding_id": expected["oracle_finding_id"],
             "status": "candidate_match" if candidates else "no_candidate",
             "candidate_finding_ids": candidates,
-            "note": "候选仅匹配类别及证据区域，理由是否识别目标缺陷仍需人工复核；无候选也不自动计为漏报。"}
+            "note": "Candidates match only categories and evidence regions. Whether the rationale identifies the intended defect requires human review; no candidate is not automatically a miss."}
 
 
 def evaluate(stages, manifest, *, oracle=None):
@@ -57,7 +57,7 @@ def evaluate(stages, manifest, *, oracle=None):
             audit = stages[key]
             cases[key] = {"expectations": [], "evaluation_status": "assistant_review_required",
                           "selection": case["selection"],
-                          "note": "暂停批次原图没有本实验人工标准答案；001、010的旧判断不作为新核对答案。"}
+                          "note": "The paused-batch original graphs have no human reference answer for this experiment; earlier 001 and 010 judgments are not answers for the new review."}
             continue
         gold = oracle["cases"][case["oracle_key"]]
         if gold["graph_sha256"] != case["input_graph_sha256"]:
@@ -68,7 +68,7 @@ def evaluate(stages, manifest, *, oracle=None):
         }
     return {"oracle_sha256": digest, "cases": cases,
             "adjudication": "Evidence matches are candidates requiring review, not semantic accuracy scores.",
-            "false_positives": "未匹配外置预期的问题不自动视为误报；需要逐项复核。",
-            "limitations": ["无法完成必要判断不算通过；执行错误与语义问题分别记录。",
-                            "固定开发示范和暂停批次的诊断，不支持统计显著性或泛化结论。",
-                            "受控文本事实保持不证明原文转换正确、模型判定正确或运行行为安全。"]}
+            "false_positives": "Findings outside the external expectations are not automatically false positives; review each individually.",
+            "limitations": ["Inability to complete a necessary judgment is not a pass; execution errors and semantic issues are recorded separately.",
+                            "Fixed development examples and paused-batch diagnostics do not support statistical-significance or generalization claims.",
+                            "Fact preservation in controlled text does not prove source translation, model judgment or runtime safety."]}

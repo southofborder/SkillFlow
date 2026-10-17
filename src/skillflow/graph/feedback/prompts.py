@@ -33,13 +33,14 @@ relationships without guessing implementation. Correct only explicit differences
 do not choose a preferred interpretation of contradictory source material.
 Dependencies already conservatively retained under the shared interpretation
 contract are not repair targets; do not turn candidate sources into necessarily
-simultaneous transmission. The program reads each current_facts and
-suggestion_targets item from the actual previous graph. Labels and constraint
+simultaneous transmission. Each current_facts and suggestion_targets item is a
+program-validated pointer into the one previous_cfg object below. Read its value
+there; the same graph content is not duplicated in each feedback item. Labels and constraint
 declarations alone are not executable operations; do not reconstruct deleted
 operations from residual titles. Business inputs include only the latest graph
 and review differences. Return only complete JSON conforming to the existing
 candidate contract above, not JSON Patch, old graph fragments, or commentary.
-Write explanatory diagnostics in Chinese; keep source quotations and code in
+Write explanatory diagnostics in English; keep source quotations and code in
 their original language without alteration."""
 
 
@@ -48,8 +49,9 @@ def _locations(graph: dict[str, Any], pointers: Any) -> list[dict[str, Any]]:
         raise ValueError("feedback requires program-resolved graph locations")
     if len(pointers) != len(set(pointers)):
         raise ValueError("feedback contains duplicate graph locations")
-    return [{"graph_pointer": pointer, "value": deepcopy(resolve_pointer(graph, pointer))}
-            for pointer in pointers]
+    for pointer in pointers:
+        resolve_pointer(graph, pointer)
+    return [{"graph_pointer": pointer} for pointer in pointers]
 
 
 def build_feedback_prompt(

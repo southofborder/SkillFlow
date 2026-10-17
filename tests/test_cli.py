@@ -16,7 +16,7 @@ def test_cli_offline_candidate_writes_complete_result(tmp_path) -> None:
                 "blocks": [
                     {
                         "block_ref": "start",
-                        "block_name": "读入用户输入",
+                        "block_name": "璇诲叆鐢ㄦ埛杈撳叆",
                         "data_source_kind": "context",
                         "instructions": [
                             {
@@ -34,7 +34,7 @@ def test_cli_offline_candidate_writes_complete_result(tmp_path) -> None:
                     },
                     {
                         "block_ref": "answer",
-                        "block_name": "返回用户输入",
+                        "block_name": "杩斿洖鐢ㄦ埛杈撳叆",
                         "instructions": [
                             {
                                 "instruction_ref": "return_input",
@@ -69,7 +69,7 @@ def test_cli_offline_candidate_writes_complete_result(tmp_path) -> None:
     assert exit_code == 0
     result = json.loads(output_path.read_text(encoding="utf-8"))
     assert result["status"] == "complete"
-    assert result["cfg"]["blocks"]["block_002"]["block_name"] == "返回用户输入"
+    assert result["cfg"]["blocks"]["block_002"]["block_name"] == "杩斿洖鐢ㄦ埛杈撳叆"
     source = result["cfg"]["blocks"]["block_001"]
     assert source["data_source_kind"] == "context"
     acquisition = source["instructions"][0]

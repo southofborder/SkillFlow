@@ -14,21 +14,26 @@ import sys
 from threading import Event
 
 from skillflow.common.paths import project_root, resolve_material_path
+from tools.propagation.task_runs import bind_task_runs, task_owner, read_task_runs
+from tools.propagation.summaries import support_identity
+from skillflow.propagation.annotation.loading import load_annotation_attempt
+from tools.propagation.summaries import case_summary
 
 PACKAGE = project_root()
 ROOT = project_root()
 
 from skillflow.common.artifacts import ArtifactWriter
 from skillflow.common.runs import exclusive_run
-from skillflow.common.inputs.snapshot import read_snapshot
+from skillflow.common.inputs.snapshot import read_snapshot, inspect_input
+from tools.propagation.pinned_inputs import verify_historical_byte_receipt as _verify_historical_byte_receipt
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.recording import implementation_provenance
 from skillflow.common.recording import now
 from skillflow.common.recording import read_json
 from skillflow.common.recording import sha_file
 from skillflow.common.recording import streaming_factory
-from skillflow.propagation.contracts.runtime_contract import execution_model
-from skillflow.propagation.contracts.runtime_contract import execution_model_binding
+from skillflow.propagation.contracts.runtime_contract import runtime_contract
+from skillflow.propagation.contracts.runtime_contract import runtime_contract_binding
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION as PROFILE_VERSION
 from skillflow.propagation.annotation.config import annotation_config
 from skillflow.propagation.annotation.runner import prepare_run
@@ -36,15 +41,15 @@ from skillflow.propagation.annotation.runner import run_annotation
 from skillflow.propagation.annotation.runner import replay_run
 from skillflow.propagation.annotation.runner import verify_prepared
 from skillflow.propagation.annotation.runner import _counts as annotation_counts
-from skillflow.propagation.runner import load_propagation_run
+from skillflow.propagation.runner import load_propagation_materials
 from skillflow.propagation.runner import run_propagation
 from skillflow.propagation.runner import replay_propagation
 from skillflow.graph.artifacts.analysis_json import load_analysis_cfg
 from skillflow.graph.artifacts.mermaid import render_mermaid
 import json
 
-IDENTITY = "skill-ir-processing-pilot3-v4"
-FORMAT_VERSION = 4
+IDENTITY = "skill-ir-processing-pilot3-v8"
+FORMAT_VERSION = 8
 ORIGIN = PACKAGE / "experiments/propagation/runs/source-boundaries-v1-20260928-112118"
 PINS = {
     "001": {"sample_id": "N01", "revision": 2,
@@ -66,8 +71,9 @@ PINS = {
             "analysis_sha256": "0eec4c18ca72bef85f00366e598ebcefa0e53e0b0d32272d301def8efd4e5489",
             "selection_sha256": "806a44b5db93af9d89278638872d5cb542d8e2cc4c43690ad8a70ea6de59a757"},
 }
-POLICY = {"extract_cfg": False, "feedback_calls": 0, "planned_logical_calls": 3,
-          "annotation_calls_per_case": 1, "propagation_calls": 0, "workers": 1,
+POLICY = {"extract_cfg": False, "feedback_calls": 0, "planned_initial_annotation_calls": 3,
+          "initial_annotation_calls_per_case": 1, "annotation_structural_corrections": "unlimited",
+          "propagation_calls": 0, "workers": 1,
           "automatic_quality_rerun": False, "uncertain_request_automatic_resend": False}
 
 
@@ -85,7 +91,9 @@ def plan():
         analysis, selection = base / "selected-analysis.json", base / "selection.json"
         selected = read_json(selection)
         cfg = read_json(analysis)["cfg"]
-        _, source, metadata = read_snapshot(base / "source")
+        _, source, metadata = inspect_input(base / "source/inputs/package")
+        historical = read_json(base / "source/inputs/snapshot.json")
+        _verify_historical_byte_receipt(historical, metadata)
         round_cfg = base / "feedback/rounds" / f"r{pin['revision']:03d}" / "cfg.json"
         prior = prior_cases[number]
         inventory = {item["path"]: {"bytes": item["size"], "sha256": item["raw_sha256"]}
@@ -121,11 +129,12 @@ def public_config():
     return annotation_config(value)
 
 
-def expected_manifest():
+def expected_manifest(directory, task_runs=None):
     return {"schema_version": FORMAT_VERSION, "identity": IDENTITY, "profile_schema_version": PROFILE_VERSION,
-            "execution_model": execution_model_binding(execution_model()), "cases": plan(),
+            "runtime_contract": runtime_contract_binding(runtime_contract()), "cases": plan(),
+            "task_runs": bind_task_runs(directory, plan(), task_runs),
             "config": public_config(), "implementation": implementation_provenance(),
-            "driver_sha256": sha_file(Path(__file__)), "policy": POLICY}
+            "tool_support": support_identity(), "driver_sha256": sha_file(Path(__file__)), "policy": POLICY}
 
 
 def checked_output(path):
@@ -187,9 +196,9 @@ def verify_prepare_skeleton(directory, cases):
             raise ValueError("retained source selection or CFG differs from pinned inputs")
 
 
-def prepare(directory):
+def prepare(directory, *, task_runs=None):
     directory = checked_output(directory)
-    expected = expected_manifest()
+    expected = expected_manifest(directory, task_runs)
     directory.mkdir(parents=True, exist_ok=True)
     writer = ArtifactWriter(())
     with exclusive_run(directory):
@@ -201,7 +210,7 @@ def prepare(directory):
                 if not (base / name).exists():
                     (base / name).write_bytes(Path(original).read_bytes())
             manifest = prepare_run(case["input"], base / "selected-analysis.json", run_dir=base / "annotation",
-                                   config=expected["config"])
+                                   config=expected["config"], task_run=task_owner(directory, expected, case["case_id"]))
             if manifest["preparation_status"] != "ready":
                 raise ValueError("annotation preparation failed: " + str(manifest["preparation_error"]))
             verify_case(directory, case, expected["config"])
@@ -244,20 +253,20 @@ def run_case(directory, case, *, config, factory, secrets, stopping, replay=Fals
     if annotation["status"] == "interrupted":
         stopping.set()
     outcome = {"annotation": annotation, "propagation": "not_run", "propagation_error": None}
-    writer.json(outcome_path, outcome)
+    writer.json(outcome_path, case_summary(outcome, owner=base, annotation_run=annotation_dir))
     propagation_dir = base / "propagation"
     if annotation["status"] in {"complete"} and (replay or not stopping.is_set()):
         try:
             if (propagation_dir / "manifest.json").exists():
-                doe = replay_propagation(propagation_dir) if replay else load_propagation_run(propagation_dir)
+                doe = replay_propagation(propagation_dir) if replay else load_propagation_materials(propagation_dir)
             elif replay:
                 raise ValueError("no committed propagation run; offline replay cannot create one")
             else:
                 doe = run_propagation(annotation_dir, run_dir=propagation_dir)
-            outcome["propagation"] = doe["status"]
+            outcome["propagation"] = doe.status
         except Exception as error:
             outcome.update(propagation="execution_error", propagation_error=writer.clean(f"{type(error).__name__}: {error}"))
-        writer.json(outcome_path, outcome)
+        writer.json(outcome_path, case_summary(outcome, owner=base, annotation_run=annotation_dir))
     return outcome
 
 
@@ -269,7 +278,7 @@ def summarize(directory, writer, *, replay=False):
         saved = base / ("replay/result.json" if replay else "result.json")
         annotation_result = base / "annotation" / ("replay/result.json" if replay else "result.json")
         outcome = read_json(saved) if saved.exists() else {
-            "annotation": read_json(annotation_result) if annotation_result.exists() else _missing(), "propagation": "not_run"}
+            "annotation": load_annotation_attempt(base / "annotation")["result"] if annotation_result.exists() else _missing(), "propagation": "not_run"}
         annotation = outcome["annotation"]
         failure_path = base / ("replay/driver-error.json" if replay else "driver-error.json")
         failure = read_json(failure_path) if failure_path.exists() else None
@@ -280,9 +289,9 @@ def summarize(directory, writer, *, replay=False):
                "propagation": outcome["propagation"], "propagation_error": outcome.get("propagation_error"),
                "driver_status": driver_status["status"], "driver_error": failure,
                "counts": annotation_counts(base / "annotation"),
-               "partial_order_ir_ids": [key for key, spec in annotation.get("transfer_specs", {}).items() if spec.get("order") == "partial"]}
+               "partial_order_ir_count": annotation.get("partial_order_ir_count", sum(spec.get("order") == "partial" for spec in annotation.get("ir_semantics", {}).values()))}
         rows.append(row)
-    summary = {"identity": IDENTITY, "execution_model": manifest["execution_model"], "mode": "replay" if replay else "run",
+    summary = {"identity": IDENTITY, "runtime_contract": manifest["runtime_contract"], "mode": "replay" if replay else "run",
                "cases": rows, "logical_calls": sum(row["counts"].get("logical_calls", 0) for row in rows),
                "http_attempts": sum(row["counts"].get("http_attempts", 0) for row in rows),
                "annotation_statuses": dict(Counter(row["annotation"] for row in rows)),
@@ -290,9 +299,9 @@ def summarize(directory, writer, *, replay=False):
     output, prefix = (directory / "replay", "../") if replay else (directory, "")
     writer.json(output / "summary.json", summary)
     notice = "这是统一契约下的静态可能行为，不是执行日志。复用冻结源包和既有 CFG；每例一次联合标注，传播和重放零 API。完成不证明标注正确或不存在 DOE。"
-    lines = ["# 字段关系与观察编译：三例复测", "", notice, "", "契约：`" + manifest["execution_model"]["version"] + "`。", "",
+    lines = ["# 字段关系与观察编译：三例复测", "", notice, "", "契约：`" + manifest["runtime_contract"]["version"] + "`。", "",
              "| 样例 | 调度 | 标注 | 传播 | 逻辑调用 | 审查材料 |", "|---|---|---|---|---:|---|"]
-    html = ["<h1>字段关系与观察编译：三例复测</h1><p>" + notice + "</p><p>契约：" + escape(manifest["execution_model"]["version"]) + "</p>",
+    html = ["<h1>字段关系与观察编译：三例复测</h1><p>" + notice + "</p><p>契约：" + escape(manifest["runtime_contract"]["version"]) + "</p>",
             "<table><tr><th>样例</th><th>调度</th><th>标注</th><th>传播</th><th>逻辑调用</th><th>审查材料</th></tr>"]
     error_lines = []
     for row in rows:
@@ -303,7 +312,9 @@ def summarize(directory, writer, *, replay=False):
                                 (f"cases/{number}/annotation/report.md", "联合标注"),
                                 (f"cases/{number}/annotation/audit/raw-annotation.json", "原始处理段"),
                                 (f"cases/{number}/annotation/audit/compilation-map.json", "观察编译映射"),
-                                (f"cases/{number}/propagation/doe-input.json", "DOE 原始事实"),
+                                (f"cases/{number}/propagation/data.json", "Data"),
+                                (f"cases/{number}/propagation/records.json", "传播记录"),
+                                (f"cases/{number}/propagation/sinks.json", "Sink"),
                                 (f"cases/{number}/propagation/report.html", "传播审查"),
                                 (f"cases/{number}/assistant-review.md", "助手复核")):
             if "/propagation/" in relative and not (directory / "cases" / number / "propagation/manifest.json").exists():
@@ -319,7 +330,7 @@ def summarize(directory, writer, *, replay=False):
             error_lines.append(f"{number} 调度记录：{message}")
             html.append("<tr><td colspan='6'>调度记录：" + escape(message) + "</td></tr>")
     lines += ["", *error_lines, "", "重点核对：筛选是否保留成员原值；同一元素的接收者和正文是否配对；原始处理段及程序生成的观察；局部机制及观察版本是否正确。", "",
-              "本次最多三次计划内逻辑模型调用；HTTP 传输尝试另计。未决、无效响应和助手发现的错误均保留，不按质量补跑。", ""]
+              "本次三次初始联合标注，结构纠正不限次数；HTTP 传输尝试另计。原始响应和助手发现的错误均保留，不按语义质量补跑。", ""]
     html.append("</table><p><a href='summary.json'>完整状态</a> · <a href='report.md'>中文报告</a></p>")
     writer.text(output / "report.md", "\n".join(lines))
     writer.text(output / "index.html", "<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>观察编译三例复测</title><style>body{font:16px/1.6 'Microsoft YaHei',sans-serif;max-width:1200px;margin:40px auto}td,th{padding:12px;border:1px solid #ccc}table{border-collapse:collapse}a{color:#176ac1}</style><body>" + "".join(html) + "</body></html>")
@@ -328,8 +339,10 @@ def summarize(directory, writer, *, replay=False):
 
 def execute(directory, *, replay=False, env_file=None, client_factory=None, secrets=()):
     directory = checked_output(directory)
-    expected = expected_manifest()
     saved = read_json(directory / "manifest.json")
+    if saved.get("identity") != IDENTITY or saved.get("schema_version") != FORMAT_VERSION:
+        raise ValueError("pilot source/config/contract/implementation identity changed")
+    expected = expected_manifest(directory)
     prepared_at = saved.pop("prepared_at", None)
     if not isinstance(prepared_at, str) or datetime.fromisoformat(prepared_at).tzinfo is None:
         raise ValueError("pilot preparation timestamp missing or invalid")
@@ -373,11 +386,12 @@ def main(argv=None):
     parser.add_argument("command", choices=["prepare", "run", "replay"])
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--env-file", type=Path)
+    parser.add_argument("--task-runs-json", type=Path, help="case ID -> completed independent Task run paths; preparation only")
     args = parser.parse_args(argv)
     if args.command != "run" and args.env_file is not None:
         raise ValueError("offline prepare/replay does not read environment files")
     if args.command == "prepare":
-        prepare(args.run_dir)
+        prepare(args.run_dir, task_runs=read_task_runs(args.task_runs_json))
         print("prepared 3 frozen CFGs; model calls: 0", flush=True)
         return 0
     result = execute(args.run_dir, replay=args.command == "replay", env_file=args.env_file)

@@ -1,3 +1,5 @@
+from tests.propagation.annotation.helpers import authored_prepare_run
+from tests.propagation.annotation.helpers import effects_of
 """Durable whole-graph annotation and replay, with no real network calls."""
 from copy import deepcopy
 import json
@@ -7,7 +9,7 @@ from threading import Event
 import pytest
 
 from skillflow.propagation.annotation import runner
-from tests.propagation.annotation.helpers import FakeClient, graph, profile, with_specs
+from tests.propagation.annotation.helpers import FakeClient, graph, semantics, with_specs, material_from_prompt
 
 
 def setup_run(tmp_path, **kwargs):
@@ -22,7 +24,7 @@ def setup_run(tmp_path, **kwargs):
     analysis.write_text(json.dumps({"cfg": graph(), "candidate": "OLD_CANDIDATE_CANARY",
                                     "review": "OLD_REVIEW_CANARY"}, ensure_ascii=False), encoding="utf-8")
     directory = tmp_path / "run"
-    manifest = runner.prepare_run(source, analysis, run_dir=directory, **kwargs)
+    manifest = authored_prepare_run(source, analysis, run_dir=directory, **kwargs)
     assert manifest["preparation_status"] == "ready", manifest["preparation_error"]
     return directory, source, analysis
 
@@ -37,17 +39,17 @@ def test_one_call_exact_input_resume_and_offline_replay(tmp_path, monkeypatch):
     client = FakeClient()
     first = runner.run_annotation(directory, client=client)
     assert first["status"] == "complete"
-    assert first["schema_version"] == 11
-    assert first["profile_schema_version"] == "security-profile-v10"
+    assert first["schema_version"] == 17
+    assert first["profile_schema_version"] == "security-profile-v14"
     assert first["request_validation"]["transport"] == "injected"
     assert first["request_validation"]["observed"] is False
     assert len(client.prompts) == first["counts"]["logical_calls"] == 1
-    assert first["validation"]["profile_count"] == 3
+    assert first["validation"]["ir_semantics_count"] == 3
     prompt = client.prompts[0]
     assert "OLD_CANDIDATE_CANARY" not in prompt and "OLD_REVIEW_CANARY" not in prompt
-    material = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
+    material = json.JSONDecoder().raw_decode(prompt.split("\nINPUT_JSON\n", 1)[1])[0]
     assert material["cfg"] == graph()
-    assert material["source"]["files"][1]["content"] == "完整附加文件\r\n第二行\n"
+    assert "".join(material["source"]["files"][1]["lines"]) == "完整附加文件\r\n第二行\n"
     assert prompt.encode() == (directory / "inputs/prompt.txt").read_bytes()
     monkeypatch.setattr(runner, "RecordingClient", forbidden)
     resumed = runner.run_annotation(directory, client_factory=forbidden)
@@ -60,10 +62,11 @@ def test_one_call_exact_input_resume_and_offline_replay(tmp_path, monkeypatch):
     assert "location_evidences" not in first
     assert first["validation"]["location_evidence_count"] == sum(map(len, sidecar.values()))
     assert first["validation"]["sink_boundary_count"] == len(first["sink_boundaries"])
-    sink_file = directory / "sink-boundaries.json"
-    assert json.loads(sink_file.read_text(encoding="utf-8")) == first["sink_boundaries"]
+    sink_file = directory / "audit/compiled-response.json"
+    assert json.loads(sink_file.read_text(encoding="utf-8"))["sink_boundaries"] == first["sink_boundaries"]
     assert first["compilation"]["sink_boundaries_sha256"] == runner.canonical_sha256(first["sink_boundaries"])
-    assert (directory / "replay/sink-boundaries.json").read_bytes() == sink_file.read_bytes()
+    assert not (directory / "sink-boundaries.json").exists()
+    assert not (directory / "replay/sink-boundaries.json").exists()
     assert (directory / "replay/audit/location-evidences.json").read_bytes() == (directory / "audit/location-evidences.json").read_bytes()
 
 
@@ -85,7 +88,7 @@ def test_sidecar_tampering_refuses_resume_and_replay_without_api(tmp_path, monke
         sidecar_path.write_text(json.dumps(sidecar, ensure_ascii=False), encoding="utf-8")
         if target == "changed_and_rehashed":
             first["location_evidences_sha256"] = runner.canonical_sha256(sidecar)
-            (directory / "result.json").write_text(json.dumps(first, ensure_ascii=False), encoding="utf-8")
+            (directory / "result.json").write_text(json.dumps(runner.result_snapshot(first), ensure_ascii=False), encoding="utf-8")
     before = (directory / "result.json").read_bytes()
     monkeypatch.setattr(runner, "RecordingClient", forbidden)
     with pytest.raises(runner.RunIdentityError, match="location evidence"):
@@ -101,12 +104,18 @@ def test_sink_projection_tampering_refuses_resume_and_replay_without_resend(tmp_
     client = FakeClient()
     first = runner.run_annotation(directory, client=client)
     assert first["status"] == "complete"
-    (directory / "sink-boundaries.json").write_text('[{"exposure_level":3}]', encoding="utf-8")
+    path = directory / "audit/compiled-response.json"
+    compiled = json.loads(path.read_text(encoding="utf-8"))
+    assert compiled["sink_boundaries"] == []
+    compiled["sink_boundaries"].append({"instruction_id": "ir_read", "event_index": 0,
+        "op_index": 0, "body_event_index": None, "scope": None,
+        "target": next(iter(compiled["locations"])), "sink_type": "storage_write", "exposure_level": 3})
+    path.write_text(json.dumps(compiled), encoding="utf-8")
     before = (directory / "result.json").read_bytes()
     monkeypatch.setattr(runner, "RecordingClient", forbidden)
-    with pytest.raises(runner.RunIdentityError, match="sink boundary projection"):
+    with pytest.raises(runner.RunIdentityError, match="compilation material"):
         runner.run_annotation(directory, client_factory=forbidden)
-    with pytest.raises(runner.RunIdentityError, match="sink boundary projection"):
+    with pytest.raises(runner.RunIdentityError, match="compilation material"):
         runner.replay_run(directory)
     assert before == (directory / "result.json").read_bytes()
     assert len(client.prompts) == 1
@@ -143,15 +152,20 @@ def test_ordered_repeated_effects_survive_single_call_and_zero_api_replay(tmp_pa
     class Ordered(FakeClient):
         def complete(self, prompt):
             response = super().complete(prompt)
-            material = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-            response["profiles"]["ir_filter"] = profile(
-                material, "ir_filter", operator=["llm"], roles=["sink", "transformer"],
-                effects=effects,
+            material = material_from_prompt(prompt)
+            response["ir_semantics"]["ir_filter"] = semantics(
+                material, "ir_filter", operator=["llm"], effects=effects,
             )
+            for spec in response["ir_semantics"].values():
+                spec["precedence"] = []
+                if spec["events"] and spec["events"][0].get("kind") == "processing":
+                    spec["events"] = [event for segment in spec["events"] for event in segment["events"]]
             with_specs(material, response)
             response.pop("sink_boundaries")
-            for ir_id, spec in response["transfer_specs"].items():
-                spec.pop("precedence")
+            for ir_id, spec in response["ir_semantics"].items():
+                spec.pop("precedence", None)
+                if spec["events"] and spec["events"][0].get("kind") == "processing":
+                    spec["events"] = [event for segment in spec["events"] for event in segment["events"]]
                 selected_mode = mode if ir_id == "ir_filter" else "local"
                 spec["events"] = [{"kind": "processing", "mode": selected_mode, "returns": [],
                                    "events": [event], "evidences": event["atomic_ops"][0]["evidences"]}
@@ -161,9 +175,10 @@ def test_ordered_repeated_effects_survive_single_call_and_zero_api_replay(tmp_pa
     first = runner.run_annotation(directory, client=client)
     assert first["status"] == "complete"
     assert len(client.prompts) == first["counts"]["logical_calls"] == 1
-    assert first["profiles"]["ir_filter"]["effects"] == expected
-    effect_evidence = [e for e in first["profiles"]["ir_filter"]["evidences"] if e["field"] == "effects"]
-    assert sorted({e["effect_index"] for e in effect_evidence}) == list(range(len(expected)))
+    assert effects_of(first["ir_semantics"]["ir_filter"]) == expected
+    events = first["ir_semantics"]["ir_filter"]["events"]
+    assert [event["effect"] for event in events] == expected
+    assert all(event["evidences"] for event in events)
     assert (directory / "audit/raw-annotation.json").is_file()
     assert (directory / "audit/compiled-response.json").is_file()
     assert (directory / "audit/compilation-map.json").is_file()
@@ -177,11 +192,11 @@ def test_partial_order_completes_and_replays(tmp_path):
     class PartialOrder(FakeClient):
         def complete(self, prompt):
             response = super().complete(prompt)
-            response["transfer_specs"]["ir_filter"]["order"] = "partial"
+            response["ir_semantics"]["ir_filter"]["order"] = "partial"
             return response
     result = runner.run_annotation(directory, client=PartialOrder())
     assert result["status"] == "complete"
-    assert result["transfer_specs"]["ir_filter"]["order"] == "partial"
+    assert result["ir_semantics"]["ir_filter"]["order"] == "partial"
     assert "unresolved" not in result
     assert not (directory / "unresolved.json").exists()
     assert runner.replay_run(directory) == result
@@ -217,37 +232,40 @@ def test_legacy_unresolved_rejected_and_semantic_failure_replays(tmp_path):
     class Failure(FakeClient):
         def complete(self, prompt):
             response = super().complete(prompt)
-            evidence = response["profiles"]["ir_read"]["evidences"][0]
+            evidence = response["ir_semantics"]["ir_read"]["operator_evidences"][0]
             return {"outcome": "cannot_assess", "failure": {
                 "reason": "必要的来源约束互相冲突，不能给出一致的标注。",
                 "instruction_ids": ["ir_read"],
-                "evidences": [{key: evidence[key] for key in ("basis", "ref_id", "quote", "reason")}],
+                "evidences": [{key: evidence[key] for key in ("target", "reason")}],
             }}
     result = runner.run_annotation(directory, client=Failure())
     assert result["status"] == "semantic_failure"
     assert result["error_kind"] == "cannot_assess"
-    assert result["profiles"] == {}
+    assert result["ir_semantics"] == {}
     assert runner.replay_run(directory) == result
 
 
 @pytest.mark.parametrize("kind", ["json", "missing", "quote", "enum", "duplicate_key"])
-def test_invalid_response_is_saved_without_repair(tmp_path, kind):
+def test_invalid_response_is_saved_then_structurally_corrected(tmp_path, kind):
     directory, _, _ = setup_run(tmp_path)
     class Invalid(FakeClient):
         def complete(self, prompt):
             response = super().complete(prompt)
+            if len(self.prompts) > 1:
+                return response
             if kind == "json": return "{invalid"
-            if kind == "duplicate_key": return '{"profiles":{},"profiles":{},"unresolved":[]}'
-            if kind == "missing": del response["profiles"]["ir_return"]
-            if kind == "quote": response["profiles"]["ir_read"]["evidences"][0]["quote"] = "NOT_IN_GRAPH"
-            if kind == "enum": response["profiles"]["ir_read"]["effects"] = ["safe"]
+            if kind == "duplicate_key": return '{"ir_semantics":{},"ir_semantics":{},"unresolved":[]}'
+            if kind == "missing": del response["ir_semantics"]["ir_return"]
+            if kind == "quote": response["ir_semantics"]["ir_read"]["operator_evidences"][0]["quote"] = "NOT_IN_GRAPH"
+            if kind == "enum": response["ir_semantics"]["ir_read"]["events"][0]["events"][0]["effect"] = "safe"
             return response
     client = Invalid()
     result = runner.run_annotation(directory, client=client)
-    assert result["status"] == "invalid_response"
-    assert result["validation"]["status"] == "failed"
-    assert result["profiles"] == {}
-    assert len(client.prompts) == 1
+    assert result["status"] == "complete"
+    assert result["validation"]["status"] == "passed"
+    assert result["counts"]["structural_corrections"] == 1
+    assert result["response_chain"]["attempts"][0]["status"] == "structural_invalid"
+    assert len(client.prompts) == 2
     assert runner.run_annotation(directory, client_factory=forbidden) == result
     assert runner.replay_run(directory) == result
 
@@ -343,14 +361,14 @@ def test_verify_prepared_is_readonly_and_repeat_prepare_rejected(tmp_path):
     assert runner.verify_prepared(directory)["preparation_status"] == "ready"
     assert before == {p.relative_to(directory): p.read_bytes() for p in directory.rglob("*") if p.is_file()}
     with pytest.raises(runner.RunIdentityError):
-        runner.prepare_run(source, analysis, run_dir=directory)
+        authored_prepare_run(source, analysis, run_dir=directory)
 
 
 def test_nested_output_rejected_before_writing(tmp_path):
     directory, source, analysis = setup_run(tmp_path)
     nested = source / "generated"
     with pytest.raises(ValueError, match="nested"):
-        runner.prepare_run(source, analysis, run_dir=nested)
+        authored_prepare_run(source, analysis, run_dir=nested)
     assert not nested.exists()
 
 
@@ -361,7 +379,7 @@ def test_invalid_graph_input_never_calls(tmp_path):
     analysis = tmp_path / "invalid.json"
     analysis.write_text('{"cfg":{}}', encoding="utf-8")
     directory = tmp_path / "run"
-    manifest = runner.prepare_run(source, analysis, run_dir=directory)
+    manifest = authored_prepare_run(source, analysis, run_dir=directory)
     assert manifest["preparation_status"] == "input_error"
     result = runner.run_annotation(directory, client_factory=forbidden)
     assert result["status"] == "input_error"
@@ -375,7 +393,7 @@ def test_response_credential_is_redacted_and_rejected_not_retried(tmp_path):
     class Overlap(FakeClient):
         def complete(self, prompt):
             response = super().complete(prompt)
-            response["profiles"]["ir_read"]["evidences"][0]["reason"] = secret
+            response["ir_semantics"]["ir_read"]["operator_evidences"][0]["reason"] = secret
             return response
     result = runner.run_annotation(directory, client=Overlap(), secrets=(secret,))
     assert result["status"] == "execution_error"
@@ -415,15 +433,44 @@ def test_missing_injected_client_is_replayed_as_execution_error(tmp_path):
     assert runner.replay_run(directory) == result
 
 
+def test_local_setup_failure_after_invalid_saved_candidate_replays_and_detects_tampering(tmp_path):
+    directory, _, _ = setup_run(tmp_path)
+    stopping = Event()
+    class InvalidOnce(FakeClient):
+        def complete(self, prompt):
+            response = super().complete(prompt)
+            stopping.set()
+            return "{invalid"
+    first = runner.run_annotation(directory, client=InvalidOnce(), stop_event=stopping)
+    assert first["status"] == "interrupted"
+    def provider(writer):
+        raise ValueError("missing model configuration")
+    result = runner.run_annotation(directory, factory_provider=provider)
+    assert result["status"] == "execution_error"
+    assert result["counts"]["logical_calls"] == 1
+    assert result["response_chain"]["attempts"][0]["status"] == "structural_invalid"
+    assert runner.replay_run(directory) == result
+    request = directory / "calls/annotation/a002/request.json"
+    value = json.loads(request.read_text(encoding="utf-8"))
+    value["prompt_sha256"] = "0" * 64
+    request.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(runner.RunIdentityError, match="material changed"):
+        runner.replay_run(directory)
+
+
 def test_uncertain_saved_call_has_no_fallback_client(tmp_path):
     directory, _, _ = setup_run(tmp_path)
     runner.run_annotation(directory, client=FakeClient())
     path = directory / runner.CALL_PATH / "call.json"
-    call = json.loads(path.read_text(encoding="utf-8"))
+    original = path.read_bytes()
+    call = json.loads(original)
     call["status"] = "running"
     path.write_text(json.dumps(call), encoding="utf-8")
-    # Fully accepted transport response survives an interrupted call-finalization.
-    assert runner.run_annotation(directory, client_factory=forbidden)["status"] == "complete"
+    # Mutating a sealed receipt is distinct from interruption before checkpoint.
+    # Genuine interrupted acceptance is exercised by ResponseChain lifecycle tests.
+    with pytest.raises(runner.RunIdentityError, match="receipt digest"):
+        runner.run_annotation(directory, client_factory=forbidden)
+    path.write_bytes(original)
     (directory / runner.CALL_PATH / "transport.json").write_text("[]", encoding="utf-8")
     # Erasing the accepted request trace is an identity violation in v8, not
     # authorization to resend or silently replace the previously saved result.

@@ -23,31 +23,30 @@ def graph_payload():
         ]}}, "edges": []}
 
 
-def ev(field=None, value=None, index=None):
-    base = {"basis": "cfg", "ref_id": "g001", "quote": "open_action", "reason": "测试数据"}
-    return base if field is None else {**base, "field": field, "value": value, "effect_index": index}
+def ev():
+    return {"target": {"path": []}, "reason": "Explicit record fixture."}
 
 
-def profile(effects):
-    return {"operator": ["agent_runtime"], "roles": [], "effects": effects,
-            "evidences": [ev("operator", "agent_runtime"), ev("roles")]
-            + ([ev("effects", value, index) for index, value in enumerate(effects)] if effects else [ev("effects")])}
+def semantics_fields(effects):
+    return {"operator": ["agent_runtime"],
+            "operator_evidences": [{**ev(), "value": "agent_runtime"}],
+            **({} if effects else {"empty_effect_evidences": [ev()]}), "sensitivity": []}
 
 
 def annotation_payload():
-    value = {"profiles": {"ir_action": profile(["model_observe", "transform", "model_observe"]), "ir_done": profile([])},
-            "locations": {"model": {"kind": "model_context", "name": "llm", "access_scope": "recipient", "retention": None,
+    value = {"locations": {"model": {"kind": "model_context", "name": "llm", "access_scope": "recipient", "retention": None,
                                     "operand_refs": [{"instruction_id": "ir_action", "side": "input", "index": 0}]}},
-            "transfer_specs": {
-                "ir_action": {"order": "fixed", "precedence": [], "events": [
-                    {"effect_index": 0, "atomic_ops": [{"op": "deliver", "inputs": [{"kind": "input", "index": 0}], "target": "model", "evidences": [ev()]}]},
-                    {"effect_index": 1, "atomic_ops": [{"op": "exclude_parts", "input": {"kind": "input", "index": 0}, "paths": [["api_key"]], "output": "filtered", "evidences": [ev()]}]},
-                    {"effect_index": 2, "atomic_ops": [{"op": "deliver", "inputs": [{"kind": "local", "name": "filtered"}], "target": "model", "evidences": [ev()]}]},
+            "ir_semantics": {
+                "ir_action": {**semantics_fields(True), "order": "fixed", "precedence": [], "events": [
+                    {"effect": "model_observe", "evidences": [ev()], "atomic_ops": [{"op": "deliver", "inputs": [{"kind": "input", "index": 0}], "target": "model", "evidences": [ev()]}]},
+                    {"effect": "transform", "evidences": [ev()], "atomic_ops": [{"op": "exclude_parts", "input": {"kind": "input", "index": 0}, "paths": [["api_key"]], "output": "filtered", "evidences": [ev()]}]},
+                    {"effect": "model_observe", "evidences": [ev()], "atomic_ops": [{"op": "deliver", "inputs": [{"kind": "local", "name": "filtered"}], "target": "model", "evidences": [ev()]}]},
                 ], "output_bindings": [{"output_index": 0, "value": {"kind": "local", "name": "filtered"}, "evidences": [ev()]}]},
-                "ir_done": {"order": "fixed", "precedence": [], "events": [], "output_bindings": []}}}
+                "ir_done": {**semantics_fields(False), "order": "fixed", "precedence": [], "events": [], "output_bindings": []}}}
     value["sink_boundaries"] = [row.model_dump(mode="json") for row in
-        derive_sink_boundaries(value["locations"], value["transfer_specs"], value["profiles"])]
-    return value
+        derive_sink_boundaries(value["locations"], value["ir_semantics"])]
+    from tests.propagation.annotation.helpers import material, with_task_semantics
+    return with_task_semantics(material(), value)
 
 
 def materials(store):
@@ -64,7 +63,7 @@ def records_case():
     clean = registry.create_result("clean", content=WholeExceptContent(base=raw.id, excluded_parts=[["api_key"]]), origin=Origin(at="ir_action", inputs=[raw.id]))
     cfg, annotation = graph_payload(), annotation_payload()
     entry = FlowState.from_mapping({FlowLocation(kind="runtime_context", name="A"): frozenset({raw.id})})
-    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v10", annotation_cfg_sha256=cfg_sha256(cfg), initial_data=seed, initial_state=entry)
+    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg), initial_data=seed, initial_state=entry)
     target = FlowLocation(kind="model_context", name="llm")
     record = IRFlowRecord(order="fixed", precedence=[], entry_state=entry, exit_state=FlowState.from_mapping({
         FlowLocation(kind="runtime_context", name="A"): frozenset({raw.id}),
@@ -108,13 +107,12 @@ def test_actual_pre_and_post_versions_are_preserved(records_case):
 def test_snapshot_roundtrip_binds_seed_annotation_and_new_versions(records_case):
     store = complete(records_case)
     store.validate(require_complete=True)
-    payload = store.to_dict()
-    assert payload["schema_version"] == "skillflow-propagation-record-v9"
-    assert payload["profile_schema_version"] == "security-profile-v10"
+    payload = store.records_dict()
+    assert set(payload) == {"ir_action", "ir_done"}
     assert not {"cfg", "annotation", "data", "initial_data", "initial_state"} & set(payload)
     assert len(store.initial_data["records"]) == 1
-    restored = PropagationRecords.from_json(store.to_json(), **materials(store))
-    assert restored.to_json() == store.to_json()
+    restored = PropagationRecords.from_records(store.records_dict(), **materials(store))
+    assert restored.records_dict() == store.records_dict()
 
 
 def test_queries_exports_and_put_are_isolated(records_case):
@@ -123,9 +121,9 @@ def test_queries_exports_and_put_are_isolated(records_case):
     record.events.clear()
     item = store.get("ir_action")
     item.events[0].atomic_ops[0].inputs.clear()
-    payload = store.to_dict()
+    payload = store.records_dict()
     annotation = store.annotation
-    annotation["profiles"].clear()
+    annotation["ir_semantics"].clear()
     cfg = store.cfg
     cfg["blocks"].clear()
     seed = store.initial_data
@@ -134,10 +132,10 @@ def test_queries_exports_and_put_are_isolated(records_case):
     state["bindings"].clear()
     detached = store.records_dict()
     detached["ir_action"]["events"].clear()
-    payload["records"]["ir_action"]["events"].clear()
+    payload["ir_action"]["events"].clear()
     assert len(store.get("ir_action").events) == 3
     assert len(store.get("ir_action").events[0].atomic_ops[0].inputs) == 1
-    assert store.annotation["profiles"] and store.cfg["blocks"]
+    assert store.annotation["ir_semantics"] and store.cfg["blocks"]
     assert store.initial_data["records"] and store.initial_state["bindings"]
 
 
@@ -165,40 +163,31 @@ def test_invalid_whole_replacements_leave_old_record_untouched(records_case, cha
     assert store.get("ir_action") == original
 
 
-@pytest.mark.parametrize("field", ["cfg", "annotation", "data", "initial_data", "initial_state"])
-def test_snapshot_digest_mismatch_rejected(records_case, field):
-    store = complete(records_case)
-    payload = store.to_dict()
-    payload[field + "_sha256"] = "0" * 64
-    with pytest.raises(ValueError, match="identity does not match supplied material"):
-        PropagationRecords.from_dict(payload, **materials(store))
-
-
 @pytest.mark.parametrize("field,value", [("schema_version", "skillflow-propagation-record-v4"), ("profile_schema_version", "security-profile-v5"), ("complete", False)])
-def test_old_versions_and_false_completion_rejected(records_case, field, value):
+def test_embedded_identity_wrappers_are_rejected(records_case, field, value):
     store = complete(records_case)
-    payload = store.to_dict()
+    payload = store.records_dict()
     payload[field] = value
     with pytest.raises(ValueError):
-        PropagationRecords.from_dict(payload, **materials(store))
+        PropagationRecords.from_records(payload, **materials(store))
 
 
 def test_unknown_order_preserved_without_pretending_verified(records_case):
     _, registry, cfg, annotation, _, _, record = records_case
-    annotation["transfer_specs"]["ir_action"]["order"] = "partial"
+    annotation["ir_semantics"]["ir_action"]["order"] = "partial"
     record = record.model_copy(update={"order": "partial"})
-    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v10", annotation_cfg_sha256=cfg_sha256(cfg))
+    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg))
     store.put("ir_action", record)
     assert not store.effect_order_known("ir_action")
-    assert PropagationRecords.from_json(store.to_json(), **materials(store)).get("ir_action").order == "partial"
+    assert PropagationRecords.from_records(store.records_dict(), **materials(store)).get("ir_action").order == "partial"
 
 
 def test_null_effect_event_keeps_possible_computation(records_case):
     _, registry, cfg, annotation, raw, clean, record = records_case
-    annotation["profiles"]["ir_action"] = profile([])
-    annotation["transfer_specs"]["ir_action"]["events"] = [{"effect_index": None, "atomic_ops": [{"op": "compute", "inputs": [{"kind": "input", "index": 0}], "dependencies": ["possible"], "output": "filtered", "evidences": [ev()]}]}]
+    annotation["ir_semantics"]["ir_action"].update(semantics_fields(False))
+    annotation["ir_semantics"]["ir_action"]["events"] = [{"effect": None, "atomic_ops": [{"op": "compute", "inputs": [{"kind": "input", "index": 0}], "dependencies": ["possible"], "output": "filtered", "evidences": [ev()]}]}]
     annotation["sink_boundaries"] = []
-    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v10", annotation_cfg_sha256=cfg_sha256(cfg))
+    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg))
     record = IRFlowRecord(order="fixed", precedence=[], entry_state=record.entry_state, exit_state=record.exit_state, events=[EffectEvent(effect=None, atomic_ops=[AtomicOpRecord(op="compute", inputs=[frozenset({raw.id})], outputs=[frozenset({clean.id})])])])
     store.put("ir_action", record)
     assert store.get("ir_action").events[0].effect is None
@@ -219,21 +208,22 @@ def test_compact_slot_lists_preserve_repeated_parameters_and_json_order():
 def test_loading_requires_all_materials_and_rejects_embedded_legacy_copies(records_case):
     store = complete(records_case)
     with pytest.raises(TypeError):
-        PropagationRecords.from_dict(store.to_dict())
-    payload = store.to_dict()
+        PropagationRecords.from_records(store.records_dict())
+    payload = store.records_dict()
     payload["data"] = store.data_registry.to_dict()
     with pytest.raises(ValueError):
-        PropagationRecords.from_dict(payload, **materials(store))
+        PropagationRecords.from_records(payload, **materials(store))
 
 
-@pytest.mark.parametrize("field", ["cfg", "annotation", "data_registry", "initial_data", "initial_state"])
-def test_substituted_material_rejected_without_recomputing_expected_digest(records_case, field):
+def test_missing_data_registry_is_rejected_before_restoration(records_case):
     store = complete(records_case)
     supplied = materials(store)
-    if field == "cfg": supplied[field]["blocks"]["entry"]["block_name"] = "different"
-    elif field == "annotation": supplied[field]["profiles"]["ir_action"]["evidences"][0]["reason"] = "different"
-    elif field == "data_registry": supplied[field] = DataRegistry("different")
-    elif field == "initial_data": supplied[field] = DataRegistry("different").to_dict()
-    else: supplied[field] = FlowState()
-    with pytest.raises(ValueError, match="identity does not match supplied material"):
-        PropagationRecords.from_dict(store.to_dict(), **supplied)
+    supplied['data_registry'] = DataRegistry('different')
+    with pytest.raises(ValueError):
+        PropagationRecords.from_records(store.records_dict(), **supplied)
+
+
+def test_material_identity_lives_in_run_manifest_not_records(records_case):
+    store = complete(records_case)
+    assert not hasattr(store, 'to_json') and not hasattr(PropagationRecords, 'from_dict')
+    assert set(store.records_dict()) == {'ir_action', 'ir_done'}

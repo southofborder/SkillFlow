@@ -8,19 +8,18 @@
 
 ```text
 原始联合标注（一次模型调用）
-├─ profiles[IR ID]
-│  └─ operator / roles / effects / evidences   保持四字段
+├─ task / demands / expressions      Task and demand declarations
+├─ ir_semantics[IR ID]                       operator and evidence; processing/events; bindings; sensitivity
 ├─ locations[位置 ID]
 │  ├─ kind                                    上下文、存储、模型、远端、工具或用户
 │  ├─ name                                    稳定名称；与 kind 一起确定位置身份
 │  ├─ operand_refs[]                          实际 IR 操作数关联，允许为空
 │  ├─ access_scope                            task / recipient / shared / public
 │  └─ retention                               task / persistent / null
-├─ transfer_specs[IR ID]                       处理段、值关系、交付和写入
 └─ location_evidences                         原有独立位置依据表
 
 程序编译后的业务材料
-├─ profiles / locations / transfer_specs
+├─ task / demands / expressions / locations / ir_semantics
 └─ sink_boundaries[]                          不由模型填写
    ├─ instruction_id                          属于哪个真实 IR
    ├─ event_index / op_index                  编译规格的事件、操作位置
@@ -74,7 +73,7 @@
 | external_tool | tool 边界的实际交付，且等级大于 0；纯本地任务内调用通常为 task / null，等级 0 |
 | user_output | 明确的用户交付 |
 
-收集不依赖 profile.roles 中是否出现 sink。程序生成的观察不会机械修改执行主体或角色。相同 effect 的重复阶段、原数据与清理结果、逐元素作用域和重复参数保持各自身份。
+收集依据实际操作和位置属性，不使用角色标签。程序生成的观察不会机械修改执行主体。相同 effect 的重复阶段、原数据与清理结果、逐元素作用域和重复参数保持各自身份。
 
 ## 4. 请求、响应、观察与保存
 
@@ -85,7 +84,7 @@
 返回内容进入模型          → 编译 model_observe：绑定返回版本
 ```
 
-纯本地工具交付保留传播记录但不进入 sink 清单。已知工具交付而网络未确定时，允许 effect_index=null 的 deliver → tool；不能用 receive.inputs 代替交付，也不能将这种关系伪装为网络通信。明确网络请求使用 net_send，单个交付点不再生成等价的第二个工具 sink。
+纯本地工具交付保留传播记录但不进入 sink 清单。已知工具交付而网络未确定时，允许 effect=null 的 deliver → tool；不能用 receive.inputs 代替交付，也不能将这种关系伪装为网络通信。明确网络请求使用 net_send，单个交付点不再生成等价的第二个工具 sink。
 
 零参数工具交付可保留空 inputs。它表示没有已建模参数，不表示工具或返回内容不存在；内容未知仍使用合法的 opaque Data。其他已要求内容的交付保持非空参数校验。
 
@@ -97,7 +96,7 @@
 
 主报告优先展示类型、等级、目标、对应数据版本及纳入／排除原因；证据在已有审计区展开。没有审计材料时也不得把静态可能行为写成执行日志。独立 DOE 加载验证清单与真实记录的坐标、目标、类型及等级；完整运行加载和离线重放再核验原始响应、编译来源和摘要。
 
-当前版本为联合标注 v10、标注运行 v11、统一运行时 v5、表示契约 v3、处理编译器 v4、传播记录 v9、DOE 输入 v7、传播运行 v10；Data 保持 v4。新入口拒绝旧记录，不将默认补字段当作历史迁移。
+当前联合标注 v13、编译器 v7、运行时 v7；Data v4 不变。完整运行版本和分阶段文件见[字段收紧规范](../architecture/field-tightening.md)。旧格式拒绝，不迁移历史材料。
 
 离线验收覆盖：任务内部与外部工具、普通文件与有清理机制的临时文件、上下文共享及记忆、先观察后删减、请求与响应版本、重复阶段和逐元素配对、删除与追加、引文和属性冲突、程序派生清单篡改，以及零 API 重放。三例实测只复用冻结 Skill 与 CFG，逐例一次联合标注，不重新建图、不质量补跑，模型实际遵循情况另由助手复核报告。
 

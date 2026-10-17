@@ -4,10 +4,10 @@ import pytest
 from skillflow.propagation.data import OpaqueContent
 from skillflow.propagation import FlowLocation
 from skillflow.propagation import propagate
-from skillflow.propagation.handoff import build_doe_input
-from skillflow.propagation.handoff import validate_doe_input
+from skillflow.propagation.facts import validate_propagation_facts
+from tests.propagation.component_helpers import components
 from skillflow.propagation.contracts.specs import validate_specs
-from skillflow.propagation.material import prepare_material
+from tests.propagation.annotation.helpers import prepare_material
 from .test_solver import (
     DEMO, annotation_for, at, input_ref, instruction, linear, literal, local,
     location, operand,
@@ -36,9 +36,8 @@ def test_returned_content_is_an_acquired_source_with_request_dependencies(bounda
     assert not solved.initial_data["records"]  # no preallocated tool/remote response
     assert solved.records.get("ir_inspect").events[0].atomic_ops[0].inputs == [frozenset([response.id])]
     source, metadata = DEMO["demo_source"]()
-    business = build_doe_input(source, cfg, annotation, solved, source_metadata=metadata,
-                               execution_model=prepare_material(source, cfg)["execution_model"])
-    assert validate_doe_input(business) == business
+    business = components(cfg, annotation, solved)
+    assert validate_propagation_facts(**business)["status"] == business["status"]
     assert business["records"]["ir_query"]["events"][0]["effect"] == effect
 
 
@@ -64,19 +63,25 @@ def test_specs_and_standalone_facts_reject_incompatible_tool_receipts(wrong_effe
     }, {"catalog": ("tool", "catalog.lookup")})
     source, metadata = DEMO["demo_source"]()
     solved = propagate(cfg, annotation)
-    business = build_doe_input(source, cfg, annotation, solved, source_metadata=metadata,
-                               execution_model=prepare_material(source, cfg)["execution_model"])
+    business = components(cfg, annotation, solved)
     annotation["locations"]["catalog"]["kind"] = boundary
-    annotation["profiles"]["ir_query"]["effects"] = [] if wrong_effect is None else [wrong_effect]
-    annotation["transfer_specs"]["ir_query"]["events"][0]["effect_index"] = None if wrong_effect is None else 0
+    spec = annotation["ir_semantics"]["ir_query"]
+    event = spec["events"][0]
+    event["effect"] = wrong_effect
+    if wrong_effect is None:
+        event.pop("evidences", None)
+        spec["empty_effect_evidences"] = [dict(spec["operator_evidences"][0])]
+        spec["empty_effect_evidences"][0].pop("value")
+    else:
+        spec.pop("empty_effect_evidences", None)
     with pytest.raises(ValueError):
         validate_specs(cfg, annotation)
-    business["locations"]["catalog"]["kind"] = boundary
+    business["annotation"]["locations"]["catalog"]["kind"] = boundary
     event = business["records"]["ir_query"]["events"][0]
     event["effect"] = wrong_effect
     event["atomic_ops"][0]["endpoints"][0]["kind"] = boundary
     with pytest.raises(ValueError):
-        validate_doe_input(business)
+        validate_propagation_facts(**business)
 
 
 def container_selection(*, field_only=False):
@@ -226,11 +231,8 @@ def test_tool_receipt_stable_retry_and_context_feedback_share_value_location_res
         assert len(fifo.registry) == 2 and fifo.stats["block_evaluations"] < 10
 
 
-def test_latest_prior_doe_version_is_explicitly_rejected():
-    cfg, annotation = linear([], {})
-    source, metadata = DEMO["demo_source"]()
-    previous = build_doe_input(source, cfg, annotation, propagate(cfg, annotation),
-        source_metadata=metadata, execution_model=prepare_material(source, cfg)["execution_model"])
-    previous["schema_version"] = "skillflow-doe-input-v5"
-    with pytest.raises(ValueError):
-        validate_doe_input(previous)
+def test_retired_standalone_handoff_has_no_public_alias():
+    import importlib.util
+    import skillflow.propagation as propagation
+    assert importlib.util.find_spec('skillflow.propagation.handoff') is None
+    assert not hasattr(propagation, 'load_doe_input')

@@ -15,7 +15,7 @@ from skillflow.propagation.contracts.specs import StrictSpec
 from skillflow.propagation.contracts.specs import Text
 from skillflow.propagation.contracts.specs import Index
 from skillflow.propagation.contracts.specs import LocationSpec
-from skillflow.propagation.contracts.specs import IRTransferSpec
+from skillflow.propagation.contracts.specs import IRSemantics
 from skillflow.propagation.contracts.specs import ForEachSpec
 from skillflow.propagation.contracts.specs import DeliverOp
 from skillflow.propagation.contracts.specs import WriteOp
@@ -86,8 +86,7 @@ def classify_sink(
 
 def derive_sink_boundaries(
     locations: Mapping[str, LocationSpec | dict],
-    transfer_specs: Mapping[str, IRTransferSpec | dict],
-    profiles: Mapping[str, object],
+    ir_semantics: Mapping[str, IRSemantics | dict],
 ) -> list[SinkBoundary]:
     """Collect sinks in stable IR-key order and actual within-IR array order.
 
@@ -99,13 +98,11 @@ def derive_sink_boundaries(
         for key, value in locations.items()
     }
     boundaries = []
-    for ir_id in sorted(transfer_specs):
-        spec = transfer_specs[ir_id]
-        spec = spec if isinstance(spec, IRTransferSpec) else IRTransferSpec.model_validate(spec)
-        profile = profiles[ir_id]
-        effects = profile["effects"] if isinstance(profile, dict) else profile.effects
+    for ir_id in sorted(ir_semantics):
+        spec = ir_semantics[ir_id]
+        spec = spec if isinstance(spec, IRSemantics) else IRSemantics.model_validate(spec)
         for event_index, body_index, event in iter_scoped_events(spec):
-            effect = None if event.effect_index is None else effects[event.effect_index]
+            effect = event.effect
             for op_index, operation in enumerate(event.atomic_ops):
                 if not isinstance(operation, (DeliverOp, WriteOp)):
                     continue

@@ -1,3 +1,6 @@
+from skillflow.common.prompt_format import render_prompt_format
+from skillflow.propagation.contracts.profiles import RawAnnotationResponse, FailureResponse
+from pydantic import TypeAdapter
 """Joint v5 symbolic specification checks, without semantic guessing or API."""
 
 from copy import deepcopy
@@ -5,15 +8,16 @@ import json
 
 import pytest
 
-from skillflow.propagation.contracts.specs import IRTransferSpec
+from skillflow.propagation.contracts.specs import IRSemantics
 from skillflow.propagation.contracts.specs import LiteralRef
 from skillflow.propagation.contracts.specs import validate_specs
 from skillflow.propagation.contracts.profiles import AnnotationPayload
 from skillflow.propagation.contracts.profiles import AnnotationResponse
 from skillflow.propagation.annotation.prompts import build_prompt
+from skillflow.propagation.material import model_material
 from skillflow.propagation.annotation.services import to_payload
 from skillflow.propagation.annotation.services import validate_compiled_response
-from tests.propagation.annotation.helpers import material, profile, valid_response, with_specs
+from tests.propagation.annotation.helpers import material, semantics, valid_response, with_specs
 
 
 def fixture():
@@ -22,14 +26,14 @@ def fixture():
 
 
 def operation(response, ir="ir_filter", event=0):
-    return response["transfer_specs"][ir]["events"][event]["atomic_ops"][0]
+    return response["ir_semantics"][ir]["events"][event]["atomic_ops"][0]
 
 
 def evidence(response):
     return deepcopy(operation(response)["evidences"])
 
 
-@pytest.mark.parametrize("field", ["locations", "transfer_specs", "location_evidences"])
+@pytest.mark.parametrize("field", ["locations", "ir_semantics", "location_evidences"])
 def test_new_fields_are_required_without_legacy_autofill(field):
     prepared, response = fixture()
     response.pop(field)
@@ -40,19 +44,20 @@ def test_new_fields_are_required_without_legacy_autofill(field):
 def test_joint_schema_is_sent_separately_from_unchanged_full_input():
     prepared, response = fixture()
     prompt = build_prompt(prepared)
-    schema = json.loads(prompt.split("\nRESPONSE_JSON_SCHEMA\n")[1].split("\nINPUT_JSON\n")[0])
-    assert set(schema["$defs"]["RawAnnotationResponse"]["required"]) == {"profiles", "locations", "transfer_specs", "outcome", "location_evidences"}
-    assert json.loads(prompt.split("\nINPUT_JSON\n")[1]) == prepared
+    schema = TypeAdapter(RawAnnotationResponse | FailureResponse).json_schema()
+    assert render_prompt_format(schema) in prompt and "RESPONSE_JSON_SCHEMA" not in prompt
+    assert set(schema["$defs"]["RawAnnotationResponse"]["required"]) == {"ir_semantics", "locations", "outcome", "location_evidences", "task_revision_id", "realizations", "demands", "expressions"}
+    assert json.JSONDecoder().raw_decode(prompt.split("\nINPUT_JSON\n")[1])[0] == model_material(prepared)
     assert validate_compiled_response(json.dumps(response, ensure_ascii=False), prepared) == response
     validate_specs(prepared["cfg"], to_payload(response))
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda r: r["transfer_specs"].pop("ir_return"),
-    lambda r: r["transfer_specs"].update(absent=r["transfer_specs"]["ir_filter"]),
-    lambda r: r["transfer_specs"]["ir_filter"]["output_bindings"].clear(),
-    lambda r: r["transfer_specs"]["ir_filter"]["output_bindings"].append(deepcopy(r["transfer_specs"]["ir_filter"]["output_bindings"][0])),
-    lambda r: r["transfer_specs"]["ir_filter"]["output_bindings"][0].update(output_index=True),
+    lambda r: r["ir_semantics"].pop("ir_return"),
+    lambda r: r["ir_semantics"].update(absent=r["ir_semantics"]["ir_filter"]),
+    lambda r: r["ir_semantics"]["ir_filter"]["output_bindings"].clear(),
+    lambda r: r["ir_semantics"]["ir_filter"]["output_bindings"].append(deepcopy(r["ir_semantics"]["ir_filter"]["output_bindings"][0])),
+    lambda r: r["ir_semantics"]["ir_filter"]["output_bindings"][0].update(output_index=True),
     lambda r: operation(r).update(inputs=[{"kind": "input", "index": 999}]),
     lambda r: operation(r).update(inputs=[{"kind": "local", "name": "missing"}]),
     lambda r: operation(r).update(data_ids=["forbidden-propagated-id"]),
@@ -80,21 +85,21 @@ def test_duplicate_location_identity_rejected_even_with_different_ids():
 
 def test_empty_effects_bind_an_unchanged_result_without_events():
     prepared, response = fixture()
-    response["profiles"]["ir_filter"] = profile(prepared, "ir_filter")
+    response["ir_semantics"]["ir_filter"] = semantics(prepared, "ir_filter")
     with_specs(prepared, response)
     parsed = validate_compiled_response(response, prepared)
-    spec = parsed["transfer_specs"]["ir_filter"]
+    spec = parsed["ir_semantics"]["ir_filter"]
     assert spec["events"] == []
     assert spec["output_bindings"][0]["value"] == {"kind": "input", "index": 0}
 
 
 def test_null_event_is_conservative_compute_not_a_hidden_side_effect():
     prepared, response = fixture()
-    response["profiles"]["ir_filter"] = profile(prepared, "ir_filter")
+    response["ir_semantics"]["ir_filter"] = semantics(prepared, "ir_filter")
     with_specs(prepared, response)
-    spec = response["transfer_specs"]["ir_filter"]
+    spec = response["ir_semantics"]["ir_filter"]
     quotes = spec["output_bindings"][0]["evidences"]
-    spec["events"] = [{"effect_index": None, "atomic_ops": [{
+    spec["events"] = [{"effect": None, "atomic_ops": [{
         "op": "compute", "inputs": [], "dependencies": [], "output": "new", "evidences": quotes,
     }]}]
     spec["output_bindings"][0]["value"] = {"kind": "local", "name": "new"}
@@ -112,7 +117,7 @@ def test_null_event_is_conservative_compute_not_a_hidden_side_effect():
 
 def test_primary_effect_operation_cannot_be_replaced_by_a_computation():
     prepared, response = fixture()
-    response["transfer_specs"]["ir_read"]["events"][0]["atomic_ops"] = [deepcopy(operation(response))]
+    response["ir_semantics"]["ir_read"]["events"][0]["atomic_ops"] = [deepcopy(operation(response))]
     with pytest.raises(ValueError, match="primary operation"):
         validate_compiled_response(response, prepared)
 
@@ -124,16 +129,16 @@ def test_primary_effect_operation_cannot_be_replaced_by_a_computation():
 ])
 def test_effect_positions_are_exact_and_not_a_second_sequence(mutation):
     prepared, response = fixture()
-    mutation(response["transfer_specs"]["ir_filter"])
+    mutation(response["ir_semantics"]["ir_filter"])
     with pytest.raises(ValueError):
         validate_compiled_response(response, prepared)
 
 
 def test_unknown_order_forward_candidate_preserves_original_and_rejects_cycles():
     prepared, response = fixture()
-    response["profiles"]["ir_filter"] = profile(prepared, "ir_filter", effects=["model_observe", "transform"])
+    response["ir_semantics"]["ir_filter"] = semantics(prepared, "ir_filter", effects=["model_observe", "transform"])
     with_specs(prepared, response)
-    spec = response["transfer_specs"]["ir_filter"]
+    spec = response["ir_semantics"]["ir_filter"]
     future = {"kind": "local", "name": "stage_1"}
     original = {"kind": "input", "index": 0}
     spec["events"][0]["atomic_ops"][0]["inputs"] = [{"kind": "alternatives", "items": [original, future]}]
@@ -161,7 +166,7 @@ def test_explicit_typed_data_operations_preserve_symbolic_structure(kind):
         "update_fields": {"input": base, "updates": [{"path": ["meta"], "value": value}]},
         "build": {"parts": [{"path": ["meta"], "value": value, "when": None}], "container": "object"},
     }[kind]
-    response["transfer_specs"]["ir_filter"]["events"][0]["atomic_ops"] = [
+    response["ir_semantics"]["ir_filter"]["events"][0]["atomic_ops"] = [
         {"op": kind, "output": "stage_0", "evidences": evidence(response), **extra}]
     assert validate_compiled_response(response, prepared) == response
 
@@ -171,15 +176,14 @@ def test_invalid_path_segments_cannot_be_coerced(path):
     prepared, response = fixture()
     operation(response).clear()
     operation(response).update(op="select_part", input={"kind": "input", "index": 0}, path=path,
-                               output="stage_0", evidences=[{"basis": "cfg", "ref_id": prepared["instruction_index"]["ir_filter"]["ref_id"],
-                                                            "quote": "select_fields_locally", "reason": "测试"}])
+                               output="stage_0", evidences=[{"target": {"instruction_id": "ir_filter", "path": []}, "reason": "测试"}])
     with pytest.raises(ValueError):
         validate_compiled_response(response, prepared)
 
 
 def test_delete_context_binding_has_no_input_and_cannot_hide_a_read():
     prepared, response = fixture()
-    response["profiles"]["ir_filter"] = profile(prepared, "ir_filter", effects=["context_write"])
+    response["ir_semantics"]["ir_filter"] = semantics(prepared, "ir_filter", effects=["context_write"])
     with_specs(prepared, response)
     op = operation(response)
     op.update(mode="delete", input=None)
@@ -199,10 +203,10 @@ def test_json_literal_types_are_not_coerced():
 
 def test_external_resource_operand_is_a_boundary_not_a_value_reference():
     prepared, response = fixture()
-    response["transfer_specs"]["ir_read"]["output_bindings"][0]["value"] = {"kind": "input", "index": 0}
+    response["ir_semantics"]["ir_read"]["output_bindings"][0]["value"] = {"kind": "input", "index": 0}
     with pytest.raises(ValueError, match="resource identity"):
         validate_compiled_response(response, prepared)
-    response["transfer_specs"]["ir_read"]["output_bindings"][0]["value"] = {"kind": "literal", "value": "config.json"}
+    response["ir_semantics"]["ir_read"]["output_bindings"][0]["value"] = {"kind": "literal", "value": "config.json"}
     assert validate_compiled_response(response, prepared) == response
 
 
@@ -242,7 +246,7 @@ def test_location_declaration_is_five_fields_and_can_have_no_public_operand():
     assert set(location) == {"kind", "name", "operand_refs", "access_scope", "retention"}
     location["operand_refs"] = []
     assert validate_compiled_response(response, prepared) == response
-    assert set(prepared["instruction_index"]["ir_read"]) == {"block_id", "position", "ref_id"}
+    assert "instruction_index" not in prepared
 
 
 @pytest.mark.parametrize("extra,value", [
@@ -283,11 +287,11 @@ def test_independent_location_evidence_has_exact_coverage_and_real_quotes(mutati
         validate_compiled_response(response, prepared)
 
 
-def test_explicit_projection_keeps_four_business_fields_for_dict_and_model():
+def test_explicit_projection_keeps_joint_business_fields_for_dict_and_model():
     prepared, response = fixture()
     validated = validate_compiled_response(response, prepared)
     payload = to_payload(validated)
-    assert set(payload) == {"profiles", "locations", "transfer_specs", "sink_boundaries"}
+    assert set(payload) == {"ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions"}
     assert to_payload(AnnotationResponse.model_validate(validated)) == payload
     assert AnnotationPayload.model_validate(payload).model_dump(mode="json") == payload
     with pytest.raises(ValueError, match="location_evidences"):
@@ -300,8 +304,8 @@ def test_explicit_projection_keeps_four_business_fields_for_dict_and_model():
 
 def test_full_response_requires_an_explicit_empty_location_evidence_table():
     prepared, response = fixture()
-    for ir_id in response["profiles"]:
-        response["profiles"][ir_id] = profile(prepared, ir_id)
+    for ir_id in response["ir_semantics"]:
+        response["ir_semantics"][ir_id] = semantics(prepared, ir_id)
     with_specs(prepared, response)
     assert response["locations"] == response["location_evidences"] == {}
     assert validate_compiled_response(response, prepared) == response

@@ -87,9 +87,9 @@
 
 保守表示不修改 CFG。核对产物中的候选是表示精度说明，不是已经执行二次传播后的数据集合。后续阶段必须把候选理解为可能性，不能把每个候选成员当成必定读取或必定传递。
 
-## 5. v5 结果契约及反馈
+## 5. v6 结果契约及反馈
 
-正常结果使用 `outcome="completed"`，五类判定为 `represented、omitted、mistranslated、unsupported_addition、internal_conflict`。每项保存源文要求、实际表示、理由、双方证据及建议；相关要求可合并，局部差异必须指出。背景项不能替代业务通过。
+正常结果只含 schema_version、contract_version、outcome、findings；不再携带 reviewed 覆盖数组或 notes，覆盖仍由 findings 引用严格校验。正常结果使用 `outcome="completed"`，五类判定为 `represented、omitted、mistranslated、unsupported_addition、internal_conflict`。每项保存源文要求、实际表示、理由、双方证据及建议；相关要求可合并，局部差异必须指出。背景项不能替代业务通过。
 
 `conservative` 仍可省略或为 null；明确采用保守依赖规则时，保存规则、候选事实、损失区分和理由。程序校验候选定位和结果身份，不证明候选业务合理性。`representation_summary` 只列保留项和其中明确采用保守说明的项，未填写说明不代表精确。
 
@@ -97,22 +97,22 @@ v5 删除 `unknown、unknown_reason`。遇到妨碍必要判断的具体冲突�
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "contract_version": "skill-ir-semantic-contract-v4",
   "outcome": "cannot_assess",
   "failure": {
     "reason": "具体阻碍必要判断的原因",
     "source_refs": [],
-    "controlled_refs": [{"unit_id": "必须为现有编号", "quote": null}]
+    "controlled_refs": [{"unit_id": "必须为现有编号"}]
   }
 }
 ```
 
-至少一侧必须有真实定位，源文引文及已给出的受控引文均校验。失败分支不携带 findings、覆盖数组或 notes；完成分支不允许 failure。程序校验后保存为 `semantic_failure`，与传输和格式错误分开，不自动修复，也不冒充没有问题。程序并未证明失败理由的语义正确性。
+至少一侧必须有真实定位。源文引用只含 file/start_line/end_line，必须完整落在一个原单元内；受控引用只含 unit_id。程序从冻结材料提取展示文本，不让模型重复填写 quote。失败分支不携带 findings、覆盖数组或 notes；完成分支不允许 failure。程序校验后保存为 `semantic_failure`，与传输和格式错误分开，不自动修复，也不冒充没有问题。程序并未证明失败理由的语义正确性。
 
 未展开内容、普通不透明行为、有依据的候选关系，以及原文未保证运行成功，本身不妨碍忠实表示，不能仅因此失败。源文可保留的开放描述继续正常核对。
 
-反馈只针对四类明确差异；合法保守项不要求重提取。只有完成响应、真实证据与覆盖有效、至少一个业务项且全部保留时，才可 `audit_passed`。全背景项停止为 `semantic_failure`。坏 JSON、非法定位、错误引文和缺失覆盖保持执行错误，不静默修补。
+反馈只针对四类明确差异；合法保守项不要求重提取。只有完成响应、真实证据与覆盖有效、至少一个业务项且全部保留时，才可 `audit_passed`。全背景项停止为 `semantic_failure`。坏 JSON、非法定位、废弃证据字段和缺失覆盖保持执行错误，不静默修补。
 
 ## 6. 实验、重放和验收
 
@@ -131,3 +131,12 @@ v5 删除 `unknown、unknown_reason`。遇到妨碍必要判断的具体冲突�
 历史解释契约 v3 的诊断范围另存 `experiments/propagation/runs/source-boundaries-v1-<时间戳>/`：001、010、013 从冻结源包重新提取，进入既有有界反馈，再对选定图进行联合标注和离线传播。它不覆盖上述历史七例，也不将最新一轮结构有效图自动称为语义核对通过图。报告按来源、读取范围、观察版本、取得值和实际接收方复核完整链路，不因后续传播完成而更改核对停止状态。
 
 本轮解释契约 v4 只对当前 001、010、013 既有 CFG 做新版单次核对，使用 `max_semantic_revisions=0`，不重新提取。结果与第二阶段标注的一次修复分别保存，二者不互相提供判定答案。
+
+### v6 feedback payload tightening
+
+The feedback request retains one complete `previous_cfg`. `current_facts` and `suggestion_targets` contain program-validated graph pointers, without repeated value subtrees. Every pointer is resolved against that exact frozen graph before the request is built. The source, controlled identities, finding basis, and conservative-dependency checks remain authoritative; this projection does not change the IR, shared semantic contract v4, or Lean certificate. Historical run identities remain unchanged.
+
+
+### File-span evidence and run v7
+
+The model response remains schema v6 and the interpretation contract remains v4. Source references use exact file paths and inclusive one-based physical-line ranges, including ranges crossing former paragraph boundaries. Normal findings must cover every nonempty source line by the union of their existing references; headings, code fences and code are included. This is a location-coverage check, not a semantic-completeness proof or one-finding-per-line requirement. `cannot_assess` validates only the cited positions. No source-unit index or duplicate coverage field is produced. Controlled graph fact IDs, CFG fields, extraction instructions and Lean certificates are unchanged. Audit and feedback run identities advance to v7 because prepared inputs, response validation and offline replay have changed.

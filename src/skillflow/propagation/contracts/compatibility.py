@@ -4,6 +4,8 @@ This module never infers labels from opcodes, tool names or evidence prose.
 It checks only explicitly supplied abstract operations and boundary categories.
 """
 
+from skillflow.common.validation import structural_error, validation_at
+
 INTERACTION_EFFECTS = {
     "read": {"context_read", "fs_read"},
     "receive": {"net_receive"},
@@ -21,12 +23,12 @@ TRANSFORM_OPERATIONS = {"select_part", "exclude_parts", "update_fields", "build"
 
 def validate_event_operations(effect: str | None, operations: list[str]) -> None:
     if not operations:
-        raise ValueError("effect event must contain an atomic operation")
+        raise structural_error("validate_event_operations", "", "effect event must contain an atomic operation")
     primary = next((op for op, effects in INTERACTION_EFFECTS.items() if effect in effects), None)
     if primary is not None and primary not in operations:
-        raise ValueError(f"effect event lacks its primary operation: {effect}/{primary}")
+        raise structural_error("validate_event_operations", "", f"effect event lacks its primary operation: {effect}/{primary}")
     if effect == "transform" and not TRANSFORM_OPERATIONS.intersection(operations):
-        raise ValueError("transform event lacks a data transformation")
+        raise structural_error("validate_event_operations", "", "transform event lacks a data transformation")
 
 
 def validate_operation_boundary(
@@ -41,17 +43,17 @@ def validate_operation_boundary(
     if effect is None:
         if operation == "compute":
             if dependencies is not None and any(value != "possible" for value in dependencies):
-                raise ValueError("effect-free compute only permits possible dependencies")
+                raise structural_error("validate_operation_boundary", "", "effect-free compute only permits possible dependencies")
         elif not (operation in {"receive", "deliver"} and boundary_kind == "tool"):
-            raise ValueError("effect-free event only permits possible compute or receive/deliver with tool")
+            raise structural_error("validate_operation_boundary", "", "effect-free event only permits possible compute or receive/deliver with tool")
     elif operation in INTERACTION_EFFECTS and effect not in INTERACTION_EFFECTS[operation]:
-        raise ValueError(f"atomic operation/effect mismatch: {operation}/{effect}")
+        raise structural_error("validate_operation_boundary", "", f"atomic operation/effect mismatch: {operation}/{effect}")
 
     if operation in INTERACTION_EFFECTS:
         allowed = {"tool"} if effect is None else EFFECT_BOUNDARIES.get(effect, set())
         if boundary_kind not in allowed:
-            raise ValueError(f"effect location kind mismatch: {operation}/{effect}/{boundary_kind}")
+            raise structural_error("validate_operation_boundary", "", f"effect location kind mismatch: {operation}/{effect}/{boundary_kind}")
         if operation == "deliver" and input_count == 0 and not (effect is None and boundary_kind == "tool"):
-            raise ValueError("empty delivery inputs are allowed only for an effect-free tool request")
+            raise structural_error("validate_operation_boundary", "", "empty delivery inputs are allowed only for an effect-free tool request")
     elif boundary_kind is not None:
-        raise ValueError("non-interaction operation must not declare a boundary")
+        raise structural_error("validate_operation_boundary", "", "non-interaction operation must not declare a boundary")

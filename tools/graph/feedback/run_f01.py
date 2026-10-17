@@ -23,7 +23,7 @@ from skillflow.common.paths import project_root, resolve_material_path
 
 REPOSITORY_ROOT = project_root()
 ROOT = REPOSITORY_ROOT / "experiments/graph/feedback"
-IDENTITY = "skill-ir-semantic-feedback-f01-v5"
+IDENTITY = "skill-ir-semantic-feedback-f01-v7"
 CASE_LABELS = {
     "c01": "F01 原图",
     "c02": "archive 增加密钥输入",
@@ -40,7 +40,7 @@ def _read(path):
 def _verified_manifest(directory, config, writer):
     prepared = prepare_cases()
     expected = {
-        "schema_version": 5,
+        "schema_version": 7,
         "identity": IDENTITY,
         **contract_binding(),
         "driver": {"path": Path(__file__).resolve().relative_to(REPOSITORY_ROOT).as_posix(),
@@ -58,7 +58,7 @@ def _verified_manifest(directory, config, writer):
     manifest_path = directory / "manifest.json"
     if manifest_path.exists():
         saved = _read(manifest_path)
-        if saved.get("schema_version") != 5 or saved.get("identity") != IDENTITY:
+        if saved.get("schema_version") != 7 or saved.get("identity") != IDENTITY:
             raise ValueError("Unsupported semantic feedback experiment version")
         if saved != expected:
             raise ValueError("F01 experiment manifest/input/config identity mismatch")
@@ -174,7 +174,7 @@ def execute(directory, *, replay=False, env_file=None, renderer=None):
         if replay:
             writer = ArtifactWriter(())
             manifest = _read(directory / "manifest.json")
-            if manifest.get("schema_version") != 5 or manifest.get("identity") != IDENTITY:
+            if manifest.get("schema_version") != 7 or manifest.get("identity") != IDENTITY:
                 raise ValueError("Unsupported semantic feedback experiment version")
             manifest = _verified_manifest(directory, manifest["config"], writer)
             factory = None
@@ -220,7 +220,7 @@ def execute(directory, *, replay=False, env_file=None, renderer=None):
                 outcomes[case_id] = {"status": "execution_error", "reason": f"{type(error).__name__}: {error}", "rounds": [], "counts": {}}
             writer.json(directory / ("replay/progress.json" if replay else "progress.json"), outcomes)
         result = {
-            "schema_version": 5, "identity": IDENTITY, **contract_binding(),
+            "schema_version": 7, "identity": IDENTITY, **contract_binding(),
             "mode": "replay" if replay else "live",
             "cases": outcomes,
             "evaluation": _post_evaluation(manifest, outcomes),

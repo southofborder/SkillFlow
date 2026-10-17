@@ -6,16 +6,17 @@ import re
 import pytest
 
 from tests.propagation.annotation.helpers import graph, source_bundle
-from skillflow.propagation.contracts.runtime_contract import execution_model
-from skillflow.propagation.material import prepare_material
+from skillflow.propagation.contracts.runtime_contract import runtime_contract
+from tests.propagation.annotation.helpers import prepare_material
+from skillflow.propagation.material import model_material
 from skillflow.propagation.annotation.prompts import INSTRUCTIONS
 from skillflow.propagation.annotation.prompts import build_prompt
 
 
 def test_source_rules_replace_stale_read_only_stage_and_keep_english_instructions():
-    assert execution_model()["version"] == "skillflow-abstract-runtime-v5"
-    rules = {item["id"]: item["text"] for item in execution_model()["rules"]}
-    assert len(rules) == len(execution_model()["rules"])
+    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v7"
+    rules = {item["id"]: item["text"] for item in runtime_contract()["rules"]}
+    assert len(rules) == len(runtime_contract()["rules"])
     assert "This stage only labels the read effect" not in rules["EM01"]
     assert "does not establish a key-only read mechanism" in rules["EM01"]
     assert "do not invent other fields" in rules["EM01"]
@@ -35,40 +36,38 @@ def test_source_rules_replace_stale_read_only_stage_and_keep_english_instruction
 
 
 @pytest.mark.parametrize("phrases", [
-    ("unspecified request keeps a possible whole-request read", "an evidenced local key-only getter"),
-    ("Model filtering declares model mode", "explicit local filtering declares local mode with only the selected result returned"),
-    ("only its returns", "are outbound parameters still limited to their actual bindings"),
-    ("EM09 independently of network classification", "network claim"),
-    ("symbolic: only for dynamic or non-unique target identity", "Unknown content inside an identified container is not an unknown location"),
-    ("Reuse an identified container across acquisitions of different fields", "Do not replace a source whole by an unrelated field source"),
+    ("retain the declared source and target value separately", "Apply runtime defaults or explicit local mechanisms"),
+    ("Explicit model content processing uses mode=model", "Only explicit local execution AND its content-visibility/return boundary"),
+    ("State returns explicitly", "bind public outputs and actual arguments"),
+    ("Receiving tool content is acquisition, not query-only computation", "networking is a separate claim"),
+    ("An identified source may remain opaque without fabricated fields", "Reuse identities and supported aliases"),
+    ("A selected field operand does not identify its entire source container", "read/local/select_part"),
 ])
-
 def test_prompt_carries_paired_positive_and_restrictive_boundaries(phrases):
     for phrase in phrases:
         assert phrase in INSTRUCTIONS
 
 
-def test_payload_preserves_complete_source_graph_and_uses_one_execution_model():
+def test_payload_preserves_complete_source_graph_and_uses_one_runtime_contract():
     text = "# 来源\n从请求取得城市。明确本地取值例：getter('city')。\n"
     prepared = prepare_material(source_bundle(text), graph())
     prompt = build_prompt(prepared)
-    payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-    assert payload == prepared
-    assert payload["source"]["files"][0]["content"] == text
+    payload = json.JSONDecoder().raw_decode(prompt.split("\nINPUT_JSON\n", 1)[1])[0]
+    assert payload == model_material(prepared)
+    assert "".join(payload["source"]["files"][0]["lines"]) == text
     assert payload["cfg"] == graph()
-    assert payload["execution_model"] == execution_model()
-    assert "Write all inference reasons and failure explanations in Chinese" in INSTRUCTIONS
-    assert "FINAL CONSISTENCY CHECK" in INSTRUCTIONS
+    assert payload["runtime_contract"] == runtime_contract()
+    assert "failure reasons in English" in INSTRUCTIONS
+    assert "COMPLETE RESPONSE AND FAILURE" in INSTRUCTIONS
     assert "Data IDs" in INSTRUCTIONS
 
 
 def test_operand_relation_is_not_ancestor_alias_and_null_receive_not_network():
     for phrase in (
-        "not any ancestor source of that value",
-        "container may have operand_refs=[]",
-        "A single operand may have several supported possible locations",
-        "tool is a content-acquisition or delivery boundary without a network claim",
-        "It must not hide a known network effect",
-        "A null event must not introduce reads, non-tool deliveries, writes, selections, exclusions, updates, or builds",
+        "Do not invent an operand for an implicit boundary or confuse an ancestor source",
+        "unanchored source location may use operand_refs=[]",
+        "Reuse identities and supported aliases",
+        "networking is a separate claim",
+        "it cannot hide reads, writes, field transformations or known networking",
     ):
         assert phrase in INSTRUCTIONS

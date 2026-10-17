@@ -15,24 +15,24 @@ PUBLIC_CONFIG_FIELDS = (
 def _nonnegative(value):
     parsed = int(value)
     if parsed < 0:
-        raise argparse.ArgumentTypeError("修复次数必须为非负整数")
+        raise argparse.ArgumentTypeError("The repair count must be a nonnegative integer")
     return parsed
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="CFG 语义反馈闭环 v5：统一解释契约、语义覆盖核对、证据校验及有界修复")
+    parser = argparse.ArgumentParser(description="CFG semantic feedback v7: shared interpretation contract, semantic coverage review, evidence validation and bounded repair")
     commands = parser.add_subparsers(dest="command", required=True)
-    run = commands.add_parser("run", help="开始或恢复同一身份的运行；不自动重发不确定请求")
-    run.add_argument("--input", type=Path, required=True, help="Skill 目录或 ZIP")
+    run = commands.add_parser("run", help="Start or resume the same run identity; do not automatically resend uncertain requests")
+    run.add_argument("--input", type=Path, required=True, help="Skill directory or ZIP")
     run.add_argument("--run-dir", type=Path, required=True)
-    run.add_argument("--initial-analysis", type=Path, help="包含有效 cfg 的已有 analysis.json")
+    run.add_argument("--initial-analysis", type=Path, help="Existing analysis.json containing a valid cfg")
     run.add_argument("--max-semantic-revisions", type=_nonnegative, default=3)
     run.add_argument("--max-structural-repairs", type=_nonnegative, default=3)
     run.add_argument("--max-audit-execution-retries", type=int, choices=range(6), default=2,
-                     help="每轮核对暂态通信失败的额外执行重试次数（0–5；默认 2），不重试完整响应")
+                     help="Additional execution retries for transient communication failures per review round (0-5; default 2); completed responses are not retried")
     run.add_argument("--env-file", type=Path)
-    run.add_argument("--renderer", type=Path, help="Lean 受控打印器可执行文件")
-    replay = commands.add_parser("replay", help="离线重走保存响应的解析、编译、保真及核对，零 API")
+    run.add_argument("--renderer", type=Path, help="Lean controlled-printer executable")
+    replay = commands.add_parser("replay", help="Reparse, compile, check fidelity and review saved responses offline, with zero API calls")
     replay.add_argument("--run-dir", type=Path, required=True)
     replay.add_argument("--renderer", type=Path)
     args = parser.parse_args(argv)
@@ -57,7 +57,7 @@ def main(argv=None):
             config=config, secrets=secrets, renderer=args.renderer,
             progress=lambda message: print(message, flush=True),
         )
-    print(f"{result['status']}；{result.get('reason', '')}；{args.run_dir.resolve()}", flush=True)
+    print(f"{result['status']}; {result.get('reason', '')}; {args.run_dir.resolve()}", flush=True)
     return 0 if result["status"] == "audit_passed" else 1
 
 

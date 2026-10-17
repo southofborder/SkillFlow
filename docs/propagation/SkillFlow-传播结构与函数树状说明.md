@@ -6,7 +6,7 @@
 当前联合标注先生成 `model/local/default` 处理段，再由程序编译观察、最终效果及证据索引。
 原始标注、编译结果和位置映射分开保存并绑定摘要；恢复与离线重放重新编译核对。
 `local` 需要源文／CFG 机制依据与明确的回传列表；`model` 需要执行主体包含 llm。
-程序不因观察接收方是模型就自动增加执行主体或角色。新规则见
+程序不因观察接收方是模型就自动增加执行主体。新规则见
 [字段关系与观察编译](SkillFlow-字段关系与观察编译.md)。
 
 新增 `filter_items`、`subset_view` 和单层 `for_each`。逐元素作用域保留 collection/element 及
@@ -15,7 +15,7 @@
 规格保留唯一 events 顺序，数据记录不再复制第二份模式表。
 
 
-依据当前代码整理：Data v4、联合标注 v10、传播记录 v9、DOE 输入 v7、传播运行 v10。本说明解释当前结构，不修改算法，不调用模型。
+依据当前代码整理；现行版本见[字段收紧规范](../architecture/field-tightening.md)。本说明解释当前结构，不修改算法，不调用模型。
 
 前面的呈现把模型声明、程序计算和文件存档混在一起，确实增加了审计负担。这里把它们分开。先读整体关系和编号，再看字段，最后查函数。
 
@@ -25,14 +25,14 @@
 ├─ 输入二：CFG                               第一阶段产生的原图
 │  └─ IRInstruction                          图中的一条动作及其操作数
 ├─ 模型产物：RawAnnotationResponse           一次联合标注的原始响应
-│  ├─ profiles[IR ID]                        谁执行、什么角色、哪些安全效果
+│  ├─ task / demands / expressions           全局要求与独立需求、计算语义
 │  ├─ locations[位置别名]                     位置身份、访问范围、留存及操作数关联
-│  ├─ transfer_specs[IR ID]                  这条动作怎样取得、处理、交付数据
+│  ├─ ir_semantics[IR ID]                    谁执行，以及怎样取得、处理、交付数据
 │  │  ├─ events[].processing / for_each      唯一处理顺序；段内使用符号 atomic_ops
 │  │  └─ output_bindings[]                   把已有值登记为原 IR 的公开结果
 │  └─ location_evidences[位置别名]           位置依据审计表，校验后独立保存
 ├─ 程序编译：sink_boundaries[]               交付／保存点的类型、等级及真实操作坐标
-├─ 程序转换：to_payload(response)            显式取四项业务字段为 AnnotationPayload
+├─ 程序转换：to_payload(response)            显式取六项业务字段为 AnnotationPayload
 │                                            这是传播输入，不含位置依据审计表
 ├─ 程序管理的数据：DataRegistry
 │  └─ Data                                  一份数据的身份、内容关系、来源与说明
@@ -48,7 +48,7 @@
    └─ diagnostics                           实际绑定错误、算法范围限制
 ```
 
-其中只有 AnnotationResponse 是这一轮 LLM 生成的业务结果。Data、状态和传播记录由程序生成。CFG 来自前一阶段。清单、摘要和调用次数用于复现与校验，放在最后解释。
+其中 RawAnnotationResponse 是模型生成的业务候选；AnnotationResponse 是程序校验并编译后的投影。Data、状态和传播记录由程序生成。CFG 来自前一阶段。清单、摘要和调用次数用于复现与校验，放在最后解释。
 
 **1．先分清编号，以及几个重复出现的词**
 
@@ -63,12 +63,12 @@
 | `loc_model` | locations 表里的位置别名，由规格引用 | Data ID 或原文证据编号 |
 | `(model_context, assistant)` | 实际位置的类别与名称，共同确定身份 | 存在于该位置的具体内容 |
 | `g_0004`、源文单元编号、`EM02` | 图、源文、执行规则的证据定位 | 文件／模型／网络的交互位置 |
-| `effect_index=1` | profile.effects 的第二次效果出现 | events 列表位置或 atomic_ops 位置 |
+| `effect` | 该事件直接关联的安全效果 | 风险判断或另一份效果数组的索引 |
 | `atomic_ops[0]` | 当前事件内第一个原子操作；顺序由数组位置确定 | 额外存储的 op_index 字段 |
 
 `kind`、`form`、`op` 都是“选择具体类型”的标记，所处结构不同：ValueRef.kind 选择引用方式，FlowLocation.kind 选择位置类别，Data.content.form 选择内容形态，AtomicOp.op 选择固定操作。
 
-`Data.annotations` 是数据本身的描述／已有敏感性标记；传播里的 `annotation` 是四项业务载荷 AnnotationPayload。原始模型响应没有 sink 清单；程序编译后的完整 AnnotationResponse 还包含 completed 状态和位置审计表，不直接传给求解器。
+`Data.annotations` 是数据本身的描述／已有敏感性标记；传播里的 `annotation` 是六项业务载荷 AnnotationPayload。原始模型响应没有 sink 清单；程序编译后的完整 AnnotationResponse 还包含 completed 状态和位置审计表，不直接传给求解器。
 
 下面 `T[]` 表示列表；`?` 表示允许 null；`{D_A,D_B}` 表示候选集合。索引全部从 0 开始，源文行号从 1 开始。能为空的字段不一定能省略；每段会说明默认值。
 
@@ -193,79 +193,53 @@ dependencies:     B / possible        表示仍可能受 B 影响，不等于含
 
 已知 parts 不保证同时存在；parts_complete=false 不代表空、错误或必须人工补全。WholeExcept 始终保留 base 的未知剩余。一次 field_updates 的路径不能相同或互为前缀；先改父字段再改子字段要写成两个操作，产生两份数据版本。
 
-**4．LLM 联合响应：它要填写的完整树**
+**4．联合语义：一条 IR 只有一份语义记录**
 
 ```text
-AnnotationPayload（传播使用的四个顶层字段，全部必填）
-├─ profiles: dict[IR ID, SecurityProfile]
-│  └─ SecurityProfile（严格四字段，均必填）
-│     ├─ operator: Operator[]            参与当前动作执行的主体，可多值，不重复
-│     ├─ roles: Role[]                   动作的数据角色，可多值，不重复
-│     ├─ effects: Effect[]               有序效果步骤，可重复，可为空
-│     └─ evidences: Evidence[]           支持每个标签或空列表判断的依据
-├─ locations: dict[位置别名, LocationSpec] 声明有哪些可读取／写入／交付边界
-├─ transfer_specs: dict[IR ID, IRTransferSpec]
-│                                        每条 IR 的有序数据处理规则
-└─ sink_boundaries: SinkBoundary[]       程序生成，定位真实交付和非删除保存
-   ├─ instruction_id: str               哪条 IR
-   ├─ event_index / op_index            编译事件及原子操作位置
-   ├─ body_event_index: int/null        逐元素 body 中的事件位置
-   ├─ scope: element/null               单层元素作用域标记
-   ├─ target: str                       已声明目标位置 ID
-   ├─ sink_type                         六种固定边界类型
-   └─ exposure_level: 1/2/3             程序固定分级；0 级不进清单
+RawAnnotationResponse
+├─ outcome = completed
+├─ task                                全局目的、要求、依据及 CFG 对应
+├─ demands / expressions        真实 CFG 目标；模型不填 goal ID
+├─ ir_semantics[IR ID]
+│  ├─ operator[]                       执行主体；不重复，排列无时序意义
+│  ├─ operator_evidences[]              定位与 reason，加 value 指明主体
+│  ├─ empty_effect_evidences[]          仅无非空效果时必填；其他情况省略
+│  ├─ order                            fixed / partial
+│  ├─ events[]                         processing 或单层 for_each
+│  │  └─ processing.events[]
+│  │     ├─ effect                     当前阶段标签，或 null
+│  │     ├─ evidences[]                 非空效果的分类与阶段依据
+│  │     └─ atomic_ops[]                当前阶段的有序数据操作
+│  ├─ output_bindings[]                真实公开结果绑定
+│  └─ sensitivity[]                    已有符号值及信息范围的敏感声明
+├─ locations                           位置身份与边界属性
+└─ location_evidences                   位置 ID → 非空依据列表
 
-AnnotationResponse（正常响应；outcome=completed）
-├─ 上述四项                             profiles / locations / transfer_specs / sink_boundaries
-├─ outcome                              completed
-└─ location_evidences: dict[位置别名, SpecEvidence[]]
-   └─ 每个位置至少一条依据；键集合必须与 locations 完全相同
+AnnotationResponse（编译结果）
+├─ outcome = completed
+├─ task / demands / expressions        单一任务与规范化需求；goal ID 由程序生成
+├─ ir_semantics[IR ID]                  同一 IR 记录，events 已展开观察
+│  └─ precedence[]                     程序生成的必要先后关系
+├─ locations / location_evidences
+└─ sink_boundaries[]                   程序生成
+   ├─ instruction_id
+   ├─ event_index / op_index
+   ├─ body_event_index / scope          逐元素位置及作用域
+   ├─ target                           已声明边界 ID
+   ├─ sink_type                        固定六类边界
+   └─ exposure_level                   固定 1/2/3 级；0 级仍传播但不入清单
+
+SourceEvidence                         CFGEvidence                RuleEvidence
+├─ file                                ├─ target: CFGTarget       ├─ rule_id
+├─ start_line / end_line                └─ reason                  └─ reason
+└─ reason
 ```
 
-原始模型响应填写三项业务声明，程序先校验、编译观察和 sink 清单，再由 `to_payload` 显式生成四项业务载荷。位置依据独立保存到 `audit/location-evidences.json`；不删除、不遗失，只是不混入传播位置结构。求解器不会自动忽略完整响应里的 outcome 和位置证据，也不提供旧版兼容解析。
+不再维护 `profiles`、`roles`、平行 effects 数组或 effect_index。效果随事件出现，重复阶段各保留独立依据。主体仍为 llm、agent_runtime、tool、human。编译观察不机械增加 llm。效果词表不变；model_observe 只由编译器生成。
 
-泛化 unresolved 已删除。不能完成必要判断时使用独立 cannot_assess/failure 响应；普通未知计算仍用 possible 依赖，可计算的不完整先后关系使用 order=partial。它们不是失败。
+证据用文件行范围、直接 CFG target 或 EM rule_id 区分，原文按真实文件行提取，模型不再抄 quote、basis 或摘要。operator_evidences 只额外填写 value；空主体使用 null。null 效果没有效果依据，但数据操作依据仍必需。无非空效果的 IR 仍须解释，不等于 NOP 或 IN/OUT 相同。
 
-```text
-Operator
-├─ llm                                  模型参与执行该动作
-├─ agent_runtime                        Agent 本地运行时
-├─ tool                                 工具执行
-└─ human                                人参与执行
-
-Role
-├─ source                               引入数据
-├─ sink                                 数据到达接收／可见／存储边界
-└─ transformer                          处理或改变内容
-
-Effect（列表顺序有效，重复项是不同阶段）
-├─ context_read                         从运行时输入／上下文取得内容
-├─ context_write                        改变后续可读取的运行时内容／绑定
-├─ fs_read                              读取文件内容
-├─ fs_write                             创建、覆盖、追加等文件写入
-├─ net_send                             向远端发送内容或参数
-├─ net_receive                          从远端接收内容
-├─ model_observe                        内容进入模型本次处理上下文
-├─ user_output                          内容直接提供给用户
-└─ transform                            选择、计算、组合、改变表示等处理
-
-Evidence（用于 profile 标签）
-├─ field: operator/roles/effects         证据支持哪个字段
-├─ value: str/null                       支持哪个标签；null 用于确认空列表的说明
-├─ effect_index: 非负 int/null           非空效果的出现位置；默认 null
-├─ basis: source/cfg/execution_model     依据来自源文、图或固定执行规则
-├─ ref_id: str                          依据编号，不是文件／网络交互边界
-├─ quote: str                           该位置真实存在的原文片段
-└─ reason: str                          中文解释：这段依据为何支持此标签
-
-SpecEvidence（用于位置审计表、原子操作、公开输出绑定）
-├─ basis: source/cfg/execution_model
-├─ ref_id: str
-├─ quote: str
-└─ reason: str
-```
-
-同一效果出现两次，需要分别用 effect_index 支持。operator／roles／空效果的证据不填效果索引。SpecEvidence 不需要 field/value：操作／输出依据附于对应规格，位置依据按位置别名放在独立审计表。Data.annotations.evidences 是另一用途的敏感性依据字符串列表，不能与这两类结构化标注证据混用。
+传播业务 `AnnotationPayload` 严格只含 task、demands、expressions、ir_semantics、locations、sink_boundaries；完整响应的 outcome 与位置证据通过显式投影剥离，不能由求解器静默忽略。Task bindings 保留图中对应关系，不自动成为需求起点。真实源文可支持错误解释；引用通过不等于语义正确。
 
 **5．位置声明与符号引用：传播前先把“哪里”和“哪个值”说清楚**
 
@@ -308,26 +282,26 @@ input 索引必须存在，不能把 external_resource 操作数当内容值引�
 
 通常 local 由前序操作定义。order=partial 时，当前实现还允许 alternatives 中包含后续定义的 local，但必须同时保留已可用候选，且定义关系不能形成循环；不能仅引用一个尚不存在的后续结果，从而遗漏此前可能使用原数据的情况。
 
-**6．IRTransferSpec：把效果展开成可计算的操作**
+**6．IR 事件：唯一的操作顺序**
 
 ```text
-IRTransferSpec
-├─ order: fixed / partial              原始及编译规格均必填
-├─ precedence[]                        仅编译规格：程序生成的必要先后约束
-├─ events: EffectSpec[]                  当前 IR 的有序事件；可为空
+IRSemantics（编译后的 IR 语义，动作字段见上一节）
+├─ order: fixed / partial
+├─ precedence[]                        程序生成的因果约束
+├─ events[]                            EffectSpec 或单层 ForEachSpec
 │  └─ EffectSpec
-│     ├─ effect_index: 非负 int/null     对应 profile.effects 的哪一次出现
-│     │                                  字段必须写；null 是无标签数据关系事件
-│     └─ atomic_ops: AtomicOp[]          至少一个，事件内按列表顺序求值
-└─ output_bindings: OutputBinding[]      恰好覆盖原 IR 的每个公开输出
-   ├─ output_index: 非负 int             对应原 IR.outputs 的位置
-   ├─ value: ValueRef                    这个公开结果代表哪一个已有值
-   └─ evidences: SpecEvidence[]          对应关系的依据，至少一条
+│     ├─ effect: Effect/null           该次效果；不通过另一份列表索引
+│     ├─ evidences: SpecEvidence[]     非空效果必填；null 效果规范化后省略
+│     └─ atomic_ops: AtomicOp[]        非空；保留参数和操作次序
+└─ output_bindings[]
+   ├─ output_index                     原 IR.outputs 下标
+   ├─ value                            已有 ValueRef，不是一次隐藏计算
+   └─ evidences                        对应关系的依据
 ```
 
-`effect_index` 不是 events 自己的下标。例如 events 为 `[null,0,1]` 时，events[1] 对应 effects[0]。有标签事件过滤后必须恰好恢复 effects 的顺序。无标签事件允许所有输入关系为 possible 的 compute，以及 tool 边界的 receive/deliver；不允许借它隐藏明确的网络、观察、写入或删除效果。
+无标签事件只支持 possible compute 或 tool 边界的 receive/deliver，不能隐藏已知效果。RawIRSemantics 在 events 中保存处理段；编译后的 events 可以比原事件更多，因此编译映射保留 raw_path、raw_atomic_range、compiled_path 和处理模式，不能用相同数组下标代替。
 
-**九类 AtomicOp 的所有字段如下。每一类都必须有 `evidences: SpecEvidence[]`，至少一条；以下树中逐项保留它，便于对照。**
+**原子数据操作 的所有字段如下。每一类都必须有 `evidences: SpecEvidence[]`，至少一条；以下树中逐项保留它，便于对照。**
 
 ```text
 ReadOp                                  从已有位置取得当前内容
@@ -491,12 +465,12 @@ read 的输入来自位置，所以记录 inputs 可以为空，来源放 endpoi
 profile
 └─ effects = [model_observe, transform, model_observe]
 
-transfer_specs[ir_filter]
-├─ events[0]：effect_index=0
+ir_semantics[ir_filter]
+├─ events[0]：effect=model_observe
 │  └─ deliver(input[0], target=loc_model)
-├─ events[1]：effect_index=1
+├─ events[1]：effect=transform
 │  └─ exclude_parts(input[0], paths=[["api_key"]], output="clean")
-├─ events[2]：effect_index=2
+├─ events[2]：effect=model_observe
 │  └─ deliver(local("clean"), target=loc_model)
 └─ output_bindings[0]
    ├─ output_index = 0
@@ -526,7 +500,7 @@ records[ir_filter]
 
 ```text
 annotate_skill(source, cfg, *, client)
-├─ prepare_material(source, cfg)         核验源文与图，生成引用索引和固定执行模型
+├─ prepare_material(source, cfg)         核验源文与图，冻结唯一运行时规则，直接校验已有 CFG 引用
 ├─ build_prompt(material)               拼出英文指令、类型契约和完整输入
 ├─ client.complete(prompt)              一次模型调用
 └─ validate_response(raw, material)      解析 JSON、检查引用、覆盖、证据与规格
@@ -534,7 +508,7 @@ annotate_skill(source, cfg, *, client)
     ├─ validate_specs(cfg, annotation)   效果位置、操作数、local、输出覆盖等合法
     └─ check_evidence(...)              引文确实存在于所指源文／图／执行规则
 
-to_payload(checked_response)            显式生成 AnnotationPayload 四项业务载荷
+to_payload(checked_response)            显式生成 AnnotationPayload 六项业务载荷
                                        不自行复核引文，也不把位置审计表送入求解器
 
 propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
@@ -560,125 +534,77 @@ propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
 
 普通未知 compute 仍会传播。缺少实际 result 候选则等待；该块未完成时不发布出口，也不跳过写入继续执行后面的读。最终仍未绑定，记录 incomplete。每次重新求值替换静态记录，不追加成一长串运行日志。
 
-**10．对外只交付一份业务文件**
-
-`doe-input.json` 是后续 DOE 可以独立读取的唯一业务结果。它不要求消费者再打开传播运行器的审计文件，但解释默认观察范围时必须取得与 execution_model 版本／摘要匹配的[统一运行时契约](SkillFlow-统一抽象运行时契约.md)。它记录契约下的静态可能行为，不是执行日志。
+**10．阶段产物与运行引用**
 
 ```text
-DOEInput
-├─ schema_version = skillflow-doe-input-v7
-├─ execution_model                     本次冻结契约绑定，不复制规则正文
-│  ├─ version                          skillflow-abstract-runtime-v5
-│  └─ sha256                           实际规则全文的规范化摘要
-├─ source                              完整可读源文及边界
-│  ├─ files[]                          path、content、sha256
-│  ├─ source_sha256                    解码文本身份
-│  ├─ index[]                          原文文件／行号引用索引
-│  ├─ inventory[]                      全部包文件的字节／文本信息
-│  └─ boundaries                       二进制、未解释代码及理解范围
-├─ cfg                                 原图；输入输出、条件及约束仍留在这里
-├─ locations                           kind/name/operand_refs/access_scope/retention
-├─ sink_boundaries[]                   已形成记录的 sink 坐标、目标、类型及固定等级
-├─ actions[IR ID]
-│  ├─ operator[]                       参与执行的主体
-│  └─ roles[]                          source/sink/transformer
-├─ data: Data[]                        扁平数据目录；不套注册表身份键
-├─ records[IR ID]: IRFlowRecord         上面解释的紧凑最终记录
-├─ status                              complete 等求解状态
-├─ coverage[IR ID]                     processed/unresolved_binding/not_reached/not_solved
-└─ diagnostics[]                       求解错误与范围限制
+PropagationResult（内存）
+├─ status / coverage / diagnostics
+├─ registry / records                  最终 Data 与逐 IR 记录
+├─ stats                               技术统计，不是真实执行次数
+└─ initial_data / initial_state        求解使用的初始描述版本
+
+传播目录
+├─ data.json                           Data[]，每份最终内容一份
+├─ records.json                        IR ID → IRFlowRecord，保留原操作/候选/条件
+├─ sinks.json                          实际边界坐标及类型/等级，不复制载荷
+├─ manifest.json                       上游地址与身份、状态、覆盖、诊断、文件摘要
+├─ audit/
+│  ├─ requested-data.json / requested-state.json
+│  ├─ initial-data.json / initial-state.json
+│  ├─ data-identities.json
+│  └─ stats.json
+├─ report.md / report.html
+└─ replay/summary.json                 重算比较，不保存另一份最终 Data
 ```
 
-`operator/roles` 只在 actions 保留一份；effects 已体现在 events，不另复制完整 profiles。传递规格、标注证据、源码摘要、注册表恢复身份与求解统计都属于审计和复现材料，不挤进主业务文件。原子 inputs/outputs 已经是计算出的 Data 候选；其符号 ref 只在原传递规格中。
+上游 `manifest.upstream={path,manifest_sha256}` 引用真正的联合标注运行；source、CFG、runtime_contract、原响应及编译映射不再复制。没有 `doe-input.json` 替代总包。共享材料由严格加载器按显式地址取得，丢失或篡改时拒绝，不从同名目录猜测。
+
+**11．公开调用顺序**
 
 ```text
-PropagationResult（内存求解结果）
-├─ status / coverage / diagnostics     业务状态
-├─ registry: DataRegistry              最终数据身份与内容
-├─ records: PropagationRecords         最终逐 IR 记录
-├─ stats                               工程计数，不是实际执行次数
-├─ initial_data                        实际使用的初始注册表
-└─ initial_state                       实际使用的完整初始状态
+联合标注与审查
+├─ prepare_material(source, cfg, user_request=None)
+│  └─ 冻结 source/cfg/runtime_contract/user_request；不生成持久地址表
+├─ annotate_skill(..., client)
+│  └─ raw Task/demands/expressions/IR语义 → 校验 → 编译观察、需求与sink
+├─ to_payload(response)                task/demands/expressions/ir_semantics/locations/sinks
+├─ review_annotation / refine_annotation
+│  └─ 旁置初审，按需一次语义修复及独立复审；机械结构纠正不设次数上限
+└─ load_annotation_run                 完整请求链、候选、编译、材料身份核验
 
-一次传播运行目录
-├─ doe-input.json                      唯一业务结果，不另产 result/data/records.json
-├─ manifest.json                       输入／源码／文件摘要，最后提交
-├─ audit/                              证据、身份与复现材料
-│  ├─ 原标注与位置证据                  原样保存，供可选审计区和重放检查
-│  ├─ 初始数据及状态                    不参与日常 DOE 读取
-│  ├─ record-materials.json            恢复记录需要的材料，不重复 records
-│  └─ 接受响应、输入身份、求解统计        有模型结果时绑定实际接受调用
-├─ report.md / report.html             同一业务视图的两种展示
-└─ replay/
-   ├─ summary.json                    重新求解及与原主文件比较的结论
-   └─ report.md / report.html           链接 ../doe-input.json，不复制主结果
+传播与下游
+├─ propagate(cfg, annotation, initial_registry=None, initial_state=None, ...)
+│  └─ 同一正向传递与工作队列；不执行真实工具或代码
+├─ run_propagation(annotation_run, run_dir=...)
+│  └─ 只保存本阶段 Data、records、sinks 和必要审计
+├─ load_propagation_materials(run_dir) → PropagationMaterials
+│  └─ 校验事实与上游；内存组件，不提供总包JSON序列化
+├─ replay_propagation(run_dir)          零 API 重新求解并比较
+└─ run_doe(propagation_run, run_dir=...)
+   └─ 对应标注的 Task/需求/敏感性 → 确定性需求及暴露对照
 ```
 
-`PropagationRecords.to_dict()` 只含紧凑记录、版本、完整标志与材料摘要，便于恢复与测试；恢复时显式提供 CFG、标注、注册表与初始材料。持久化只在 audit 保存去除 records 的部分，再显式接入主文件中的 records 校验恢复。工程材料不能伪造“审计正确”，主文件也不因没有证据长文而丢掉 Data 关系或必要先后约束。
-
-**11．函数调用树与公开入口**
-
-```text
-安全标注
-├─ runtime_contract.execution_model()   返回唯一规则的隔离副本，所有 Skill 共用
-├─ execution_model_binding(model)       检查规则全文并生成 version/sha256
-├─ prepare_material(source, cfg)        检查材料，生成真实源文／图引用索引
-├─ build_prompt(material)               单次英文标注指令
-├─ annotate_skill(..., client)          整图一次模型调用
-├─ validate_response(raw, material)     五项响应、完整覆盖与引文校验
-├─ derive_sink_boundaries(...)         从编译交付／保存操作生成类型、等级和定位
-└─ to_payload(response)                显式取得四项业务载荷
-
-确定性传播
-└─ propagate(cfg, annotation, initial_registry=None, initial_state=None,
-             schedule="fifo", max_variants=100000)
-   ├─ _seed_state                      仅在未显式给完整状态时建立读取来源
-   ├─ _graph / _generation_feedback    图调度与生成型循环范围检查
-   ├─ join_states                      同位置候选取并集
-   ├─ TransferInterpreter.evaluate     按规格求值当前 IR
-   │  ├─ resolve                       input/local/literal/alternatives → Data候选
-   │  ├─ execute                       九种抽象操作，不执行真实工具或代码
-   │  └─ bind_outputs                  local/已有值 → 原 IR 公开结果位置
-   └─ PropagationRecords.put           原子替换静态记录，不追加求解历史
-
-业务交付与运行
-├─ build_doe_input(source, cfg, annotation, solved, source_metadata=..., execution_model=...)
-│  └─ 从真实求解结果投影业务材料，并校验全体引用
-├─ save_propagation_run(...)            正式实验与人工示例共用保存入口
-│  ├─ 只接受新／空目录，冻结材料并绑定摘要
-│  ├─ 保存唯一 doe-input 与独立 audit
-│  ├─ write_reports                    从统一视图写出 MD／HTML
-│  └─ 最后写 manifest                  防止不完整文件冒充已提交运行
-├─ run_propagation(annotation_run, run_dir, seed_data=None, initial_state=None)
-│  ├─ 读取并重校验实际接受响应
-│  ├─ propagate                        离线求解
-│  └─ save_propagation_run              与手工示例相同的交付路径
-└─ replay_propagation(run_dir)          核验版本／来源／代码，离线重算并比较主文件
-
-报告
-├─ build_view(doe, audit=None)          唯一视图模型；只读业务与可选审计输入
-├─ render_markdown(doe, audit=None)     同一组操作行生成 Markdown
-├─ render_html(doe, audit=None)         同一组操作行生成可点击 Data 版本图表
-└─ write_reports(directory, doe, writer, audit=None)
-   └─ 默认展示业务；原标注和位置依据折叠，重放链接原主文件
-```
+`PropagationRecords.records_dict()` 返回隔离的记录映射。`from_records(..., cfg, annotation, data_registry, initial_data, initial_state)` 显式接收对应材料并严格检查；旧摘要封套及隐式恢复入口已删除。调用记录保留原始响应，受限 JSON 修整另存回执，不能改写原响应冒充模型直接生成。
 
 `DataRegistry` 继续提供 register_source、register_part、create_result、get、refine、resolve_part、validate、to_dict/to_json 和 from_dict/from_json。描述细化沿用旧 ID，内容处理创建新 ID；敏感性依据仅留在 Data.annotations.evidences。完整 Data 契约见 [Data 规范](SkillFlow-Data数据结构与更新规则.md)。
 
-`PropagationRecords` 提供 put/get/validate、effect_order_known、to_dict/to_json 与 from_dict/from_json；快照恢复必须显式传 cfg、annotation、data_registry、initial_data、initial_state，并逐一核对摘要；records_dict() 单独取得业务记录。effect_order_known 只检查 order 是否为 fixed，不能证明真实执行顺序。
+`PropagationRecords` 提供 put/get/validate、effect_order_known、records_dict() 与 from_records(...)。records_dict() 只导出 IR 到记录的映射；from_records(...) 要求显式提供对应 CFG、编译标注及 DataRegistry 等材料。材料身份由运行清单验证，记录不再内嵌材料或摘要封套。effect_order_known 只检查 order 是否为 fixed，不证明真实执行顺序。
 
 原先没有实际调用的 intermediate_key、symbolic_endpoint 与对应私有辅助已移除；身份统一由实际求值位置和 DataRegistry 接口产生。旧 propagation_record_demo.py 入口已删除，主示例 `--records-only` 保留只查看记录的用途，不再维护第二个程序入口。
 
 **12．怎样看结果**
 
-1. 先看 `doe-input.json` 的 status、coverage、diagnostics，以及每条记录的 order/precedence；传播完成不等于语义已证明。
+1. 先看传播 manifest 的 status、coverage、diagnostics，以及 records.json 每条记录的 order/precedence；传播完成不等于语义已证明。
 2. 在 HTML 中按 IR 查看原输入输出、执行主体、按数组顺序保留的效果与实际 Data 候选。
 3. 点击 D 短名核对 content、origin、排除和字段覆盖关系；Data 依赖不自动等同于明文包含。
 4. 需要追查字段路径、local 名称或判断依据时，展开原标注审计；程序按记录位置读取原规格，不复制第二套参数。
-5. 源文、动作、数据和最终记录都在业务文件；只有复现、引文审计和成本统计才需 audit。
+5. 源文和 CFG 由上游冻结材料唯一保存，Data、操作记录与 sink 清单由传播阶段保存；加载器沿清单引用重建关联，审查页面不要求手工拼接。复现、引文审计和成本统计使用对应阶段的 audit 与调用记录。
 
 报告里的 D001 等仅为显示别名，实际 Data ID 不改写。传递步骤在 JSON 中用数组次序表达，报告的 1.1、1.2 是位置标签，不是再次储存的 op_index。输出数组的第 0 项是该抽象操作产生的第一个值，不保证对应 IR.outputs[0]；公开输出联系仍由原规格 output_bindings 解释，并体现在出口 result 位置。
 
 当前实现提供静态候选关系和顺序记录；没有证明模型解释正确，也没有将这些记录视为 DOE 裁决结果。
 
 当前可选参数以[Sink 标注收紧与可选参数规范](SkillFlow-Sink标注收紧与可选参数.md)为准。when 属于操作消费条件，不修改 Data，也不成为任意路径条件语言。
+
+
+联合标注自身也按所有权保存：原始 package＋snapshot 冻结源文件，cfg/runtime-contract/user-request 分片各保存一次，内存 material 不另落盘。annotation/result.json 仅为状态、验证、计数、请求链及编译证书；六项业务事实只在 audit/compiled-response.json 中。加载器验证后重建业务结果，单独的 ir-semantics/locations/sink-boundaries 导出已删除。审查与修复通过显式上游引用读取这些事实，只保存本阶段拥有的显式候选、定位、观察、实际请求及结论；修复 context 根据已有所有者和初审重建并检查清单摘要，不再落盘复制。

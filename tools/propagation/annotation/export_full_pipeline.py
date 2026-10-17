@@ -39,15 +39,22 @@ from skillflow.graph.ir.cfg import ControlFlowGraph
 from skillflow.graph.feedback.policy import decide
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.recording import sha_file
-from skillflow.propagation.material import checked_cfg
+from skillflow.graph.validation import checked_cfg
 from skillflow.propagation.material import prepare_material
 from skillflow.propagation.annotation.loading import load_annotation_run
+from skillflow.propagation.annotation import load_prepared_material
+from skillflow.propagation.annotation.runner import result_snapshot
+from tools.propagation.summaries import restore_annotation
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
-from skillflow.common.source_evidence import source_units
 from skillflow.graph.semantic_contract import contract_binding
 
-IDENTITY = "skill-ir-full-feedback-security-profile-review30-v10"
-EXPORT_IDENTITY = "skill-ir-full-pipeline-delivery-v5"
+from tools.propagation.annotation.run_full_pipeline import IDENTITY, FORMAT_VERSION as PIPELINE_FORMAT_VERSION
+from skillflow.propagation.annotation.runner import IDENTITY as ANNOTATION_IDENTITY, FORMAT_VERSION as ANNOTATION_FORMAT_VERSION
+
+from tools.propagation.annotation.prepare_failed_case_rerun import IDENTITY as RERUN_IDENTITY, FORMAT_VERSION as RERUN_FORMAT_VERSION
+
+EXPORT_IDENTITY = "skill-ir-full-pipeline-delivery-v8"
+EXPORT_FORMAT_VERSION = 8
 SAMPLE_IDS = tuple(f"{group}{number:02}" for group in "NQFDR" for number in range(1, 7))
 ANNOTATION_STATUSES = {"complete", "input_error", "invalid_response", "execution_error", "semantic_failure", "interrupted", "not_run"}
 
@@ -199,7 +206,7 @@ def _annotation(root, annotation, selection, graph, source, snapshot, binding):
     if status not in ANNOTATION_STATUSES:
         raise ValueError("Nonterminal or unsupported annotation status")
     directory = root / "annotation"
-    if (directory / "result.json").exists() and read_json(directory / "result.json") != annotation:
+    if (directory / "result.json").exists() and read_json(directory / "result.json") != result_snapshot(annotation):
         raise ValueError("Annotation result differs from case result")
     material = None
     manifest_path = directory / "manifest.json"
@@ -208,7 +215,7 @@ def _annotation(root, annotation, selection, graph, source, snapshot, binding):
         unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
         if manifest.get("manifest_sha256") != canonical_sha256(unsigned):
             raise ValueError("Annotation manifest digest mismatch")
-        if (manifest.get("identity") != "skill-ir-security-profile-v11" or manifest.get("schema_version") != 11
+        if (manifest.get("identity") != ANNOTATION_IDENTITY or manifest.get("schema_version") != ANNOTATION_FORMAT_VERSION
                 or manifest.get("profile_schema_version") != SCHEMA_VERSION):
             raise ValueError("Unsupported annotation manifest")
         files = {p.relative_to(directory).as_posix(): sha_file(p)
@@ -225,17 +232,18 @@ def _annotation(root, annotation, selection, graph, source, snapshot, binding):
                 "checked_fields": ["path", "size", "raw_sha256", "decoded_sha256", "kind"]}
             if binding != expected_binding or read_json(root / "source-binding.json") != binding:
                 raise ValueError("Source binding differs from verified stage snapshots")
-            material = prepare_material(source, graph)
+            saved_material = load_prepared_material(directory)
+            material = prepare_material(source, graph, user_request=saved_material["user_request"], task_baseline=saved_material["task"])
             if (read_json(directory / "inputs/cfg.json") != graph
-                    or read_json(directory / "inputs/material.json") != material
+                    or saved_material != material
                     or manifest["material_sha256"] != canonical_sha256(material)
                     or manifest["source_sha256"] != source["source_sha256"]
                     or manifest["graph_sha256"] != canonical_sha256(graph)):
                 raise ValueError("Annotation material differs from selected source or graph")
     if status in {"complete"}:
         if (annotation.get("profile_schema_version") != SCHEMA_VERSION
-                or annotation.get("schema_version") != 11
-                or annotation.get("identity") != "skill-ir-security-profile-v11"):
+                or annotation.get("schema_version") != ANNOTATION_FORMAT_VERSION
+                or annotation.get("identity") != ANNOTATION_IDENTITY):
             raise ValueError("Unsupported profile result schema")
         if material is None or selection is None:
             raise ValueError("A successful annotation requires a verified selected graph and material")
@@ -248,7 +256,7 @@ def _annotation(root, annotation, selection, graph, source, snapshot, binding):
         if (verified_run["manifest"] != manifest or verified_run["material"] != material
                 or verified_run["result"] != annotation):
             raise ValueError("Export annotation differs from the verified selected run")
-    elif any(annotation.get(key) for key in ("profiles", "locations", "transfer_specs", "sink_boundaries")):
+    elif any(annotation.get(key) for key in ("ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")):
         raise ValueError("Failed annotation must not export unvalidated business records")
     return material
 
@@ -262,7 +270,7 @@ def load_case(run_dir: Path, case: dict, result: dict, skills_dir: Path, *, rend
         raise ValueError("Corpus inventory digest mismatch")
     zip_path = child(skills_dir, case["basename"] + ".zip")
     zip_check = verified_zip(zip_path, case["source_inventory"])
-    feedback, annotation, selection = result["feedback"], result["annotation"], result["selection"]
+    feedback, annotation, selection = result["feedback"], restore_annotation(result["annotation"], owner=root), result["selection"]
     if feedback.get("status") not in {"audit_passed", "semantic_failure", "revision_limit", "extraction_error",
             "fidelity_error", "audit_error", "execution_error", "interrupted", "not_run"}:
         raise ValueError("Feedback must have a terminal stop status")
@@ -311,7 +319,7 @@ def load_case(run_dir: Path, case: dict, result: dict, skills_dir: Path, *, rend
         boundaries = {"binary_files": [entry.path for entry in package.files if entry.content is None],
                       "uninterpreted_code_files": [entry.path for entry in package.files if entry.kind == "code"],
                       "notice": "本例未完成反馈快照；源文仅从已核验 ZIP 解码展示，不表示脚本已执行或二进制已理解。"}
-    provenance = {"schema_version": 5, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "run_id": run_dir.name,
+    provenance = {"schema_version": EXPORT_FORMAT_VERSION, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "run_id": run_dir.name,
         "case_id": case["case_id"], "sample_id": case["sample_id"], "basename": case["basename"],
         "selected_revision": selection["revision"] if selection else None,
         "graph_sha256": canonical_sha256(graph) if graph is not None else None,
@@ -325,18 +333,20 @@ def load_case(run_dir: Path, case: dict, result: dict, skills_dir: Path, *, rend
         "annotation_reason_summary": reason_summary(annotation.get("reason", "")),
         "diagnostic_sources": {"feedback": str(feedback_dir / "result.json") if (feedback_dir / "result.json").exists() else str(root / "result.json"),
                                "annotation": str(root / "annotation/result.json") if (root / "annotation/result.json").exists() else str(root / "result.json")},
-        "cfg": graph, "source": {**source, "units": source_units(source)}, "audit": audit,
-        "profiles": annotation["profiles"], "locations": annotation["locations"],
-        "transfer_specs": annotation["transfer_specs"],
+        "cfg": graph, "source": source, "audit": audit,
+        "ir_semantics": annotation["ir_semantics"], "locations": annotation["locations"],
         "sink_boundaries": annotation["sink_boundaries"],
+        "task": material["task"] if material and annotation["status"] == "complete" else None,
+        "task_ref": annotation.get("task_ref"), "realizations": annotation.get("realizations", []), "demands": annotation.get("demands", []),
+        "expressions": annotation.get("expressions", []),
         "annotation_audit": ({"file": f"audit/{basename}/location-evidences.json",
                               "sha256": annotation["location_evidences_sha256"],
                               "source_file": str(root / "annotation/audit/location-evidences.json")}
                              if annotation["status"] in {"complete"} else None),
         "validation": annotation.get("validation", {}), "source_binding": result["source_binding"],
         "source_validation": {"zip": zip_check, "snapshot": snapshot is not None},
-        "annotation_evidence_index": {key: material[key] for key in
-            ("source_index", "graph_index", "instruction_index", "execution_model")} if material else None,
+        "runtime_contract": material["runtime_contract"] if material else None,
+        "user_request": material["user_request"] if material else None,
         "boundaries": boundaries,
         "scheduler_error": result.get("scheduler_error"),
         "png_file": f"ir-IPP/{basename}.png", "svg_file": f"render/{basename}.svg",
@@ -394,7 +404,7 @@ def build_export_plan(run_dir: Path, skills_dir: Path, *, renderer=None, assista
     run_dir, skills_dir = run_dir.resolve(), skills_dir.resolve()
     manifest, result = read_json(run_dir / "manifest.json"), read_json(run_dir / "experiment-result.json")
     for value in (manifest, result):
-        if (value.get("schema_version") != 10 or value.get("identity") != IDENTITY
+        if (value.get("schema_version") != PIPELINE_FORMAT_VERSION or value.get("identity") != IDENTITY
                 or value.get("profile_schema_version") != SCHEMA_VERSION):
             raise ValueError("Only the current complete full-pipeline experiment is supported")
         if any(value.get(key) != item for key, item in contract_binding().items()):
@@ -417,7 +427,7 @@ def build_export_plan(run_dir: Path, skills_dir: Path, *, renderer=None, assista
         if origins:
             row["execution_origin"] = origins[case["case_id"]]
         rows.append(row)
-    return {"schema_version": 5, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "run_id": run_dir.name,
+    return {"schema_version": EXPORT_FORMAT_VERSION, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "run_id": run_dir.name,
         "run_dir": str(run_dir), "manifest_sha256": sha_file(run_dir / "manifest.json"),
         "experiment_result_sha256": sha_file(run_dir / "experiment-result.json"), "cases": rows,
         "notice": "核对器通过不等于已证明语义等价；标注记录完整不等于安全标注正确。导出未经人工确认。"}
@@ -431,7 +441,7 @@ def execution_origins(run_dir: Path, cases: list[dict]) -> dict:
         return {}
     value = read_json(path)
     unsigned = {key: item for key, item in value.items() if key != "provenance_sha256"}
-    if (value.get("schema_version") != 4 or value.get("identity") != "skill-ir-explicit-failed-case-rerun-v4"
+    if (value.get("schema_version") != RERUN_FORMAT_VERSION or value.get("identity") != RERUN_IDENTITY
             or value.get("provenance_sha256") != canonical_sha256(unsigned)):
         raise ValueError("Execution origin provenance seal mismatch")
     child, parent = value.get("child_run", {}), value.get("parent_run", {})
@@ -457,6 +467,12 @@ def execution_origins(run_dir: Path, cases: list[dict]) -> dict:
                    "source_run_id": run_dir.name if case in expected_rerun else parent["run_id"],
                    "provenance_sha256": value["provenance_sha256"]}
             for case in sorted(all_cases)}
+
+
+def _source_excerpt(row, ref):
+    from skillflow.common.source_evidence import extract_source_lines
+    files = {item['path']: item['content'] for item in row['source']['files']}
+    return extract_source_lines(files[ref['file']], ref['start_line'], ref['end_line'])
 
 
 def suggestions(row: dict) -> str:
@@ -492,14 +508,14 @@ def suggestions(row: dict) -> str:
             if finding.get("conservative"):
                 lines += ["", "明确保守依赖说明：" + json.dumps(finding["conservative"], ensure_ascii=False)]
             for ref in finding["source_refs"]:
-                lines += ["", f"源文 `{ref['unit_id']}` · `{ref['file']}:{ref['start_line']}-{ref['end_line']}`：",
-                          "", *["> " + line for line in ref["quote"].splitlines()]]
+                lines += ["", f"源文 `{ref['file']}:{ref['start_line']}-{ref['end_line']}`：",
+                          "", *["> " + line for line in _source_excerpt(row, ref).splitlines()]]
             for ref in finding["graph_refs"]:
                 lines += ["", "图位置：" + json.dumps(ref, ensure_ascii=False)]
             for advice in finding["suggestions"]:
                 lines += ["", f"修改建议：{advice['change']}", "", f"依据：{advice['reason']}", "",
                     "当前目标：" + json.dumps(advice["graph_refs"], ensure_ascii=False)]
-    partial = [ir_id for ir_id, spec in row["transfer_specs"].items() if spec["order"] == "partial"]
+    partial = [ir_id for ir_id, spec in row["ir_semantics"].items() if spec["order"] == "partial"]
     if partial:
         lines += ["", "## 部分顺序关系", "", "以下 IR 按必要先后约束计算候选次序：" + ", ".join(partial)]
     review = row.get("assistant_review", {})
@@ -581,10 +597,10 @@ def validate_staging(plan, staging):
         if sha_file(staging / row["svg_file"]) != entry["svg_sha256"]:
             raise ValueError("SVG bytes differ from actual rendered graph")
         profile = read_json(staging / "security-profiles" / (row["basename"] + ".json"))
-        if (profile.get("schema_version") != 5 or profile.get("identity") != EXPORT_IDENTITY
+        if (profile.get("schema_version") != EXPORT_FORMAT_VERSION or profile.get("identity") != EXPORT_IDENTITY
                 or profile.get("profile_schema_version") != SCHEMA_VERSION
                 or profile["provenance"] != row["provenance"]
-                or any(profile[key] != row[key] for key in ("profiles", "locations", "transfer_specs", "sink_boundaries"))
+                or any(profile[key] != row[key] for key in ("ir_semantics", "locations", "sink_boundaries", "task", "demands", "expressions"))
                 or profile.get("annotation_audit") != row.get("annotation_audit")):
             raise ValueError("Exported profiles differ from bound annotation")
         if row.get("annotation_audit"):
@@ -610,13 +626,14 @@ def export(run_dir: Path, staging: Path, *, skills_dir=None, node="node", node_m
             if canonical_sha256(table) != evidence_audit["sha256"]:
                 raise ValueError("Location evidence audit changed after export preparation")
             write_json(child(staging, evidence_audit["file"]), table)
-        profile = {"schema_version": 5, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "provenance": row["provenance"],
+        profile = {"schema_version": EXPORT_FORMAT_VERSION, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "provenance": row["provenance"],
             "status": row["annotation_status"], "reason": row["annotation_reason"],
-            "source_binding": row["source_binding"], "profiles": row["profiles"],
-            "locations": row["locations"], "transfer_specs": row["transfer_specs"],
+            "source_binding": row["source_binding"], "ir_semantics": row["ir_semantics"],
+            "locations": row["locations"],
             "sink_boundaries": row["sink_boundaries"],
+            "task": row["task"], "task_ref": row["task_ref"], "realizations": row["realizations"], "demands": row["demands"], "expressions": row["expressions"],
             "annotation_audit": row.get("annotation_audit"),
-            "validation": row["validation"], "evidence_index": row["annotation_evidence_index"],
+            "validation": row["validation"],
             "notice": "四字段标注与符号传播说明；未执行传播、风险或必要性判断。失败状态不补造 profile。"}
         write_json(staging / "security-profiles" / (row["basename"] + ".json"), profile)
         atomic_write_text(staging / row["suggestions_file"], suggestions(row))
@@ -629,7 +646,7 @@ def export(run_dir: Path, staging: Path, *, skills_dir=None, node="node", node_m
     for row in plan["cases"]:
         _png.bind_png_source(staging / row["png_file"], row["provenance"])
     checks = validate_staging(plan, staging)
-    manifest = {"schema_version": 5, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "run_id": plan["run_id"],
+    manifest = {"schema_version": EXPORT_FORMAT_VERSION, "identity": EXPORT_IDENTITY, "profile_schema_version": SCHEMA_VERSION, "run_id": plan["run_id"],
         "manifest_sha256": plan["manifest_sha256"], "experiment_result_sha256": plan["experiment_result_sha256"],
         "generators": {"exporter_sha256": sha_file(HERE),
                        "renderer_sha256": sha_file(BASELINE_TOOLS / "render_review_cfg.mjs")},

@@ -221,6 +221,6 @@ def test_english_granularity_instructions_preserve_source_and_code(tmp_path) -> 
         "do not split it mechanically by effect count",
         "Do not invent source-level operations for implicit model observation",
         "Treat code files and code blocks as black-box operations",
-        "Write explanatory diagnostics in Chinese",
+        "Write explanatory diagnostics in English",
     ):
         assert requirement in normalized

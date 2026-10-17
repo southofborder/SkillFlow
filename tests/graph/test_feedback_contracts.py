@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from skillflow.graph.audit.evidence import canonical_graph_sha256
 from skillflow.graph.audit.evidence import normalize_cfg
 from skillflow.common.artifacts import ArtifactWriter
+from skillflow.common.source_evidence import _digest
 from skillflow.graph.extraction.compiler import compile_candidate
 from skillflow.graph.extraction.prompt import _EXAMPLES
 from skillflow.graph.extraction.prompt import build_whole_skill_prompt
@@ -97,7 +98,7 @@ def test_optional_conservative_absence_never_claims_precision():
     decision = decide({"outcome": "completed", "findings": [finding()]}, 0)
     assert decision["representation_summary"] == {"represented_ids": ["j1"], "conservative_ids": []}
     assert "precision_summary" not in decision
-    assert "不代表精确保留" in decision["reason"]
+    assert "does not imply exact preservation" in decision["reason"]
 
 
 @pytest.mark.parametrize("reason", [None, "", "  "])
@@ -145,6 +146,8 @@ def test_snapshot_raw_and_decoded_hashes_and_boundaries(tmp_path):
     metadata = freeze_input(source, directory, ArtifactWriter(()))
     package, bundle, recovered = read_snapshot(directory)
     assert recovered == metadata
+    assert metadata["schema_version"] == 2
+    assert not (directory / "inputs/source.json").exists()
     assert package.root_name == "skill"
     assert [f.path for f in package.files] == ["SKILL.md", "blob.bin", "scripts/never_execute.py"]
     entry = metadata["files"][0]
@@ -193,6 +196,66 @@ def test_snapshot_rejects_changed_bytes_inventory_or_source(tmp_path, tamper):
         path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(ValueError):
         read_snapshot(run)
+
+
+
+@pytest.mark.parametrize("content", [b"one\n\nlast", b"one\r\n\r\nlast\r\n", b"one\rlast\r", b"", "中文\n末行".encode("utf-8")])
+def test_snapshot_rebuilds_source_from_raw_without_newline_normalization(tmp_path, content):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_bytes(content)
+    (source / "opaque.bin").write_bytes(b"\x00\xff")
+    run = tmp_path / "run"
+    metadata = freeze_input(source, run, ArtifactWriter(()))
+    package, bundle, restored = read_snapshot(run)
+    assert restored == metadata
+    assert (run / "inputs/package/SKILL.md").read_bytes() == content
+    assert not (run / "inputs/source.json").exists()
+    assert bundle["files"][0]["content"] == content.decode("utf-8-sig")
+    assert package.files[0].content == bundle["files"][0]["content"]
+    assert metadata["boundaries"]["binary_files"] == ["opaque.bin"]
+
+
+def test_snapshot_rejects_v1_without_reinterpreting_its_content(tmp_path):
+    run = tmp_path / "run"
+    freeze_input(make_source(tmp_path), run, ArtifactWriter(()))
+    path = run / "inputs/snapshot.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["schema_version"] = 1
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported input snapshot version"):
+        read_snapshot(run)
+
+
+@pytest.mark.parametrize("version", [2.0, True, "2"])
+def test_snapshot_version_rejects_non_integer_after_resealing(tmp_path, version):
+    run = tmp_path / "run"
+    metadata = freeze_input(make_source(tmp_path), run, ArtifactWriter(()))
+    metadata["schema_version"] = version
+    metadata["snapshot_sha256"] = _digest({key: value for key, value in metadata.items()
+                                           if key != "snapshot_sha256"})
+    (run / "inputs/snapshot.json").write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported input snapshot version"):
+        read_snapshot(run)
+
+
+@pytest.mark.parametrize("size", [True, 1.0])
+@pytest.mark.parametrize("reseal", [False, True])
+def test_snapshot_rejects_equal_but_different_numeric_types(tmp_path, size, reseal):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_bytes(b"x")
+    run = tmp_path / "run"
+    metadata = freeze_input(source, run, ArtifactWriter(()))
+    metadata["files"][0]["size"] = size
+    if reseal:
+        metadata["snapshot_sha256"] = _digest({key: value for key, value in metadata.items()
+                                               if key != "snapshot_sha256"})
+    (run / "inputs/snapshot.json").write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="digest|frozen package"):
+        read_snapshot(run)
+    with pytest.raises(ValueError, match="original Skill identity changed"):
+        verify_original_input(source, metadata)
 
 
 def test_zip_snapshot_preserves_root_members_and_archive_identity(tmp_path):
@@ -264,7 +327,7 @@ def test_snapshot_json_duplicate_keys_are_rejected_even_when_last_value_matches(
     freeze_input(source, run, ArtifactWriter(()))
     path = run / "inputs/snapshot.json"
     raw = path.read_text(encoding="utf-8")
-    path.write_text(raw.replace('"schema_version": 1,', '"schema_version": 9, "schema_version": 1,'), encoding="utf-8")
+    path.write_text(raw.replace('"schema_version": 2,', '"schema_version": 9, "schema_version": 2,'), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate JSON member"):
         read_snapshot(run)
 
@@ -280,8 +343,8 @@ def make_feedback():
     defect = {
         "id": "difference-1", "kind": "semantic", "status": "mistranslated",
         "source_requirement": "Use source value", "actual_representation": "Wrong input recorded",
-        "reason": "Exact comparison", "source_refs": [{"quote": "source sentinel"}],
-        "controlled_refs": [{"unit_id": "f1", "quote": None}], "basis": ["explicit_graph"],
+        "reason": "Exact comparison", "source_refs": [{"file": "SKILL.md", "start_line": 1, "end_line": 1}],
+        "controlled_refs": [{"unit_id": "f1"}], "basis": ["explicit_graph"],
         "graph_refs": [pointer],
         "suggestions": [{"target_ids": ["f1"], "change": "Use the original value",
                          "reason": "Source evidence", "graph_refs": [pointer]}],
@@ -300,7 +363,9 @@ def test_feedback_uses_fixed_prompt_actual_graph_positions_and_latest_difference
     assert payload["previous_cfg"] == normalize_cfg(cfg)
     target = payload["explicit_differences"][0]["suggestions"][0]["suggestion_targets"][0]
     assert target["graph_pointer"] == pointer
-    assert target["value"] == next(iter(normalize_cfg(cfg)["blocks"].values()))["instructions"][0]
+    assert set(target) == {"graph_pointer"}
+    from skillflow.common.source_evidence import resolve_pointer
+    assert resolve_pointer(payload["previous_cfg"], target["graph_pointer"]) == next(iter(normalize_cfg(cfg)["blocks"].values()))["instructions"][0]
     assert "unknown_reminders" not in payload
     assert "HISTORY MUST NOT LEAK" not in prompt
     assert "ORACLE MUST NOT LEAK" not in prompt
@@ -311,14 +376,14 @@ def test_feedback_instructions_are_english_while_quoted_evidence_is_unchanged():
     import re
 
     package, cfg, audit, _ = make_feedback()
-    quote = "原文引文，不可翻译。"
-    audit["findings"][0]["source_refs"][0]["quote"] = quote
+    source_ref = deepcopy(audit["findings"][0]["source_refs"][0])
     prompt = build_feedback_prompt(package, cfg, audit)
     instructions, payload_text = prompt.split(FEEDBACK_INSTRUCTIONS + "\n\n", 1)
     assert not re.search(r"[\u3400-\u9fff]", FEEDBACK_INSTRUCTIONS)
     assert not re.search(r"[\u3400-\u9fff]", instructions)
-    assert "Write explanatory diagnostics in Chinese" in FEEDBACK_INSTRUCTIONS
-    assert json.loads(payload_text)["explicit_differences"][0]["source_refs"][0]["quote"] == quote
+    assert "Write explanatory diagnostics in English" in FEEDBACK_INSTRUCTIONS
+    assert json.loads(payload_text)["explicit_differences"][0]["source_refs"][0] == source_ref
+    assert "Full original source sentinel" in prompt
 
 
 def test_feedback_refuses_old_graph_hash_and_nonexistent_targets():

@@ -28,7 +28,7 @@ from skillflow.common.inputs.skill_package import _strip_single_wrapper
 from skillflow.common.inputs.skill_package import load_skill_package
 
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 
 
 def _sha(raw: bytes) -> str:
@@ -136,11 +136,17 @@ def _describe(identity: dict[str, Any], members: list[tuple[str, bytes]]) -> tup
         "boundaries": {
             "binary_files": [entry["path"] for entry in entries if entry["decoded_sha256"] is None],
             "uninterpreted_code_files": [entry["path"] for entry in entries if entry["kind"] == "code"],
-            "notice": "提取和核对共享全部可读文件。二进制未进入文本语义核对；代码及嵌入内容不因此获得执行正确性或行为理解保证。",
+            "notice": "Extraction and review share all readable files. Binary content is outside text semantic review; code and embedded content have no execution-correctness or behavioral-understanding guarantee.",
         },
     }
     metadata["snapshot_sha256"] = _digest(metadata)
     return package, source, metadata
+
+
+def inspect_input(input_path: str | Path) -> tuple[SkillPackage, dict[str, Any], dict[str, Any]]:
+    """Describe raw input bytes without loading or migrating a saved run."""
+    identity, members = _collect(input_path)
+    return _describe(identity, members)
 
 
 def _preserve_secrets(value: Any, writer: ArtifactWriter) -> None:
@@ -172,7 +178,6 @@ def freeze_input(input_path: str | Path, directory: str | Path, writer: Artifact
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
-    writer.json(inputs / "source.json", source)
     writer.json(inputs / "snapshot.json", metadata)
     read_snapshot(directory)
     return metadata
@@ -180,7 +185,8 @@ def freeze_input(input_path: str | Path, directory: str | Path, writer: Artifact
 
 def _read_metadata(directory: Path) -> dict[str, Any]:
     metadata = _json_object((directory / "inputs" / "snapshot.json").read_text(encoding="utf-8"))
-    if metadata.get("schema_version") != SNAPSHOT_VERSION:
+    version = metadata.get("schema_version")
+    if type(version) is not int or version != SNAPSHOT_VERSION:
         raise ValueError("unsupported input snapshot version")
     payload = {key: value for key, value in metadata.items() if key != "snapshot_sha256"}
     if metadata.get("snapshot_sha256") != _digest(payload):
@@ -189,18 +195,21 @@ def _read_metadata(directory: Path) -> dict[str, Any]:
 
 
 def read_snapshot(directory: str | Path) -> tuple[SkillPackage, dict[str, Any], dict[str, Any]]:
-    """Offline snapshot verification; never read the original path or use an API."""
+    """Verify original bytes and rebuild exact decoded text only in memory.
+
+    No original path or API is accessed. Raw file hashes, decoded text hashes,
+    inventory and binary/code boundaries are rechecked against the snapshot.
+    """
     directory = Path(directory).resolve()
     metadata = _read_metadata(directory)
     package_path = directory / "inputs" / "package"
     _, members = _collect(package_path)
     identity = {key: metadata[key] for key in ("original_path", "storage", "root_name", "archive_sha256")}
     package, source, observed = _describe(identity, members)
-    if observed != metadata:
+    if _digest(observed) != _digest(metadata):
         raise ValueError("frozen package bytes, source inventory, or decoded text digest changed")
-    source_path = directory / "inputs" / "source.json"
-    if _json_object(source_path.read_text(encoding="utf-8")) != source:
-        raise ValueError("saved source bundle does not match the frozen package")
+    if (directory / "inputs" / "source.json").exists():
+        raise ValueError("snapshot v2 stores source only in original package bytes; source.json is not allowed")
     # Reuse the public loader too: its normalized file contract must agree with
     # the exact byte snapshot used to derive the audit source bundle.
     loaded = load_skill_package(package_path)
@@ -214,5 +223,5 @@ def verify_original_input(input_path: str | Path | None, metadata: dict[str, Any
     """Online resume rejects changes in original raw bytes, archive, or inventory."""
     identity, members = _collect(input_path if input_path is not None else metadata["original_path"])
     _, _, observed = _describe(identity, members)
-    if observed != metadata:
+    if _digest(observed) != _digest(metadata):
         raise ValueError("original Skill identity changed; refuse to continue this run")

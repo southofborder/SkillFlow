@@ -1,4 +1,4 @@
-"""Reproduce the authored example through the shared propagation save path."""
+"""Render an authored example, explicitly separate from an accepted formal run."""
 from __future__ import annotations
 import argparse
 import importlib.util
@@ -28,7 +28,7 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args(argv)
     result = generate(args.output)
-    print(f"{result['status']}: {args.output.resolve() / 'report.html'}")
+    print(f"{result.status}: {args.output.resolve() / 'report.html'}")
     return 0
 
 

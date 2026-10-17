@@ -1,3 +1,4 @@
+from tests.propagation.annotation.helpers import effects_of
 """Compiled action/write boundaries, not a semantic truth oracle."""
 
 from copy import deepcopy
@@ -5,25 +6,25 @@ import json
 
 import pytest
 
-from skillflow.propagation.material import prepare_material
+from tests.propagation.annotation.helpers import prepare_material
 from skillflow.propagation.contracts.profiles import EFFECTS
 from skillflow.propagation.contracts.profiles import OPERATORS
 from skillflow.propagation.annotation.prompts import build_prompt
 from skillflow.propagation.annotation.services import validate_compiled_response
-from tests.propagation.annotation.helpers import graph, material, profile, source_bundle, valid_response, with_specs
+from tests.propagation.annotation.helpers import graph, material, semantics, source_bundle, valid_response, with_specs
 
 
 @pytest.mark.parametrize("placement", ["profile", "profile_with_both", "evidence", "unresolved"])
 def test_actor_is_rejected_everywhere_without_alias_migration(placement):
     prepared = material()
     response = valid_response(prepared)
-    item = response["profiles"]["ir_read"]
+    item = response["ir_semantics"]["ir_read"]
     if placement == "profile":
         item["actor"] = item.pop("operator")
     elif placement == "profile_with_both":
         item["actor"] = item["operator"]
     elif placement == "evidence":
-        item["evidences"][0]["field"] = "actor"
+        item["operator_evidences"][0]["field"] = "actor"
     else:
         response["unresolved"] = [{"instruction_id": "ir_read", "field": "actor", "reason": "未知执行主体"}]
     before = deepcopy(response)
@@ -35,64 +36,65 @@ def test_actor_is_rejected_everywhere_without_alias_migration(placement):
 def test_operator_is_multivalued_and_vocabularies_have_no_other_additions():
     prepared = material()
     response = valid_response(prepared)
-    response["profiles"]["ir_read"] = profile(prepared, "ir_read", operator=list(reversed(OPERATORS)))
+    response["ir_semantics"]["ir_read"] = semantics(prepared, "ir_read", operator=list(reversed(OPERATORS)))
     accepted = validate_compiled_response(with_specs(prepared, response), prepared)
-    assert accepted["profiles"]["ir_read"]["operator"] == ["human", "tool", "agent_runtime", "llm"]
+    assert accepted["ir_semantics"]["ir_read"]["operator"] == ["human", "tool", "agent_runtime", "llm"]
     assert set(EFFECTS) == {"context_read", "context_write", "fs_read", "fs_write", "net_send",
                            "net_receive", "model_observe", "user_output", "transform"}
 
 
-@pytest.mark.parametrize("source_text,effects,roles", [
-    ("将 B 原样保存到共享上下文 cached_document，不提交给模型。", ["context_write"], ["sink"]),
-    ("本地处理调用先删除字段，再将处理结果写回共享上下文。", ["transform", "context_write"], ["transformer", "sink"]),
-    ("仅将 B 原样转交为本动作的结果，不修改共享状态。", [], []),
-    ("把 B 写入本地文件，不修改运行时上下文。", ["fs_write"], ["sink"]),
-    ("保存到尚未提交模型的会话缓存，不调用模型。", ["context_write"], ["sink"]),
-    ("把 B 交给模型本次处理，不更新共享会话缓存。", ["model_observe"], ["sink"]),
-    ("仅移除共享上下文中的绑定，不读取其内容。", ["context_write"], []),
+@pytest.mark.parametrize("source_text,effects", [
+    ("将 B 原样保存到共享上下文 cached_document，不提交给模型。", ["context_write"]),
+    ("本地处理调用先删除字段，再将处理结果写回共享上下文。", ["transform", "context_write"]),
+    ("仅将 B 原样转交为本动作的结果，不修改共享状态。", []),
+    ("把 B 写入本地文件，不修改运行时上下文。", ["fs_write"]),
+    ("保存到尚未提交模型的会话缓存，不调用模型。", ["context_write"]),
+    ("把 B 交给模型本次处理，不更新共享会话缓存。", ["model_observe"]),
+    ("仅移除共享上下文中的绑定，不读取其内容。", ["context_write"]),
 ])
-def test_compiled_scenarios_preserve_labels_without_opcode_inference(source_text, effects, roles):
+def test_compiled_scenarios_preserve_labels_without_opcode_inference(source_text, effects):
     # All scenarios deliberately have the same open opcode. The parser checks
-    # records and quotations; it must not infer extra effects or roles itself.
+    # records and source spans; it must not infer extra effects itself.
     cfg = graph()
     cfg["blocks"]["entry"]["instructions"][1]["opcode"] = "perform_action"
     source = source_bundle(source_text)
     prepared = prepare_material(source, cfg)
     response = valid_response(prepared)
-    response["profiles"]["ir_filter"] = profile(
-        prepared, "ir_filter", operator=["agent_runtime"], roles=roles, effects=effects,
+    response["ir_semantics"]["ir_filter"] = semantics(
+        prepared, "ir_filter", operator=["agent_runtime"], effects=effects,
     )
-    source_location = prepared["source_index"][0]["id"]
-    for evidence in response["profiles"]["ir_filter"]["evidences"]:
-        evidence.update(basis="source", ref_id=source_location, quote=source_text,
-                        reason="离线注入的预期标注；验证保存与证据绑定，不证明模型语义判断。")
+    evidence = {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
+                "reason": "离线注入的预期标注；验证保存与证据绑定，不证明模型语义判断。"}
+    for item in response["ir_semantics"]["ir_filter"]["operator_evidences"]:
+        value = item["value"]
+        item.clear(); item.update(value=value, **evidence)
     with_specs(prepared, response)
     before = deepcopy((source, cfg, response))
     # These are final compiled-record fixtures. Raw model responses declare
     # processing boundaries; compiler/runner tests cover that entry point.
     accepted = validate_compiled_response(response, prepared)
     assert accepted == response
-    assert accepted["profiles"]["ir_filter"]["effects"] == effects
+    assert effects_of(accepted["ir_semantics"]["ir_filter"]) == effects
     assert (source, cfg, response) == before
 
 
 def test_context_write_occurrences_require_separate_matching_evidence():
     prepared = material()
     response = valid_response(prepared)
-    item = profile(prepared, "ir_filter", operator=["agent_runtime"],
+    item = semantics(prepared, "ir_filter", operator=["agent_runtime"],
                    effects=["context_write", "transform", "context_write"])
-    response["profiles"]["ir_filter"] = item
+    response["ir_semantics"]["ir_filter"] = item
     assert validate_compiled_response(json.dumps(with_specs(prepared, response), ensure_ascii=False), prepared) == response
-    item["evidences"][-1]["effect_index"] = 0
-    with pytest.raises(ValueError, match="lacks evidence"):
+    item["events"][-1]["evidences"] = []
+    with pytest.raises(ValueError, match="own evidence"):
         validate_compiled_response(with_specs(prepared, response), prepared)
-    item["evidences"][-1]["effect_index"] = 1
-    with pytest.raises(ValueError, match="label does not match"):
+    item["events"][-1]["evidences"] = [{"rule_id": "missing", "reason": "Unknown occurrence evidence."}]
+    with pytest.raises(ValueError, match="does not exist"):
         validate_compiled_response(with_specs(prepared, response), prepared)
 
 
-def test_old_execution_model_or_profile_material_cannot_be_reinterpreted():
-    for key, value in (("version", "security-profile-v2"), ("execution_model", {"version": "wide-read-agent-v2", "rules": []})):
+def test_old_runtime_contract_or_profile_material_cannot_be_reinterpreted():
+    for key, value in (("version", "security-profile-v2"), ("runtime_contract", {"version": "wide-read-agent-v2", "rules": []})):
         prepared = material()
         prepared[key] = value
         with pytest.raises(ValueError):

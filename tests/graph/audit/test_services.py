@@ -8,7 +8,7 @@ import socket
 import pytest
 
 from skillflow.graph.audit.prompts import source_controlled_prompt
-from skillflow.graph.audit.prompts import source_units
+from skillflow.common.source_evidence import nonempty_source_lines
 from skillflow.graph.audit.services import audit_source_controlled
 from skillflow.graph.audit.services import parse_response
 from skillflow.graph.audit.services import validate_audit
@@ -39,7 +39,7 @@ def bind_document(document):
 
 
 def bind_protocol(response):
-    response.update(schema_version=5, outcome="completed", contract_version=CONTRACT_VERSION)
+    response.update(schema_version=6, outcome="completed", contract_version=CONTRACT_VERSION)
     return response
 
 
@@ -60,18 +60,14 @@ def material():
         {"id": "f_context", "kind": "context", "status": "represented",
          "source_requirement": "标题是背景信息。", "actual_representation": "流程容器。",
          "reason": "本项仅记录非业务上下文，并非语义要求通过。",
-         "source_refs": [{"unit_id": "src_001", "file": "SKILL.md", "start_line": 1, "end_line": 1,
-                          "quote": "# source_only_marker"}],
+         "source_refs": [{"file": "SKILL.md", "start_line": 1, "end_line": 1}],
          "controlled_refs": [{"unit_id": "u_container"}], "basis": ["interpretation"], "suggestions": []},
         {"id": "f_read", "kind": "semantic", "status": "represented",
          "source_requirement": "读取请求并返回。", "actual_representation": "读取后返回该结果。",
          "reason": "比较了动作、顺序与返回身份。",
-         "source_refs": [{"unit_id": "src_002", "file": "SKILL.md", "start_line": 3, "end_line": 3,
-                          "quote": "读取请求并返回。"}],
-         "controlled_refs": [{"unit_id": "u_ops", "quote": "读取请求，返回该结果。"}],
-         "basis": ["explicit_graph"], "suggestions": []}],
-        "reviewed_source_unit_ids": ["src_001", "src_002"],
-        "reviewed_controlled_unit_ids": ["u_container", "u_ops"], "notes": []}
+         "source_refs": [{"file": "SKILL.md", "start_line": 3, "end_line": 3}],
+         "controlled_refs": [{"unit_id": "u_ops"}],
+         "basis": ["explicit_graph"], "suggestions": []}]}
     return source, document, bind_protocol(response)
 
 
@@ -96,15 +92,15 @@ def test_single_call_receives_only_complete_source_and_controlled_text(material)
     parsed = audit_source_controlled(source, document, client)
     assert len(client.prompts) == 1
     payload = json.loads(client.prompts[0].split("\nINPUT_JSON\n")[1])
-    assert payload["source_files"] == [{"path": "SKILL.md", "content": source["files"][0]["content"]}]
+    assert "".join(line["text"] for line in payload["source_files"][0]["lines"]) == source["files"][0]["content"]
     assert payload["controlled_text"] == document["text"]
     assert payload["controlled_units"] == [{"id": u["id"], "basis": u["basis"]} for u in document["units"]]
-    assert payload["source_line_index"]["SKILL.md"][2] == {"line": 3, "text": "读取请求并返回。"}
+    assert payload["source_files"][0]["lines"][2] == {"line": 3, "text": "读取请求并返回。\n"}
     for forbidden in ("raw_graph_only_marker", "oracle_only_marker", "mutation_only_marker", "old_result_only_marker",
                       "certificate_only_marker", "private_rich_location", "/blocks/arbitrary/instructions", "graph_sha256"):
         assert forbidden not in client.prompts[0]
     assert parsed["findings"][1]["graph_refs"] == ["/blocks/arbitrary/instructions"]
-    assert "不是语义等价" in parsed["coverage_notice"]
+    assert "not proof of semantic equivalence" in parsed["coverage_notice"]
     assert material == original
 
 
@@ -117,7 +113,7 @@ def test_combined_behavior_order_and_binding_need_no_classification_or_optional_
     checked = validate_audit(response, source, document)
     assert checked["representation_summary"] == {
         "represented_ids": ["f_read"], "conservative_ids": []}
-    assert "未填写保守说明不代表精确保留" in checked["coverage_notice"]
+    assert "Absence of a conservative explanation does not imply exact preservation" in checked["coverage_notice"]
     for field in ("precision", "dimension", "unknown_cause"):
         assert field not in checked["findings"][1]
     assert "dimension_reviews" not in checked
@@ -142,14 +138,11 @@ def test_unknown_requires_only_reason_not_an_extra_cause_category(material):
         validate_audit(response, source, document)
 
 
-def test_source_unit_index_preserves_fences_and_all_nonempty_lines():
+def test_coverage_locations_include_code_and_fences_without_paragraph_units():
     content = "首段\r\n\r\n```python\r\nprint('x')\r\n\r\nprint('y')\r\n```\r\n\r\n末段\r\n"
     source = bind_source({"files": [{"path": "a.md", "content": content}, {"path": "b.md", "content": "尾文件"}]})
-    units = source_units(source)
-    assert [(u["file"], u["start_line"], u["end_line"]) for u in units] == [
-        ("a.md", 1, 1), ("a.md", 3, 7), ("a.md", 9, 9), ("b.md", 1, 1)]
-    assert "print('x')\n\nprint('y')" in units[1]["text"]
-    assert [u["id"] for u in units] == ["src_001", "src_002", "src_003", "src_004"]
+    files = {item["path"]: item["content"] for item in source["files"]}
+    assert nonempty_source_lines(files) == {("a.md", n) for n in (1, 3, 4, 6, 7, 9)} | {("b.md", 1)}
 
 
 def test_auxiliary_kind_is_not_a_second_model_visible_classification(material):
@@ -178,8 +171,7 @@ def test_auditor_receives_fixed_ir_roles_without_case_specific_answers(material)
     # or an unverified alteration of the certified controlled text.
     payload = json.loads(payload)
     assert payload["controlled_text"] == document["text"]
-    assert set(payload) == {"source_files", "source_line_index", "source_units",
-                            "controlled_text", "controlled_units", "required_coverage"}
+    assert set(payload) == {"source_files", "controlled_text", "controlled_units"}
 
 
 def test_audit_boundary_does_not_invent_path_selection_or_strengthen_wf(material):
@@ -205,8 +197,8 @@ def test_english_audit_instructions_keep_material_verbatim_and_check_granularity
     instructions, payload_text = prompt.split("\nINPUT_JSON\n", 1)
     assert not re.search(r"[\u3400-\u9fff]", instructions)
     normalized = " ".join(instructions.split())
-    assert "Write explanations and reasons in Chinese" in normalized
-    assert "Preserve source and controlled quotes verbatim in their original language" in normalized
+    assert "Write explanations and reasons in English" in normalized
+    assert "the program extracts excerpts. Do not reproduce or translate quotes" in normalized
     for rule in (
         "separate source-specified actions must remain individually represented",
         "an intermediate data version affects processing, observation, writing, or transmission",
@@ -218,7 +210,8 @@ def test_english_audit_instructions_keep_material_verbatim_and_check_granularity
     ):
         assert rule in normalized
     payload = json.loads(payload_text)
-    assert payload["source_files"] == [
+    assert [{"path": item["path"], "content": "".join(line["text"] for line in item["lines"])}
+            for item in payload["source_files"]] == [
         {"path": item["path"], "content": item["content"]} for item in source["files"]]
     assert payload["controlled_text"] == document["text"]
 
@@ -227,7 +220,7 @@ def test_new_interpretation_boundary_does_not_override_model_uncertainty(materia
     from skillflow.common.semantic_failure import SemanticFailure
     source, document, response = material
     finding = response["findings"][1]
-    failure = {"schema_version": 5, "contract_version": CONTRACT_VERSION, "outcome": "cannot_assess",
+    failure = {"schema_version": 6, "contract_version": CONTRACT_VERSION, "outcome": "cannot_assess",
                "failure": {"reason": "引用的源文要求互相冲突，无法比较应保留的行为。",
                            "source_refs": finding["source_refs"], "controlled_refs": finding["controlled_refs"]}}
     client = FakeClient(failure)
@@ -251,7 +244,7 @@ def test_invalid_json_never_triggers_a_repair_call(material, raw):
 @pytest.mark.parametrize("path,value", [
     (("source_refs", 0, "unit_id"), "absent"),
     (("source_refs", 0, "file"), "missing.md"),
-    (("source_refs", 0, "start_line"), 1),
+    (("source_refs", 0, "start_line"), 0),
     (("source_refs", 0, "end_line"), 4),
     (("source_refs", 0, "quote"), "并没有这句话"),
     (("controlled_refs", 0, "unit_id"), "fabricated_missing_operation"),
@@ -268,8 +261,8 @@ def test_bad_locations_and_quotes_are_rejected(material, path, value):
 @pytest.mark.parametrize("field", ["reviewed_source_unit_ids", "reviewed_controlled_unit_ids"])
 def test_missing_or_repeated_coverage_is_rejected(material, field):
     source, document, response = material
-    response[field].pop()
-    with pytest.raises(ValueError, match=field):
+    response[field] = []
+    with pytest.raises(ValueError, match="Extra inputs"):
         validate_audit(response, source, document)
 
 
@@ -374,7 +367,6 @@ def test_renaming_units_needs_no_identifier_specific_detection(material):
     document["units"][1]["id"] = new
     document["units"][1]["text"] = document["units"][1]["text"].replace(old, new)
     bind_document(document)
-    response["reviewed_controlled_unit_ids"][1] = new
     response["findings"][1]["controlled_refs"][0]["unit_id"] = new
     assert validate_audit(response, source, document)["findings"][1]["graph_refs"] == ["/blocks/arbitrary/instructions"]
 
@@ -399,7 +391,98 @@ def test_prior_role_fields_are_not_accepted(material):
 def test_source_and_controlled_order_do_not_rewrite_model_judgment(material):
     source, document, response = material
     response["findings"].reverse()
-    response["reviewed_controlled_unit_ids"].reverse()
-    response["reviewed_source_unit_ids"].reverse()
     parsed = validate_audit(response, source, document)
     assert [f["id"] for f in parsed["findings"]] == ["f_read", "f_context"]
+
+
+def test_cross_paragraph_reference_is_valid_and_does_not_create_unit_records(material):
+    source, document, response = material
+    combined = response["findings"][1]
+    combined["source_refs"] = [{"file": "SKILL.md", "start_line": 1, "end_line": 3}]
+    combined["controlled_refs"] = [{"unit_id": "u_container"}, {"unit_id": "u_ops"}]
+    response["findings"] = [combined]
+    parsed = validate_audit(response, source, document)
+    assert parsed["findings"][0]["source_refs"] == combined["source_refs"]
+    assert "source_units" not in parsed
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_prompt_contains_each_source_line_once_and_reports_resolve_real_text(material, newline):
+    from skillflow.graph.audit.report import render_suggestions, source_evidence_lines
+    source, document, response = material
+    source["files"][0]["content"] = newline.join(["# source_only_marker", "", "读取请求并返回。"])
+    bind_source(source)
+    payload = json.loads(source_controlled_prompt(source, document).split("\nINPUT_JSON\n", 1)[1])
+    content = "".join(line["text"] for line in payload["source_files"][0]["lines"])
+    assert content == source["files"][0]["content"]
+    assert json.dumps(payload, ensure_ascii=False).count("读取请求并返回。") == 1
+    assert "source_line_index" not in payload and "required_coverage" not in payload
+    response["findings"][1].update(status="omitted", suggestions=[suggestion()])
+    parsed = validate_audit(response, source, document)
+    report = render_suggestions("case", {"status": "complete", "result": parsed}, source=source)
+    assert "> 读取请求并返回。" in report
+    assert "quote" not in parsed["findings"][1]["source_refs"][0]
+    assert source_evidence_lines(response["findings"][1]["source_refs"], source)
+
+
+def test_compact_protocol_rejects_previous_version_and_all_removed_fields(material):
+    source, document, response = material
+    for extra in ({"schema_version": 5}, {"notes": []},
+                  {"reviewed_source_unit_ids": ["src_001", "src_002"]},
+                  {"reviewed_controlled_unit_ids": ["u_container", "u_ops"]}):
+        with pytest.raises(ValueError):
+            validate_audit({**response, **extra}, source, document)
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_physical_line_coverage_does_not_promote_one_line_to_a_whole_paragraph(material, newline):
+    source, document, response = material
+    source["files"][0]["content"] = newline.join(["# source", "", "first requirement", "second requirement", "  "])
+    bind_source(source)
+    with pytest.raises(ValueError, match="nonempty source lines.*4"):
+        validate_audit(response, source, document)
+    response["findings"][1]["source_refs"][0]["end_line"] = 4
+    assert validate_audit(response, source, document)["outcome"] == "completed"
+
+
+def test_line_coverage_union_is_per_file_and_allows_overlapping_ranges(material):
+    source, document, response = material
+    source["files"].append({"path": "notes/code.txt", "content": "```\r\nrun()\r\n\r\n```"})
+    bind_source(source)
+    with pytest.raises(ValueError, match="notes/code.txt"):
+        validate_audit(response, source, document)
+    response["findings"][1]["source_refs"] += [
+        {"file": "notes/code.txt", "start_line": 1, "end_line": 2},
+        {"file": "notes/code.txt", "start_line": 2, "end_line": 4},
+    ]
+    assert validate_audit(response, source, document)["outcome"] == "completed"
+
+
+def test_cannot_assess_checks_only_its_real_ranges_not_complete_coverage(material):
+    from skillflow.common.semantic_failure import SemanticFailure
+    source, document, _ = material
+    response = {"schema_version": 6, "contract_version": CONTRACT_VERSION, "outcome": "cannot_assess",
+                "failure": {"reason": "必要条件冲突。",
+                            "source_refs": [{"file": "SKILL.md", "start_line": 1, "end_line": 1}],
+                            "controlled_refs": []}}
+    with pytest.raises(SemanticFailure):
+        validate_audit(response, source, document)
+    response["failure"]["source_refs"][0]["end_line"] = 4
+    with pytest.raises(ValueError, match="invalid source reference"):
+        validate_audit(response, source, document)
+
+
+def test_blank_and_empty_files_do_not_add_coverage_requirements(material):
+    source, document, response = material
+    source["files"] += [{"path": "empty.txt", "content": ""}, {"path": "blank.txt", "content": " \n\t\r\n"}]
+    bind_source(source)
+    assert validate_audit(response, source, document)["outcome"] == "completed"
+
+
+def test_prompt_describes_line_coverage_without_requiring_one_finding_per_line(material):
+    instructions, payload = source_controlled_prompt(material[0], material[1]).split("\nINPUT_JSON\n", 1)
+    normalized = " ".join(instructions.split())
+    assert "every nonempty physical line" in normalized
+    assert "does not require one finding per line" in normalized
+    assert "cannot_assess branch validates its cited positions" in normalized
+    assert "source_units" not in json.loads(payload)

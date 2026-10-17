@@ -14,7 +14,8 @@ _EXPORTS = {
         "cfg_sha256",
     )},
     "propagate": "solver", "PropagationResult": "solver",
-    "load_doe_input": "handoff", "load_propagation_run": "runner",
+    "load_propagation_materials": "runner",
+    "PropagationMaterials": "loading", "materials_from_result": "loading",
     "IRTransferSpec": "contracts.specs", "ValueRef": "contracts.specs",
     "RawIRTransferSpec": "contracts.specs", "ProcessingSpec": "contracts.specs", "ForEachSpec": "contracts.specs",
 }

@@ -6,19 +6,19 @@ from pathlib import Path
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="联合标注聚焦审查与最多一次完整修复；不修改 CFG")
+    parser = argparse.ArgumentParser(description="Focused joint-annotation review with at most one complete repair; CFG remains unchanged")
     sub = parser.add_subparsers(dest="command", required=True)
-    prepare = sub.add_parser("prepare", help="只读验证完成标注并冻结审查材料")
+    prepare = sub.add_parser("prepare", help="Read-only validation of completed annotation and freezing of review materials")
     prepare.add_argument("--annotation-run", type=Path, required=True)
     prepare.add_argument("--run-dir", type=Path, required=True)
     prepare.add_argument("--env-file", type=Path)
-    run = sub.add_parser("run", help="一次独立审查，或从已接受响应恢复")
+    run = sub.add_parser("run", help="One independent review, or resume from accepted responses")
     run.add_argument("--run-dir", type=Path, required=True)
     run.add_argument("--env-file", type=Path)
-    replay = sub.add_parser("replay", help="保存响应的严格离线重放，不创建在线客户端")
+    replay = sub.add_parser("replay", help="Strict offline replay of saved responses; no online client is created")
     replay.add_argument("--run-dir", type=Path, required=True)
-    refine = sub.add_parser("refine", help="初审、有问题时完整修复一次、独立复审")
-    refine.add_argument("--annotation-run", type=Path, help="首次准备时的当前完成标注")
+    refine = sub.add_parser("refine", help="Initial review, one complete repair if issues are found, and independent final review")
+    refine.add_argument("--annotation-run", type=Path, help="Current completed annotation for initial preparation")
     refine.add_argument("--run-dir", type=Path, required=True)
     refine.add_argument("--env-file", type=Path)
     args = parser.parse_args(argv)
@@ -42,13 +42,13 @@ def main(argv=None):
             from skillflow.propagation.review.refinement import run_refinement
             if not (args.run_dir / "manifest.json").exists():
                 if args.annotation_run is None:
-                    parser.error("首次 refine 必须提供 --annotation-run")
+                    parser.error("Initial refine requires --annotation-run")
                 from skillflow.propagation.annotation.loading import load_annotation_run
                 original = load_annotation_run(args.annotation_run)
-                prepare_refinement_run(args.annotation_run / "inputs/package", args.annotation_run / "inputs/cfg.json",
+                prepare_refinement_run(None, None,
                     original["material"], original["raw_annotation"], run_dir=args.run_dir,
                     provenance={"kind": "accepted_annotation", "upstream_identity": original["upstream_identity"]},
-                    config=public, secrets=secrets)
+                    config=public, secrets=secrets, upstream_run=args.annotation_run)
             result = run_refinement(args.run_dir, config=public, env_file=args.env_file, secrets=secrets,
                                     progress=lambda message: print(message, flush=True))
             print(result["status"], args.run_dir.resolve())

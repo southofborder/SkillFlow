@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from skillflow.propagation.contracts.runtime_contract import execution_model
-from skillflow.propagation.contracts.runtime_contract import execution_model_binding
+from skillflow.propagation.contracts.runtime_contract import runtime_contract
+from skillflow.propagation.contracts.runtime_contract import runtime_contract_binding
 from skillflow.propagation.annotation import runner
 from tests.propagation.annotation.helpers import FakeClient
 from tests.propagation.annotation.test_security_runner import setup_run, forbidden
@@ -16,12 +16,12 @@ def write(path, value):
 
 def test_runtime_binding_roundtrip_without_additional_call(tmp_path, monkeypatch):
     directory, _, _ = setup_run(tmp_path)
-    expected = execution_model_binding(execution_model())
+    expected = runtime_contract_binding(runtime_contract())
     manifest = runner.read_json(directory / "manifest.json")
-    assert manifest["execution_model"] == expected
+    assert manifest["runtime_contract"] == expected
     client = FakeClient()
     result = runner.run_annotation(directory, client=client)
-    assert result["execution_model"] == expected
+    assert result["runtime_contract"] == expected
     monkeypatch.setattr(runner, "RecordingClient", forbidden)
     assert runner.replay_run(directory) == result
     assert len(client.prompts) == 1
@@ -32,15 +32,15 @@ def test_runtime_identity_refused_before_source_mismatch_or_network(tmp_path, mo
     directory, _, _ = setup_run(tmp_path)
     manifest = runner._unseal(runner.read_json(directory / "manifest.json"))
     if change == "missing":
-        manifest.pop("execution_model")
+        manifest.pop("runtime_contract")
     elif change == "old":
-        manifest["execution_model"]["version"] = "wide-read-agent-v6"
+        manifest["runtime_contract"]["version"] = "wide-read-agent-v6"
     elif change == "digest":
-        manifest["execution_model"]["sha256"] = "0" * 64
+        manifest["runtime_contract"]["sha256"] = "0" * 64
     else:
-        material = runner.read_json(directory / "inputs/material.json")
-        material["execution_model"]["rules"][0]["text"] = "changed assumption"
-        write(directory / "inputs/material.json", material)
+        model = runner.read_json(directory / "inputs/runtime-contract.json")
+        model["rules"][0]["text"] = "changed assumption"
+        write(directory / "inputs/runtime-contract.json", model)
     manifest["implementation"] = {"old": "implementation"}
     write(directory / "manifest.json", runner._seal(manifest))
     monkeypatch.setattr(runner, "RecordingClient", forbidden)
@@ -55,8 +55,8 @@ def test_accepted_result_contract_tampering_is_not_silently_repaired(tmp_path, m
     directory, _, _ = setup_run(tmp_path)
     client = FakeClient()
     result = runner.run_annotation(directory, client=client)
-    result["execution_model"]["sha256"] = "0" * 64
-    write(directory / "result.json", result)
+    result["runtime_contract"]["sha256"] = "0" * 64
+    write(directory / "result.json", runner.result_snapshot(result))
     before = (directory / "result.json").read_bytes()
     monkeypatch.setattr(runner, "RecordingClient", forbidden)
     with pytest.raises(runner.RunIdentityError, match="runtime contract identity"):

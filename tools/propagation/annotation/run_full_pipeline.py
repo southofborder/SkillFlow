@@ -15,6 +15,10 @@ import sys
 import threading
 
 from skillflow.common.paths import project_root, resolve_material_path
+from tools.propagation.task_runs import bind_task_runs, task_owner, read_task_runs
+from tools.propagation.summaries import support_identity
+from skillflow.propagation.annotation.loading import load_annotation_attempt
+from tools.propagation.summaries import case_summary
 
 HERE = Path(__file__).resolve()
 PACKAGE_ROOT = project_root()
@@ -41,13 +45,15 @@ from skillflow.graph.semantic_contract import contract_binding
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
 from skillflow.propagation.annotation.config import annotation_config
 
-IDENTITY = "skill-ir-full-feedback-security-profile-review30-v10"
+IDENTITY = "skill-ir-full-feedback-security-profile-review30-v14"
+FORMAT_VERSION = 14
 LIMITS = {"max_semantic_revisions": 3, "max_structural_repairs": 3,
           "max_audit_execution_retries": 2,
           "extraction_logical_calls_per_case": 16, "audit_logical_calls_per_case": 4,
-          "annotation_logical_calls_per_case": 1, "logical_calls_per_case": 21,
-          "logical_calls_total": 630, "audit_execution_calls_per_case": 12,
-          "execution_calls_per_case": 29, "execution_calls_total": 870}
+          "annotation_stages_per_case": 1, "annotation_structural_attempt_limit": None,
+          "annotation_logical_calls_per_case": None, "logical_calls_per_case": None,
+          "logical_calls_total": None, "audit_execution_calls_per_case": 12,
+          "execution_calls_per_case": None, "execution_calls_total": None}
 
 
 def _renderer_identity(renderer):
@@ -67,8 +73,9 @@ def _source_case(item):
             "run_dir": f"cases/{item['index']:03}"}
 
 
-def _manifest(directory, plan, config, workers, renderer, writer):
-    expected = {"schema_version": 10, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION, **contract_binding(),
+def _manifest(directory, plan, config, workers, renderer, writer, task_runs=None):
+    expected = {"schema_version": FORMAT_VERSION, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION, **contract_binding(),
+                "tool_support": support_identity(),
                 "driver": {"path": HERE.relative_to(REPOSITORY_ROOT).as_posix(), "sha256": sha_file(HERE)},
                 "source_selector": {"review_driver_sha256": sha_file(HERE.with_name("run_review_set.py")),
                                     "selector_sha256": sha_file(REPOSITORY_ROOT / "tools/graph/baseline/review_set_source.py")},
@@ -76,6 +83,7 @@ def _manifest(directory, plan, config, workers, renderer, writer):
                 "annotation_config": annotation_config(config), "workers": workers,
                 "renderer": _renderer_identity(renderer), "limits": LIMITS,
                 "cases": [_source_case(item) for item in plan],
+                "task_runs": bind_task_runs(directory, [_source_case(item) for item in plan], task_runs),
                 "policy": {"initial_analysis": None, "selection": "last_valid_cfg_from_current_feedback_only",
                            "annotation_requires_audit_passed": False, "old_cfg_fallback": False,
                            "completed_response_automatic_resend": False,
@@ -84,7 +92,7 @@ def _manifest(directory, plan, config, workers, renderer, writer):
                            "review_and_oracle_in_model_input": False}}
     path = directory / "manifest.json"
     if path.exists():
-        if read_json(path).get("identity") != IDENTITY or read_json(path).get("schema_version") != 10:
+        if read_json(path).get("identity") != IDENTITY or read_json(path).get("schema_version") != FORMAT_VERSION:
             raise ValueError("Unsupported full pipeline run version; use a new directory for the semantic contract")
         if read_json(path) != expected:
             raise ValueError("Full pipeline input/config/source/driver identity mismatch")
@@ -96,7 +104,7 @@ def _manifest(directory, plan, config, workers, renderer, writer):
 
 
 def _missing(reason, *, status="not_run"):
-    return {"status": status, "reason": reason, "profiles": {}, "locations": {}, "transfer_specs": {}, "sink_boundaries": [], "counts": {}}
+    return {"status": status, "reason": reason, "ir_semantics": {}, "locations": {}, "sink_boundaries": [], "counts": {}}
 
 
 def _selection(feedback):
@@ -157,6 +165,8 @@ def _counts(feedback, annotation):
               "audit_execution_calls": number(f, "audit_execution_calls", feedback),
               "audit_execution_retries": number(f, "audit_execution_retries", feedback),
               "annotation_logical_calls": number(a, "logical_calls", annotation),
+              "annotation_stage_calls": number(a, "stage_calls", annotation),
+              "annotation_structural_corrections": number(a, "structural_corrections", annotation),
               "semantic_revisions": number(f, "semantic_revisions", feedback),
               "structural_repairs": number(f, "structural_repairs", feedback),
               "http_attempts": add(number(f, "http_attempts", feedback), number(a, "http_attempts", annotation)),
@@ -169,15 +179,14 @@ def _counts(feedback, annotation):
     counts["total_execution_calls"] = add(*(counts[key] for key in
         ("extraction_logical_calls", "audit_execution_calls", "annotation_logical_calls")))
     for field, maximum in (("extraction_logical_calls", 16), ("audit_logical_calls", 4),
-                           ("annotation_logical_calls", 1), ("total_logical_calls", 21),
-                           ("audit_execution_calls", 12), ("audit_execution_retries", 8),
-                           ("total_execution_calls", 29)):
+                           ("annotation_stage_calls", 1),
+                           ("audit_execution_calls", 12), ("audit_execution_retries", 8)):
         if counts[field] is not None and counts[field] > maximum:
             raise AssertionError("Full pipeline logical call budget exceeded: " + field)
     return counts
 
 
-def _case(directory, case, *, config, renderer, factory, annotation_factory, secrets, stop_event, replay=False):
+def _case(directory, case, *, config, renderer, factory, annotation_factory, secrets, stop_event, replay=False, task_run=None):
     from skillflow.graph.feedback.runner import refine_skill
     from skillflow.graph.feedback.runner import replay_run as replay_feedback
     from skillflow.propagation.annotation.runner import prepare_run
@@ -202,7 +211,7 @@ def _case(directory, case, *, config, renderer, factory, annotation_factory, sec
                         or prior["annotation"]["status"] != "not_run" or prior["selection"] is not None
                         or prior["source_binding"] is not None or feedback_dir.exists() or annotation_dir.exists()):
                     raise ValueError("Missing feedback manifest for a case that was started or cannot be verified")
-                return prior
+                return {**prior, "annotation": _missing(prior["annotation"]["reason"], status="not_run")}
             feedback = replay_feedback(feedback_dir, renderer=renderer)
         else:
             feedback = refine_skill(resolve_material_path(case["package_path"], base=REPOSITORY_ROOT), run_dir=feedback_dir,
@@ -253,17 +262,17 @@ def _case(directory, case, *, config, renderer, factory, annotation_factory, sec
                 prepared = None
             else:
                 prepared = prepare_run(feedback_dir / "inputs/package", root / "selected-analysis.json",
-                                       run_dir=annotation_dir, config=profile_config, secrets=secrets)
+                                       run_dir=annotation_dir, config=profile_config, secrets=secrets, task_run=task_run)
             if prepared is not None:
                 if prepared["preparation_status"] != "ready":
-                    annotation = replay_annotation(annotation_dir) if replay else read_json(annotation_dir / "result.json")
+                    annotation = replay_annotation(annotation_dir) if replay else load_annotation_attempt(annotation_dir)["result"]
                 else:
                     binding = _source_binding(feedback_dir, annotation_dir, case)
                     if prepared["graph_sha256"] != selected["graph_sha256"] or prepared["source_sha256"] != selected["source_sha256"]:
                         raise ValueError("Prepared annotation does not match selected feedback graph/source")
                     _stable_json(root / "source-binding.json", binding, writer, replay=replay)
                     phase = "annotation"
-                    progress(f"{'重放' if replay else '开始'}第 {selected['revision']} 轮 CFG 的唯一标注；反馈状态 {feedback['status']}")
+                    progress(f"{'重放' if replay else '开始'}第 {selected['revision']} 轮 CFG 的联合标注阶段；反馈状态 {feedback['status']}")
                     annotation = replay_annotation(annotation_dir) if replay else run_annotation(
                         annotation_dir, client_factory=annotation_factory, config=profile_config, secrets=secrets,
                         stop_event=stop_event, progress=progress)
@@ -287,9 +296,9 @@ def _case(directory, case, *, config, renderer, factory, annotation_factory, sec
               "counts": _counts(feedback, annotation), "scheduler_error": error}
     if replay and (root / "result.json").exists():
         original = read_json(root / "result.json")
-        if result != original:
+        if case_summary(result, owner=root, annotation_run=annotation_dir) != original:
             raise ValueError("Offline full pipeline replay differs from saved stages or selection: " + case["case_id"])
-    writer.json(output / "result.json", result)
+    writer.json(output / "result.json", case_summary(result, owner=root, annotation_run=annotation_dir))
     return result
 
 
@@ -302,7 +311,7 @@ def _summary(outcomes):
     return {"cases": len(outcomes), "feedback_statuses": dict(Counter(item["feedback"]["status"] for item in outcomes.values())),
             "annotation_statuses": dict(Counter(item["annotation"]["status"] for item in outcomes.values())),
             "selected_graphs": sum(item["selection"] is not None for item in outcomes.values()),
-            "profiles": sum(len(item["annotation"].get("profiles", {})) for item in outcomes.values()),
+            "ir_semantics": sum(len(item["annotation"].get("ir_semantics", {})) for item in outcomes.values()),
             "partial_order_ir_count": sum(_sources.partial_order_count(item["annotation"]) for item in outcomes.values()),
             "counts": dict(totals), "unavailable_count_cases": [key for key, value in outcomes.items()
                 if any(item is None for item in value["counts"].values())]}
@@ -314,13 +323,13 @@ def render_report(result, manifest):
     prefix = "../" if result["mode"] == "replay" else ""
     stage = "/replay" if result["mode"] == "replay" else ""
     lines = ["# 30 个 Skill 重新提取、语义反馈与安全语义标注", "",
-             "本轮从冻结 Skill 源包重新提取，不采用历史 CFG。每例最多 3 次语义修复，每轮最多 3 次结构修复，随后对本轮末次结构有效图标注一次。", "",
+             "本轮从冻结 Skill 源包重新提取，不采用历史 CFG。每例最多 3 次语义修复，每轮构图最多 3 次结构修复，随后对本轮末次结构有效图执行一个联合标注阶段；标注结构纠正不限次数，与构图和语义修复计数分开。", "",
              "核对遇到可识别的暂态传输失败时，最多额外重试 2 次；语义核对轮次、执行尝试与 HTTP 尝试分别计数。完整响应、无效语义核对 JSON、未决、用户中断或状态不确定的请求不因本策略自动重发。远程阻塞读取超时为 600 秒。", "",
              "核对器通过仅记为 audit_passed；其他停止状态仍明确保留。标注记录完整不保证分类正确。本轮没有进行数据传播、风险、必要性或 DOE 判断。", "",
              f"模式：{result['mode']}；反馈状态：{clean(summary['feedback_statuses'])}；标注状态：{clean(summary['annotation_statuses'])}。", "",
-             f"有效保存 {summary['profiles']} 份 profile，{summary['partial_order_ir_count']} 条部分顺序 IR。调用计数：{clean(summary['counts'])}。", "",
+             f"有效保存 {summary['ir_semantics']} 份 profile，{summary['partial_order_ir_count']} 条部分顺序 IR。调用计数：{clean(summary['counts'])}。", "",
              f"计数仅汇总已观测值，计数不完整的案例：{', '.join(summary['unavailable_count_cases']) or '无'}。未知不视为零。", "",
-             "| 编号／样例 | 反馈停止状态 | 选图轮次 | 标注状态 | profile 数 | 未决数 | 原因 |",
+             "| 编号／样例 | 反馈停止状态 | 选图轮次 | 标注状态 | profile 数 | 部分顺序 IR | 原因 |",
              "|---|---|---:|---|---:|---:|---|"]
     for case in manifest["cases"]:
         identifier = case["case_id"]
@@ -331,7 +340,7 @@ def render_report(result, manifest):
         annotation_link = f"{prefix}cases/{identifier}/annotation{stage}/report.md"
         annotation_status = (f"[{annotation['status']}]({annotation_link})" if annotation["status"] != "not_run" else "not_run")
         lines.append(f"| {identifier} · {case['sample_id']} · {case['basename']} | [{row['feedback']['status']}]({feedback_link}) | "
-                     f"{selected_round} | {annotation_status} | {len(annotation.get('profiles', {}))} | {_sources.partial_order_count(annotation)} | "
+                     f"{selected_round} | {annotation_status} | {len(annotation.get('ir_semantics', {}))} | {_sources.partial_order_count(annotation)} | "
                      f"{clean(annotation.get('reason', '') or row['feedback'].get('reason', ''))} |")
     lines += ["", "每例 selection.json 记录当前末次有效图的轮次、摘要与反馈停止状态；source-binding.json 校验两个阶段的文件字节与解码文本一致。", "",
               "没有有效图的案例不进行标注，不回退历史基线图。来源、配置、源码、打印器及各次响应均保留；恢复先消费已保存响应。只对已经明确以暂态传输失败结束的核对调用创建有界的新尝试，失败与重试决定分别留存。", "",
@@ -339,7 +348,7 @@ def render_report(result, manifest):
     return "\n".join(lines)
 
 
-def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None):
+def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None, task_runs=None):
     if mode not in {"run", "replay"}:
         raise ValueError("mode must be run or replay")
     if workers is not None and (type(workers) is not int or not 1 <= workers <= 8):
@@ -359,7 +368,7 @@ def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None
     stop_event = threading.Event()
     with exclusive_run(directory):
         prior = read_json(directory / "manifest.json") if (directory / "manifest.json").exists() else None
-        if prior is not None and (prior.get("schema_version") != 10 or prior.get("identity") != IDENTITY
+        if prior is not None and (prior.get("schema_version") != FORMAT_VERSION or prior.get("identity") != IDENTITY
                                   or prior.get("profile_schema_version") != SCHEMA_VERSION):
             raise ValueError("Unsupported full pipeline run version; use a new directory for the semantic contract")
         selected_workers = workers if workers is not None else (prior["workers"] if prior else 3)
@@ -367,7 +376,7 @@ def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None
         if renderer is None and prior:
             renderer = prior["renderer"]["path"]
         writer = ArtifactWriter(())
-        manifest = _manifest(directory, plan, config, selected_workers, renderer, writer)
+        manifest = _manifest(directory, plan, config, selected_workers, renderer, writer, task_runs)
         renderer = manifest["renderer"]["path"]
         output = directory / "replay" if mode == "replay" else directory
         outcomes = {}
@@ -380,13 +389,13 @@ def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None
             writer = ArtifactWriter(secrets)
 
         def save():
-            writer.json(output / "progress.json", {key: outcomes[key] for key in sorted(outcomes)})
+            writer.json(output / "progress.json", {key: case_summary(outcomes[key], owner=directory / "cases" / key, annotation_run=directory / "cases" / key / "annotation") for key in sorted(outcomes)})
 
         def work(case):
             print(f"{case['case_id']} {case['sample_id']}：{'离线重放完整流程' if mode == 'replay' else '从冻结源包开始提取及反馈'}", flush=True)
             try:
                 return _case(directory, case, config=config, renderer=renderer, factory=factory, annotation_factory=profile_factory, secrets=secrets,
-                             stop_event=stop_event, replay=mode == "replay")
+                             stop_event=stop_event, replay=mode == "replay", task_run=task_owner(directory, manifest, case["case_id"]))
             except Exception as error:
                 if mode == "replay":
                     raise
@@ -396,7 +405,8 @@ def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None
                 root = directory / case["run_dir"]
                 def saved(stage):
                     try:
-                        return read_json(root / stage / "result.json")
+                        return (load_annotation_attempt(root / stage)["result"] if stage == "annotation"
+                                else read_json(root / stage / "result.json"))
                     except (OSError, ValueError):
                         return _missing(message, status="execution_error")
                 feedback, annotation = saved("feedback"), saved("annotation")
@@ -441,11 +451,11 @@ def execute(directory, *, mode="run", env_file=None, workers=None, renderer=None
                 row = {"feedback": missing, "selection": None, "source_binding": None, "annotation": missing,
                        "counts": _counts(missing, missing), "scheduler_error": None}
                 outcomes[identifier] = row
-                writer.json(directory / case["run_dir"] / "result.json", row)
+                writer.json(directory / case["run_dir"] / "result.json", case_summary(row, owner=directory / case["run_dir"], annotation_run=directory / case["run_dir"] / "annotation"))
         outcomes = {case["case_id"]: outcomes[case["case_id"]] for case in manifest["cases"]}
-        result = {"schema_version": 10, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION, **contract_binding(), "mode": mode, "cases": outcomes,
+        result = {"schema_version": FORMAT_VERSION, "identity": IDENTITY, "profile_schema_version": SCHEMA_VERSION, **contract_binding(), "mode": mode, "cases": outcomes,
                   "summary": _summary(outcomes), "assistant_review": "pending", "user_confirmed": False}
-        writer.json(output / "experiment-result.json", result)
+        writer.json(output / "experiment-result.json", {**result, "cases": {key: case_summary(value, owner=directory / "cases" / key, annotation_run=directory / "cases" / key / "annotation") for key, value in outcomes.items()}})
         writer.text(output / "report.md", render_report(result, manifest))
         save()
         return result
@@ -456,6 +466,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("run", "replay"):
         command = commands.add_parser(name)
+        command.add_argument("--task-runs-json", type=Path, help="case ID -> completed independent Task run paths")
         command.add_argument("--run-dir", type=Path, required=True)
         command.add_argument("--renderer", type=Path)
         if name == "run":
@@ -463,7 +474,7 @@ def main(argv=None):
             command.add_argument("--workers", type=int)
     args = parser.parse_args(argv)
     result = execute(args.run_dir, mode=args.command, env_file=getattr(args, "env_file", None),
-                     workers=getattr(args, "workers", None), renderer=args.renderer)
+                     workers=getattr(args, "workers", None), renderer=args.renderer, task_runs=read_task_runs(args.task_runs_json))
     print(json.dumps(result["summary"], ensure_ascii=False), flush=True)
     return int(any(item["annotation"]["status"] not in {"complete"} for item in result["cases"].values()))
 

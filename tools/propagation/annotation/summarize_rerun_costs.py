@@ -20,9 +20,10 @@ from tools.propagation.annotation import prepare_failed_case_rerun as _prepare
 read_json, write_json = _prepare.read_json, _prepare.write_json
 sha_file, canonical_sha256 = _prepare.sha_file, _prepare.canonical_sha256
 
-IDENTITY = "skill-ir-rerun-lineage-costs-v4"
+IDENTITY = "skill-ir-rerun-lineage-costs-v6"
+FORMAT_VERSION = 6
 CASES = {f"{number:03}" for number in range(1, 31)}
-CALL_PATH = re.compile(r"cases/(?P<case>\d{3})/(?:(?:feedback/calls/(?P<revision>r\d{3})/(?P<feedback_task>extraction|audit))|(?:annotation/calls/(?P<annotation_task>annotation)))/a\d{3}/call\.json")
+CALL_PATH = re.compile(r"cases/(?P<case>\d{3})/(?:(?:feedback/calls/(?P<revision>r\d{3})/(?P<feedback_task>extraction|audit))|(?:annotation/calls/(?P<annotation_task>annotation)))/a\d{3,}/call\.json")
 
 
 class PendingRunError(ValueError):
@@ -36,7 +37,7 @@ def terminal_material(directory):
         raise PendingRunError("pending：批次尚无最终 experiment-result.json；未读取调用记录")
     manifest, outcome = read_json(directory / "manifest.json"), read_json(final)
     for value in (manifest, outcome):
-        if (value.get("schema_version") != 10 or value.get("identity") != _prepare.PARENT_IDENTITY
+        if (value.get("schema_version") != _prepare.PARENT_FORMAT_VERSION or value.get("identity") != _prepare.PARENT_IDENTITY
                 or value.get("profile_schema_version") != _prepare.SCHEMA_VERSION):
             raise ValueError("Unsupported pipeline identity")
     if ({row["case_id"] for row in manifest["cases"]} != CASES or len(manifest["cases"]) != 30
@@ -142,7 +143,7 @@ def validated_ledger(directory, files, *, allow_uncertain=False):
 def verify_lineage(directory, manifest):
     provenance = read_json(directory / "rerun-provenance.json")
     unsigned = {key: value for key, value in provenance.items() if key != "provenance_sha256"}
-    if (provenance.get("schema_version") != 4 or provenance.get("identity") != _prepare.IDENTITY
+    if (provenance.get("schema_version") != _prepare.FORMAT_VERSION or provenance.get("identity") != _prepare.IDENTITY
             or provenance.get("provenance_sha256") != canonical_sha256(unsigned)):
         raise ValueError("Rerun provenance seal mismatch")
     child, recorded_parent = provenance["child_run"], provenance["parent_run"]
@@ -192,7 +193,7 @@ def accounting_records(directory, ledger, requested_model):
         traces = _prepare.validated_trace(path.with_name("transport.json"))
         trace = traces[0] if traces else {}
         attempts = trace.get("http_attempts", [])
-        logical = (row["origin_id"] if task == "extraction" else
+        logical = (row["origin_id"] if task in {"extraction", "annotation"} else
                    f"{directory.name}:cases/{row['case_id']}/{task}/{match['revision'] or 'annotation'}")
         records.append({**row, "task": task, "revision": match["revision"], "logical_id": logical,
             "requested_model": requested_model,
@@ -230,6 +231,8 @@ def metrics(records):
     return {"execution_calls": len(records), "execution_statuses": dict(Counter(row["status"] for row in records)),
             "nonterminal_saved_calls": len(nonterminal), "nonterminal_saved_call_origins": nonterminal,
             "logical_calls": sum(logical.values()), "logical_by_task": logical,
+            "annotation_stage_calls": len({(row["origin_run"], row["case_id"]) for row in records if row["task"] == "annotation"}),
+            "annotation_structural_corrections": logical["annotation"] - len({(row["origin_run"], row["case_id"]) for row in records if row["task"] == "annotation"}),
             "http_attempt_records": len(attempts), "http_attempts": len(attempts) if not unobserved else None,
             "http_retries_observed": sum(max(0, len(row["attempts"]) - 1) for row in records),
             "unobserved_http_call_origins": unobserved, "usage": usage,
@@ -253,7 +256,7 @@ def summarize(directory):
     records = old + new
     if len({row["origin_id"] for row in records}) != len(records):
         raise ValueError("Duplicate lineage execution origin")
-    summary = {"schema_version": 4, "identity": IDENTITY, "status": "complete",
+    summary = {"schema_version": FORMAT_VERSION, "identity": IDENTITY, "status": "complete",
         "run_id": directory.name, "parent_run_id": parent.name,
         "rerun_provenance_sha256": provenance["provenance_sha256"],
         "parent_inventory_sha256": provenance["parent_run"]["files_sha256"],

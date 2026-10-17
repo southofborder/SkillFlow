@@ -156,7 +156,7 @@ operands and control flow, not only in constraint text. A constraint alone does
 not introduce a conversion, validation, or other execution step.
 
 Return only JSON matching the schema below; do not wrap it in Markdown fences
-and do not add commentary. Write explanatory diagnostics in Chinese. Preserve
+and do not add commentary. Write explanatory diagnostics in English. Preserve
 the original language and exact wording of source quotations, constraints, and
 embedded code; do not translate the package itself.
 """

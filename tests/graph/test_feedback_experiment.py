@@ -28,14 +28,14 @@ def driver(monkeypatch):
 def test_f01_manifest_binds_v5_and_current_interpretation_contract(driver, tmp_path):
     writer = ArtifactWriter(())
     manifest = driver._verified_manifest(tmp_path, {"model": "offline-fixture"}, writer)
-    assert manifest["schema_version"] == 5
-    assert manifest["identity"] == "skill-ir-semantic-feedback-f01-v5"
+    assert manifest["schema_version"] == 7
+    assert manifest["identity"] == "skill-ir-semantic-feedback-f01-v7"
     assert all(manifest[key] == value for key, value in contract_binding().items())
     assert driver._verified_manifest(tmp_path, manifest["config"], writer) == manifest
     assert read_json(tmp_path / "manifest.json") == manifest
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 6])
 def test_f01_wrapper_refuses_historical_records_without_migration(driver, tmp_path, version):
     writer = ArtifactWriter(())
     old = {"schema_version": version, "identity": f"skill-ir-semantic-feedback-f01-v{version}"}

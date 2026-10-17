@@ -21,10 +21,9 @@ def candidate(value="ok"):
 
 def answer(prompt, status="represented", *, kind="semantic", marker="current-difference"):
     data = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-    files = {f["path"]: f["content"].splitlines() for f in data["source_files"]}
-    refs = [{"unit_id": u["id"], "file": u["file"], "start_line": u["start_line"], "end_line": u["end_line"],
-             "quote": "\n".join(files[u["file"]][u["start_line"]-1:u["end_line"]])} for u in data["source_units"]]
-    controlled = data["required_coverage"]["reviewed_controlled_unit_ids"]
+    refs = [{"file": item["path"], "start_line": 1, "end_line": len(item["lines"])}
+            for item in data["source_files"] if item["lines"]]
+    controlled = [u["id"] for u in data["controlled_units"]]
     finding = {"id": marker, "kind": kind, "status": status, "source_requirement": "返回 ok。",
                "actual_representation": "工程协议测试记录，不是语义答案。", "reason": marker,
                "source_refs": refs, "controlled_refs": [{"unit_id": key} for key in controlled],
@@ -32,11 +31,11 @@ def answer(prompt, status="represented", *, kind="semantic", marker="current-dif
     if status in {"omitted", "mistranslated", "unsupported_addition", "internal_conflict"}:
         finding["suggestions"] = [{"target_ids": [controlled[-1]], "change": marker, "reason": "依源文修正"}]
     if status == "cannot_assess":
-        return {"schema_version": 5, "contract_version": CONTRACT_VERSION, "outcome": "cannot_assess",
+        return {"schema_version": 6, "contract_version": CONTRACT_VERSION, "outcome": "cannot_assess",
                 "failure": {"reason": "源文在必要返回要求上相互冲突。", "source_refs": refs,
                             "controlled_refs": [{"unit_id": key} for key in controlled]}}
-    return {"schema_version": 5, "outcome": "completed", "contract_version": CONTRACT_VERSION,
-            "findings": [finding], **data["required_coverage"], "notes": []}
+    return {"schema_version": 6, "outcome": "completed", "contract_version": CONTRACT_VERSION,
+            "findings": [finding]}
 
 
 class Client:
@@ -78,7 +77,7 @@ def test_initial_pass_and_offline_replay_with_no_api(material, monkeypatch):
     assert len(audits.prompts) == 1 and not extraction.prompts
     assert result["passed_cfg"] == result["last_valid_cfg"]
     assert result["representation_summary"] == {"represented_ids": ["current-difference"], "conservative_ids": []}
-    assert result["schema_version"] == 5 and result["identity"] == "skill-ir-semantic-feedback-v5"
+    assert result["schema_version"] == 7 and result["identity"] == "skill-ir-semantic-feedback-v7"
     def no_api(*args, **kwargs):
         pytest.fail("replay creates no online client")
     monkeypatch.setattr(runner, "RecordingClient", no_api)
@@ -129,7 +128,7 @@ def test_valid_conservative_audit_passes_zero_revision_and_is_reported(material)
     assert not extraction.prompts and len(audits.prompts) == 1
     assert result["representation_summary"] == {"represented_ids": ["current-difference"], "conservative_ids": ["current-difference"]}
     assert result["contract_sha256"] == contract_binding()["contract_sha256"]
-    assert "保守规则" in (directory / "report.md").read_text(encoding="utf-8")
+    assert "Conservative rule" in (directory / "report.md").read_text(encoding="utf-8")
     assert runner.replay_run(directory) == result
 
 
@@ -150,7 +149,7 @@ def test_missing_essential_audit_contract_is_execution_error_without_retry(mater
     assert result["representation_summary"] == {"represented_ids": [], "conservative_ids": []}
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 6])
 def test_old_feedback_records_are_not_reinterpreted(material, version):
     directory = material[2]
     directory.mkdir()
@@ -171,7 +170,7 @@ def test_one_revision_is_full_candidate_reextraction_and_isolated(material):
     for prompt in audits.prompts:
         assert "current-difference" not in prompt and '"previous_cfg"' not in prompt
         data = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-        assert set(data) == {"source_files", "source_line_index", "source_units", "controlled_text", "controlled_units", "required_coverage"}
+        assert set(data) == {"source_files", "controlled_text", "controlled_units"}
         sources.append(data["source_files"])
     assert sources[0] == sources[1]
     assert runner.replay_run(material[2]) == result
@@ -209,7 +208,7 @@ def test_invalid_audit_is_execution_error_not_revision_or_pass(material, failure
         value = answer(prompt)
         if failure == "json": return "broken JSON"
         if failure == "quote": value["findings"][0]["source_refs"][0]["quote"] = "nonexistent"
-        if failure == "coverage": value["reviewed_source_unit_ids"] = []
+        if failure == "coverage": value["findings"][0]["source_refs"].pop()
         if failure == "unknown_id": value["findings"][0]["controlled_refs"][0]["unit_id"] = "NO-SUCH-ID"
         return value
     source, seed, directory = material

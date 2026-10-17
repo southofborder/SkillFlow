@@ -6,17 +6,21 @@ from the verified compiler mapping, never inferred from operation names.
 """
 
 from __future__ import annotations
+from skillflow.propagation.contracts.references import cfg_instructions
 
 from copy import deepcopy
 from typing import Any
 
-from skillflow.common.source_evidence import json_pointer
+from skillflow.common.source_evidence import json_pointer, nonempty_source_lines
 from skillflow.common.source_evidence import resolve_pointer
 from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.material import checked_material as checked_annotation_material
 from skillflow.propagation.annotation.services import compile_response
+from skillflow.propagation.contracts.paths import semantics_path
 
 from skillflow.propagation.review.models import SCHEMA_VERSION
+
+REVIEW_FIELDS = {"schema_version", "raw_annotation", "observations", "target_index", "goal_index", "source_line_universe"}
 
 
 def _target_index(raw: dict, instruction_ids: set[str]) -> list[dict]:
@@ -29,12 +33,12 @@ def _target_index(raw: dict, instruction_ids: set[str]) -> list[dict]:
         # containing claim, rather than each quote string, is the review target.
         targets.append({"id": f"ann_{len(targets) + 1:04d}", "kind": "annotation",
                         "pointer": json_pointer(*path), "instruction_ids": ir_ids})
-        if path and path[-1] in ("evidences", "location_evidences"):
+        if path and path[-1] in ("evidences", "location_evidences", "operator_evidences", "empty_effect_evidences"):
             return
         items = sorted(value.items()) if isinstance(value, dict) else enumerate(value)
         for key, child in items:
             child_ir_ids = ir_ids
-            if len(path) == 1 and path[0] in ("profiles", "transfer_specs"):
+            if len(path) == 1 and path[0] == "ir_semantics":
                 child_ir_ids = [key]
             elif len(path) == 1 and path[0] == "locations":
                 child_ir_ids = sorted({item["instruction_id"] for item in child["operand_refs"]})
@@ -48,17 +52,16 @@ def _target_index(raw: dict, instruction_ids: set[str]) -> list[dict]:
 
 def _compiled_observation_paths(compiled: dict) -> set[str]:
     paths: set[str] = set()
-    for ir_id, spec in compiled["transfer_specs"].items():
+    for ir_id, spec in compiled["ir_semantics"].items():
         def events(values, path):
             for index, event in enumerate(values):
                 current = [*path, index]
                 if event.get("kind") == "for_each":
                     events(event["body"], [*current, "body"])
                 else:
-                    effect_index = event["effect_index"]
-                    if effect_index is not None and compiled["profiles"][ir_id]["effects"][effect_index] == "model_observe":
+                    if event["effect"] == "model_observe":
                         paths.add(json_pointer(*current))
-        events(spec["events"], ["transfer_specs", ir_id, "events"])
+        events(spec["events"], semantics_path(ir_id, "events"))
     return paths
 
 
@@ -101,6 +104,7 @@ def _observations(raw: dict, compiled: dict, mapping: dict, targets: list[dict])
             "raw_target_id": by_pointer[raw_pointer]["id"],
             "processing_target_id": by_pointer[json_pointer(*processing[0][0])]["id"],
             "scope_target_ids": scopes,
+            **({"when": deepcopy(operation["when"])} if operation.get("when") is not None else {}),
         })
     if seen != expected:
         raise ValueError("compiler observation list is incomplete")
@@ -111,20 +115,72 @@ def prepare_review_material(material: dict[str, Any], raw_annotation: dict[str, 
     """Validate and compile original inputs, then construct the one review view."""
     annotation_material = checked_annotation_material(material)
     raw, compiled, mapping = compile_response(raw_annotation, annotation_material)
-    targets = _target_index(raw, set(annotation_material["instruction_index"]))
+    targets = _target_index(raw, set(cfg_instructions(annotation_material["cfg"])))
+    # The sealed Task is a separate object, never inserted into the annotation.
+    def task_targets(value, path):
+        if not isinstance(value, (dict, list)):
+            return
+        targets.append({"id": f"task_{len(targets) + 1:04d}", "kind": "task",
+                        "pointer": json_pointer(*path), "instruction_ids": []})
+        if path and path[-1] == "evidences":
+            return
+        items = sorted(value.items()) if isinstance(value, dict) else enumerate(value)
+        for key, child in items:
+            task_targets(child, [*path, key])
+    task_targets(annotation_material["task"], [])
     observations = _observations(raw, compiled, mapping, targets)
     targets.extend({"id": item["id"], "kind": "observation", "pointer": json_pointer(index),
                     "instruction_ids": [item["instruction_id"]]}
                    for index, item in enumerate(observations))
+    from skillflow.propagation.contracts.joint import joint_source_files
+    universe = [{"file": file, "line": line}
+                for file, line in sorted(nonempty_source_lines(joint_source_files(annotation_material)))]
     return {"schema_version": SCHEMA_VERSION, **deepcopy(annotation_material),
-            "raw_annotation": raw, "observations": observations, "target_index": targets}
+            "raw_annotation": raw, "observations": observations, "target_index": targets,
+            "goal_index": _goal_index(annotation_material["cfg"], raw, compiled, mapping),
+            "source_line_universe": universe}
+
+
+def _goal_index(cfg, raw, compiled, mapping):
+    """Resolve every original seed with existing compiler coordinates, without Data."""
+    from skillflow.propagation.contracts.demand_index import build_demand_target_index
+    from skillflow.propagation.contracts.references import target_key
+    targets = build_demand_target_index(cfg, raw)
+    goals = {goal["id"]: goal for goal in compiled["demands"]}
+    seen = set()
+    result = []
+    for item in mapping["goals"]:
+        pointer, goal_id = item["raw_pointer"], item["goal_id"]
+        if pointer in seen or goal_id not in goals:
+            raise ValueError("compiler goal mapping has duplicate or unknown seed")
+        seen.add(pointer)
+        original, goal = resolve_pointer(raw, pointer), goals[goal_id]
+        if original["requirement_id"] != goal["requirement_id"] or item["requirement_id"] != goal["requirement_id"]:
+            raise ValueError("compiler goal mapping requirement differs")
+        if item["target"] != goal["target"]:
+            raise ValueError("compiler goal mapping target differs")
+        target = targets[target_key(goal["target"])]
+        resolved = {key: deepcopy(target[key]) for key in (
+            "domain", "kind", "instruction_id", "pointer", "slot", "ref", "role", "when",
+            "member_index", "scope_path", "operation_raw_path", "available_locals") if key in target}
+        if target["domain"] == "cfg":
+            resolved["value"] = deepcopy(target["value"])
+        elif target["kind"] == "operation":
+            resolved["op"] = target["value"]["op"]
+            resolved["declared_refs"] = deepcopy(target.get("declared_refs", []))
+            if "output" in target["value"]:
+                resolved["output"] = target["value"]["output"]
+        result.append({**deepcopy(item), "goal": deepcopy(goal), "resolved_target": resolved})
+    if {item["goal_id"] for item in result} != set(goals) or len(result) != len(goals):
+        raise ValueError("compiler goal mapping is incomplete")
+    return result
 
 
 def checked_review_material(material: dict[str, Any]) -> dict[str, Any]:
     if type(material) is not dict or material.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported annotation review material version")
     annotation_material = {key: deepcopy(value) for key, value in material.items()
-                           if key not in ("schema_version", "raw_annotation", "observations", "target_index")}
+                           if key not in REVIEW_FIELDS}
     reconstructed = prepare_review_material(annotation_material, material["raw_annotation"])
     if canonical_sha256(reconstructed) != canonical_sha256(material):
         raise ValueError("review material indexes or compiled observations differ")
@@ -139,7 +195,8 @@ def resolve_targets(target_ids: list[str], material: dict[str, Any]) -> list[dic
         if target_id not in indexes:
             raise ValueError(f"review target does not exist: {target_id}")
         item = deepcopy(indexes[target_id])
-        collection = material["raw_annotation"] if item["kind"] == "annotation" else material["observations"]
+        collection = {"annotation": material["raw_annotation"], "task": material["task"],
+                      "observation": material["observations"]}[item["kind"]]
         item["value"] = deepcopy(resolve_pointer(collection, item["pointer"]))
         resolved.append(item)
     return resolved

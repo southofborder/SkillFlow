@@ -84,7 +84,7 @@ def test_strong_reset_before_loop_read_breaks_generation_feedback():
     compute_id = only_result(result, "ir_compute", "C")
     assert result.registry.get(read_id).content.value == "fixed"
     assert result.registry.get(compute_id).origin.inputs == [read_id]
-    assert propagate(cfg, annotation, schedule="lifo").records.to_dict() == result.records.to_dict()
+    assert propagate(cfg, annotation, schedule="lifo").records.records_dict() == result.records.records_dict()
 
 
 def test_ir_inputs_and_output_bindings_use_entry_values_after_context_write():

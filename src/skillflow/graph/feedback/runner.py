@@ -49,7 +49,7 @@ from skillflow.common.audit_execution import AUDIT_RETRY_POLICY
 from skillflow.common.audit_execution import RetryingAuditClient
 from skillflow.common.audit_execution import retry_delay_ms
 
-IDENTITY = "skill-ir-semantic-feedback-v5"
+IDENTITY = "skill-ir-semantic-feedback-v7"
 CONFIG_KEYS = {"endpoint", "model", "reasoning_effort", "timeout_ms", "max_retries",
                "retry_base_ms", "retry_max_backoff_ms", "response_format"}
 
@@ -108,7 +108,7 @@ def _prepare(source, directory, initial_analysis, limits, config, writer, render
     files = {path.relative_to(directory).as_posix(): sha_file(path)
              for path in sorted((directory / "inputs").rglob("*")) if path.is_file()}
     manifest = _seal({
-        "schema_version": 5, "identity": IDENTITY, "run_id": directory.name, **contract_binding(),
+        "schema_version": 7, "identity": IDENTITY, "run_id": directory.name, **contract_binding(),
         "created_at": now(), "limits": limits.model_dump(), "config": config,
         "implementation": implementation_provenance(), "renderer": _printer_identity(renderer),
         "source_sha256": source_bundle["source_sha256"], "initial_analysis": initial,
@@ -124,7 +124,7 @@ def _prepare(source, directory, initial_analysis, limits, config, writer, render
 
 def _verify(directory, source, initial_analysis, limits, config, renderer, replay):
     manifest = read_json(directory / "manifest.json")
-    if manifest.get("schema_version") != 5 or manifest.get("identity") != IDENTITY:
+    if manifest.get("schema_version") != 7 or manifest.get("identity") != IDENTITY:
         raise RunIdentityError("Unsupported feedback run version; single-audit records are not feedback runs")
     unsigned = deepcopy(manifest)
     digest = unsigned.pop("manifest_sha256", None)
@@ -184,7 +184,7 @@ class _RoundClient:
             raise ValueError("A credential overlaps the actual model input")
         state.used_calls.append((self.revision, self.role, directory))
         if state.progress:
-            state.progress(f"第 {self.revision} 轮 {self.role} 调用 {self.calls}：{'读取已有响应' if exists else '开始'}")
+            state.progress(f"Round {self.revision}  {self.role} call {self.calls}: {'Read saved response' if exists else 'Start'}")
         client = SavedResponseClient(directory, state.writer) if exists else RecordingClient(directory, self.factory, state.writer)
         try:
             response = client.complete(prompt)
@@ -210,7 +210,7 @@ class _RoundClient:
             request_identity = verify_request_identity(directory, role_config, prompt=prompt)
             state.stable(relative + "/request-validation.json", request_identity)
         if state.progress:
-            state.progress(f"第 {self.revision} 轮 {self.role} 调用 {self.calls}：响应已保存")
+            state.progress(f"Round {self.revision}  {self.role} call {self.calls}: Response saved")
         return recovered
 
 
@@ -242,8 +242,8 @@ class _AuditClient:
 
         def notify(decision):
             if state.progress:
-                state.progress(f"第 {self.revision} 轮 audit 暂态执行失败（{decision['category']}）；"
-                               f"准备额外重试 {decision['attempt']}/{self.retries}，保留本次失败记录")
+                state.progress(f"Round {self.revision}  audit Transient execution failure ({decision['category']}); "
+                               f"Preparing additional retry {decision['attempt']}/{self.retries}; retaining the current failure record")
 
         return RetryingAuditClient(
             execute=self.client.complete, retries=self.retries, call_path=call_path,
@@ -343,18 +343,18 @@ def _run(directory, manifest, *, extraction_factory, audit_factory, writer, rend
     runtime = _Runtime(directory, writer, replay, stop_event or Event(), progress)
     runtime.config = manifest["config"]
     limits = FeedbackLimits.model_validate(manifest["limits"])
-    result = {"schema_version": 5, "identity": IDENTITY, "run_id": manifest["run_id"], **contract_binding(),
+    result = {"schema_version": 7, "identity": IDENTITY, "run_id": manifest["run_id"], **contract_binding(),
               "representation_summary": {"represented_ids": [], "conservative_ids": []},
-              "status": "interrupted", "reason": "尚未开始核对。", "rounds": [], "counts": {},
+              "status": "interrupted", "reason": "Review has not started.", "rounds": [], "counts": {},
               "limits": {**manifest["limits"], "logical_call_bounds": manifest["logical_call_bounds"],
                          "execution_call_bounds": manifest["execution_call_bounds"]},
               "last_valid_cfg": None, "passed_cfg": None, "source_sha256": source["source_sha256"],
-              "boundaries": ["核对器通过不等于已证明源文与图语义等价。", "受控文本仅保持图中明确记录的事实。",
-                             "二进制或不透明内容不构成已完成行为理解或运行保证；见 inputs/snapshot.json。"]}
+              "boundaries": ["Review passing does not prove source-to-graph semantic equivalence.", "Controlled text preserves only facts explicitly recorded in the graph.",
+                             "Binary or opaque content carries no complete behavioral-understanding or execution guarantee; see inputs/snapshot.json."]}
     previous_graph, previous_audit = None, None
     for revision in range(limits.max_semantic_revisions + 1):
         if runtime.should_pause("before_round", {"revision": revision}):
-            result.update(status="interrupted", reason="用户中断；未启动后续调用。")
+            result.update(status="interrupted", reason="User interrupted; no subsequent calls were started.")
             break
         row = {"revision": revision, "status": "running", "extraction": None, "structural": None,
                "fidelity": None, "audit": None, "audit_execution": [], "decision": None, "feedback_prompt": None,
@@ -367,7 +367,7 @@ def _run(directory, manifest, *, extraction_factory, audit_factory, writer, rend
             if revision == 0 and manifest["initial_analysis"] is not None:
                 graph = ControlFlowGraph.model_validate(read_json(directory / "inputs/initial-cfg.json"))
                 row["extraction"] = {"status": "provided_graph", "attempts": 0,
-                                     "notice": "仅加载实际 CFG，不使用已有 raw_candidate。"}
+                                     "notice": "Load only the actual CFG; do not use an existing raw_candidate."}
             else:
                 prompt = (build_whole_skill_prompt(package) if revision == 0 else
                           build_feedback_prompt(package, previous_graph, previous_audit))
@@ -385,7 +385,7 @@ def _run(directory, manifest, *, extraction_factory, audit_factory, writer, rend
                 runtime.stable(prefix + "/candidate.json", analysis.raw_candidate)
                 runtime.stable(prefix + "/structural-diagnostics.json", analysis.diagnostics)
                 if analysis.status != "complete" or analysis.cfg is None:
-                    raise ValueError("结构修复已耗尽；没有结构有效的完整候选。")
+                    raise ValueError("Structural repairs are exhausted; no complete structurally valid candidate is available.")
                 graph = analysis.cfg
             graph.validate_integrity()
             current = normalize_cfg(graph)
@@ -439,7 +439,7 @@ def _run(directory, manifest, *, extraction_factory, audit_factory, writer, rend
             runtime.writer.json(runtime.output / (prefix + "/round.json"), row)
             result["counts"] = runtime.counts()
             runtime.writer.json(runtime.output / "result.json", result)
-            runtime.writer.text(runtime.output / "report.md", render_report(result))
+            runtime.writer.text(runtime.output / "report.md", render_report(result, source=source))
         if row["status"] != "revise":
             break
     result["counts"] = runtime.counts()
@@ -450,7 +450,7 @@ def _run(directory, manifest, *, extraction_factory, audit_factory, writer, rend
         raise AssertionError("Feedback exceeded its deterministic audit execution bound")
     FeedbackResult.model_validate(result)
     runtime.writer.json(runtime.output / "result.json", result)
-    runtime.writer.text(runtime.output / "report.md", render_report(result))
+    runtime.writer.text(runtime.output / "report.md", render_report(result, source=source))
     if result["last_valid_cfg"] is not None:
         runtime.writer.json(runtime.output / "last-valid-cfg.json", result["last_valid_cfg"])
     else:
@@ -498,7 +498,7 @@ def refine_skill(source, *, run_dir, initial_analysis=None, max_semantic_revisio
 def replay_run(run_dir, *, renderer=None):
     """Reparse/compile/print/check saved calls without creating a network client."""
     manifest = read_json(Path(run_dir) / "manifest.json")
-    if manifest.get("identity") != IDENTITY or manifest.get("schema_version") != 5:
+    if manifest.get("identity") != IDENTITY or manifest.get("schema_version") != 7:
         raise RunIdentityError("Unsupported feedback run version")
     return refine_skill(None, run_dir=run_dir, config=manifest["config"], replay=True,
                         renderer=renderer, **manifest["limits"])

@@ -5,6 +5,8 @@ tool names. A guard controls use of a value, never becomes a request parameter.
 """
 from __future__ import annotations
 
+from skillflow.common.validation import structural_error, validation_at
+
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -64,14 +66,14 @@ def static_condition(ref, instruction=None):
     from skillflow.propagation.contracts.specs import AlternativesRef
     if isinstance(ref, LiteralRef):
         if type(ref.value) is not bool:
-            raise ValueError("condition must be Boolean, not Python truthiness")
+            raise structural_error("static_condition", "", "condition must be Boolean, not Python truthiness")
         return ref.value
     if isinstance(ref, InputRef) and instruction is not None:
         operand = instruction.get("inputs", [])[ref.index]
         if operand["type"] == "literal":
             value = operand.get("literal_value")
             if type(value) is not bool:
-                raise ValueError("condition input must be Boolean")
+                raise structural_error("static_condition", "", "condition input must be Boolean")
             return value
     if isinstance(ref, AlternativesRef):
         values = [static_condition(child, instruction) for child in ref.items]
@@ -122,13 +124,13 @@ def request_pairs(spec) -> dict[tuple[int, int | None, int], tuple[int, int | No
                     continue
                 candidates = [(prior, request) for prior, request in available if _identity(request) == _identity(operation)]
                 if len(candidates) > 1:
-                    raise ValueError("ambiguous request/receive association")
+                    raise structural_error("request_pairs", "", "ambiguous request/receive association")
                 if candidates:
                     prior, _ = candidates[0]
                     result[key] = prior
                     available = [(p, request) for p, request in available if p != prior]
                 elif operation.location in declared_targets:
-                    raise ValueError("receive request inputs do not match an unconsumed delivery")
+                    raise structural_error("request_pairs", "", "receive request inputs do not match an unconsumed delivery")
         return result
     edges = structural_precedence(spec) | {
         (operation_key(item.before), operation_key(item.after)) for item in spec.precedence}
@@ -174,7 +176,7 @@ def request_pairs(spec) -> dict[tuple[int, int | None, int], tuple[int, int | No
                 del pending[key]
                 progressed = True
             if not progressed:
-                raise ValueError("ambiguous or missing request/receive association in partial order")
+                raise structural_error("request_pairs", "", "ambiguous or missing request/receive association in partial order")
     return result
 
 
