@@ -6,7 +6,12 @@
 - [Cloud preparation verification](cloud-verification.md): submission scope,
   dependency checks and actual environment verification status.
 
-Source submission scope: the repository includes the implementation, tests, tools, documentation, and the frozen inputs required by the three-case pilot and retired-format regression. Other links to local experiment runs document the development record; their large call archives and generated reports are not included in this source update. Those links require the corresponding local experiment directory.
+Source submission scope: the repository includes implementation, tests, tools,
+documentation, frozen regression inputs and the current comparison materials
+listed in [the cloud material audit](cloud-material-audit.md). Other local
+experiment links document the development record and still require the
+corresponding local directory. The cloud preparation is a verified
+point-in-time snapshot, not a full historical archive.
 
 当前实现主线为 Skill-IR → 结构校验 → 受控回述与源文核对 → 有界 CFG 反馈 → 独立 source-only Task 提取与封存 → 固定 Task 的需求／处理／敏感联合标注 → 四轴完整审查及最多一轮隔离 Task 修订或标注修复 → 确定性传播与 DOE。
 Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递规格、离线前向求解及入口／出口事件记录；处理模式由标注声明，可能观察由程序编译。正常核对直接判断具体差异；候选来源、可能依赖和部分顺序继续计算，确实无法完成必要判断时明确失败。当前版本和保证边界统一见下列主规范，不将核对通过或传播完成解释为已证明语义等价。DOE 已接入任务保持反向需求、敏感范围追踪和每个 sink 的确定性对照；前端声明的正确性及完整性仍需语义审查，一般生成数据反馈循环仍超出当前求解范围。

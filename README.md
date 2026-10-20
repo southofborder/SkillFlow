@@ -1,5 +1,10 @@
 # SkillFlow
 
+Cross-computer development: start with the
+[research handoff](docs/cloud-research-handoff.md) and
+[offline cloud setup](tools/cloud/README.md). Environment setup does not
+authorize model experiments; the formal long comparison has not started.
+
 SkillFlow develops task-related static data minimization analysis for Agent Skills.
 **SkillFlow** implements graph construction, controlled source comparison, bounded
 CFG feedback, joint security and transfer annotation, focused review with one
