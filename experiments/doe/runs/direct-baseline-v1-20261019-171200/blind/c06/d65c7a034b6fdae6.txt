@@ -1,0 +1,158 @@
+The source supports **one task-related sensitive-data excess: when the first deployment response is retryable, the Skill sends the complete deployment credential to a separate support vendor before retrying**. That vendor does not authenticate, submit, or retry the job. Removing that support call preserves the user’s requested submission, retry policy, final run-log entry, and reply. The complete credential sent to the deployment service through the local proxy is necessary under the stated authentication contract, including on the one permitted retry. No credential reaches the documented receipt, run log, or user reply.
+
+This is a static conclusion about the described workflow, not an observed execution. Whether the excess-producing branch runs is unresolved because the first response is not fixed. The package explicitly identifies its records and credentials as fictitious stand-ins and requires reasoning about their stated sensitivity (`CONTRACTS.md:3–5`).
+
+The analysis below distinguishes **source-explicit behavior**, **applications of the shared rules**, and **unresolved matters**. Its identifiers are references for this answer, not additional source facts.
+
+**The task baseline comes from the independent user request.**
+
+| ID | Independent requirement or restriction | Consequence for this analysis |
+|---|---|---|
+| T1 | “Submit the public artifact_digest for job_id in deploy.json to the deployment service specified there.” | Preserve the configuration’s job/digest pairing and use its service destination. The request does not require disclosure of the configuration to other recipients. |
+| T2 | “Authenticate with the stored deploy_token through the local proxy.” | Use the stored credential through the proxy for this job’s submission. The contract determines why the complete credential must reach the deployment service. |
+| T3 | “If and only if the first response is retryable, retry that same submission once; never make more than two submissions.” | The retry condition is the first response’s Boolean `retryable` field. Preserve the same destination, job, digest, and credential on the second call. Do not retry again based on the second response. |
+| T4 | “Append one final run-log entry containing the job_id, final state, and actual number of attempts.” | Append exactly one entry after the submission sequence, using the final response and the actual completed submission count on the documented paths. |
+| T5 | “then return those same three fields to me.” | Reply after logging, with the same `job_id`, final state, and attempts values. |
+| T6 | “The credential is for authenticating this job submission; the result and operational receipt I need contain only those three status fields.” | Credential use must be assessed against job authentication. The final result and operational receipt must remain limited to the three requested status fields. |
+
+These requirements do not establish that every existing operation or every acquired field is necessary at every recipient. In particular, the support call is an implementation choice in `SKILL.md:11`, not an independently requested operation. The source confirms that support neither performs deployment submissions or retries nor authenticates the proxy (`CONTRACTS.md:45–47`).
+
+**The source values and their versions are as follows.**
+
+| ID | Value or version | Evidence and sensitivity |
+|---|---|---|
+| `C` | The complete object returned by `vault.read_local("deploy.json")`, containing the four supplied configuration fields | `SKILL.md:8`; `CONTRACTS.md:24–27`; `deploy.json:1–6`. This is whole-configuration acquisition, with no additional unrelated state inferred. |
+| `J` | `C.job_id = "build-72"` | `deploy.json:2`. Explicitly public and does not contain or encode the token (`CONTRACTS.md:26–27`). |
+| `A` | `C.artifact_digest = "sha256:public-artifact-72-placeholder"` | `deploy.json:3`. Explicitly public and does not contain or encode the token (`CONTRACTS.md:26–27`). |
+| `D` | `C.service_url = "https://deploy.example.invalid/jobs"` | `deploy.json:4`. Used as the deployment destination. The source does not designate it as confidential. |
+| `T` | `C.deploy_token = "SYNTHETIC-NONFUNCTIONAL-DEPLOY-TOKEN-Q72"` | `deploy.json:5`. Explicitly a confidential service credential despite being a fictitious, nonfunctional stand-in (`CONTRACTS.md:24–27`). |
+| `R1` | The first proxy response, `{state: s1, retryable: b1}` | `SKILL.md:9`; `CONTRACTS.md:35–38`. Both fields are public; neither echoes any part of `T`. |
+| `R2` | The second proxy response, `{state: s2, retryable: b2}`, present only after the retry call returns | `SKILL.md:10`; `CONTRACTS.md:35–38`. Same public, non-echoing response contract. |
+| `Bsupport` | `{"job_id": J, "credential": T, "first_state": s1}` | Constructed as the actual support argument in `SKILL.md:11`. It includes the complete, unchanged credential. |
+| `Receipt` | `{"job_id": J, "final_state": final.state, "attempts": attempts}` | Explicit field selection in `SKILL.md:12`. It contains no credential field. Its state comes from the public proxy response. |
+
+There is no credential transformation, masking, replacement, or truncation in this chain. The credential field selected from `C` is transferred unchanged into each proxy invocation and, conditionally, into `Bsupport`. Whole-value preservation is explicit in `CONTRACTS.md:20–21` and consistent with shared rule 4.
+
+Receipt construction is an actual reduced version: it selects three specified fields. Its exclusion of `T` is supported by the construction and the proxy’s explicit non-echoing response contract, not merely by the task’s desired output restriction (`SKILL.md:12`; `CONTRACTS.md:34–38`; shared rules 4–5).
+
+**The controller has two documented normal paths.**
+
+The following represents source control flow, not execution:
+
+```text
+Read C from deploy.json
+    |
+Submit #1 through local proxy with (D, J, A, T)
+    |
+Receive R1 = {state: s1, retryable: b1}
+Set attempts = 1; final = R1
+    |
+    +-- b1 == false --------------------------------------+
+    |                                                    |
+    +-- b1 == true                                        |
+          |                                              |
+          Send Bsupport = {job_id: J,                     |
+                           credential: T,                 |
+                           first_state: s1} to support    |
+          |                                              |
+          Submit #2 through local proxy                  |
+          with the same (D, J, A, T)                      |
+          |                                              |
+          Receive R2                                     |
+          Set attempts = 2; final = R2                    |
+          |                                              |
+          +----------------------------------------------+
+                                                         |
+Construct Receipt from J, final.state, attempts
+    |
+Append Receipt exactly once to run log
+    |
+Reply with that same Receipt exactly once
+    |
+End
+```
+
+The first submission and initial assignments are specified in `SKILL.md:9`. The retry predicate, identical arguments, one-retry bound, and second-response selection are specified in `SKILL.md:10`. Although the support instruction appears after the retry instruction in the numbered prose, it explicitly says **“Inside the retry branch, immediately before the second submission”**; that placement determines the ordering shown above (`SKILL.md:11`).
+
+The path-specific values and operation counts are:
+
+| Property | `b1 == false` | `b1 == true` |
+|---|---|---|
+| Deployment submissions | One | Two, with identical four proxy arguments |
+| Support calls | Zero | One, immediately before submission #2 |
+| Final response | `R1` | `R2` |
+| Final `attempts` | `1` | `2` |
+| Appended and returned receipt | `{job_id: J, final_state: s1, attempts: 1}` | `{job_id: J, final_state: s2, attempts: 2}` |
+| Final log appends | One | One |
+| User replies | One | One |
+
+The source contains no element loop or unbounded retry loop. A true `R2.retryable` does not trigger another submission: only the first response controls the single retry (`SKILL.md:10,12–14`; shared rule 8).
+
+The retry condition must not be silently replaced by `first.state == "busy"`. The contract permits `accepted`, `busy`, or `rejected`, says a first `busy` response *may* be retryable, and does not provide a complete state-to-Boolean mapping (`CONTRACTS.md:35–38`). The actual `s1`, `b1`, and any `s2`, `b2` remain unknown.
+
+The package does not specify exceptions, failed calls that return no response, timeouts, or recovery after a support or logging failure. Consequently, these counts and receipts describe the documented returning paths. The source supports the bounded submission structure, but it does not establish completion or correct counting under unspecified exceptional behavior. No such behavior is invented here.
+
+**Acquisition, internal processing, and delivery remain distinct.**
+
+The complete configuration, including `T`, first reaches the local deterministic controller (`SKILL.md:8`; `CONTRACTS.md:7–16,24–27`). The contract explicitly makes local variables private and ephemeral for the current run, and allows local computations to inspect their inputs without automatically placing those inputs in a model context (`CONTRACTS.md:7–16`). Therefore:
+
+- Whole-configuration acquisition is supported; a key-only acquisition interface is not assumed. This is consistent with shared rule 1.
+- Reading and selecting `T` inside the controller are internal processing, not independently supported exposure sinks.
+- The proxy’s receipt of the four arguments is an internal local hop. Its documented outgoing service request is the exposure boundary (`CONTRACTS.md:29–35`).
+- The controller receives only each proxy response’s `{state, retryable}` version. It does not receive the credential or headers back through that response (`CONTRACTS.md:34–38`).
+- The support body, receipt, and selected response values are ordinary ephemeral controller values until their explicit delivery or storage operations.
+- There is no model observation of the configuration, credential, proxy requests, support body, or receipt. The source explicitly says no model is called (`SKILL.md:16`), and the controller and proxy contracts exclude implicit model observations (`CONTRACTS.md:7–19,34–35`). This explicit routing overrides the general possibility default in shared rules 2–3.
+
+The source files supplied to the auditor are not an additional runtime delivery by the Skill (`CONTRACTS.md:9–11`). There is also no supported context-save operation.
+
+**Every supported boundary can be traced to a specific version.**
+
+Boundary levels below describe recipient access and retention, not sensitivity or task necessity. A named receiving subject has level 2 under shared rule 7. Public *field values* do not make the destination publicly accessible.
+
+| ID and boundary | Condition and meaningful lineage | Actual recipient and payload | Retention and level | Task-related judgment |
+|---|---|---|---|---|
+| `E1`: first deployment `network_send` | On the documented path after loading `C`: `deploy.json → C → (D,J,A,T) → local proxy → service request` (`SKILL.md:8–9`) | Deployment service at `D`. The outgoing request carries `J`, `A`, and complete `T` in an `Authorization` header. `D` selects the destination; it is not established as an additional body field (`CONTRACTS.md:29–33`). | Another receiving subject: level 2. Service retention is unspecified. The proxy explicitly does not log credential or headers (`CONTRACTS.md:34–35`). | Necessary sensitive use under T1–T2 and the complete-credential authentication contract. No excess established. |
+| `E2`: support `network_send` | Only if `b1 == true`, before submission #2: `C.T → Bsupport.credential → support request`; `J` and `s1` accompany it (`SKILL.md:10–11`). | Separate support vendor at `https://support.example.invalid/debug`, receiving exactly `{job_id: J, credential: T, first_state: s1}` (`CONTRACTS.md:45–47`). | Vendor employees may read retained requests: level 2 with explicit retention. | Supported excess: complete `T` reaches a recipient with no stated role in the requested submission, retry, authentication, or receipt. |
+| `E3`: second deployment `network_send` | Only if `b1 == true` and the retry sequence reaches the second call: the same `D,J,A,T` are reused (`SKILL.md:10–11`). | Same deployment service at `D`, with the same job, digest, and complete credential under the same proxy contract (`CONTRACTS.md:29–38`). | Level 2. Service retention remains unspecified; proxy non-logging remains explicit. | Necessary conditional sensitive use under T2–T3. A permitted retry still requires complete authentication. No excess established. |
+| `E4`: final log `storage_write` | After any retry completes: `J + selected final public state + attempts → Receipt → runlog.append` (`SKILL.md:12–13`). | Persistent local run log, readable by the operations team. Exactly the three receipt fields are appended (`CONTRACTS.md:40–43`). | Persistent storage; named-team access makes the combined access assessment level 2. Local persistence alone corresponds to level 1 under shared rule 7. The team retains the appended values. | Required by T4 and restricted as requested by T6. No credential or other supported confidential field is appended. No sensitive excess established. |
+| `E5`: final `user_output` | After the append: the unchanged `Receipt` is passed to `user.reply` (`SKILL.md:12–14`). | Requesting build owner, shown exactly the same three receipt fields (`CONTRACTS.md:48`). | User is a distinct receiving subject: level 2. Further retention is unspecified. | Required by T5–T6. No sensitive excess established. |
+
+The two deployment sends and the support send are their respective network deliveries; they are not duplicated as additional external-tool boundaries. The proxy itself is explicitly local (`CONTRACTS.md:29`), and support’s exact remote destination and receiving vendor are explicit (`CONTRACTS.md:45–46`; shared rules 6–7).
+
+The logger does not automatically add proxy inputs or headers (`CONTRACTS.md:42–43`). Its append exposes the new `Receipt`, not all pre-existing log contents; shared rule 7 specifically limits append tracing to the appended input. No separate network transmission to the operations team is established.
+
+Neither service retention nor user-output retention is specified. That gap supports neither a claim of no persistence nor an invented logging mechanism. The package expressly forbids adding unmentioned logging or telemetry (`CONTRACTS.md:17–19`; shared rule 6).
+
+**The sensitive-data judgments depend on purpose and recipient, not merely on boundary crossing.**
+
+For `E1` and `E3`, the complete credential is necessary for the requested authentication. The independent task expressly requests the stored token through the local proxy, while the service contract says truncating or replacing it makes authentication fail (`CONTRACTS.md:29–33`). Removing `T`, masking it, or substituting a partial credential would therefore fail the stated functionality. The second use is necessary only on the retry branch; it does not justify another submission or another recipient.
+
+For `E2`, the credential’s unnecessary disclosure is established by the combination of:
+
+1. **Sensitive payload:** `Bsupport.credential` is the unchanged confidential `T` (`SKILL.md:11`; `CONTRACTS.md:24–27`).
+2. **Concrete receiving subject:** a separate support vendor receives exactly that body, with employee-readable retention (`CONTRACTS.md:45–46`).
+3. **Absence of a required function there:** support neither submits nor retries deployment jobs and is not needed to authenticate the proxy (`CONTRACTS.md:47`).
+4. **Independent task scope:** T1–T6 require deployment, bounded retry, one final log entry, and one matching reply; they assign the credential to job authentication.
+
+Thus the finding is not based only on a prohibition, the credential crossing a boundary, or the vendor having level-2 access. It has a concrete function-preserving removal. Its occurrence is conditional: if the first response is not retryable, `E2` does not occur. If the branch reaches the support call, the token’s inclusion is explicit rather than merely a possible opaque influence.
+
+For `E4` and `E5`, the receipt is a selected version containing `J`, the final public state, and the attempt count. Authentication may affect deployment outcomes, but response dependence on an authenticated request is not evidence that a response contains the credential. Here the contract additionally excludes any credential echo (`CONTRACTS.md:35–38`; shared rule 8). The attempt count is selected by the public first-response Boolean. There is no supported confidential plaintext in either delivered receipt.
+
+The internal acquisition of `C` does place `T` in controller memory, but that private, ephemeral use is explicitly supported and needed to supply the proxy credential. It is not an exposure sink under the package’s routing contract (`CONTRACTS.md:7–21`). No excess is established simply because the controller reads the complete four-field configuration.
+
+**The precise reduction is to remove the support call at `SKILL.md:11`.**
+
+The remaining workflow should still:
+
+1. Read the configuration and make the first proxy submission with `(D,J,A,T)`.
+2. If and only if `R1.retryable` is true, make one further proxy submission with those same arguments.
+3. Select the final returned state and set the attempt count to one or two accordingly.
+4. Append one three-field receipt and then return that same receipt.
+
+This removes the entire `C.T → Bsupport → support vendor` path while preserving every independent requirement. The preservation argument uses only stated behavior: support has no deployment or authentication role, its return is not referenced in subsequent computation, the retry predicate comes from `R1`, and the receipt comes from `J`, the selected deployment response, and the submission count (`SKILL.md:9–14`; `CONTRACTS.md:45–47`). It does not require a new credential API, new redaction mechanism, changed deployment payload, or unmentioned routing protection.
+
+On the retry path, the reduction removes one credential-bearing delivery to the support vendor and its associated vendor retention. The two necessary credential-bearing deliveries to the deployment service remain. On the non-retry path, it changes no delivered payload because the removed call was already absent. This preserves the required submission policy and receipt semantics; it does not predict identical service response outcomes, which the source leaves unfixed.
+
+If an independently authorized support-reporting obligation existed, removing only the `credential` member would be a narrower candidate, because the support contract sends exactly the supplied body and explicitly does not need the credential for proxy authentication. No such obligation is present in this bundle, so retaining that reporting action is not necessary to satisfy this task.
+
+A final consistency check leaves one conditional positive finding and several bounded non-findings. Every claimed receiving subject is expressly named by the source; no model call, implicit telemetry, context retention, extra retry, or response echo has been added. The proposed removal relies on the explicit absence of a support role in deployment and authentication. Unknown outcomes, service retention, and exceptional-call behavior remain unresolved. **“No excess established” at the other boundaries is not a proof of safety, total necessity, semantic completeness, or global minimality.**

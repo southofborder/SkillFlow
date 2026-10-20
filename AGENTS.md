@@ -1,5 +1,10 @@
 # SkillFlow 项目长期记忆
 
+Cloud and cross-computer handoff: read [Research handoff](docs/cloud-research-handoff.md)
+before continuing work from a new environment. The current pipeline is frozen
+for comparison; cloud setup permits installation and offline checks only, not
+new experiment calls or changes to the research protocol.
+
 讨论或实现 DOE 前，先阅读 [DOE 目标与设计原则](docs/doe/SkillFlow-DOE目标与设计原则.md)。这是 2026-10-06 确认的当前目标基准；后续用户明确修订优先。
 
 核心目标：**面向 Agent Skills 的任务相关静态数据最小化分析，结合敏感数据来源、沿途处理、路径条件和接收方，以发现所有非必要敏感数据暴露为目标。**不必要动作和必要动作中的多余敏感载荷都在范围内，不能按动作必要性预先筛掉 sink。“动作必要不代表它携带的每份数据、每个敏感字段都必要”是重点强调的独特贡献点之一，不是总目标的范围限制。敏感数据到达 sink 或边界等级高，也不直接等于 DOE；“所有”是覆盖目标，不是当前零漏报保证。

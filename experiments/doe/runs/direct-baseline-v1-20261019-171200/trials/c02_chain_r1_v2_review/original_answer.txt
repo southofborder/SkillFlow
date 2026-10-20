@@ -1,0 +1,84 @@
+**No unnecessary exposure of sensitive information is established for the workflow described here.** The confidential deployment token reaches the local proxy and the specified deployment service for the authentication expressly required by the independent task. The service requires its complete value. The final log entry and user response contain exactly the three requested status fields, and the contract explicitly excludes credential echoes and implicit model observations. This conclusion concerns the supplied static workflow; it is not proof of global minimality, operational safety, or behavior outside the documented contract.
+
+All references below use the supplied physical file lines. References to the independent user task identify its relevant instruction because that request has no physical line metadata. The token is treated as confidential within the synthetic workflow, despite being a fictitious, nonfunctional stand-in, as instructed by `CONTRACTS.md:3–5,24–27`.
+
+The task obligations and their implementation are:
+
+| ID | Requirement grounded in the independent task | Source implementation and assessment |
+|---|---|---|
+| T1 | Submit the public `artifact_digest` for the `job_id` in `deploy.json` to the deployment service specified in that file. | The first call uses `config.service_url`, `config.job_id`, and `config.artifact_digest` from the loaded configuration. These identify one job, its artifact, and its intended service; they are not a batch of independently paired elements. `SKILL.md:8–9`; `deploy.json:2–4`. |
+| T2 | Authenticate that job submission using the stored `deploy_token` through the local proxy. The credential is for this authentication purpose. | The call passes the complete configured token to the documented local proxy. The proxy sends it in the `Authorization` header, and the service requires the complete current credential. `SKILL.md:9`; `CONTRACTS.md:24–35`. |
+| T3 | Retry the **same submission exactly once if and only if the first response is retryable**; never make more than two submissions. | The sole retry condition is `first.retryable == true`. The retry uses the same four arguments. There is no further retry condition or loop. `SKILL.md:9–10`. |
+| T4 | Append exactly one final run-log entry containing the job ID, final state, and actual number of attempts. | The receipt is constructed after the optional retry and appended exactly once. Its fields are `job_id`, `final_state`, and `attempts`. `SKILL.md:11–12`. |
+| T5 | Return those same three fields to the requesting user. The result and operational receipt contain **only** those fields. | `user.reply` receives the same receipt exactly once, after the append. Neither the credential, digest, service URL, nor `retryable` is included. `SKILL.md:11–13`; exact delivery semantics in `CONTRACTS.md:40–48`. |
+
+These obligations do not independently require a model call, a support submission, disclosure of the token to operations personnel, or inclusion of request headers in a receipt. The existence of a support API is a capability description, not authorization or a reachable workflow action: `CONTRACTS.md:45–47` documents it, while `SKILL.md:8–13` contains no call to it.
+
+The static control flow has two normal response paths:
+
+1. Read `deploy.json` into local `config`.
+2. Submit once through the local proxy using the four configured arguments.
+3. After the first response, set `attempts = 1` and `final = first`.
+4. Branch on the first response’s Boolean `retryable` field:
+   - If false, perform no retry.
+   - If true, perform exactly one additional submission with the same four arguments, then set `attempts = 2` and `final` to the second response.
+5. Construct the three-field receipt from `config.job_id`, the selected response’s `state`, and `attempts`.
+6. Append that receipt once, then deliver the same receipt to the user once.
+
+The evidence is `SKILL.md:8–13`. There is one configuration record and one job, with no per-element iteration. The conditional retry is the only repeated submission. A second response marked retryable does not enable a third submission.
+
+| Path | Condition | Submissions | Selected final response | Receipt |
+|---|---|---:|---|---|
+| P1 | `first.retryable == false` | 1 | `first` | `{"job_id":"build-72","final_state":first.state,"attempts":1}` |
+| P2 | `first.retryable == true` | 2 | Second response | `{"job_id":"build-72","final_state":second.state,"attempts":2}` |
+
+Each response’s `state` belongs to `accepted`, `busy`, or `rejected`. The actual responses are unspecified. The contract says a first `busy` response *may* be retryable; it does not establish an additional state-based gate or a complete mapping from states to retryability. Consequently, the analysis preserves the explicit Boolean condition rather than replacing it with “retry when busy.” It also does not assert that every abstract combination of state and retryability is feasible. `CONTRACTS.md:35–38`; `SKILL.md:10`.
+
+The sequence terminates after at most two returned submissions, one append, and one reply. Exceptions, failed reads, timeouts, and calls that do not return are not described. There is insufficient evidence to supply additional failure-handling paths or to guarantee receipt production under such failures.
+
+The data versions and their meaningful lineage are:
+
+| ID | Value or version | Origin, processing, and scope |
+|---|---|---|
+| D0 | Existing deployment configuration | Contains `job_id = "build-72"`, `artifact_digest = "sha256:public-artifact-72-placeholder"`, `service_url = "https://deploy.example.invalid/jobs"`, and the complete `deploy_token` value at `deploy.json:5`. Only the token is expressly classified as confidential; the job ID and digest are expressly public. `deploy.json:1–6`; `CONTRACTS.md:24–27`. |
+| D1 | Local `config` | `vault.read_local("deploy.json")` returns the deployment configuration to the controller. This is acquisition of that whole record, not a key-only read and not acquisition of unrelated vault state. `SKILL.md:8`; `CONTRACTS.md:24–27`; shared rule 1. |
+| D2 | First proxy arguments | `url = D1.service_url`, `job_id = D1.job_id`, `artifact_digest = D1.artifact_digest`, and `credential = D1.deploy_token`. These are selected fields transferred unchanged. `SKILL.md:9`; preservation contract in `CONTRACTS.md:20–21`. |
+| D3 | First service request | The URL selects the configured deployment service. The service receives the configured job ID and digest, plus the **complete credential** in `Authorization`. The whole configuration is not documented as the network payload. `CONTRACTS.md:29–33`. |
+| D4 | First response | Exactly `{state, retryable}`. Both fields are public, and neither can echo any portion of the credential. The proxy does not return credentials or request headers. `CONTRACTS.md:34–38`. |
+| D5 | Optional second arguments and service request | Present only on P2. All four arguments equal D2; the network request therefore carries the same job ID, digest, and complete authorization credential to the same service as D3. There is no configuration reread, recipient change, or payload modification between attempts. `SKILL.md:10`; `CONTRACTS.md:29–35`. |
+| D6 | Optional second response | Present only on P2 and governed by the same response contract as D4. `SKILL.md:10`; `CONTRACTS.md:34–38`. |
+| D7 | Local final selection and counter | P1 selects D4 and `1`; P2 selects D6 and `2`. These are local assignments. The first response’s retryability controls the second request’s presence and the counter, but `retryable` is not itself a receipt member. `SKILL.md:9–11`. |
+| D8 | Final receipt | Explicit construction selects `config.job_id`, `final.state`, and `attempts`, creating a new three-field object. It does not transfer `config`, either request, an entire response, or the credential. `SKILL.md:11`. |
+| D9 | Appended log entry and user-visible result | Both receive D8 unchanged. The logger appends exactly this input and does not automatically add proxy inputs or headers; the user sees exactly this input. `SKILL.md:12–13`; `CONTRACTS.md:40–48`. |
+
+The controller may internally inspect the configuration and token. That local processing is distinct from model observation, persistent storage, or external delivery. The contract expressly makes local ephemeral variables private to the current run and says documented return values, rather than complete inputs, reach callers. It also explicitly prohibits adding implicit observations, logging, or telemetry. `CONTRACTS.md:7–21`.
+
+In particular, the general possibility of acquired or returned content entering a model under shared rules 2–3 is resolved here by explicit routing evidence: a model observes only arguments explicitly passed to a documented model call, the proxy invokes no model, and the workflow calls no model. `CONTRACTS.md:7–11,34–35`; `SKILL.md:15–16`. There is therefore no supported `model_observe` boundary for D0–D9.
+
+Authentication can affect whether a submission succeeds, and response retryability affects later control flow. Such dependence does not establish credential plaintext in a response or receipt. The explicit non-echo response contract limits the returned version to public response fields; the explicit receipt construction narrows that further. This distinguishes possible influence from content inclusion under shared rules 4 and 8.
+
+The following table accounts for every supported receiving, observation, and storage point. Boundary levels describe access and retention, not whether an exposure is excessive.
+
+| Point | Payload, condition, and lineage | Receiving subject and retention | Sensitive-data judgment |
+|---|---|---|---|
+| B0 — Local configuration acquisition | D0 → D1, once before submission. Whole `deploy.json` configuration, including the token. `SKILL.md:8`; `CONTRACTS.md:24–27`. | Private deterministic controller for the current run; ephemeral local values. No new file write or model delivery is specified. `CONTRACTS.md:7–16`; `SKILL.md:15`. | Necessary fields for routing, submission, and authentication are acquired. No unnecessary sensitive acquisition is established for the supplied four-field record. This does not assume that arbitrary additional configuration fields would be needed. |
+| B1 — Local proxy reception | D1 → D2, always once; D1 → D5 once more only on P2. | Explicitly local proxy, performing the task’s required authentication and submission. It does not log the credential or headers, return them, or invoke a model. `CONTRACTS.md:29–35`. | Necessary confidential use. As an explicit local task-internal mechanism, this is not an additional external-tool exposure. Shared rules 3, 6–7. |
+| B2 — First `network_send` | D2 → D3: configured job ID and artifact digest, with the complete token in `Authorization`, delivered to `https://deploy.example.invalid/jobs`. Always occurs on the documented normal path. `SKILL.md:9`; `CONTRACTS.md:29–33`; `deploy.json:2–5`. | Specified deployment service, a recipient distinct from the local controller. Level 2. Service-side retention is not stated. | Necessary sensitive delivery: the independent task expressly requires authentication here, and the complete credential is required. No excess established. |
+| B3 — Optional second `network_send` | D5 repeats D3 exactly, only if `first.retryable == true`. `SKILL.md:10`; `CONTRACTS.md:29–35`. | Same deployment service; level 2. Retention again unspecified. | Necessary under the task’s exact retry condition. The repeated credential is required to authenticate the second submission. No excess established. |
+| B4 — Local response reception | D4 and, on P2, D6. Each response is exactly public `{state, retryable}`. `CONTRACTS.md:34–38`. | Controller, privately and ephemerally. `CONTRACTS.md:13–16`; `SKILL.md:15`. | Needed for the retry decision and final-state selection. No supported credential content and no exposure sink at this internal return. |
+| B5 — `storage_write` through log append | D8 → D9, exactly once after any retry. Exactly `job_id`, `final_state`, and `attempts`. `SKILL.md:11–12`. | Persistent local log readable and retained by the operations team, which is distinct from the deployment service. Level 2 because it has the stated additional reader; its locality does not make it private ephemeral state. `CONTRACTS.md:40–43`; shared rule 7. | Required operational receipt. No token, headers, digest, or URL reaches it through the documented payload. No unnecessary sensitive exposure established. Append does not expose the log’s previous contents. |
+| B6 — `user_output` | D8 → D9, exactly once after append, with the same three fields. `SKILL.md:11–13`. | Requesting build owner; exact display of the supplied body. Level 2 as a distinct receiving subject, with no public dissemination stated. User-side retention is unspecified. `CONTRACTS.md:48`; shared rules 6–7. | Required result with the requested content restriction satisfied. No unnecessary sensitive exposure established. |
+
+B2 and B3 are each one network delivery. They are not duplicated as additional external-tool boundaries merely because a proxy API performs them; the proxy’s explicitly local reception is separately represented by B1. This follows shared rules 6–7 and the explicit proxy contract.
+
+There is no supported `context_save`, no runtime model observation, no separate external-tool reception beyond the documented service network deliveries, and no public level-3 output. The source file’s pre-existing persistence is not a new workflow `storage_write`. The support vendor’s retained-request capability is unreachable from this workflow. Source material provided to the auditor is also expressly excluded from runtime deliveries. `CONTRACTS.md:7–21,45–48`; `SKILL.md:8–16`.
+
+The minimization judgments follow from those paths:
+
+- **The token’s complete value is necessary at B1, B2, and conditionally B3.** This is not an exemption inferred from the general necessity of deployment. The independent task specifically requires credential authentication through the proxy, and `CONTRACTS.md:29–33` specifically establishes that the complete credential is needed by the service. Truncating, replacing, or omitting the credential at the service boundary would fail the stated authentication function. A proposed substitute authentication mechanism would require new interface evidence.
+- **The optional second token delivery is justified only by the first response’s retryability.** The source implements that condition exactly, reuses the same submission, and caps attempts at two. There is no unconditional repeat, retry after a nonretryable response, or third attempt to classify as unnecessary. `SKILL.md:9–10`.
+- **The operational log is a material retained boundary, but its supported payload has no confidential token content.** Its necessity does not exempt arbitrary payload: the judgment depends on D8’s explicit three-field construction and the logger’s exact-body contract. `SKILL.md:11–12`; `CONTRACTS.md:40–43`.
+- **The user result has the same narrow payload.** A response-dependent final state is not a credential echo, and a counter controlled by a public `retryable` value does not establish disclosure of the confidential credential. `CONTRACTS.md:35–38,48`; `SKILL.md:9–13`; shared rules 4 and 8.
+- **No concrete further sensitive-data reduction is warranted by this evidence.** The workflow already implements the relevant preservation mechanisms: private local credential handling, an authenticated submission to the specified recipient, a single conditionally permitted retry, and an explicit three-field projection before retained logging and user delivery. Removing a required submission, its complete authentication credential, the required final append, or a requested status field would lose documented function. Adding a support delivery or copying the configuration into a receipt would introduce a different workflow, not describe this one.
+
+The remaining material uncertainties are the actual service outcomes, service-side retention, user-side retention, and behavior under unspecified failures. None licenses invented logging, a hidden model call, or credential inclusion in the documented public responses. Conversely, unknown recipient retention does not prove that the service retains nothing. The supported result is therefore **necessary confidential authentication at the specified service, with no established unnecessary sensitive exposure along the supplied execution paths**, subject to the explicit contracts and evidence limits above.

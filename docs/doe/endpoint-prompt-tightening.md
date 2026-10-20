@@ -29,7 +29,7 @@ Explicit whole-object obligations, ordinary returns, real Boolean results, count
 | Field | Refers to | Purpose |
 |---|---|---|
 | `findings[].target_ids` | Supplied review targets | Locate a sealed Task claim, candidate claim, generated observation, or existing parent for an omission. |
-| `goal_checks[].raw_pointer` | Exact supplied goal-index strings | Check existing seeds; an absent seed has no pointer. |
+| `declaration_checks[].raw_pointer` | Exact supplied goal-index strings | Check existing seeds; an absent seed has no pointer. |
 | `evidences[].target` | Real CFG objects | Support graph operands, constraints, or metadata. |
 | Source span or `rule_id` evidence | Frozen source or runtime rules | Support a requirement, mechanism, or applicable default. |
 

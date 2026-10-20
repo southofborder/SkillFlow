@@ -1,0 +1,515 @@
+{
+  "schema": "skillflow-real-comparison-selection-v1",
+  "scope": "Source-only review of newly recovered ranks 1–500. Original acquisition failures and recovery evidence remain unchanged; own operative workflow and source-closure criteria apply.",
+  "decisions": {
+    "tokauthai/skillscan": {
+      "source_tree_sha256": "144ed6bda0d9ca2da5dafe2dca6d333f366749b60521568e324f2189da971b73",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own scanner implements conditional first-run behavior and a defined content/path hashing transformation.",
+      "features": [
+        {
+          "feature": "conditions_or_retries",
+          "reason": "Presence of the first-run marker determines whether the skill asks for an initial scan or skips the initial path.",
+          "evidence": [
+            {
+              "path": "SKILL.md",
+              "start_line": 30,
+              "end_line": 40,
+              "quote": "## First Load\n\nCheck `scripts/.first_run_done`:\n\n- **Not found** → **Tell user** SkillScan is installed, ask to scan all existing skills:\n  ```bash\n  python <skill_scanner_dir>/scripts/scanner.py first-run\n  ```\n  `.first_run_done` is created automatically after completion.\n\n- **Found** → Skip, operate normally."
+            }
+          ]
+        },
+        {
+          "feature": "versions_or_transformations",
+          "reason": "The implementation filters files, hashes relative path plus bytes, sorts file hashes and hashes their framed concatenation.",
+          "evidence": [
+            {
+              "path": "scripts/scanner.py",
+              "start_line": 276,
+              "end_line": 303,
+              "quote": "def calculate_dir_sha256(directory: Path) -> str:\n    \"\"\"Calculate SHA256 hash of a skill directory (based on all file contents + relative paths).\n    Excludes _meta.json and files/dirs in SKIP_FILES/SKIP_DIRS.\"\"\"\n    file_hashes = []\n    for file_path in sorted(directory.rglob('*')):\n        if not file_path.is_file():\n            continue\n        if file_path.name == '_meta.json':\n            continue\n        rel = file_path.relative_to(directory)\n        if any(part in SKIP_DIRS for part in rel.parts):\n            continue\n        if file_path.name in SKIP_FILES:\n            continue\n        rel_path = str(rel)\n        file_hash = hashlib.sha256()\n        file_hash.update(rel_path.encode('utf-8'))\n        file_hash.update(b'\\x00')\n        with open(file_path, 'rb') as f:\n            for chunk in iter(lambda: f.read(8192), b''):\n                file_hash.update(chunk)\n        file_hashes.append(file_hash.hexdigest())\n    file_hashes.sort()\n    final_hash = hashlib.sha256()\n    for h in file_hashes:\n        final_hash.update(h.encode('utf-8'))\n        final_hash.update(b'\\x00')\n    return final_hash.hexdigest()"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The retained scanner.py contains 816 nonempty lines of actual scanning, hashing, request, response, CLI and state handling code. Its operative implementation exceeds 200 lines independently of registry metadata, scan labels or skill-card material.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The own scanner implementation is retained. The first-run marker is created after completion. The cloud API, Python runtime and installed skills being scanned are external/runtime inputs; their availability is not a claim of semantic correctness.",
+        "local_reference_decisions": [
+          {
+            "target": "scripts/.first_run_done",
+            "classification": "runtime_created",
+            "reason": "The first-run completion marker is explicitly created automatically after the initial operation; it is saved state rather than missing own source.",
+            "evidence": [
+              {
+                "path": "SKILL.md",
+                "start_line": 32,
+                "end_line": 32,
+                "quote": "Check `scripts/.first_run_done`:"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "uroboros1205/prismfy-search": {
+      "source_tree_sha256": "1fe0cd4ae58d3a948a09657aef7af25954893fafd37d392efcc688a1ca803f6e",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The retained search client transforms arguments into an API body and branches on returned error/raw-output states.",
+      "features": [
+        {
+          "feature": "versions_or_transformations",
+          "reason": "The client converts page to a number and constructs a body with optional timeRange/domain fields.",
+          "evidence": [
+            {
+              "path": "search.sh",
+              "start_line": 141,
+              "end_line": 151,
+              "quote": "  # Build JSON body\n  local body\n  body=$(jq -n \\\n    --arg q \"$query\" \\\n    --argjson engines \"$engines_json\" \\\n    --arg lang \"$lang\" \\\n    --arg page \"$page\" \\\n    '{query: $q, engines: $engines, language: $lang, page: ($page | tonumber)}')\n\n  [[ -n \"$time_range\" ]] && body=$(echo \"$body\" | jq --arg t \"$time_range\" '. + {timeRange: $t}')\n  [[ -n \"$domain\"     ]] && body=$(echo \"$body\" | jq --arg d \"$domain\"     '. + {domain: $d}')"
+            }
+          ]
+        },
+        {
+          "feature": "conditions_or_retries",
+          "reason": "A returned API code stops the operation, while raw mode prints the JSON response and returns.",
+          "evidence": [
+            {
+              "path": "search.sh",
+              "start_line": 156,
+              "end_line": 165,
+              "quote": "  # Check for API errors\n  local err_code\n  err_code=$(echo \"$response\" | jq -r '.code // empty' 2>/dev/null || true)\n  if [[ -n \"$err_code\" ]]; then\n    die \"$(api_error_message \"$err_code\" \"$response\")\"\n  fi\n\n  if [[ \"$raw\" == \"true\" ]]; then\n    echo \"$response\" | jq .\n    return"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "search.sh retains over 200 nonempty operative lines implementing argument validation, API requests, error handling, payload construction and output. This criterion is independent of request examples and service marketing.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The own request/formatting client and hook are retained. Prismfy service behavior, API key, Bash/jq/curl and the external search engines remain external inputs/dependencies; no required own script is missing.",
+        "local_reference_decisions": []
+      }
+    },
+    "ide-rea/ai-ppt-generator": {
+      "source_tree_sha256": "33274eb1ec3e02645ae478cdd109ad9ce4c507720081e726eadcb355540f885b",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own PPT scripts categorize returned themes and apply conditional preferred/weighted selection before generation.",
+      "features": [
+        {
+          "feature": "versions_or_transformations",
+          "reason": "Returned themes are classified by recognized style names, with unclassified items placed in the default bucket.",
+          "evidence": [
+            {
+              "path": "scripts/random_ppt_theme.py",
+              "start_line": 51,
+              "end_line": 67,
+              "quote": "    for theme in themes:\n        style_names = theme.get(\"style_name_list\", [])\n        if not style_names:\n            categorized[\"默认\"].append(theme)\n            continue\n            \n        added = False\n        for style_name in style_names:\n            if style_name in categorized:\n                categorized[style_name].append(theme)\n                added = True\n                break\n        \n        if not added:\n            categorized[\"默认\"].append(theme)\n    \n    return categorized"
+            }
+          ]
+        },
+        {
+          "feature": "conditions_or_retries",
+          "reason": "A nonempty preferred category is used first; otherwise available buckets are considered and the empty-set case returns None.",
+          "evidence": [
+            {
+              "path": "scripts/random_ppt_theme.py",
+              "start_line": 70,
+              "end_line": 84,
+              "quote": "def select_random_theme_by_category(categorized_themes, preferred_category=None):\n    \"\"\"Select a random theme, optionally preferring a specific category\"\"\"\n    # If preferred category specified and has themes, use it\n    if preferred_category and preferred_category in categorized_themes:\n        if categorized_themes[preferred_category]:\n            return random.choice(categorized_themes[preferred_category])\n    \n    # Otherwise, select from all non-empty categories\n    available_categories = []\n    for category, themes in categorized_themes.items():\n        if themes:\n            available_categories.append(category)\n    \n    if not available_categories:\n        return None"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The retained generate_ppt.py, ppt_theme_list.py and random_ppt_theme.py implement real request, theme categorization/selection and subprocess handoff behavior, exceeding 200 operative nonempty lines without counting sample outputs or registry metadata.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The own theme-list, category selector and generation scripts called by the entry are retained. Baidu service behavior, credentials, requests/Python and generated PPT download data remain external/runtime inputs.",
+        "local_reference_decisions": []
+      }
+    },
+    "wscats/baidu-netdisk-skills": {
+      "source_tree_sha256": "139ebe30e355a5e1fe0dbacf060d92aed298b30faac733823ded9c9666234846",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own Netdisk scripts persist structured backup manifests and conditionally reject update download hosts.",
+      "features": [
+        {
+          "feature": "persistence_or_cross_session",
+          "reason": "Backup inputs are represented as a versioned manifest with agent, memory system, device, dates, trigger count and file list, then written to the requested output file.",
+          "evidence": [
+            {
+              "path": "scripts/memory-backup.sh",
+              "start_line": 178,
+              "end_line": 193,
+              "quote": "  node -e \"\n    const fs = require('fs');\n    const [outFile, ver, agent, ms, dev, ts, bt, ...files] = process.argv.slice(1);\n    const obj = {\n      version: ver,\n      agent: agent,\n      memorySystem: ms,\n      device: dev,\n      createdAt: ts,\n      backupType: bt,\n      lastBackupAt: ts,\n      triggerCount: 1,\n      files: files\n    };\n    fs.writeFileSync(outFile, JSON.stringify(obj, null, 2) + '\\n');\n  \" \"$output_file\" \"2.0\" \"$agent\" \"$memory_system\" \"$normalized_device\" \"$created_at\" \"manual\" \"${files[@]}\""
+            }
+          ]
+        },
+        {
+          "feature": "conditions_or_retries",
+          "reason": "Updates reject non-HTTPS downloads, unparseable hosts and hosts outside the explicit Baidu allowlist.",
+          "evidence": [
+            {
+              "path": "scripts/update.sh",
+              "start_line": 129,
+              "end_line": 155,
+              "quote": "    # 必须 https\n    case \"$url\" in\n        https://*) ;;\n        *)\n            log_error \"拒绝更新：下载地址必须使用 HTTPS（实际：${url})\"\n            return 1\n            ;;\n    esac\n\n    # 提取 host（去掉 https://、路径、端口）\n    local host\n    host=$(echo \"$url\" | sed -E 's|^https://([^/:]+).*$|\\1|')\n    if [ -z \"$host\" ]; then\n        log_error \"拒绝更新：无法解析下载地址的主机名\"\n        return 1\n    fi\n\n    case \"$host\" in\n        *.baidu.com|baidu.com|*.baidupcs.com|baidupcs.com|*.bdimg.com|*.bdstatic.com)\n            return 0\n            ;;\n        *)\n            log_error \"拒绝更新：下载地址不在百度官方域名白名单内（host=${host}）\"\n            log_error \"  仅允许的域名：*.baidu.com、*.baidupcs.com、*.bdimg.com、*.bdstatic.com\"\n            return 1\n            ;;\n    esac"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The retained memory-backup.sh (781 nonempty lines), install.sh, update.sh and login/helper scripts contain substantive executable backup, manifest, restore, update and credential-flow handling. Operative complexity is established independently of command reference lists or sample output.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The own scripts and referenced command documentation are retained. The apparent unresolved reference is a prose glob naming package areas, not an omitted helper. Baidu CLI/service, credentials and user backup/config data remain external/runtime dependencies.",
+        "local_reference_decisions": [
+          {
+            "target": "reference/scripts/*），**不会**修改用户的本地文件、网盘内容或系统二进制。",
+            "classification": "illustrative_or_optional",
+            "reason": "The raw target is a prose glob/category followed by Chinese punctuation describing the retained SKILL/reference/scripts update scope; it is not a literal required implementation filename.",
+            "evidence": [
+              {
+                "path": "reference/bdpan-commands.md",
+                "start_line": 414,
+                "end_line": 414,
+                "quote": "> - 此机制**仅**用于刷新 Skill 仓库内的文档/脚本（如 SKILL.md、reference/*、scripts/*），**不会**修改用户的本地文件、网盘内容或系统二进制。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "wscats/qq-zone-photo": {
+      "source_tree_sha256": "f99f3d0ff4cf9be9fd42239b38cf804e0b0b104f1a172f7877c84ec786858d02",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own QZone client persists cookies and maintains per-photo URL/name/output correspondence during album downloads.",
+      "features": [
+        {
+          "feature": "persistence_or_cross_session",
+          "reason": "The client creates the cookie-file parent directory and writes the cookie dictionary as JSON for reuse.",
+          "evidence": [
+            {
+              "path": "scripts/qzone_photos.py",
+              "start_line": 76,
+              "end_line": 81,
+              "quote": "def save_cookies(path: str, cookies: dict) -> None:\n    \"\"\"Save cookies to a JSON file.\"\"\"\n    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else \".\", exist_ok=True)\n    with open(path, \"w\", encoding=\"utf-8\") as f:\n        json.dump(cookies, f, indent=2, ensure_ascii=False)\n    print(f\"Cookies saved to {path}\")"
+            }
+          ]
+        },
+        {
+          "feature": "element_or_recipient_pairing",
+          "reason": "Each photo keeps its URL and name together when selecting the album output path; missing URLs are skipped and successful paths are collected.",
+          "evidence": [
+            {
+              "path": "scripts/qzone_photos.py",
+              "start_line": 558,
+              "end_line": 573,
+              "quote": "    album_dir = os.path.join(output_dir, album_id)\n    os.makedirs(album_dir, exist_ok=True)\n\n    downloaded = []\n    total = len(photos)\n    for idx, photo in enumerate(photos, 1):\n        url = photo.get(\"url\", \"\")\n        if not url:\n            print(f\"[{idx}/{total}] Skipping photo with no URL: {photo.get('name', 'unknown')}\")\n            continue\n\n        name = photo.get(\"name\", \"\") or f\"photo_{idx}.jpg\"\n        print(f\"[{idx}/{total}] Downloading: {name}\")\n        path = download_photo(session, url, album_dir, name)\n        if path:\n            downloaded.append(path)"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The retained qzone_photos.py contains 696 nonempty lines of actual cookie/session, API, album/photo and download implementation. The 200-line operative criterion does not depend on documentation screenshots or examples.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The own client implementation is retained. Missing image/image*.png references are documentation screenshots rather than execution inputs. QQ/QZone services, user cookies and downloaded album contents are external/runtime data.",
+        "local_reference_decisions": [
+          {
+            "target": "image/image3.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "README.md",
+                "start_line": 33,
+                "end_line": 33,
+                "quote": "![](./image/image3.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image4.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "README.md",
+                "start_line": 34,
+                "end_line": 34,
+                "quote": "![](./image/image4.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image5.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "README.md",
+                "start_line": 35,
+                "end_line": 35,
+                "quote": "![](./image/image5.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image1.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "README.md",
+                "start_line": 98,
+                "end_line": 98,
+                "quote": "![](./image/image1.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image2.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "README.md",
+                "start_line": 99,
+                "end_line": 99,
+                "quote": "![](./image/image2.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image3.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "SKILL.md",
+                "start_line": 39,
+                "end_line": 39,
+                "quote": "![](./image/image3.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image4.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "SKILL.md",
+                "start_line": 40,
+                "end_line": 40,
+                "quote": "![](./image/image4.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image5.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "SKILL.md",
+                "start_line": 41,
+                "end_line": 41,
+                "quote": "![](./image/image5.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image1.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "SKILL.md",
+                "start_line": 104,
+                "end_line": 104,
+                "quote": "![](./image/image1.png)"
+              }
+            ]
+          },
+          {
+            "target": "image/image2.png",
+            "classification": "illustrative_or_optional",
+            "reason": "This image is a documentation screenshot illustrating use, not a mandatory input to the retained QZone client.",
+            "evidence": [
+              {
+                "path": "SKILL.md",
+                "start_line": 105,
+                "end_line": 105,
+                "quote": "![](./image/image2.png)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "mike5230odense/self-improvement": {
+      "source_tree_sha256": "9d711bb0ccf4b65f6b6b85f67efbd93c7203a0075cd32e0828cf53e5b834a610",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own extraction helper distinguishes existing/dry-run cases and actually writes a generated skill directory/file.",
+      "features": [
+        {
+          "feature": "conditions_or_retries",
+          "reason": "An existing destination fails in normal mode, while dry-run follows the preview-only branch.",
+          "evidence": [
+            {
+              "path": "scripts/extract-skill.sh",
+              "start_line": 123,
+              "end_line": 134,
+              "quote": "# Check if skill already exists\nif [ -d \"$SKILL_PATH\" ] && [ \"$DRY_RUN\" = false ]; then\n    log_error \"Skill already exists: $SKILL_PATH\"\n    log_error \"Use a different name or remove the existing skill first.\"\n    exit 1\nfi\n\n# Dry run output\nif [ \"$DRY_RUN\" = true ]; then\n    log_info \"Dry run - would create:\"\n    echo \"  $SKILL_PATH/\"\n    echo \"  $SKILL_PATH/SKILL.md\""
+            }
+          ]
+        },
+        {
+          "feature": "persistence_or_cross_session",
+          "reason": "Normal extraction creates the destination and writes SKILL.md using the selected skill name.",
+          "evidence": [
+            {
+              "path": "scripts/extract-skill.sh",
+              "start_line": 171,
+              "end_line": 183,
+              "quote": "# Create skill directory structure\nlog_info \"Creating skill: $SKILL_NAME\"\n\nmkdir -p \"$SKILL_PATH\"\n\n# Create SKILL.md from template\ncat > \"$SKILL_PATH/SKILL.md\" << TEMPLATE\n---\nname: $SKILL_NAME\ndescription: \"[TODO: Add a concise description of what this skill does and when to use it]\"\n---\n\n# $(echo \"$SKILL_NAME\" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The retained main logging/promotion workflow plus extract-skill.sh, activator.sh, error-detector.sh and hook handlers give at least four referenced operative files. Actual validation, hook emission, learning capture and skill-file creation establish complexity; execution of the generated skill template is not assumed.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "Own learning templates, extraction helper, activation/error helpers and hook implementations are retained. Generated .learnings records and new skill directories are runtime output; agent runtimes and optional integrations are external environments.",
+        "local_reference_decisions": []
+      }
+    },
+    "shengbinxu/stock-monitor": {
+      "source_tree_sha256": "340d9d55e48a9afa53f8cf2a4bef404043d6ef83ae7df569b1dafe3681c60cb8",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own stock-monitor scripts define config fallback behavior and persistent alert state.",
+      "features": [
+        {
+          "feature": "conditions_or_retries",
+          "reason": "The monitor loads an existing user config or returns a complete built-in stocks mapping when the file is absent.",
+          "evidence": [
+            {
+              "path": "scripts/stocks_monitor.py",
+              "start_line": 26,
+              "end_line": 37,
+              "quote": "def load_config():\n    config_path = get_config_path()\n    if os.path.exists(config_path):\n        with open(config_path, 'r') as f:\n            return json.load(f)\n    return {\n        \"stocks\": {\n            \"贵州茅台\": {\"symbol\": \"600519.SS\", \"base_price\": 1600.0, \"currency\": \"¥\"},\n            \"腾讯控股\": {\"symbol\": \"0700.HK\", \"base_price\": 512.0, \"currency\": \"HK$\"},\n            \"拼多多\": {\"symbol\": \"PDD\", \"base_price\": 120.0, \"currency\": \"$\"}\n        }\n    }"
+            }
+          ]
+        },
+        {
+          "feature": "persistence_or_cross_session",
+          "reason": "Alert state is read across runs, defaults to empty when absent, and is saved as JSON with parent-directory creation.",
+          "evidence": [
+            {
+              "path": "scripts/stocks_monitor.py",
+              "start_line": 57,
+              "end_line": 68,
+              "quote": "def load_state():\n    state_path = get_state_path()\n    if os.path.exists(state_path):\n        with open(state_path, 'r') as f:\n            return json.load(f)\n    return {}\n\ndef save_state(state):\n    state_path = get_state_path()\n    os.makedirs(os.path.dirname(state_path), exist_ok=True)\n    with open(state_path, 'w') as f:\n        json.dump(state, f, indent=2)"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The three retained monitor scripts contain substantial real quote fetching, stock-type/time gating, threshold calculation, state and notification/output handling, exceeding 200 operative lines independently of the short usage example.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The own three monitor implementations are retained. stocks_config.json is user-created runtime configuration: SKILL.md gives a complete schema/example and the core script supplies defaults. alerts.json is automatically persisted state. Market feeds and optional Futu environment are external services; no unavailable own mandatory config content is inferred.",
+        "local_reference_decisions": []
+      }
+    },
+    "jernejcicorbin-hub/claim-verifier": {
+      "source_tree_sha256": "5e678e09005dcefe4905d5eba86adc7423b913394c4cbe903b88a365381af7e7",
+      "reviewer_kind": "assistant_source_review",
+      "reviewer_id": "calibration-source-screening-agent",
+      "decision": "include",
+      "reason": "The own verifier extracts bounded deduplicated claims and passes each to its retained single-claim helper.",
+      "features": [
+        {
+          "feature": "versions_or_transformations",
+          "reason": "Input text is sentence-split, trimmed, filtered, deduplicated and capped before verification.",
+          "evidence": [
+            {
+              "path": "claim-verify-batch.sh",
+              "start_line": 56,
+              "end_line": 65,
+              "quote": "# Basic claim extraction heuristic: split by sentence separators, trim, dedupe, keep non-trivial lines.\nmapfile -t claims < <(\n  echo \"$text\" \\\n  | tr '\\n' ' ' \\\n  | sed 's/[!?]/./g' \\\n  | tr '.' '\\n' \\\n  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \\\n  | awk 'length($0) > 20' \\\n  | awk '!seen[$0]++' \\\n  | head -n \"$max_claims\""
+            }
+          ]
+        },
+        {
+          "feature": "cross_file_dataflow",
+          "reason": "The batch script resolves the retained single-claim helper and passes each extracted claim to it with raw output, handling failure locally.",
+          "evidence": [
+            {
+              "path": "claim-verify-batch.sh",
+              "start_line": 4,
+              "end_line": 5,
+              "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nSINGLE=\"$SCRIPT_DIR/claim-verify.sh\""
+            },
+            {
+              "path": "claim-verify-batch.sh",
+              "start_line": 74,
+              "end_line": 83,
+              "quote": "for claim in \"${claims[@]}\"; do\n  raw=\"\"\n  if ! raw=\"$(\"$SINGLE\" --raw --claim \"$claim\" 2>/tmp/claim_verify_err.$$)\"; then\n    err=\"$(cat /tmp/claim_verify_err.$$ 2>/dev/null || true)\"\n    status=\"not_found\"\n    confidence=\"0.20\"\n    evidence='[]'\n    notes=\"single-claim verify failed: ${err:-unknown}\"\n    failure_code=\"PRISMFY_UNAVAILABLE\"\n    run_failure_code='\"PRISMFY_UNAVAILABLE\"'"
+            }
+          ]
+        }
+      ],
+      "operational_complexity_review": {
+        "status": "confirmed",
+        "basis": "The entry's executable single/batch scripts and hook implementation retain actual parsing, query construction, service/error handling, evidence/report assembly and hook output. Their own operative workflow exceeds 200 lines independently of example verification reports; status text is preserved as source behavior, not validated as truth.",
+        "source_inventory_is_proof": false
+      },
+      "source_closure": {
+        "status": "complete_for_static_audit",
+        "reason": "The batch script, referenced claim-verify.sh and hook source are retained. Prismfy search/API availability and shell/jq tools are external dependencies; incoming text, temporary items and emitted evidence reports are runtime data.",
+        "local_reference_decisions": []
+      }
+    }
+  }
+}

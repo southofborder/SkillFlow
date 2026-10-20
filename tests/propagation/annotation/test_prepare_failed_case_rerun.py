@@ -28,8 +28,8 @@ def tool():
 def parent(tool, tmp_path, monkeypatch):
     root = tmp_path / "parent-run"
     root.mkdir()
-    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": []}
-    result = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": {}, "summary": {"cases": 30}}
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": []}
+    result = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": tool.PARENT_IDENTITY, **contract_binding(), "cases": {}, "summary": {"cases": 30}}
     for number in range(1, 31):
         identifier = f"{number:03}"
         failed = identifier in tool.EXPECTED_RERUN_CASES

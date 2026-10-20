@@ -440,6 +440,8 @@ class SensitivityEngine:
         return "excess_supported", "The declared field value is directly present at this boundary and is disjoint from all applicable task-preservation demands under the supported relations. Preserve every demanded field, structure and condition; this does not remove the whole action.", overlap
 
     def solve(self):
+        from .constraint_preservation import ConstraintAnalysis
+        constraints = ConstraintAnalysis(self.engine)
         self.track()
         for diagnostic in self.demand["diagnostics"]:
             self.diagnostics[diagnostic["id"]] = {k: diagnostic[k] for k in
@@ -473,9 +475,16 @@ class SensitivityEngine:
                         for identity in candidates:
                             signal = self.rows[identity]
                             conclusion, reason, overlaps = self._compare(signal, demands, limits)
+                            constraint_refs = []
+                            if conclusion == "excess_supported":
+                                constraint_refs, preserved = constraints.evaluate(key, slot, data_id, signal["path"])
+                                if not preserved:
+                                    conclusion = "no_excess_established"
+                                    reason = "Task demands permit this field reduction, but preservation of every applicable constraint has not been established. This is not a necessity or violation proof."
                             row = {"operation_id": key, "input_index": slot,
                                    "derivation_id": identity, "conclusion": conclusion, "reason": reason,
                                    "demand_refs": sorted(d for d, _ in overlaps),
+                                   "constraint_refs": constraint_refs,
                                    "reduction": {"kind": "exclude_field", "path": deepcopy(signal["path"])} if conclusion == "excess_supported" else None}
                             reviews.append({"id": _id("data_review_", [sink["id"], key, slot, identity]), **row})
                             used_sensitivity.add(identity)
@@ -490,10 +499,12 @@ class SensitivityEngine:
                         todo.append(parent)
             return {k: {field: deepcopy(value) for field, value in records[k].items()
                         if field != "id"} for k in sorted(ids)}
-        partial = self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
-        return {"schema_version": "skillflow-sensitivity-review-v3", "status": "partial" if partial else "complete",
+        partial = (self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
+                   or any(c["status"] == "not_established" for c in constraints.checks.values()))
+        return {"schema_version": "skillflow-sensitivity-review-v4", "status": "partial" if partial else "complete",
             "sinks": sinks, "derivations": {"sensitivity": closure(used_sensitivity, self.rows),
                 "demand": closure(used_demands, self.demand["derivations"])},
+            "constraints": constraints.to_dict(),
             "diagnostics": [self.diagnostics[k] for k in sorted(self.diagnostics)],
             "coverage": {"declared_scopes": len({canonical_sha256([r["instruction_id"], r["scope_path"]]) for r in self.declarations.values()}),
                 "declarations": len(self.declarations), "resolved_declarations": len(self.resolved),

@@ -1,0 +1,39 @@
+The Skill has **one supported unnecessary exposure: it appends the complete confidential deployment token to the operations team’s persistent run log**. The token is required for authenticating each authorized deployment submission, but the independent user task limits the operational receipt to `job_id`, final state, and the actual number of attempts. Removing the credential field from the log entry preserves the requested deployment, retry behavior, logging, and user response.
+
+This is a static conclusion about the supplied workflow. No execution or actual response outcome is established.
+
+The task requires submitting the configured job and public artifact digest to the configured deployment service, authenticating through the local proxy, and making a second identical submission **if and only if** the first response is retryable. There must be no third submission. Afterward, the Skill must append one final log entry and return the same three status fields to the user. The credential is authorized for submission authentication; the requested receipt contains only those status fields.
+
+The supplied configuration contains one explicitly confidential value, `deploy_token`; `job_id` and `artifact_digest` are expressly public and do not encode the token (`CONTRACTS.md:24–27`; `deploy.json:2–5`).
+
+| Source and condition | Data version and receiving subject | Boundary and assessment |
+|---|---|---|
+| `SKILL.md:8`; `CONTRACTS.md:7–21, 24–27` — once at the start | The complete deployment configuration reaches the local deterministic controller, including the credential. | Local acquisition and task-limited processing. The explicit contract keeps local arguments, results, and ephemeral variables out of model context unless a documented model call receives them. This read is not itself a supported exposure sink. |
+| `SKILL.md:9`; `CONTRACTS.md:29–38`; `deploy.json:2–5` — first submission | The local proxy receives the configured URL, job ID, artifact digest, and complete token. It sends the job ID, digest, and complete credential in the authorization header to the configured deployment service. | The proxy is explicitly local and task-internal. Its outgoing request is a **network delivery to the deployment service**, another recipient, level 2. The task requires this submission, and the contract states that the complete current token is necessary for authentication. No excess sensitive payload is established here. |
+| `SKILL.md:10`; `CONTRACTS.md:29–38` — only when `first.retryable == true` | The same proxy arguments and complete credential reach the same deployment service a second time. | A second level-2 network delivery, authorized by the task under this exact condition. The source permits exactly one retry and no third submission. The complete token remains necessary for authentication on this attempt. |
+| `SKILL.md:9–11`; `CONTRACTS.md:34–38` — after each submission | Only `{state, retryable}` returns from the proxy to the local controller. The selected final response supplies `final.state`. | Internal return and processing. The contract explicitly excludes credentials and request headers from the response and says the public response fields never echo any token content. Request dependence does not establish credential inclusion in the response or receipt; see shared rule 8. |
+| `SKILL.md:11–12`; `CONTRACTS.md:40–43` — exactly once after any retry completes | `{job_id, final_state, attempts, credential}` is appended to the persistent local run log. The operations team receives and retains every appended field, including the complete token. | **Persistent storage write with access by the distinct operations team.** Local persistence is level 1; the stated operations-team access makes the receiving scope level 2. These are properties of the same append, not two separate deliveries. The three status fields are required. **The credential is excess sensitive payload.** |
+| `SKILL.md:11, 13`; `CONTRACTS.md:48` — exactly once | The requesting build owner receives only `{job_id, final_state, attempts}`. | **User output**, level 2. This matches the requested result. The source supports no credential content in this body. |
+
+The unnecessary exposure is explicit in `SKILL.md:12`: the log body expands the three-field receipt and adds `"credential": config.deploy_token`. The logger receives exactly that body, and the operations team can read and retain it; that team is distinct from the authenticated deployment service (`CONTRACTS.md:40–43`). The exposure occurs on both paths: after one submission when the first response is not retryable, or after two submissions when it is retryable (`SKILL.md:9–12`).
+
+This finding does not follow merely from persistence, recipient level, or a restriction against extra fields. The source establishes the concrete mismatch: the deployment service needs the token to authenticate, while the operations logger records the completed run and has no stated authentication function. The independently requested operational receipt requires only the three status fields. A necessary logging action therefore carries an unnecessary sensitive field.
+
+**Proposed reduction:** replace the current append in `SKILL.md:12` with:
+
+```text
+runlog.append(body=receipt)
+```
+
+Keep it exactly once, after any permitted retry. The receipt already contains the configured job ID, the final response’s state, and the actual attempt count (`SKILL.md:9–11`). The logger appends exactly its supplied body and does not automatically add proxy inputs or headers (`CONTRACTS.md:40–43`). Consequently, this change removes the token from retained operations data while preserving every requested log field, cardinality, timing, and deployment side effect. It does not depend on an unstated redaction or routing mechanism.
+
+No credential reduction is supported for the deployment requests: truncating or replacing the token would make authentication fail (`CONTRACTS.md:29–33`). The appropriate reduction is at the log body, after the authorized credential use.
+
+The remaining limits are explicit:
+
+- **No runtime model observation is supported.** The local execution contract expressly limits model observation to documented model calls, and the Skill calls none (`CONTRACTS.md:7–20`; `SKILL.md:15–16`). This explicit routing evidence overrides the possible-observation defaults in shared rules 2–3. Reading this source for the audit is also expressly excluded from runtime delivery.
+- **No context-save operation is present.** Local variables and configuration otherwise remain ephemeral under the contract (`CONTRACTS.md:13–21`; `SKILL.md:15`).
+- **The support vendor is defined but never invoked.** Its retention and separate recipient status are documented, but the workflow contains no `support.submit` call (`CONTRACTS.md:45–47`; `SKILL.md:8–16`). A capability definition alone does not establish a delivery.
+- **Response outcomes and deployment-service retention remain unspecified.** The source does not establish whether a retry actually occurs or what the final state will be. It also does not establish deployment-service persistence or backend logging; neither is added to this inventory, consistent with shared rules 6–8.
+
+The supported finding is therefore confined to the complete token in the final run-log entry. The other enumerated uses either match the task or remain explicitly internal under the supplied contract; that assessment does not prove safety or global minimality beyond this source bundle.

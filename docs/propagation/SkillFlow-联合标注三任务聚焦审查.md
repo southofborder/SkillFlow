@@ -1,4 +1,33 @@
-# Joint annotation review v5 and one repair
+# Joint annotation review v7 and one semantic repair
+
+## Current declaration review contract
+
+The current identities are `annotation-review-v7`, `skill-ir-annotation-review-v11` and `skill-ir-annotation-refinement-v10`. Task remains source-only and immutable during annotation. The four review axes remain source, requirement, declaration and IR; no extra review call or fifth axis is introduced.
+
+| Axis | Required accounting |
+| --- | --- |
+| `source_checks` | Every nonempty frozen source line, including prohibitions omitted from Task |
+| `requirement_checks` | Every requirement, including missing demands or constraints and incomplete applicability |
+| `declaration_checks` | Every exact `declaration_index.raw_pointer`, covering both demands and constraints |
+| `reviewed_ir_ids` | Every real IR, including processing, visibility, sensitivity and interactions |
+
+`declaration_checks` replaces `goal_checks`, without an alias. Its row is still exactly `raw_pointer / status / reason / finding_indexes`; accepted rows have no findings, and issue rows reference real findings. The declaration index stores a constraint's program identity, requirement ID and raw pointer, not a duplicate constraint body. The raw annotation already contains that body.
+
+Optional `realizations[].constraints[]` expresses prohibitions, execution conditions, occurrence bounds and ordering. A pure restriction needs no positive seed. Mixed requirements must express both positive and restriction parts, preserving any unsupported remainder. Expression completeness does not prove that the implementation satisfies the restriction.
+
+Restrictions are checked against current facts: a prohibition cannot silently delete a field, a bound cannot remove an extra call, and a required condition cannot prune a bypass path. Actual selection, exclusion, update and control mechanisms remain separate implementation facts. Constraint checks do not create positive demands or model-authored satisfaction/reduction verdicts. Possible influence is not plaintext inclusion, and an intersecting dependency is not proof of necessity.
+
+The reviewer inspects information relations, applicable receivers/events, condition versions, count units/reset scopes and event matching. Missing declarations have no pointer to invent: use a requirement check and an existing realization/operation parent. A faithful Task with a wrongly grounded constraint uses `domain=annotation`; a source prohibition omitted from Task uses `domain=task` and the existing isolated source-only revision route. Sensitivity is not a prohibition, and a prohibition is not sensitivity evidence by itself.
+
+Constraint event references use actual CFG or raw annotation operation coordinates; generated observations and Data IDs are program-owned. Finding IDs locate candidate claims, whereas CFG evidence supports only real graph facts. A result symbol does not establish source-stated field membership. Task general bindings are now in `realizations[].bindings`, not the sealed Task.
+
+The normal chain remains 3/5/6 semantic calls, with one shared semantic repair budget and unlimited mechanical corrections. Independent rereview sees only the current candidate and original materials. Loading reconstructs exact declaration coverage from the compiler mapping; recovery preserves accepted responses, and replay uses zero API calls. No historical response or identity is migrated.
+
+Seven prompt sections and strict validation remain. A short, complete, independent constraint realization/check lesson is compiled in offline tests. Four-axis coverage and accepted checks record an inspection claim, not semantic completeness, satisfaction, minimality or absence of DOE.
+
+## Historical v5 specification
+
+The following text documents the preceding protocol and its historical artifacts. Its earlier field ownership, response shape and version numbers are not current interfaces; the declaration contract above and [formal pipeline](../doe/joint-pipeline.md) take precedence.
 
 本规范对应 `annotation-review-v5`、`skill-ir-annotation-review-v9` 和 `skill-ir-annotation-refinement-v8`。初审与复审各自为独立的一次整图审查；仅在初审合法且提出具体问题时，允许一次完整联合标注修复。源文与 CFG 不变，不实施 DOE 判断。
 

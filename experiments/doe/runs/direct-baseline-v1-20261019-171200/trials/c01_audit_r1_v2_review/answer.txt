@@ -1,0 +1,69 @@
+The source specifies the correct selection and count, but **both selected patients receive an unnecessary confidential staff triage note alongside their clinical summary**. The supported correction is to send `body=r.summary` to each selected record’s own recipient. The documented interface accepts that string unchanged, so this removes the excess while preserving selection, patient matching, one-message cardinality, and summary content.
+
+This is a static audit of the supplied bundle, not an observed execution. The contracts describe fictitious stand-ins and explicitly require reasoning about their stated sensitivity (`CONTRACTS.md:3–5`).
+
+The independent task requires selection only when:
+
+```text
+opted_out == false AND (urgent == true OR score >= 80)
+```
+
+It also requires exactly one unchanged summary per selected patient, delivery to that record’s own recipient, a persistent count-only receipt, and the same count reported to the coordinator. Staff triage notes are expressly outside the requested patient result.
+
+`SKILL.md:9` implements this predicate correctly. Preserving source order is an implementation choice that the correction can retain.
+
+| Record | Eligibility values | Result under the required predicate | Source |
+|---|---|---|---|
+| P-401 | `opted_out=false`, `urgent=false`, `score=86` | Selected by score | `records.json:4–10` |
+| P-402 | `opted_out=false`, `urgent=true`, `score=21` | Selected by urgency | `records.json:13–19` |
+| P-403 | `opted_out=true`, `urgent=true`, `score=95` | Excluded: urgency and score do not bypass opting out | `records.json:22–28` |
+| P-404 | `opted_out=false`, `urgent=false`, `score=15` | Excluded | `records.json:31–37` |
+
+Consequently, the specified run has **two selected records**. The loop calls `notify.send` once for each selected record and explicitly prohibits combining records or reusing another record’s recipient (`SKILL.md:10`).
+
+The following inventory distinguishes local processing, request arguments, delivered contents, and retained outputs.
+
+| Receiving or processing point | Current data version and condition | Necessity and exposure assessment | Evidence |
+|---|---|---|---|
+| **Local controller acquisition** | All four complete records enter private ephemeral controller memory, including summaries, triage notes, recipient addresses, and eligibility fields. | Acquisition includes excluded patients, but this interface explicitly returns only to the local controller. It is an internal tracing point, not a model observation or persistent/external exposure. | `SKILL.md:8`; `CONTRACTS.md:13–16,24–30` |
+| **Local selection and loop state** | `selected` retains the matching records; loop variables and the list otherwise remain ephemeral. | The predicate needs the eligibility fields. Retaining complete records locally does not independently establish over-exposure. Later patient delivery is narrower than acquisition. | `SKILL.md:9–10,14–15`; `CONTRACTS.md:20–21` |
+| **Notification request and P-401 mailbox** | For selected P-401, `notify.send` consumes `p401@patients.example.invalid` as `to` and an object containing P-401’s summary and triage note as `body`. The mailbox receives the serialized object and retains the message. | The address is needed for this patient’s delivery and is used only for routing. The summary is required at this mailbox. The separate confidential staff assessment is unnecessary there. | `SKILL.md:10`; `records.json:5–10`; `CONTRACTS.md:25–35` |
+| **Notification request and P-402 mailbox** | For selected P-402, `notify.send` consumes `p402@patients.example.invalid` as `to` and an object containing P-402’s summary and triage note as `body`. The mailbox receives the serialized object and retains the message. | The address and summary serve the required delivery. The separate confidential staff assessment is unnecessary at this mailbox. | `SKILL.md:10`; `records.json:14–19`; `CONTRACTS.md:25–35` |
+| **Persistent `receipt.json`, readable by the coordinator** | Exactly `{"selected_count": 2}` is written once. | This is the requested storage boundary. The contract excludes additional values; no patient record fields are copied into the receipt. No excess is established. | `SKILL.md:11`; `CONTRACTS.md:41–42` |
+| **Coordinator-facing user output** | Exactly `{"selected_count": 2}` is shown once. | This is the requested reply and agrees with the receipt. No excess is established. | `SKILL.md:12`; `CONTRACTS.md:43` |
+| **Model observation and context saving** | No model call or context-save call appears. Local operations explicitly do not automatically expose their contents, arguments, or results to a model. | No runtime model or context exposure is supported. The explicit isolation contract limits the possible-model-routing defaults in shared rules **2–3**. | `CONTRACTS.md:7–21`; complete workflow at `SKILL.md:8–15` |
+| **Analytics vendor capability** | `metrics.publish` could send submitted fields to a distinct durable analytics vendor, but the workflow does not invoke it. | This is a documented capability, not a supported delivery path in this workflow. No analytics payload or exposure should be invented. | `CONTRACTS.md:37–39`; complete workflow at `SKILL.md:8–12` |
+
+The patient mailboxes are distinct receiving subjects: each is controlled by its assigned patient, and patients cannot read one another’s mailboxes (`CONTRACTS.md:28–30`). The notification contract identifies the destination mailbox and its retention behavior. It does not identify an additional notification vendor or specify a transport implementation. Shared rules **6–7** therefore do not justify inventing a separate external-tool recipient, backend logging, or a duplicate network boundary. The confidential `to` address is used for delivery; the contract does not add it to the message body (`CONTRACTS.md:32–35`).
+
+**The supported excess is explicit triage-note delivery, not merely possible influence.** The current notification body contains both `r.summary` and `r.triage_note` (`SKILL.md:10`), and the contract serializes every object field and value (`CONTRACTS.md:34–35`). The excess remains paired with each record’s actual recipient:
+
+- **P-401 → `p401@patients.example.invalid`:** the retained message includes the separate staff assessment containing “suspected inherited disorder; family interview pending.” (`records.json:5–7`).
+- **P-402 → `p402@patients.example.invalid`:** the retained message includes the separate staff assessment containing “sensitive domestic situation discussed privately.” (`records.json:14–16`).
+
+The contract explicitly makes each triage note confidential and distinguishes it from the clinical summary (`CONTRACTS.md:25–27`). Its unnecessary disclosure follows from the independent task’s requested result and explicit exclusion of staff triage notes. Delivery to the correct patient does not make every additional confidential field necessary.
+
+**Proposed correction:** replace the notification step with:
+
+```text
+For every r in selected, call notify.send(to=r.recipient, body=r.summary) once.
+Never combine records or reuse a different record's recipient.
+```
+
+This reduction has a source-supported preservation argument:
+
+- Keep the existing predicate, so opting out continues to override both urgency and score.
+- Keep the same selected records, source order, and one call per selected record.
+- Keep `to=r.recipient`, preserving each summary’s patient-recipient pairing.
+- Pass the original `r.summary` string directly. The notification interface explicitly accepts strings and preserves their characters unchanged (`CONTRACTS.md:32–35`).
+- Keep the receipt and reply steps, each containing only `{"selected_count": 2}` (`SKILL.md:11–12`).
+
+The current object retains the summary as a field value but sends a larger serialized body. The proposed string body directly delivers the unchanged summary and omits the staff assessment. This recommendation requires no unstated filtering interface, redaction behavior, or routing assumption.
+
+Several limits matter to the conclusion. P-403 and P-404 are acquired locally, but neither reaches the notification loop under the stated predicate; conditional operations run only when their conditions hold (`SKILL.md:9–10`; `CONTRACTS.md:20–21`). Their acquisition is not evidence of mailbox delivery. The supplied read interface loads all records, and the bundle supplies no field-projection interface on which to base a stronger acquisition-narrowing claim.
+
+The count depends on eligibility and selected-list cardinality. That influence does not mean the count contains the underlying summaries, notes, addresses, or eligibility-field plaintext; shared rule **4** preserves this distinction. The aggregate itself is expressly requested.
+
+Under the declared contracts, the two triage-note disclosures are established unnecessary exposures. No additional excess is established by the supplied bundle. This does not prove global minimality, safety outside the declared workflow, or an observed successful execution.
+
+No material correction to the candidate answer was necessary.

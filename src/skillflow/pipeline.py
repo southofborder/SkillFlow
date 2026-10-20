@@ -21,8 +21,8 @@ from skillflow.common.json_normalization import NORMALIZATION_VERSION
 from skillflow.propagation.annotation.config import annotation_config, PUBLIC_CONFIG_FIELDS
 
 
-IDENTITY = "skillflow-analysis-run-v6"
-FORMAT_VERSION = 6
+IDENTITY = "skillflow-analysis-run-v7"
+FORMAT_VERSION = 7
 POLICY = {"structural_corrections": "unlimited", "max_repairs": 1, "reextract_cfg": False,
           "json_normalization": NORMALIZATION_VERSION,
           "review": True, "source_only_task": True, "diagnostic_analysis_on_review_failure": True,

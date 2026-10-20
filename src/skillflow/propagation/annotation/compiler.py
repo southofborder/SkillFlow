@@ -27,6 +27,7 @@ from skillflow.propagation.contracts.specs import structural_precedence
 from skillflow.propagation.contracts.specs import position_value
 from skillflow.propagation.contracts.specs import compiled_operation
 from skillflow.propagation.contracts.joint import normalize_joint_semantics, goal_mapping
+from skillflow.propagation.contracts.constraints import constraint_mapping
 from skillflow.propagation.contracts.uses import value_uses
 from skillflow.propagation.contracts.uses import request_precedence
 from skillflow.common.recording import canonical_sha256
@@ -35,7 +36,7 @@ from skillflow.propagation.material import checked_material
 from skillflow.propagation.contracts.profiles import RawAnnotationResponse
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
 
-COMPILER_VERSION = "skillflow-processing-compiler-v8"
+COMPILER_VERSION = "skillflow-processing-compiler-v9"
 
 
 class InternalCompilationError(RuntimeError):
@@ -63,10 +64,11 @@ def compile_response(raw, material):
     compiled.pop("task_revision_id")
     compiled.update(normalized)
     compiled["ir_semantics"] = {}
-    mapping = {"schema_version": "skillflow-processing-compilation-v8",
+    mapping = {"schema_version": "skillflow-processing-compilation-v9",
                "compiler_version": COMPILER_VERSION,
                "runtime_contract": runtime_contract_binding(material["runtime_contract"]),
-               "events": [], "goals": goal_mapping(raw, normalized)}
+               "events": [], "goals": goal_mapping(raw, normalized),
+               "constraints": constraint_mapping(raw, normalized["task_ref"])}
     rules = {rule["id"]: rule["text"] for rule in material["runtime_contract"]["rules"]}
     mechanism = {"rule_id": "EM10",
                  "reason": "The program compiles observations from declared processing modes and actual symbolic references; this does not prove the mode classification or that execution occurred."}

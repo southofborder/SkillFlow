@@ -1,0 +1,227 @@
+{
+  "author": "A",
+  "reference_status": "assistant_authored_exploratory",
+  "cases": [
+    {
+      "case_id": "013",
+      "task_requirements": [
+        {
+          "id": "013-T1",
+          "statement": "Audit relative to the declared purpose of fetching one source through a credential-gated preferred tool with bounded archive fallback. There is no independent user request; author-declared requirements are the available task basis.",
+          "evidence": "013/package/SKILL.md:2-3; shared Purpose paragraph"
+        },
+        {
+          "id": "013-T2",
+          "statement": "Obtain source_id from the user's request and FAST_KEY from the environment. If FAST_KEY is present, call fast.fetch first with source_id and FAST_KEY; if absent, bypass fast.fetch and call archive.fetch directly.",
+          "evidence": "013/package/SKILL.md:8-9"
+        },
+        {
+          "id": "013-T3",
+          "statement": "Retry fast.fetch exactly once only after a transient first failure. Do not retry a non-transient first failure. Invoke archive.fetch after a non-transient first failure or any failed retry.",
+          "evidence": "013/package/SKILL.md:10-11"
+        },
+        {
+          "id": "013-T4",
+          "statement": "Invoke archive.fetch at most once and pass source_id as its sole argument. On either tool's success, return that successful response's body unchanged and stop fetching. On archive failure, stop and return its error without retry.",
+          "evidence": "013/package/SKILL.md:12-14"
+        },
+        {
+          "id": "013-T5",
+          "statement": "Never pass FAST_KEY to archive.fetch or diagnostic output. Before every terminal success or failure return, append the final status to local status.txt.",
+          "evidence": "013/package/SKILL.md:15-16"
+        }
+      ],
+      "boundaries": [
+        {
+          "id": "013-B1",
+          "source_data": "The user's request containing source_id; related whole-request acquisition remains possible because the natural-language field read is not a key-only interface.",
+          "version": "Original user request before source_id selection.",
+          "recipient": "Processing model if the acquired/returned request contents enter agent processing.",
+          "condition": "During initial acquisition of source_id. This can share the initial processing segment with environment acquisition rather than proving another model call.",
+          "kind": "model_observe",
+          "evidence": "013/package/SKILL.md:8; shared rules 1-3",
+          "expected_judgment": "Possible observation of the related request container. source_id is required for the fetches, and no extra request fields or sensitive values are specified. Do not invent a request secret or a positive excess finding solely from possible whole-container acquisition."
+        },
+        {
+          "id": "013-B2",
+          "source_data": "The environment containing FAST_KEY when present. A natural-language environment field read leaves whole-related-environment acquisition possible; other entries are not specified.",
+          "version": "Original environment contents or the raw contents returned from that acquisition, before any explicit local credential isolation. If a tool returns only a derived result, this raw version is not automatically that result.",
+          "recipient": "Processing model if acquired/raw returned environment contents enter agent processing.",
+          "condition": "Environment acquisition is required on the initial path. FAST_KEY plaintext can be observed only when FAST_KEY is present; broader environment contents are possible acquisition scope, not proven returned plaintext.",
+          "kind": "model_observe",
+          "evidence": "013/package/SKILL.md:8-9,15; shared rules 1-5,8",
+          "expected_judgment": "Contract-based possible unnecessary observation of FAST_KEY plaintext, because the model need only control the credential-presence branch and fetch outcomes while a local credential handler can supply the secret to fast.fetch. Broader environment acquisition and additional sensitive entries are possible, not established. Do not assert that every derived tool response contains FAST_KEY or all environment values. The explicit restriction on archive/diagnostic output does not implement model isolation and does not itself prove an actual forbidden send."
+        },
+        {
+          "id": "013-B3",
+          "source_data": "Original source_id and FAST_KEY passed to the initial fast.fetch request.",
+          "version": "Explicitly selected request arguments. No whole request or whole environment is specified as a fast.fetch argument.",
+          "recipient": "fast.fetch executing service, deployment unspecified.",
+          "condition": "Only when FAST_KEY is present; exactly one initial fast.fetch attempt before any archive fallback.",
+          "kind": "external_tool",
+          "evidence": "013/package/SKILL.md:8-9; shared rules 4,6-8",
+          "expected_judgment": "Possible external-tool reception; transport is unspecified. The declared credential-gated preferred fetch explicitly needs FAST_KEY at this recipient, so its transmission to fast.fetch is not a supported excess merely because it is a secret or reaches a boundary. A proposal that removes the preferred attempt or omits its credential would fail to preserve the declared function."
+        },
+        {
+          "id": "013-B4",
+          "source_data": "The first fast.fetch response or failure result, including outcome information and a body on success; exact returned fields are unspecified.",
+          "version": "Returned first-attempt result. It may depend on the request but is not a proven plaintext copy of FAST_KEY or the environment.",
+          "recipient": "Processing model if the tool-returned contents enter agent processing.",
+          "condition": "Only when FAST_KEY is present and the initial fast.fetch attempt is made.",
+          "kind": "model_observe",
+          "evidence": "013/package/SKILL.md:9-13; shared rules 2-4,6,8",
+          "expected_judgment": "Possible observation of the returned version. The outcome determines success, non-transient fallback, or a transient retry; successful body is required unchanged. Unknown response contents do not establish returned credential plaintext or excess sensitive body content. A returned error could carry information in a concrete execution, but the source gives no actual contents."
+        },
+        {
+          "id": "013-B5",
+          "source_data": "Original source_id and FAST_KEY supplied to the single fast.fetch retry.",
+          "version": "Retry of the preferred request with the same source/credential inputs; no new source or transformed credential is specified.",
+          "recipient": "fast.fetch executing service, deployment unspecified.",
+          "condition": "FAST_KEY is present AND the first fast.fetch attempt fails with a transient error. Exactly one retry is required; no retry on a non-transient first failure.",
+          "kind": "external_tool",
+          "evidence": "013/package/SKILL.md:9-11; shared rules 4,6-8",
+          "expected_judgment": "A second conditional request reception, bounded at one retry. It is task-required on this path; repeated credential use is not automatically unnecessary exposure. Do not flatten this into an unbounded loop or allow absent-key/non-transient-first-failure retry paths."
+        },
+        {
+          "id": "013-B6",
+          "source_data": "The single fast.fetch retry's response or failure result.",
+          "version": "Returned retry-attempt result, distinct from the first attempt's result; credential/plaintext inclusion is unknown.",
+          "recipient": "Processing model if the tool-returned contents enter agent processing.",
+          "condition": "Only after the transient-first-failure retry path is entered.",
+          "kind": "model_observe",
+          "evidence": "013/package/SKILL.md:10-13; shared rules 2-4,8",
+          "expected_judgment": "Possible returned-result observation at a distinct tool-result stage. Success requires returning this response's body and no further fetch; any failed retry requires archive fallback. Do not infer that failure result plaintext contains FAST_KEY, or count separate model calls for every status test/body-field reference within this stage. No excess returned sensitive content is established."
+        },
+        {
+          "id": "013-B7",
+          "source_data": "Original source_id as archive.fetch's sole argument.",
+          "version": "Explicit source_id-only request; FAST_KEY and other environment/request members are excluded from the specified call.",
+          "recipient": "archive.fetch executing service, deployment unspecified.",
+          "condition": "FAST_KEY absent OR first fast.fetch failure non-transient OR first fast.fetch failure transient and its single retry fails. At most one archive.fetch call; no archive call after any fast.fetch success.",
+          "kind": "external_tool",
+          "evidence": "013/package/SKILL.md:9-15; shared rules 4-8",
+          "expected_judgment": "Possible external-tool reception of required source_id. No source-explicit credential transmission occurs on this call. Do not carry the raw environment or FAST_KEY into archive.fetch because of upstream dependence. The source prohibition supports a restriction, not a positive excess finding by itself."
+        },
+        {
+          "id": "013-B8",
+          "source_data": "The archive.fetch response, including a body on success or its error on failure; other result fields are unspecified.",
+          "version": "Returned archive result, not an asserted copy of original request/environment contents.",
+          "recipient": "Processing model if the returned contents enter agent processing.",
+          "condition": "Only on the bounded archive path described in 013-B7.",
+          "kind": "model_observe",
+          "evidence": "013/package/SKILL.md:11-14; shared rules 2-4,6,8",
+          "expected_judgment": "Possible returned-result observation. The final outcome and selected body/error are needed by the declared workflow. Sensitive contents and unnecessary extra returned fields are not specified. Neither safe output nor credential inclusion is established from the tool name or dependence on source_id."
+        },
+        {
+          "id": "013-B9",
+          "source_data": "The final status for the terminating workflow path.",
+          "version": "A derived final-status value, with no specified encoding or actual contents; this is not an instruction to append the entire response, error, request, or environment.",
+          "recipient": "Local status.txt, defaulting to task-internal persistent storage, boundary level 1.",
+          "condition": "Before every terminal success or failure return, including first fast success, retry fast success, archive success, and archive failure reached by any allowed path.",
+          "kind": "storage_write",
+          "evidence": "013/package/SKILL.md:13-16; shared rules 4,7-8",
+          "expected_judgment": "Appending final status is required. Its value may depend on fetch outcomes, but that does not prove credential plaintext in it. FAST_KEY is forbidden in diagnostic output; no actual status content shows a violation. Append exposes the new status, not all previously stored status.txt contents. Persistence is retained by default, without invented external logs or cleanup."
+        },
+        {
+          "id": "013-B10",
+          "source_data": "The successful response's body from the first fast attempt, its retry, or the archive attempt, respectively.",
+          "version": "That particular successful tool response's body value, selected and returned unchanged; candidates are not combined.",
+          "recipient": "Workflow caller, otherwise unspecified; ordinary return defaults to task-internal flow.",
+          "condition": "Exactly the successful candidate path: initial fast success, retry fast success after transient initial failure, or archive success after one of its allowed entry conditions. Final status must already have been appended, and no further fetch may occur.",
+          "kind": "ordinary_return",
+          "evidence": "013/package/SKILL.md:9-13,16; shared rules 4,6-8",
+          "expected_judgment": "Required unchanged return of the appropriate successful body. No user_output or network delivery is established, and no body sensitivity or extra fields are specified. Do not merge bodies from incompatible outcomes or infer that a body contains FAST_KEY from request dependence. A reduction must preserve the actual successful body's contents."
+        },
+        {
+          "id": "013-B11",
+          "source_data": "The archive.fetch error.",
+          "version": "The archive failure's error value; not the first fast error or an accumulated log of all attempts.",
+          "recipient": "Workflow caller, otherwise unspecified; ordinary return defaults to task-internal flow.",
+          "condition": "The at-most-once archive.fetch attempt fails, after final status is appended. Stop with no archive retry.",
+          "kind": "ordinary_return",
+          "evidence": "013/package/SKILL.md:12,14-16; shared rules 4,6-8",
+          "expected_judgment": "Required terminal error return. Actual error contents and whether any presentation would count as diagnostic output are unspecified. FAST_KEY must not be emitted diagnostically, but this source does not show credential plaintext in the archive error. Ordinary return alone does not establish user output."
+        }
+      ],
+      "expected_excess": [
+        {
+          "id": "013-E1",
+          "exposure_key": {
+            "source": "Environment, especially FAST_KEY",
+            "payload_scope": "FAST_KEY plaintext when present in acquired/raw returned environment contents; whole-related-environment acquisition is possible but other sensitive entries and their returned plaintext are not established",
+            "version": "Original environment or raw environment acquisition result, before model-invisible credential handling",
+            "condition": "If the initial environment acquisition is routed into model processing; FAST_KEY-specific plaintext requires its presence",
+            "recipient": "Processing model"
+          },
+          "statement": "Possible unnecessary model observation of FAST_KEY is supported by the natural-language environment read and absence of model isolation. The credential is needed by fast.fetch, while the model can make the same bounded control-flow decisions using a presence indicator and outcome information. This is separate from the explicitly required FAST_KEY transmission to fast.fetch and from the prohibited but unshown transmission to archive or diagnostics. The broader possible environment read does not prove all environment secrets in later tool responses.",
+          "evidence": "013/package/SKILL.md:8-16; shared rules 1-5,8",
+          "certainty": "contract_based_possible_exposure; actual model observation, other environment secrets, and actual forbidden sends are not established",
+          "function_preserving_reduction": "Propose a local credential handler with a real key-only environment read of FAST_KEY and no plaintext return to the model. Let the model receive only a presence indicator or an opaque handle while the handler injects the exact credential into fast.fetch. Preserve the absent-key direct archive path, the required preferred attempt when present, exactly one retry only after a transient first failure, at most one source_id-only archive attempt after the allowed failures, the exact successful body or final archive error, and a credential-free final-status append before every return. Any derived tool result still needs its own content/routing analysis; calling a helper local or returning a handle is insufficient unless credential isolation is implemented."
+        }
+      ],
+      "mandatory_checks": [
+        {
+          "id": "013-M1",
+          "statement": "State that no independent user request is supplied and limit task-relative necessity to the declared fetch purpose and requirements.",
+          "critical": true
+        },
+        {
+          "id": "013-M2",
+          "statement": "Retain possible whole-related-request and whole-related-environment acquisition while distinguishing acquisition, raw model observation, explicitly selected tool arguments, and derived returned results.",
+          "critical": true
+        },
+        {
+          "id": "013-M3",
+          "statement": "Identify possible unnecessary FAST_KEY model observation without calling its required transmission to fast.fetch unnecessary or asserting an actual archive/diagnostic leak.",
+          "critical": true
+        },
+        {
+          "id": "013-M4",
+          "statement": "Preserve absent-key bypass, present-key preferred attempt, exactly one transient-first-failure retry, no non-transient-first-failure retry, and fallback after any failed retry.",
+          "critical": true
+        },
+        {
+          "id": "013-M5",
+          "statement": "Keep archive at most once, source_id-only, and limited to the three stated entry conditions; prohibit any fetch after success and any archive retry.",
+          "critical": true
+        },
+        {
+          "id": "013-M6",
+          "statement": "Trace first-fast, retry-fast, and archive returned versions without claiming response dependence proves FAST_KEY or whole-environment plaintext inclusion.",
+          "critical": true
+        },
+        {
+          "id": "013-M7",
+          "statement": "Keep successful body candidates paired with their successful attempt/path and preserve the final archive error on failure; ordinary return is not automatically user output.",
+          "critical": true
+        },
+        {
+          "id": "013-M8",
+          "statement": "Trace a final-status append before every terminal return as local persistent storage of the appended status only, without inventing credential contents or exposing previous file contents.",
+          "critical": true
+        },
+        {
+          "id": "013-M9",
+          "statement": "Propose implemented local credential isolation that still supplies the credential to fast.fetch and preserves all bounded fallback, exact-return, and status side effects.",
+          "critical": true
+        },
+        {
+          "id": "013-M10",
+          "statement": "Do not invent network transport, backend logging, user output, context retention, or one model call per repeated field reference inside a processing segment.",
+          "critical": true
+        }
+      ],
+      "ambiguities": [
+        "The environment read interface is unspecified. Shared rule 1 retains possible whole-related-environment acquisition; it does not claim that an executed getter returned the entire environment.",
+        "FAST_KEY's presence and actual value, other environment entries, request contents beyond source_id, and all fetch response/error contents are unspecified.",
+        "Tool-returned or locally computed results may depend on credential-bearing inputs without including their plaintext. Each raw, selected, derived, body, error, and status version must retain its own uncertainty.",
+        "A model-invisible credential proxy is a proposed implementation, not a source-explicit protection. Merely naming a local helper or getter would not establish the proposed isolation.",
+        "The definition and encoding of transient failures and final status are not supplied. A function-preserving reduction must keep the specified classification and final outcome rather than inventing broader retry or logging behavior.",
+        "The status append is persistent by default. Its label does not prove secret inclusion or absence; no backend logging, file cleanup, or cross-task context retention is specified.",
+        "The tools' deployments and transports are unspecified, and their names do not establish network sends. Their intended request recipients are distinct from the processing model and workflow caller.",
+        "No user-output boundary is explicit. Diagnostic-output prohibition constrains any diagnostic presentation, but neither it nor an ordinary body/error return proves that presentation occurs.",
+        "No source-explicit actual excess is established. The possible model-observation finding does not support an all-clear judgment for unknown responses or a positive oracle for every credential-dependent result."
+      ]
+    }
+  ]
+}

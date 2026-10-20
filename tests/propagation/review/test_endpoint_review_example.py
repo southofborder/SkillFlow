@@ -28,7 +28,7 @@ def rendered_lesson():
     compiled_review = prepare_review_material(material, context['raw_annotation'])
     assert context['target_index'] == {
         row['id']: {row['kind']: row['pointer']} for row in compiled_review['target_index']}
-    for key in ('goal_index', 'observations', 'source_line_universe'):
+    for key in ('declaration_index', 'observations', 'source_line_universe'):
         assert context[key] == compiled_review[key]
     return prompt, shown, material, compiled_review
 
@@ -42,11 +42,11 @@ def test_complete_review_input_and_response_validate_from_sent_text_without_comp
     assert {f.domain for f in response.findings} == {'annotation'}
     assert task_objections(response) == []
     assert response.requirement_checks[0].finding_ids == ['F001', 'F002']
-    supplied_goals = {g['raw_pointer'] for g in shown['context']['goal_index']}
-    assert {g.raw_pointer for g in response.goal_checks} == supplied_goals
-    issues = [g for g in response.goal_checks if g.status == 'issue']
+    supplied_goals = {g['raw_pointer'] for g in shown['context']['declaration_index']}
+    assert {g.raw_pointer for g in response.declaration_checks} == supplied_goals
+    issues = [g for g in response.declaration_checks if g.status == 'issue']
     assert len(issues) == 1 and issues[0].finding_ids == ['F001']
-    assert all(g.finding_ids == [] for g in response.goal_checks if g.status == 'accepted')
+    assert all(g.finding_ids == [] for g in response.declaration_checks if g.status == 'accepted')
     assert all('target' not in evidence or 'events' not in evidence['target'].get('path', [])
                for finding in shown['response']['findings'] for evidence in finding['evidences'])
     for finding in shown['response']['findings']:

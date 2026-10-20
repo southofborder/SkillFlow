@@ -13,6 +13,7 @@ from skillflow.common.source_evidence import Text
 from skillflow.propagation.contracts.boundaries import SinkBoundary
 from skillflow.propagation.data.models import PathStep
 from .demand_results import ActualPayload, Derivation
+from .constraint_results import ConstraintSupport
 
 
 class Strict(BaseModel):
@@ -54,6 +55,7 @@ class DataReview(Strict):
     conclusion: Literal["excess_supported", "possible_excess", "no_excess_established"]
     reason: Text
     demand_refs: list[Text]
+    constraint_refs: list[Text]
     reduction: FieldReduction | None
 
 
@@ -91,10 +93,11 @@ class Coverage(Strict):
 
 
 class SensitivityResult(Strict):
-    schema_version: Literal["skillflow-sensitivity-review-v3"]
+    schema_version: Literal["skillflow-sensitivity-review-v4"]
     status: Literal["complete", "partial"]
     sinks: list[SinkReview]
     derivations: SharedDerivations
+    constraints: ConstraintSupport
     diagnostics: list[Diagnostic]
     coverage: Coverage
 

@@ -1,0 +1,150 @@
+This audit is relative to the Skill’s declared notification workflow because **no independent user task was supplied**. The source establishes how this Skill is intended to behave; it does not independently establish user authorization for particular recipients or actual message contents. The analysis below concerns static possibilities, not an execution.
+
+**The supported excess is possible model observation of unused access tokens when the acquired event records enter agent processing.** The source supplies no isolation or projection mechanism that would prevent this. There is no supported path placing the `access_token` field directly in a notification request or in `count.txt`. Notification delivery and count storage remain relevant boundaries even though no excess is established at those points.
+
+1. **Task baseline and limits**
+
+The declared purpose is to send notifications according to subscription status, urgency, and value (`SKILL.md`, lines 2–3). The procedural text adds the following positive obligations and restrictions:
+
+| Requirement | Conditions and exact scope | Evidence |
+|---|---|---|
+| Read the supplied event collection | Read `events.json`. Each record has `recipient`, `summary`, `record_id`, `value`, `urgent`, `opted_out`, and `access_token`. This describes the input; it does not establish that every field must reach every processor. | `SKILL.md`, line 8 |
+| Apply subscription and threshold eligibility | A record may be selected only if `opted_out` is not true and either `urgent` is true or `value >= 100`. | Lines 9–10 |
+| Preserve the opt-out restriction | An urgent record still cannot be selected when `opted_out` is true. Urgency waives only the numeric threshold. | Line 10 |
+| Invoke the notification interface once per selected record | Every selected record receives one `notify.send` call addressed using that same record’s `recipient`. Distinct records remain distinct elements, including records with equal values. No deduplication by `record_id` is specified. | Line 11 |
+| Preserve the message body exactly | The body is the selected record’s **original** `summary` value. No summary generation, rewriting, or extra format conversion is required. | Lines 12 and 15 |
+| Exclude unselected records from notification calls | There must be no `notify.send` call for an unselected record. | Line 13 |
+| Exclude access tokens from delivery | Sending the `access_token` field to any recipient is prohibited throughout the workflow. This restriction alone does not prove that an exposure occurs or establish its task-related excess. | Line 14 |
+| Persist a count after processing | Write the number of processed records to local `count.txt` after processing is complete. | Line 16 |
+
+The exact original summary and the count file are explicit requirements of this declared workflow. Their presence cannot, by itself, be classified as unnecessary merely because a simpler notification system could omit them. Conversely, the input’s inclusion of `access_token` and `record_id` does not establish a functional need to observe or deliver those values.
+
+Two wording gaps remain:
+
+- **Selection completeness:** “Select a record only when” directly establishes an eligibility restriction. Its ordinary filter reading selects every eligible record, but it does not separately say “select every eligible record.” The analysis therefore distinguishes the eligible set from the actually selected set rather than silently adding a further quantifier (`SKILL.md`, line 9).
+- **Count semantics:** “processed records” could refer to all records examined or only selected records processed for notification. The source does not resolve that difference (`SKILL.md`, line 16). A reduction must preserve the intended count once that meaning is defined.
+
+2. **Static control flow**
+
+Let the input collection contain records \(r_1,\ldots,r_N\). No actual \(N\), field values, or recipient identities are supplied.
+
+For each record \(r_i\), define:
+
+\[
+E_i =
+(r_i.\mathrm{opted\_out}\ \text{is not true})
+\land
+\bigl((r_i.\mathrm{urgent}\ \text{is true}) \lor (r_i.\mathrm{value}\ge100)\bigr).
+\]
+
+The decision structure is:
+
+| `opted_out` | `urgent` | Numeric comparison | Eligibility |
+|---|---|---|---|
+| true | Any | Any | Ineligible |
+| Not true | true | Irrelevant to eligibility | Eligible |
+| Not true | Not true | `value >= 100` | Eligible |
+| Not true | Not true | `value < 100` | Ineligible |
+
+“Is true” and “is not true” are retained as written; no truthiness conversion, default values, or coercion rules are supplied. Handling of malformed records, missing fields, nonnumeric comparisons, and incompatible notification-body types is unspecified (`SKILL.md`, lines 8–12).
+
+The normal-path structure is:
+
+1. Acquire the event collection.
+2. Evaluate the selection rule for records.
+3. For every selected \(r_i\), invoke exactly:
+   ```
+   notify.send(
+       recipient = original r_i.recipient,
+       body      = original r_i.summary
+   )
+   ```
+4. Invoke no such call for an unselected record.
+5. After processing completes, write the processed-record count to local `count.txt`.
+
+Let \(S\) be the selected record indices. The explicit restriction is \(S \subseteq \{i:E_i\}\); under the ordinary complete-filter reading, equality holds. In either reading, the number of specified notification invocations is \(|S|\), with one invocation per selected element (`SKILL.md`, lines 9–13).
+
+The source does not specify the ordering of selected records, whether eligibility is computed for the entire collection before sending or evaluated record by record, or any concurrency. It specifies no retry loop or retry allowance. An additional invocation for the same selected record would depart from the stated once-per-record behavior. It also does not define failure recovery or whether a failed send permits subsequent processing and count writing. The final write is specified for the completed-processing path (`SKILL.md`, lines 11 and 16).
+
+3. **Sources, versions, and dependencies**
+
+The only supplied content source is `events.json`. The existing input file is a source, not a newly performed storage write.
+
+| Data/version | Contents or dependency | Visibility and task role |
+|---|---|---|
+| **D0: Original event collection** | All records and all seven listed fields | The Skill explicitly reads this collection. No key-limited reader or isolated return interface is provided (`SKILL.md`, line 8). |
+| **D1: Eligibility decisions** | Each decision depends on that record’s `opted_out`, `urgent`, and, when relevant, `value` | Necessary for the selection rule. Neither `record_id` nor `access_token` participates (`SKILL.md`, lines 9–10). |
+| **D2: Selected elements** | Selected records retain their original field values unless a narrower view is explicitly constructed | Selection changes which elements qualify. It does not itself remove fields or undo earlier observation; shared rules 3–4. |
+| **D3ᵢ: Notification arguments** | Exactly the pair `(rᵢ.recipient, rᵢ.summary)`, with the original summary as the body | Explicit field selection limits the specified request. It is not the whole selected record (`SKILL.md`, lines 11–12). |
+| **D4: Processed count** | A tally of processed records; the relevant population is ambiguous | The required output is a number. There is no specified dependence on access-token contents, record identifiers, or summary text (`SKILL.md`, line 16). |
+
+Element pairing is essential: the recipient and summary for a call must come from **the same selected record**. There is no source basis for combining recipients from one record with summaries from another, broadcasting each summary to all recipients, or delivering the selection flags.
+
+The field name `access_token` supports treating that field as credential-sensitive. Actual token values and validity are unknown. The remaining fields may contain identifying, confidential, or preference information, but no concrete values or sensitivity classifications are supplied. In particular:
+
+- `recipient` is a routing destination; its actual identity and form are unknown.
+- `summary` is content delivered unchanged; its sensitivity and internal contents are unknown.
+- `record_id` is an identifier with no specified use in this workflow.
+- `opted_out`, `urgent`, and `value` support eligibility decisions, but their disclosure to notification recipients is not required.
+
+There is no evidence that a `summary` contains an access token, aliases the `access_token` field, or includes other particular sensitive facts. Such a relationship must not be invented.
+
+4. **Propagation and receiving points**
+
+The following table includes both implemented field restrictions and contract-based possible observation. Boundary levels describe access or retention, not whether DOE exists.
+
+| Point | Condition, actual scope, and recipient | Boundary and retention assessment | Evidence |
+|---|---|---|---|
+| **B0: Task-internal acquisition** | On reading the input, D0 includes all listed fields for all records, including tokens belonging to records later excluded | Pure task-internal acquisition is not itself an exposure sink. Reading the file does not establish external delivery. | `SKILL.md`, line 8; shared rules 1, 6–7 |
+| **B1: Possible model observation** | If the acquired collection is used for agent processing without an explicit isolated reader, D0 can enter a model request. This includes `access_token` and `record_id`, and records subsequently excluded | `model_observe`; possible observation by a distinct receiving subject. Another-subject access is level 2. No cross-task retention, context saving, or public access is established. | `SKILL.md`, lines 8–10; shared rules 2–3, 7 |
+| **B2: Notification interface reception** | For each \(i \in S\), the interface receives D3ᵢ: the paired original recipient and original summary body | Possible `external_tool` reception because deployment is unspecified; level 2 if another service receives the request. The name `notify.send` does not establish network transport. No tool retention policy is supplied. | `SKILL.md`, lines 11–12; shared rules 6–8 |
+| **B3: Addressed notification delivery** | The intended notification goes to that record’s `recipient`, carrying its original summary | A supported logical delivery to the addressed subject. Recipient identity, deployment, and retention are unspecified. It is another-recipient access where that subject is distinct from the task. No public delivery or delivery to the requesting user is established. | `SKILL.md`, lines 3 and 11–12; shared rules 6–8 |
+| **B4: Local count storage** | After processing completes, D4 is written to `count.txt` | `storage_write`, level 1: task-internal persistent storage by default. The written payload is the number, not the underlying records. Cleanup is not specified. | `SKILL.md`, line 16; shared rules 4 and 7 |
+
+B2 and B3 identify the interface subject and the addressed notification subject along the specified notification path. They do **not** establish an additional network transmission merely from the sending verb, and they should not be counted as duplicate descriptions of a proven network delivery.
+
+The source gives no explicit model invocation or segmented model-call schedule. B1 is a contract-supported possibility, not a claim that each numbered operation creates a separate model request. If a model performs the selection, it observes its input version; selection afterward cannot erase an earlier observation. A genuinely isolated local reader returning only reduced results would instead limit model exposure to that returned version, under shared rules 2–3. That mechanism is absent from the current source.
+
+No separate `network_send`, `context_save`, or requesting-`user_output` boundary is established. No notification response contents are specified, so response dependence cannot be treated as a return of the request arguments. No backend logs, auxiliary output files, or automatic final-message payloads are supported. The absence of stated retention does not prove that an external recipient retains nothing; it also does not justify inventing storage writes there (shared rules 6–7).
+
+5. **Task-related judgments and reductions**
+
+**J1 — Supported possible excess at B1: access-token observation.**
+
+The source explicitly places an `access_token` field in every acquired record, while its selection rule, required addressing, original-summary body, and processed count give that value no functional role (`SKILL.md`, lines 8–12 and 16). Under shared rule 2, absent isolation, acquired content used for agent processing can possibly enter a model request. Thus tokens from both selected and unselected records can reach a model before any later selection.
+
+This is a **possible exposure supported by the runtime contract**, not an observed leak or proof that every implementation exposes tokens. Its excess follows from the lack of any token-dependent task operation. The prohibition in line 14 reinforces the restriction but is not the sole reason for this judgment.
+
+A functionality-preserving reduction is to introduce an **explicitly isolated task-internal reader** that parses the input and excludes `access_token` from everything returned to the model. Its returned representation can retain the original `recipient` and `summary`, the eligibility inputs, and sufficient record/cardinality information for the required count. This preserves eligibility, element pairing, one call per selected record, exact body values, and count production. It must operate **before** model observation; a model reading the tokens and then deleting them does not provide the same reduction.
+
+The proposal does not claim to prevent the local parser from reading the original file bytes. It prevents unnecessary onward exposure of those bytes to the model.
+
+**J2 — Additional scope reduction at B1 is available, with sensitivity-dependent benefit.**
+
+`record_id` has no specified consumer. Unselected records’ recipient and summary values have no notification delivery role. Selected records’ decision flags need not be delivered to the notification service or addressed recipient (`SKILL.md`, lines 9–13).
+
+An isolated local evaluator could therefore:
+
+- evaluate the exact eligibility rule locally;
+- retain the required processed count locally, once its meaning is defined;
+- expose only the original `(recipient, summary)` pairs for selected elements to the component that invokes `notify.send`.
+
+A more fully local controller could perform the specified calls and count write without exposing event contents to a model at all. These are **proposals**, not mechanisms already implemented by the source. They preserve the required record multiplicity and recipient/body pairing, must not introduce deduplication or rewriting, and must preserve the intended selected set and count interpretation.
+
+These reductions remove unnecessary processing scope. Beyond `access_token`, however, the supplied bundle does not establish which removed values are sensitive, so their sensitive-data benefit is conditional rather than an additional proven credential exposure.
+
+**J3 — No excess is established in the specified notification payload at B2/B3.**
+
+For each selected element, the notification interface needs the destination to address the notification, and the declared workflow explicitly requires the original summary as the body (`SKILL.md`, lines 11–12 and 15). These arguments can be sensitive, but their sensitivity or boundary level alone does not establish excess.
+
+The specified request does **not** include `access_token`, `record_id`, `opted_out`, `urgent`, or `value`. Selection of a record does not imply delivery of the entire selected object: line 12 expressly selects the summary for the body.
+
+Removing or rewriting arbitrary parts of that summary would violate the supplied exact-value requirement. It cannot be presented as a functionality-preserving fix under this baseline. A narrower-content task would require an independently established change in requirements. Conversely, wrapping a whole record into the body would violate the current specification; there is no source evidence that this occurs.
+
+**J4 — No excess is established at B4.**
+
+Writing the processed count is an explicit positive obligation. Its specified payload is a number, not event records or token values (`SKILL.md`, line 16). The number may reveal workflow volume, but that is the information the declared write requests.
+
+The count is a transformation based on record cardinality, not proof of plaintext inclusion from every input field. No token-content dependence is specified. No alternative count, rounding, omission, or deletion policy can be claimed to preserve the exact count requirement without further information. The meaning of “processed” remains unresolved.
+
+The chain therefore supports one concrete sensitive-data concern: **unused credentials may reach a model because whole-record acquisition is not paired with explicit isolation or projection**. It also supports precise local reductions that prevent that exposure while preserving the stated behavior. The actual input, reader interface, model routing, tool deployment, recipient identities, and count semantics remain unknown. No excess established at the notification or count boundaries is proof of safety, complete authorization, semantic completeness, or global minimality.

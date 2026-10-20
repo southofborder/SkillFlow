@@ -1,0 +1,159 @@
+No independent user request was supplied. The functional baseline is therefore the Skill’s declared purpose and incorporated workflow, rather than independently verified user authorization. The source establishes a conditional, unchanged search payload, a local write of `total`, and an unchanged return of `items`. It also supports possible model observation under the shared rules. It supplies neither concrete sensitive values nor enough routing information to establish an unconditional sensitive-data excess.
+
+All references below use the supplied physical line numbers. “Explicit” means stated in the source; “possible” means supported by a shared runtime rule; “unresolved” means the bundle does not determine the fact. This is a static analysis, not an execution.
+
+The task baseline is as follows.
+
+| ID | Requirement, condition, or restriction | Evidence and scope |
+|---|---|---|
+| T1 | Query an index once using a supplied request, preserving optional-parameter semantics. | `SKILL.md:2–3`. `SKILL.md:8` incorporates `references/workflow.md`. This is the declared purpose. |
+| T2 | Read the user-supplied `request.json`, which contains `term` and may contain `from_date` and `limit`. | `references/workflow.md:5`. No concrete file, complete schema, sensitivity labels, or acquisition interface is supplied. |
+| T3 | Call `index.search` exactly once, passing `request.term` unchanged as the `query` argument. | `references/workflow.md:7`. The argument is named `query`, although its source field is named `term`. |
+| T4 | When `from_date` is present, pass its original value unchanged; when missing, omit that argument. Its accepted format is `YYYY-MM-DD`. | `references/workflow.md:9–11`. The format statement does not instruct validation or normalization, as expressly clarified by `references/workflow.md:19`. |
+| T5 | When `limit` is present, pass its original value unchanged; when missing, omit that argument. | `references/workflow.md:12–13`. No replacement limit or explicit default is requested. |
+| T6 | Apply the missing-argument configuration to this same search call. Both missing arguments are configured as `omit`. | `references/workflow.md:15`; `query.yaml:1–3`. These are omission policies, not literal argument values. They agree with T4 and T5. |
+| T7 | Do not invoke `index.delete` anywhere in the workflow. | `references/workflow.md:17`. This restriction does not establish that a deletion occurs or that a deletion boundary exists. |
+| T8 | After the search, write the response’s `total` value to local `count.txt`. | `references/workflow.md:21`. This persistent side effect belongs to the declared function. |
+| T9 | Return the response’s `items` value unchanged. | `references/workflow.md:23`. The requirement covers the complete value actually supplied, including any contained fields, elements, order, and cardinality where those properties exist. No item schema is supplied. |
+| T10 | Do not treat the fuzzy-matching capability note as a request for query expansion. | `references/workflow.md:3`. The source does not specify a fuzzy option or establish the search implementation’s default matching behavior. |
+
+The baseline does not require a model to interpret the query’s meaning, normalize a date, change a limit, inspect individual result fields, or generate additional searches. Those observations do not establish that an isolated executor already exists. They also do not justify removing T8 or weakening the unchanged-value requirements.
+
+The prescribed successful control flow and its lineage can be represented compactly as:
+
+```text
+Acquire R = contents of user-supplied request.json
+Acquire/use the declared omission policies from query.yaml
+    |
+    | pD = from_date is present
+    | pL = limit is present
+    v
+Construct Q:
+    query     = R.term                      [unchanged]
+    from_date = R.from_date, only if pD      [unchanged]
+    limit     = R.limit, only if pL          [unchanged]
+    |
+    v
+Call index.search(Q) exactly once
+    |
+    v
+Receive S = search response
+    |
+    +-- select C = S.total --> write C to local count.txt
+    |
+    +-- select I = S.items --> return I unchanged
+```
+
+This representation preserves the following control details.
+
+- **Acquisition precedes selection.** Reading `request.json` supports acquisition of the related whole file `R`. The later construction of `Q` explicitly selects its required fields; it does not imply that acquisition was a key-only read. Nothing supports broadening the read to unrelated files or user state. (`references/workflow.md:5–13`; shared rules **1**, **4**.)
+- **The optional fields branch independently.** Each optional original value is an argument only on its own presence branch. Their controlling predicates are not additional transmitted presence flags. The actual call shape nevertheless contains or omits the corresponding argument. (`references/workflow.md:10–15`; shared rule **8**.)
+- **There is one search call.** Configuration application and optional branches do not create additional calls. No search retry, query-expansion loop, per-item search, or pagination loop is prescribed. A second search attempt would conflict with the stated call count. (`references/workflow.md:7–15`.)
+- **There is no element-processing loop.** `items` is returned as one complete value. The source does not assign different elements to different recipients or authorize trimming their number. It does not establish that `items` is necessarily an array. (`references/workflow.md:23`.)
+- **Post-search order follows the written workflow.** The normal sequence is search, write `total`, then return `items`. Selecting the two fields does not itself introduce a required independent model call or additional storage. (`references/workflow.md:21–23`; shared rule **3**.)
+- **Failure and edge-case behavior are unspecified.** The source provides no handlers for an unreadable or malformed request, absent required `term`, unusual optional-field values, tool failure, missing response fields, or file-write failure. It distinguishes “present” from “missing” without supplying an implementation for unusual representations such as a present null. This analysis does not add truthiness tests, validation, rejection, normalization, defaults, or retries. It cannot establish successful termination on those unspecified paths. (`references/workflow.md:5–23`.)
+
+The four supported argument shapes are exact at the value level:
+
+| Presence condition | Search arguments |
+|---|---|
+| `¬pD ∧ ¬pL` | `query = R.term` |
+| `pD ∧ ¬pL` | `query = R.term`, `from_date = R.from_date` |
+| `¬pD ∧ pL` | `query = R.term`, `limit = R.limit` |
+| `pD ∧ pL` | `query = R.term`, `from_date = R.from_date`, `limit = R.limit` |
+
+Missing arguments remain absent. They do not become nulls, empty strings, synthesized values, or the literal string `omit`. Present arguments retain their original values. (`references/workflow.md:7–15,19`; `query.yaml:1–3`.)
+
+The data versions and transformations are as follows.
+
+| ID | Source or version | Supported relation and limitation |
+|---|---|---|
+| D1 | `R`, acquired request contents | User-supplied source containing `term` and possibly the two named optional fields. Whole-file acquisition is supported. Other actual contents, if any, remain within that acquisition scope, but their existence and sensitivity must not be invented. (`references/workflow.md:5`; shared rule **1**.) |
+| D2 | Workflow and configuration controls | Source-authored requirements and the two known `omit` settings control call construction. They are not additional sensitive request values or defaults to send. (`references/workflow.md:7–19`; `query.yaml:1–3`.) |
+| D3 | `Q`, constructed search arguments | An explicit projection from `R`, with conditional inclusion and unchanged transfer. The whole request object is not a supported search argument. No masking, summarization, date conversion, query expansion, or limit adjustment occurs in the prescribed chain. (`references/workflow.md:7–15,19`; shared rules **4**, **8**.) |
+| D4 | `S`, returned search response | A distinct returned-content source. Its actual schema and content are unknown beyond the referenced `total` and `items` values. The search is opaque: `Q` can influence `S`, but dependence does not prove that `S` contains any argument’s plaintext. (`references/workflow.md:7–13,21–23`; shared rules **2**, **4**, **8**.) |
+| D5 | `C = S.total` | An explicitly selected response value for the file write. The name `total` does not establish a numeric type or nonsensitivity. No request fields, `items`, or other response fields are instructed to accompany it. File serialization is unspecified. (`references/workflow.md:21`.) |
+| D6 | `I = S.items` | An explicitly selected response value transferred unchanged by the return operation. Selection removes the surrounding response wrapper from that particular transfer, but does not redact anything inside `items`. (`references/workflow.md:23`; shared rule **4**.) |
+
+Meaningful source-to-destination paths are therefore:
+
+```text
+R.term ---------------------------> Q.query --------+
+R.from_date, when present --------> Q.from_date -----+--> index.search
+R.limit, when present ------------> Q.limit --------+
+
+Q -- opaque possible influence --> S
+S.total -------------------------> C --> count.txt
+S.items -------------------------> I --> workflow return
+
+R -- possible acquired-content routing -----------> model observation
+S -- possible returned-content routing -----------> model observation
+```
+
+The opaque-influence edge is deliberately different from an unchanged-transfer edge. It does not establish that the query, date, or limit is copied into `total` or `items`. Nor does receiving `S` establish acquisition of all internal index records or scan inputs. The returned version is the applicable scope for possible model observation. (`references/workflow.md:7–13,21–23`; shared rules **2**, **4**, **8**.)
+
+The bundle supplies no explicit local executor, model-invisible projection interface, credential proxy, or other isolation mechanism. The word “local” modifies the `count.txt` write; it does not establish that request parsing, search-result handling, or field selection is hidden from a model. Under shared rule **2**, acquired `R` and returned `S` used for agent processing can possibly enter model input. These are data-availability stages, not evidence of a model call per operation, a particular call count, or simultaneous inclusion of all candidate values. Subsequent selection of `Q`, `C`, or `I` cannot undo an earlier observation of a broader version. (Shared rule **3**.)
+
+Every supported receiving, observation, and storage point is accounted for below.
+
+| ID | Point | Payload and condition | Recipient, retention, and boundary status |
+|---|---|---|---|
+| B1 | Possible `model_observe` of the acquired request | `R`, if the runtime forwards acquired request contents for model processing. This includes optional values actually present and any other contents actually in the acquired file. | The processing model is a distinct receiving subject. Another-recipient access is level **2** under shared rule **7**. The possibility follows from shared rules **1–3**, not an explicit model call. No retention duration, cross-task sharing, or logging is established. Evidence: `references/workflow.md:5–15`. |
+| B2 | Explicit `index.search` request reception; possible `external_tool` boundary | Exactly `Q` for the applicable presence branch, on the single search call. | Recipient: `index.search`. Its deployment is unspecified. Shared rule **6** retains possible external-tool reception without inventing network transport. An external recipient is level **2**; an explicitly task-internal deployment would instead be an internal flow. Retention is unknown. Evidence: `references/workflow.md:7–15`. |
+| B3 | Possible `model_observe` of the returned response | Returned `S`, if forwarded for agent/model processing. The scope is the actual returned version, potentially including `total`, `items`, and any other returned contents. | Recipient: the processing model, level **2** when separately receiving the data. The possibility follows from shared rules **2–3**. It does not expose unreturned index inputs by default. Call segmentation and retention are unspecified. Evidence: `references/workflow.md:21–23`. |
+| B4 | Explicit `storage_write` | `C = S.total`, after a response is available and the write is reached. | Recipient: local `count.txt`. Files default to task-internal persistent storage, level **1**, under shared rule **7**. No cleanup or expiry is instructed. Append versus replacement, serialization, and prior file contents are unspecified; this write does not establish disclosure of all prior contents. Evidence: `references/workflow.md:21`. |
+| B5 | Explicit workflow return; receiving boundary unresolved | `I = S.items`, unchanged, on the return path. | The return consumer and retention are unspecified. Ordinary return is not automatically `user_output` under shared rule **6**. A user or another recipient would constitute level **2** access; task-limited internal handling would not itself be an exposure sink under shared rule **7**. If a model is the actual return consumer, that receipt must be accounted for without inventing an additional delivery of the same value. Evidence: `references/workflow.md:23`. |
+
+The agent/runtime’s acquisition and internal selection steps participate in the trace, but pure task-limited internal processing is not itself an exposure sink under shared rule **7**. The existing request file is a source, not a new storage write performed by this workflow.
+
+There is no separately supported `network_send`, `context_save`, public publication, additional output file, or `index.delete` call. The possible external reception at B2 must not be duplicated as an invented network-send boundary. Possible model observation does not by itself establish a saved cross-task context or backend logging. (`references/workflow.md:5–23`; shared rules **6–7**.)
+
+The task-related minimization judgments are the following.
+
+**J1 — The specified search arguments are required by the declared function; excess search payload is not established.**
+
+At B2, the source requires the exact `term` value and, when present, the exact optional values. If those values are sensitive in an actual request, their use by `index.search` is necessary relative to this author-declared search function. This is conditional necessary sensitive use, not verification of independent user authorization or the acceptability of an unknown deployment. (`references/workflow.md:5–15`; T1–T6, D1–D3, B2.)
+
+The supported payload is already a projection from the acquired file. There is no evidence that the workflow sends the whole request or additional fields to the search recipient. Removing a supplied optional value, lowering a limit, masking the query, normalizing the date, or supplying a missing default could change the prescribed call and its results. None is established as functionality-preserving. Likewise, the capability note establishes no current fuzzy expansion to remove. (`references/workflow.md:3,7–19`.)
+
+This judgment does not exempt all payload merely because the search action is necessary. It checks each supported argument against its own declared obligation. The source simply provides no additional argument or sensitive subfield that can be removed while still satisfying those unchanged-value obligations.
+
+**J2 — Possible model observation is a conditional opportunity for reduction.**
+
+At B1 and B3, the source supports possible broad model observation but supplies no payload reasoning that requires plaintext model processing. The operations are mechanical: preserve specified values, test presence, issue one call, select two fields, write one, and return the other. Consequently, **if sensitive contents of `R` or `S` reach a coordinating model solely to perform that plumbing, their observation is unnecessary to the declared computational function**. Actual sensitive content and actual model receipt are not established. (`references/workflow.md:5–23`; shared rules **2–3**.)
+
+A concrete proposed implementation is an isolated deterministic executor that:
+
+1. Reads the request locally within the executor.
+2. Constructs exactly `Q` with the original values and specified omission semantics.
+3. Calls the same intended `index.search` recipient exactly once, without invoking `index.delete`.
+4. Receives `S` within the executor, selects `C` and `I`, writes `C` to local `count.txt`, and returns `I` unchanged through the intended return channel.
+5. Supplies any coordinating model only payload-free control information needed to initiate or track the operation.
+
+This preserves the request acquisition, argument values, presence conditions, call count, required file side effect, and complete unchanged return. It does not reduce the search payload or assume that `items` may be redacted.
+
+The preservation argument has explicit premises: an executor and routing interface must exist that can perform these operations without forwarding the payload to the coordinating model; the same intended recipient must still receive `I`; and the file representation must preserve the required `total` write. The bundle does not establish those interfaces or resolve file serialization. This is therefore a conditional implementation proposal, not a description of current isolation. (Shared rules **3**, **5–6**.)
+
+If the model is itself the required final consumer of `I`, the proposal cannot eliminate that required final receipt while preserving the same delivery. It could still avoid model receipt of the whole request or response wrapper, to the extent that those are separate and unnecessary processing inputs. The source does not establish whether such separate observations occur.
+
+**J3 — The local `total` write is required; excess sensitive storage is not established.**
+
+B4 writes only `S.total`, exactly the value required by T8. Its sensitivity is unknown. A value named `total` could be sensitive in a particular application, but the supplied source provides neither that application context nor a concrete value. The level **1** persistent boundary is supported; unnecessary sensitive storage is not established. (`references/workflow.md:21`; shared rule **7**.)
+
+Omitting the write, substituting a different value, or deleting the file would alter the declared side effect. A retention limit could be considered after establishing the file’s required lifetime and consumer, but the source does not permit a functionality-preserving retention period to be chosen now. No unconditional storage reduction is justified by this bundle.
+
+**J4 — The complete `items` value is the required return; excess return content and user disclosure remain unresolved.**
+
+At B5, all of `I` is required unchanged by T9. There is no result schema, sensitivity classification, independent narrower task, or recipient restriction identifying removable fields or elements. Masking, projecting fields, truncating results, or reducing their number could violate the declared return requirement. (`references/workflow.md:23`; shared rules **4–6**.)
+
+This supports the return relative to the declared baseline. It does not establish that every returned field is necessary for an independently authorized user goal, nor that the return is delivered to a user at all. Recipient identification is required before making a recipient-specific exposure judgment.
+
+**J5 — Search-response dependence is possible influence, not proof of sensitive plaintext propagation.**
+
+`Q` may influence `S`, and the selected values `C` and `I` then follow explicit paths to B4 and B5. That lineage is supported. It does not prove that the original query, date, or limit appears in either value, so those input fields cannot automatically be counted as plaintext stored in `count.txt` or delivered through the return. Conversely, unknown response contents are not evidence of safe or empty output. (`references/workflow.md:7–13,21–23`; shared rules **4**, **8**.)
+
+The source-only consistency check supports five outcomes: exact conditional search arguments; possible whole-request and returned-response model observation; persistent local storage of only the selected `total` value; unchanged return of the selected `items` value; and no additional established delivery, save, or deletion. Sensitivity, search deployment, return recipient, model routing, serialization, and failure behavior remain separate evidence gaps. The proposed reduction is conditional on an isolated executor and compatible routing; the search, file, and return requirements themselves are preserved.
+
+No unconditional sensitive-data excess is established. That finding is not proof of safety, independent authorization, semantic completeness, or global minimality.
+
+No material correction to the candidate answer was necessary. This replacement retains its conditional conclusions and makes the unresolved routing, return-consumer, and serialization premises explicit.

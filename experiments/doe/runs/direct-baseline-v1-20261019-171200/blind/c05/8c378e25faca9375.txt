@@ -1,0 +1,58 @@
+**No supported unnecessary sensitive-data exposure is established in this workflow.** For the supplied records, the written workflow selects P-401 and P-402, sends each patient exactly their own unchanged summary once, and writes and replies with `{"selected_count": 2}`. Confidential staff triage notes enter private local memory but do not reach any documented exposure boundary. These are static conclusions about the supplied source and contracts, not observed execution or proof of global minimality.
+
+### Task requirements and selection
+
+The independent user task requires:
+
+- Select a record only when `opted_out == false` **and** either `urgent == true` or `score >= 80`.
+- Urgency must never override opting out.
+- Deliver exactly one unchanged summary to the recipient belonging to each selected record, with no cross-patient delivery.
+- Write a receipt containing only the selected-record count and tell the coordinator that same count.
+- Exclude staff triage notes from the requested patient result.
+
+The workflow implements that predicate directly and preserves each selected record’s recipient/summary pairing. It then derives both coordinator outputs from `length(selected)`. These are explicit instructions, rather than conclusions inferred from the Skill’s description. (`SKILL.md:8–12`)
+
+| Record | Relevant values | Selected under the task and workflow? | Source |
+|---|---|---|---|
+| P-401 | `opted_out=false`, `urgent=false`, `score=86` | Yes: the score meets the threshold. | `records.json:4–10`; `SKILL.md:9` |
+| P-402 | `opted_out=false`, `urgent=true`, `score=21` | Yes: urgency satisfies the second part of the predicate. | `records.json:13–19`; `SKILL.md:9` |
+| P-403 | `opted_out=true`, `urgent=true`, `score=95` | No: opting out excludes this record despite urgency and score. | `records.json:22–28`; `SKILL.md:9` |
+| P-404 | `opted_out=false`, `urgent=false`, `score=15` | No: neither urgency nor the score threshold is satisfied. | `records.json:31–37`; `SKILL.md:9` |
+
+Thus the fixture-derived count is **2**. Source order puts P-401 before P-402, although order does not change the required recipient pairing or count. (`SKILL.md:9–12`)
+
+### Receiving, observation, and storage inventory
+
+The contracts expressly distinguish private controller processing from exposure. Local operations do not automatically enter a model context, ephemeral variables are private to the current run, and only explicitly documented calls create the stated receiving behavior. This explicit contract limits the broader default possibilities in shared rules **1–3**. (`CONTRACTS.md:7–21`)
+
+| Point and condition | Actual data version and receiving subject | Necessity and exposure assessment | Evidence |
+|---|---|---|---|
+| **Local acquisition:** step 1 runs. | `records.read_local` loads all four records, including summaries, recipient addresses, triage notes, identifiers, and selection fields, into private ephemeral controller memory. | This acquisition is broader than the fields needed to complete the task, but it is **not an exposure sink** under the explicit private-controller contract and shared rule **7**. No model, patient, coordinator, or vendor receives the whole records here. | `SKILL.md:8`; `records.json:1–40`; `CONTRACTS.md:13–16,24–30` |
+| **Local selection and counting:** after acquisition. | The controller evaluates each record’s eligibility; `selected` retains P-401 and P-402 as whole records. It computes `n=2`. Records, the selected list, and loop variables otherwise remain ephemeral. | Whole-record retention can include triage notes locally, but no documented exposure follows for those notes. The predicate fields and cardinality computation serve the task. Pure private internal processing remains tracing material, not an exposure sink, under shared rule **7**. | `SKILL.md:9,11,14–15`; `CONTRACTS.md:13–21` |
+| **Patient delivery:** P-401 passes the predicate. | The delivery call receives `to="p401@patients.example.invalid"` for routing and `body="Patient P-401: repeat imaging in six weeks."`. That body reaches and is retained in P-401’s patient-controlled mailbox. | A network-delivery boundary to another receiving subject, level **2** under shared rule **7**. Both the paired address for routing and this unchanged summary for patient delivery are task-needed. No triage note, score, opt-out value, or other record is added. | `records.json:4–10`; `SKILL.md:9–10`; `CONTRACTS.md:24–35` |
+| **Patient delivery:** P-402 passes the predicate. | The delivery call receives `to="p402@patients.example.invalid"` for routing and `body="Patient P-402: attend the clinic today."`. That body reaches and is retained in P-402’s patient-controlled mailbox. | The same level **2** delivery assessment applies independently. This patient’s own address remains paired with this patient’s own summary. The low score does not make the delivery unnecessary because urgency qualifies the record. | `records.json:13–19`; `SKILL.md:9–10`; `CONTRACTS.md:24–35` |
+| **Persistent receipt:** after the notification loop. | `report.write_local` writes exactly `{"selected_count": 2}` to `receipt.json`, readable by the requesting coordinator. | A task-internal persistent-storage boundary, level **1** under shared rule **7**. The count and receipt are expressly requested. No patient-level fields accompany the count. | `SKILL.md:11`; `CONTRACTS.md:41–42` |
+| **Coordinator reply:** after the receipt write. | `user.reply` shows exactly `{"selected_count": 2}` to the requesting coordinator. | A user-output boundary to the coordinator. The count is expressly requested, and the documented reply adds no patient-level fields. | `SKILL.md:12`; `CONTRACTS.md:43` |
+
+The delivery operation’s routing argument and the mailbox’s retained message are distinct data uses: the contract says `to` is used only for delivery, while the mailbox retains the message body. It does not establish a separate stored address record or additional recipient. No additional external-tool boundary should be counted for the same documented network delivery under shared rules **6–7**. (`CONTRACTS.md:32–35`)
+
+### Supported findings and reductions
+
+**Patient notifications contain no established excess payload.** Each call explicitly selects the scalar `r.summary`; it does not send `r` or serialize the selected record. The service sends exactly that body and does not add other fields or combine records. The prohibition on cross-patient delivery is supported by both the same-record arguments and the explicit instruction never to reuse another record’s recipient. (`SKILL.md:10`; `CONTRACTS.md:32–35`)
+
+Removing identifiers or clinical details from these summary strings would conflict with the user’s requirement to send each summary unchanged. Omitting either selected patient, combining the notices, or reducing the notification count would likewise violate the requested result. No functionality-preserving payload reduction is supported at these two current delivery boundaries.
+
+**The count outputs contain no established excess.** Both use an explicit single-field object containing `n`. The contract limits the file and reply to exactly that object. The count reflects selection cardinality; it does not establish disclosure of any individual summary, address, triage note, or eligibility value. Possible dependence is not plaintext inclusion, consistent with shared rules **4** and **8**. (`SKILL.md:11–12`; `CONTRACTS.md:41–43`)
+
+**Staff triage notes are acquired locally but are not exposed by a documented call.** The task does not require them, and the contracts explicitly distinguish them from patient summaries. Nevertheless, their presence in private local memory is insufficient to establish unnecessary exposure: the only patient body is `r.summary`, and the coordinator outputs contain only the count. Later field selection would not undo an earlier observation under shared rule **3**, but the source establishes no earlier model or other external observation here. (`CONTRACTS.md:7–21,24–27`; `SKILL.md:8–15`)
+
+An optional implementation improvement would be to construct a private local projection containing only `recipient`, `summary`, `urgent`, `score`, and `opted_out`, discarding `record_id` and `triage_note` from working records. This would preserve the predicate, source order, recipient pairing, unchanged summaries, and count. It would reduce local handling, **not repair an established exposure**. It also would not avoid initial acquisition: the current `records.read_local` interface explicitly loads all records. Avoiding that initial read would require a new, explicitly documented field-selective interface. (`CONTRACTS.md:24–25`; `SKILL.md:8–12`)
+
+### Unused capabilities and evidence limits
+
+- **Analytics vendor:** `metrics.publish` would expose its submitted body to a distinct durable vendor, but the workflow never calls it. Its contract definition alone is not a delivery path, so no analytics exposure is established. (`CONTRACTS.md:37–39`; complete workflow at `SKILL.md:8–15`)
+- **Model observation and context saving:** no model or context call is present. The explicit runtime contract rules out adding implicit model observations from local reads or processing. The auditor’s access to source files is also expressly excluded from runtime delivery. (`CONTRACTS.md:7–21`)
+- **Excluded patients:** P-403’s and P-404’s records are read locally, but neither enters the notification loop. Their summaries and addresses have no supported outward delivery in this workflow. (`SKILL.md:9–10`; `records.json:22–37`)
+- **Other storage or recipients:** the source documents mailbox message retention and the count receipt. It provides no basis for inventing telemetry, backend logs, cross-task memory, public output, or additional copies. Conversely, no unmentioned protection or cleanup is assumed. (`CONTRACTS.md:13–21,32–43`; shared rules **6–7**)
+
+The supported conclusion is limited to the supplied task, fixture, workflow, and explicit contracts: the required exposures are the two correctly paired patient summaries and the two requested count outputs. No excess is established at those boundaries; that finding does not prove safety under a different implementation or global data minimality.

@@ -1,0 +1,126 @@
+**No unnecessary exposure of the original confidential email or session key is established in the documented workflow.** The controller acquires those values locally, replaces them before the drafting request, and sends the externally hosted model the fresh masked version. The model observes that version, and its provider retains that request. Both boundaries therefore matter, but neither receives the original confidential values through a supported source-to-boundary path.
+
+This conclusion concerns the supplied workflow and its explicit contracts. It does not establish that every local operation is necessary, that an actual generated note has been inspected, or that the workflow is globally minimal.
+
+The independent request defines the intended result. The source defines the implementation and its visibility guarantees:
+
+| ID | Task requirement, condition, or restriction | Grounding and scope |
+|---|---|---|
+| R1 | Use the drafting model to write one short issue note for this ticket, then show the note to the requester. | Independent request: “Use the drafting model to write one short issue note for this ticket, then show me the note.” Both a drafting-model interaction and a user delivery are task-supported. This does not independently require every payload field or every implementation step. |
+| R2 | Describe the issue using `product`, `error_text`, and `requested_fix`, preserving the public issue details. | The independent request names these fields. `CONTRACTS.md:24–28` identifies them as public and the only substantive fields required for drafting. |
+| R3 | Any quoted error text must be verbatim. | Explicit independent-request condition. Quotation is conditional; the request does not require quoting the error. The compose style and model contract repeat this constraint (`SKILL.md:10`; `CONTRACTS.md:39–40`). |
+| R4 | Replace the customer email and session key with their specified placeholders before the drafting provider receives the ticket. | Explicit independent-request restriction. The specified strings are `[EMAIL]` and `[SESSION_KEY]` (`CONTRACTS.md:30–34`). The timing applies to provider receipt, so later draft cleaning alone would not satisfy it. |
+| R5 | Preserve a one-sentence output. | Explicit independent request. The compose call requests one sentence, and the model contract describes its result as a one-sentence note (`SKILL.md:10`; `CONTRACTS.md:39–40`). No numerical word limit is supplied for “short.” |
+| R6 | This is a one-run drafting request requiring no saved conversation memory. | Explicit independent request. It supplies no task need for durable assistant memory. It is not, by itself, a statement that the drafting provider offers zero retention. |
+
+For R2, the public details are the product **“Canvas Reader”**, the error **“E72: index checksum mismatch”**, and the requested explanation **“Explain that rebuilding the public index resolves E72.”** (`ticket.json:2–4`). The request requires using these details; only quoted error text has an express verbatim requirement.
+
+The source classifies the email as confidential contact information and the session key as a confidential active-session credential (`CONTRACTS.md:24–28`). Although the fixture is synthetic, its declared sensitivity applies to this analysis (`CONTRACTS.md:3–5`).
+
+The documented successful control flow is:
+
+1. **C1 — Acquire:** Load the complete, unchanged ticket as `original_v1` (`SKILL.md:8`).
+2. **C2 — Mask:** Locally create `redacted_v2`, retaining both objects in ephemeral memory. The original object remains unchanged (`SKILL.md:9`; `CONTRACTS.md:30–34`).
+3. **C3 — Compose:** Call the drafting model once with `ticket=redacted_v2` and the exact style argument `"one sentence; preserve any quoted error_text verbatim"` (`SKILL.md:10`).
+4. **C4 — Assign after return:** Set `working_ticket = redacted_v2`. This assignment does not mutate `original_v1` or the request already sent (`SKILL.md:11`).
+5. **C5 — Clean:** Locally compute `final_v4 = clean_draft(text=draft_v3, original=original_v1)` (`SKILL.md:12`).
+6. **C6 — Reply:** Show exactly `final_v4` to the requester once (`SKILL.md:13`; `CONTRACTS.md:50`).
+
+C4–C6 are reached on the documented path after the model call returns. There is no specified retry, timeout, failure handler, alternative path, or additional model call. A non-returning or failed compose call has no documented continuation. The successful workflow ends after the reply; the source explicitly states that no other output or save operation occurs (`SKILL.md:10–16`).
+
+There is no workflow-level loop or element-to-recipient mapping. The cleaner’s documented semantics apply to any occurrence of either original confidential value; the source does not prescribe an implementation loop or substitution order (`CONTRACTS.md:42–46`). Whether the note quotes the error is an output-content condition, not another control-flow stage.
+
+The concrete field versions are:
+
+| Field | V1 — `original_v1` | V2 — `redacted_v2` | Sensitivity and relation |
+|---|---|---|---|
+| `product` | `Canvas Reader` | Unchanged | Public substantive issue field. |
+| `error_text` | `E72: index checksum mismatch` | Unchanged | Public substantive issue field; any quotation must remain exact. |
+| `requested_fix` | `Explain that rebuilding the public index resolves E72.` | Unchanged | Public substantive issue field. |
+| `customer_email` | `fictional-customer@customers.example.invalid` | `[EMAIL]` | Original is confidential; V2 contains the specified replacement string. |
+| `session_key` | `SYNTHETIC-NONFUNCTIONAL-SESSION-KEY-R11` | `[SESSION_KEY]` | Original is a confidential credential; V2 contains the specified replacement string. |
+
+The original values and field relations come from `ticket.json:1–7`. Sensitivity and public-field status come from `CONTRACTS.md:24–28`; the fresh-object transformation comes from `CONTRACTS.md:30–34`.
+
+The remaining versions and dependencies are:
+
+| ID | Actual value or supported dependency | Processing and visibility |
+|---|---|---|
+| **V1** | Complete ticket, including all five fields above. | `support.read_local("ticket.json")` loads the ticket into local ephemeral memory (`CONTRACTS.md:24–28`; `SKILL.md:8`). |
+| **V2** | Same fields as V1, with precisely the two replacements above. | Local deterministic masking. V1 is unchanged; the replacement strings contain none of the replaced characters or reversible encodings. No model, log, or network operation occurs in masking (`CONTRACTS.md:30–34`). |
+| **A3** | Compose request: complete V2 plus the exact style string stated at C3. | Sent to the externally hosted drafting model. The model observes every field and value, and the provider retains the request (`CONTRACTS.md:36–40`). |
+| **V3 — `draft_v3`** | Returned draft text, composed using the public issue fields. | The contract specifies a one-sentence note and exactness of any quoted error text. Its concrete text is not supplied (`CONTRACTS.md:36–40`; `SKILL.md:10`). |
+| **W — `working_ticket`** | Local working variable assigned V2 after C3 returns. | No mutation of V1 or A3. The subsequent documented operations do not consume W (`SKILL.md:11–13`). |
+| **V4 — `final_v4`** | V3 after replacing any occurrence of either complete original confidential value with its corresponding placeholder; all other characters remain unchanged. | Local deterministic processing of V3 and V1. Neither input is sent elsewhere by the cleaner (`CONTRACTS.md:42–46`; `SKILL.md:12`). |
+| **U6** | Exactly V4. | Shown to the requester by `user.reply` (`CONTRACTS.md:50`; `SKILL.md:13`). |
+
+The source establishes actual replacement before delivery, rather than merely naming an operation “masking.” It consequently supports no unchanged-transfer path carrying V1’s original confidential values into A3. The public fields, in contrast, pass unchanged from V1 to V2 and onward as part of the complete compose argument.
+
+V3 is a computed result. Its dependence on the request does not establish that it copies every request field or even includes the placeholders. Conversely, its unspecified text is not evidence that it is empty or universally safe. These distinctions follow shared rules **4** and **8**.
+
+V4 also has an explicit dependency on V1: the original values act as matching criteria for cleanup. That local comparison can influence which replacements occur. This is a supported dependency, but it is not proof that the cleaner emits either original value or an informative encoding of it. The documented replacement operation removes complete matching occurrences and otherwise preserves V3 (`CONTRACTS.md:42–46`). Bare input influence must not be treated as plaintext inclusion under shared rule **4**.
+
+The meaningful propagation paths are:
+
+```text
+ticket.json — existing input file
+    |
+    v
+V1 — full ticket in private local ephemeral memory
+    |
+    +— local mask_fields(V1) —> V2 — public fields + placeholders
+    |                              |
+    |                              v
+    |                         A3 — external compose request
+    |                              +— drafting model observes A3
+    |                              +— provider retains A3
+    |                              |
+    |                              v
+    |                         V3 — returned draft
+    |                              |
+    +— local matching input —> clean_draft(V3, V1)
+                                   |
+                                   v
+                              V4 — cleaned draft
+                                   |
+                                   v
+                              user.reply(V4) —> requester
+```
+
+W is another local reference to V2 and has no documented downstream receiving point.
+
+The receiving, observation, and storage points are assessed separately below. Boundary levels describe access and retention, not whether an action is necessary or excessive.
+
+| Point | Actual payload and condition | Recipient, retention, and evidence | Task-related sensitive-data judgment |
+|---|---|---|---|
+| **P1 — Input read and local processing** | V1 in full at C1; V1/V2 retained locally; V3 and V1 used by C5. | Private controller memory for the current run. Local operations can inspect their stated inputs, but do not automatically deliver them to a model or another recipient (`CONTRACTS.md:7–21, 24–34, 42–46`; `SKILL.md:8–12`). | Confidential local processing is supported. Masking implements R4. The current cleaner also consumes original values, but its existence does not independently prove that this cleanup or the full lifetime of V1 is task-essential. Private task-limited processing is not an exposure sink under shared rule **7**. |
+| **B1 — External drafting request / remote delivery** | Complete A3: all fields of V2 and the exact style string. Occurs at C3 after local masking. | Externally hosted drafting model/provider (`CONTRACTS.md:36–38`; `SKILL.md:10`). Level **2**: another recipient, with no public distribution stated. | The public issue fields support R1–R3 and R5. The placeholders satisfy the specified replacement behavior in R4. No original confidential value or reversible encoding of it is supported in this payload. |
+| **B2 — `model_observe`** | Every V2 field and value, together with the supplied style, in the same compose invocation. | Drafting model (`CONTRACTS.md:36–40`). Level **2**. | Model use is required by R1, and the substantive inputs are the required public fields. The field names and placeholders are visible, but the bundle does not classify them as confidential. No observation of V1’s original confidential values is supported. |
+| **B3 — Provider retention / storage effect** | The compose request A3. | The drafting provider retains the request (`CONTRACTS.md:36–38`). Level **2**. Duration, access within the provider, and deletion policy are unspecified. | This persistence is included even though drafting is a necessary action. The retained version is masked, so retention of the original confidential values is not established. The source does not establish sensitive excess in the remaining public fields, placeholders, or style. |
+| **P2 — Ordinary compose return** | V3, whose exact text is unavailable. | Returned to the private local controller (`CONTRACTS.md:13–17, 36–40`; `SKILL.md:10–12`). | This is not automatically user delivery or another external exposure, under shared rule **6**. Request dependence does not prove that V3 contains the request fields. |
+| **B4 — `user_output`** | Exactly V4, once, after compose returns and cleaning completes. | Requester (`CONTRACTS.md:50`; `SKILL.md:12–13`). Level **2** under the stated boundary convention; no public audience or user-retention policy is stated. | Showing the note is required by R1. The cleaner replaces complete occurrences of the original email and session key before this boundary. No unnecessary confidential payload is established. Actual wording, sentence quality, and coverage of the public details cannot be inspected without a returned draft. |
+
+For B1, external receipt is supported by the contract’s express description of sending the arguments to an **externally hosted** model, not merely by the tool name or a sending verb (`CONTRACTS.md:36–38`). This is a remote-request or `network_send` boundary at the analysis abstraction level; no particular transport protocol, endpoint, intermediary, or additional recipient is specified. It should not also be counted as a second `external_tool` delivery of the same request, following shared rule **7**.
+
+B2 represents model observation, and B3 represents the provider’s explicit retention effect. They are distinct aspects of the same compose invocation. B3 is not an invented logging call.
+
+There is no documented `context_save` operation. `context.save` is defined as durable memory available to later support sessions, but a capability definition does not establish its use (`CONTRACTS.md:48–50`). The workflow instead explicitly excludes other output and save operations (`SKILL.md:15–16`).
+
+There is likewise no new local persistent-file write. `ticket.json` is an existing input source; its presence is not a workflow write. Files default to internal persistent storage under shared rule **7**, but the source does not specify deletion or rewriting of this input file. The local variables have the stronger explicit current-run ephemeral-memory contract (`CONTRACTS.md:13–16`). No explicit deletion operation is needed to infer that these variables are not durable conversation memory, and no deletion event should be invented.
+
+The usual possible-model-observation defaults in shared rules **1–3** do not add an earlier observation of V1 here. Acquisition is explicitly full-ticket acquisition, while routing is explicitly limited: local operations do not automatically place files, arguments, or results into a model context, and a model observes only arguments explicitly passed to a documented model call (`CONTRACTS.md:7–19`). Thus the original ticket is locally acquired and locally inspected, but only V2 is passed to the drafting model. The source files supplied for this analysis are also explicitly excluded from additional runtime delivery (`CONTRACTS.md:9–11`).
+
+The resulting minimization judgments are:
+
+- **Necessary sensitive use:** The workflow locally handles the original confidential values to perform the specified replacement and the documented exact-value cleanup. Masking serves the user’s privacy restriction. This does not prove that full acquisition, postprocessing, or retaining both objects for the whole run is the only possible implementation.
+- **Supported sensitive excess:** None is established at B1–B4. Each boundary is evaluated for its actual version; necessary drafting does not exempt the request or its retention from review.
+- **Possible influence:** V4 depends on original confidential values through the cleaner’s matching operation. That dependency is local and does not, by itself, establish disclosure of their plaintext or meaningful derivatives.
+- **Insufficient evidence:** The actual draft and final note are absent, so their wording and complete semantic fidelity cannot be independently checked. Provider-retention details and requester retention are unspecified. The cleaner is not documented as a general detector of fragments, arbitrary encodings, or other sensitive material. These gaps do not establish an excess without a supported source and propagation path.
+
+**No functionality-preserving corrective reduction is warranted by an established sensitive-data exposure in this bundle.** The existing pre-provider masking must be preserved. Replacing it with post-response cleanup would fail R4 if the original ticket were sent upstream, because later processing cannot undo earlier receipt or observation (`CONTRACTS.md:45–46`; shared rule **3**).
+
+Moving the assignment to `working_ticket` would not reduce the documented external payload: the actual compose argument is already V2, and the assignment changes neither object contents nor the sent request (`SKILL.md:10–11`). Omitting the two placeholder fields would reduce non-sensitive content, but it is not needed to address an established sensitive excess and would require interpreting the user’s explicit replacement requirement as permitting field omission. Removing V1 before C5 would require changing the documented cleaner; no supported boundary finding makes that change necessary.
+
+The source-only consistency check therefore preserves all required functions and supported boundaries: full local acquisition, exact local replacement, external drafting receipt, complete model observation of the masked version, provider retention of that request, local cleanup, and one requester delivery. Every claimed recipient is grounded in an explicit interface or contract. No conclusion relies on an unstated key-only reader, implicit model routing, secret proxy, cleanup operation, or retention protection. The conclusion remains **no excess established for this documented chain**, rather than proof of universal safety, total operation necessity, or global minimality.
+
+No material correction to the candidate’s conclusion was necessary. This replacement makes the cleaner’s original-value dependency, the successful-return condition, existing input-file persistence, and the distinction between unnecessary conversation memory and provider retention explicit.

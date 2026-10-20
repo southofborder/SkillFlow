@@ -44,12 +44,12 @@ def test_structurally_valid_omission_has_a_checked_annotation_finding(producer_s
     # Both absence and an upstream-only seed are mechanically representable.
     assert compile_response(raw, material)[0] == raw
     prepared = prepare_review_material(material, raw)
-    assert len(prepared["goal_index"]) == int(producer_seed)
+    assert len(prepared["declaration_index"]) == int(producer_seed)
     response = validate_response(missing_payload_finding(prepared, parent=parent), prepared)
     assert response.requirement_checks[0].finding_ids == ["F001"]
     assert task_objections(response) == []
     assert response.findings[0].domain == "annotation"
-    assert all(check.status == "accepted" for check in response.goal_checks)
+    assert all(check.status == "accepted" for check in response.declaration_checks)
     assert (material, raw) == before
     _, solved = solve_fixture((material, raw, facts))
     assert not boundary_rows(solved)
@@ -117,7 +117,7 @@ def test_save_action_only_is_structurally_legal_and_semantically_reviewable():
     finding["suggestion"] = "在追加操作的实际输入上保持新写入值；不要把旧文件整体变成需求。"
     accepted = validate_response(response, review)
     assert accepted.requirement_checks[0].status == "issue"
-    assert accepted.goal_checks[0].status == "accepted"  # The action itself is legal.
+    assert accepted.declaration_checks[0].status == "accepted"  # The action itself is legal.
     assert task_objections(accepted) == []
     _, solved = solve_fixture(fixture)
     assert boundary_rows(solved, "storage_write", node_kind="action")

@@ -1,0 +1,168 @@
+The supplied workflow selects P-401 and P-402, sends each patient exactly their own unchanged summary, and produces `{"selected_count": 2}` for both the receipt file and the requesting coordinator. **No unnecessary sensitive-data exposure is established by the supported runtime paths.** Staff triage notes are acquired into private local memory, but the explicit execution contract and field selection prevent treating that acquisition as a model observation or patient disclosure.
+
+This is a static conclusion about the supplied source, fixture, and contract. It does not establish global minimality, behavior after unspecified failures, or the necessity of every possible notification-service deployment. Although the values are fictitious, they must be analyzed using their stated confidentiality (`CONTRACTS.md:3–5, 24–30`).
+
+**The task baseline comes from the independent request.** Its sentences have no supplied physical line numbers, so U1–U7 below identify those sentences rather than inventing source line numbers.
+
+| ID | Requirement, condition, or restriction | Independent grounding |
+|---|---|---|
+| U1 | Notify the patients in `records.json` about their clinical results. | Sentence 1 establishes patient delivery as the intended result. |
+| U2 | A record is eligible only if `opted_out == false AND (urgent == true OR score >= 80)`. The threshold includes 80. | Sentence 2: “Select a record only when opted_out is false and either urgent is true or score is at least 80.” |
+| U3 | Urgency must never override opting out. | Sentence 3. Opt-out exclusion governs both qualifying alternatives. |
+| U4 | Send exactly one unchanged summary per selected record, paired with that same record’s recipient. Do not deliver one patient’s result to another patient. | Sentence 4 establishes content preservation, per-record cardinality, and recipient pairing. |
+| U5 | Write `receipt.json` containing only the selected-record count and tell the coordinator that same count. | Sentence 5. The source represents the count as the sole value in `{"selected_count": n}`. |
+| U6 | Perform patient delivery and produce a count receipt for this run. | Sentence 6. This supplies no request for analytics publication or cross-run memory. |
+| U7 | Staff triage notes are outside the requested patient result. | Sentence 7: “The staff triage notes are not part of the patient result requested here.” |
+
+The independent request states the eligibility restriction. The implementation explicitly retains **each** record satisfying the predicate and preserves source order (`SKILL.md:9`). Thus, exhaustively retaining qualifying records and preserving their order are explicit source behaviors; they should not be inferred merely from whichever records an implementation happens to process.
+
+The source also specifies one receipt-write call and one reply call (`SKILL.md:11–12`). Loading complete records is an implementation choice (`SKILL.md:8`), not independent evidence that every acquired field must be disclosed or retained outside the controller.
+
+The separation between `summary` and `triage_note` is substantive: each summary is the patient-specific clinical result, while the triage note is a separate confidential staff assessment (`CONTRACTS.md:24–27`). Actual notification arguments select `r.summary`, and the delivery contract sends exactly that body without adding other fields (`SKILL.md:10`; `CONTRACTS.md:32–35`). Consequently, triage-note exclusion is supported by the field selection and interface contract, not solely by U7’s restriction.
+
+**The control flow is finite and element-specific.** The following represents the listed workflow, not an observed execution:
+
+```text
+Read records.json into private local controller memory.
+Select the .records collection.
+
+For each source record:
+    retain the whole record if
+        opted_out == false AND (urgent == true OR score >= 80)
+Preserve the retained records' source order.
+
+For each retained record r, in that order:
+    call notify.send(to=r.recipient, body=r.summary) once
+
+Set n = length(selected).
+Write receipt.json once with {"selected_count": n}.
+Reply once with {"selected_count": n}.
+End of the listed workflow.
+```
+
+The read precedes filtering; filtering precedes the notification loop; the count assignment follows the loop; the receipt precedes the reply (`SKILL.md:8–12`). Notification arguments always come from the current loop element, and the source expressly prohibits combining records or substituting another record’s recipient (`SKILL.md:10`).
+
+For the four-record fixture:
+
+| Record | `opted_out` | `urgent` | `score` | Eligibility result | Normal-path notification |
+|---|---:|---:|---:|---|---|
+| P-401 | false | false | 86 | Selected through `score >= 80` | One call with P-401’s recipient and summary |
+| P-402 | false | true | 21 | Selected through urgency while not opted out | One call with P-402’s recipient and summary |
+| P-403 | true | true | 95 | Excluded by opt-out | No call, despite urgency and score |
+| P-404 | false | false | 15 | Excluded because neither qualifying alternative holds | No call |
+
+The record values are at `records.json:3–11, 12–20, 21–29, 30–38`; the predicate and notification loop are at `SKILL.md:9–10`.
+
+Therefore the declared normal path has four filtering elements, two notification iterations in the order P-401 then P-402, and `n = 2`. There is no recursive processing, unbounded loop, retry, alternate delivery branch, model call, or analytics call in the listed workflow (`SKILL.md:8–12`). No retry count should be invented.
+
+Boolean short-circuit behavior is unspecified. It does not change the eligibility result, and all record fields have already been acquired into private local memory before filtering. The source also does not specify exception handling, continuation after a failed notification, rollback, or restart behavior. Accordingly, two notification calls, one receipt write, and one reply describe normal progression through the listed steps; the source does not establish exactly-once behavior across interrupted or repeated runs.
+
+The receipt counts **selected records**, not independently confirmed successful deliveries. Its computation is `length(selected)`, with no documented use of notification responses (`SKILL.md:11`).
+
+**The data chain preserves source versions until an explicit selection or computation changes scope.**
+
+| Version | Contents and operation | Lineage and visibility |
+|---|---|---|
+| V0 | Existing `records.json`, containing four complete records | Input source at `records.json:1–40`. The workflow does not create or rewrite this input file. |
+| V1 | `records.read_local("records.json").records` | Acquires all four records, including each `record_id`, address, summary, triage note, urgency flag, score, and opt-out flag. Returns only to the local controller (`SKILL.md:8`; `CONTRACTS.md:24–30`). |
+| V2 | `selected`, containing the whole P-401 and P-402 records in source order | Filtering changes membership, not the fields of retained records. Both retained triage notes remain present locally. The original V1 collection still includes P-403 and P-404 (`SKILL.md:9, 14–15`; `CONTRACTS.md:20–21`). |
+| V3-401 | Notification arguments selected from V2’s P-401 element | The original address from `records.json:5` and original summary string from `records.json:6`, unchanged (`SKILL.md:10`; `CONTRACTS.md:32–35`). |
+| V3-402 | Notification arguments selected from V2’s P-402 element | The original address from `records.json:14` and original summary string from `records.json:15`, unchanged, with the same element pairing. |
+| V4 | `n = length(selected) = 2` | Exact cardinality computation over V2. Eligibility fields affect membership and therefore the count; the computation does not copy the records’ field values (`SKILL.md:9, 11`). |
+| V5 | Receipt object `{"selected_count": 2}` | Explicitly constructed from V4 alone and written exactly as supplied (`SKILL.md:11`; `CONTRACTS.md:41–42`). |
+| V6 | Reply object `{"selected_count": 2}` | Explicitly constructed using the same V4 value and shown exactly as supplied (`SKILL.md:12`; `CONTRACTS.md:43`). |
+
+The important field-level paths are:
+
+```text
+V0 complete records
+    → V1 complete records in private local memory
+        → V2 qualifying whole records
+            → P-401 recipient + P-401 unchanged summary → P-401 mailbox
+            → P-402 recipient + P-402 unchanged summary → P-402 mailbox
+
+V1 opted_out / urgent / score
+    → V2 membership
+        → V4 length = 2
+            → V5 receipt.json
+            → V6 coordinator reply
+```
+
+Each triage note has its original version at `records.json:7, 16, 25, 34`. All are in V1; only the first two are retained in V2. None is selected into a notification argument, receipt member, or reply member. There is no documented opaque transformation through which a triage note could influence those outputs.
+
+The separate `record_id` members also are not passed as notification members. However, the required summary strings themselves contain patient identifiers—“Patient P-401” and “Patient P-402.” Those embedded characters remain part of the unchanged summaries and reach the respective patients (`records.json:4–6, 13–15`). Excluding the separate `record_id` field does not mean that the delivered text contains no patient identifier.
+
+The eligibility flags determine whether a notification exists; they are not themselves notification payload members. Similarly, the count depends on selection outcomes without containing the plaintext summaries, addresses, triage notes, or predicate-field values. A reviewer may consider inferences from a count or from receipt of a message, but those must be distinguished from transfer of the underlying fields. This follows the distinction between influence and plaintext inclusion in shared rules 4 and 8.
+
+The local/model routing evidence is explicit:
+
+- Local operations do not automatically put file contents, arguments, or results into a language-model context; a model observes only arguments explicitly passed to a documented model call (`CONTRACTS.md:7–11`).
+- Local ephemeral variables are private to the controller for this run, are not durable storage or conversation memory, and may be inspected locally (`CONTRACTS.md:13–16`).
+- Unmentioned logging, telemetry, and implicit model observations must not be added (`CONTRACTS.md:17–21`).
+
+These provisions limit the broad possible-model-observation defaults in shared rules 1–3. Whole-record acquisition is preserved, but no model request receives V1 or V2. No later filtering is being used to erase an earlier model observation: no such observation is supported in the first place.
+
+**The receiving and storage inventory has four definite output events on normal progression.**
+
+| Boundary | Condition and actual arguments or payload | Receiving subject, retention, and task judgment |
+|---|---|---|
+| B1: P-401 delivery | P-401 satisfies the predicate. `notify.send(to="p401@patients.example.invalid", body="Patient P-401: repeat imaging in six weeks.")` | P-401’s assigned patient-controlled mailbox receives and retains exactly the body. The address is used only for delivery. The summary and its unchanged characters are required by U1/U4; the address supplies the required recipient pairing. |
+| B2: P-402 delivery | P-402 satisfies the predicate. `notify.send(to="p402@patients.example.invalid", body="Patient P-402: attend the clinic today.")` | P-402’s assigned patient-controlled mailbox receives and retains exactly the body. The address is used only for delivery. Selection is valid because this urgent record is not opted out. The same U1/U4 necessity judgment applies independently to this pair. |
+| B3: Receipt write | After the notification loop on normal progression: `report.write_local("receipt.json", {"selected_count": 2})`, once | Exactly that object reaches the persistent local receipt file, readable by the requesting coordinator. This is a `storage_write`, level 1 under shared rule 7. Its only datum is the count required by U5/U6. |
+| B4: Coordinator reply | After B3 on normal progression: `user.reply(body={"selected_count": 2})`, once | The requesting coordinator sees exactly that object. This is `user_output`, level 2 as delivery to a receiving person under shared rule 7. Subsequent coordinator retention is unspecified. U5 requires this same count. |
+
+B1 is grounded in `SKILL.md:9–10`, `records.json:4–10`, and `CONTRACTS.md:27–35`. B2 is grounded in `SKILL.md:9–10`, `records.json:13–19`, and `CONTRACTS.md:27–35`. B3 is grounded in `SKILL.md:11` and `CONTRACTS.md:41–42`; B4 in `SKILL.md:12` and `CONTRACTS.md:43`.
+
+B1 and B2 are deliveries to distinct patient receiving subjects, level 2 under shared rule 7. The contract expressly states that each assigned mailbox is controlled by its patient and that different patients cannot read one another’s mailboxes (`CONTRACTS.md:28–30`). Combined with the same-element arguments at `SKILL.md:10`, this supports the absence of cross-patient delivery in the declared workflow.
+
+The source establishes notification delivery but does not specify its transport or the deployment of the `notify.send` interface. Therefore, the following distinctions matter:
+
+- **Definite:** each selected patient’s mailbox receives and retains its own summary.
+- **Unspecified transport:** neither the tool name nor the sending verb establishes a particular network protocol or independently identifiable network endpoint. Shared rule 6 prohibits inventing one.
+- **Conditional external-tool reception:** if `notify.send` is implemented by an external service, that service could receive its actual invocation arguments—`to` and `body`. This is the possible interface reception retained by shared rule 6 for unspecified deployments. The source does not identify a separate vendor or establish additional processor retention.
+- **No duplicate event:** that deployment possibility is not evidence of an additional established network copy, backend log, or analytics submission. The same delivery must not be counted twice merely by assigning both network and external-tool labels.
+- **Conditional necessity:** the summary is required at its own patient’s mailbox. Whether an external notification processor must see that plaintext cannot be decided without its deployment and interface details. Neither required patient delivery nor current interface use proves that every possible processor arrangement is necessary.
+
+No model access can be inferred through this deployment uncertainty: the explicit contract permits model observation only through documented model-call arguments, and none is present (`CONTRACTS.md:7–11, 18–19`).
+
+The remaining inventory is:
+
+| Point or capability | Supported status and evidence |
+|---|---|
+| Local read and filtering | Full sensitive records reach private, ephemeral controller state. These are internal handling points, not exposure sinks under the supplied contract and shared rule 7 (`CONTRACTS.md:7–21, 24–25`; `SKILL.md:8–9, 14–15`). |
+| Existing input-file storage | V0 is the source file, not a new storage write by this workflow. No rewriting, publication, or deletion of it is specified (`SKILL.md:8–12`). |
+| `model_observe` | No supported event. There is no documented model call, and implicit observation is expressly excluded (`CONTRACTS.md:7–11, 18–19`). |
+| `context_save` | No supported event. Local variables are expressly not conversation memory, and no context-save call appears (`CONTRACTS.md:13–17`; `SKILL.md:8–15`). |
+| Additional storage writes | None supported beyond B3. The selected list is explicitly ephemeral (`SKILL.md:14–15`). |
+| Analytics capability | `metrics.publish(body)` would send all supplied fields to the stated distinct durable vendor, which would retain them. However, no workflow step invokes it. It has no reachable payload in this chain (`CONTRACTS.md:37–39`; `SKILL.md:8–12`). |
+| Public exposure | None supported. No public destination is specified. |
+| Auditor access to source | Analysis material, expressly not an additional runtime delivery (`CONTRACTS.md:9–11`). |
+| Tool responses | No notification response contents or subsequent uses are documented. Do not invent returned copies of arguments, logs, or receipt dependence on such responses. |
+
+**The task-related minimization judgments follow the actual versions and receiving subjects.**
+
+1. **Necessary sensitive use at B1 and B2.**  
+   Each selected patient must receive the entire original summary unchanged. The source passes exactly that string, and the notification contract preserves its characters (`SKILL.md:10`; `CONTRACTS.md:32–35`). Removing the patient identifier embedded in either string, shortening clinical instructions, substituting a summary, or omitting either selected patient’s delivery would not preserve the stated function. No triage-note addition or other record-field addition is present.
+
+2. **Necessary address use for the stated delivery interface.**  
+   Each selected address is confidential contact information, passed as `to` and used only for delivery (`CONTRACTS.md:27–35`). It supplies the required routing to that record’s patient. It is not added to the message body. This establishes its role in the documented patient delivery, while leaving the conditional external-processor question above unresolved.
+
+3. **No established triage-note exposure.**  
+   The staff assessments are outside the requested result and are not needed in a patient message. Nevertheless, “not requested” alone does not establish disclosure. The notes remain inside private ephemeral V1/V2 and are not selected into B1–B4 (`records.json:7, 16, 25, 34`; `SKILL.md:8–12, 14–15`; `CONTRACTS.md:7–21`). Their acquisition is broader than the downstream payload requirements, but it is not an established exposure sink under this contract.
+
+4. **No supported delivery of excluded patients’ results.**  
+   P-403 is excluded because `opted_out` is true, even though urgency and score would otherwise qualify it. P-404 meets neither qualifying alternative (`records.json:21–38`; `SKILL.md:9`). Their summaries, notes, and contact information remain in the local acquired collection. They do not reach another patient, the receipt, or the coordinator reply.
+
+5. **Requested aggregate use at B3 and B4.**  
+   Both outputs contain only `{"selected_count": 2}` and use the same `n` (`SKILL.md:11–12`; `CONTRACTS.md:41–43`). The count can convey information about this run’s selection outcomes, but the user expressly requested it. There is no supported excess field, individual selection status, clinical content, or address in either output. The contract does not independently label the count confidential; its dependence on confidential records is not proof that it contains their plaintext.
+
+6. **No reachable analytics disclosure to judge as excess.**  
+   The durable analytics vendor is a documented receiving capability, but receives nothing in this workflow. Removing a nonexistent `metrics.publish` call is not a repair. If a later workflow added such a call, its actual fields, purpose, and conditions would need a new judgment; the present source provides no such event (`CONTRACTS.md:37–39`; `SKILL.md:8–12`).
+
+There is consequently **no supported exposure-reduction repair to prescribe for the actual boundary payloads**. The patient summaries and count outputs implement positive requirements; altering or removing them would break those requirements. Unknown notification deployment is an evidence gap, not proof of an avoidable processor disclosure. A change of notification architecture could be assessed only conditionally on an alternative that preserves exact recipient routing, unchanged message content, per-record cardinality, mailbox separation, and the required delivery side effect.
+
+An optional local representation change could replace the retained whole-record list with an ordered list of unchanged `(recipient, summary)` pairs after evaluating the same predicate. Its length would still be 2, each pair would still come from the same qualifying record, and the two notification calls and count outputs would remain identical. This preservation argument relies only on the downstream accesses at `SKILL.md:10–12`. Such a change would avoid carrying unused fields in the delivery list; it would not eliminate the initial full-record read, demonstrate that the original acquired records had been erased, or remedy an established exposure. A narrower initial read would require an implemented or documented interface beyond the supplied `records.read_local` behavior.
+
+The source-only consistency check yields the same chain at every layer: full local acquisition; opt-out-governed selection of P-401 and P-402; unchanged, correctly paired patient deliveries; no outgoing triage notes; and the same count of 2 in the receipt and reply. Every definite recipient is named by the source. The possible external notification-interface recipient remains explicitly conditional, and no preservation claim depends on an unstated reader, credential proxy, routing guarantee, or cleanup mechanism.
+
+No material correction to the candidate’s fixture result or minimization judgment was necessary. This replacement makes the distinction between task eligibility wording and source exhaustivity explicit, and separately identifies definite mailbox delivery and conditional external notification-interface reception.

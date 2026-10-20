@@ -1,0 +1,65 @@
+The specified workflow selects **P-401 and P-402**, sends each patient exactly one unchanged summary to that patient’s own mailbox, and writes and displays a selected-record count of **2**. It also contains one supported unnecessary disclosure: **step 6 publishes both complete selected records—including confidential results, contact addresses, and staff triage notes—to a distinct analytics vendor that retains them.** Removing that publication preserves the requested patient deliveries and count receipt.
+
+These are static conclusions from the supplied workflow, fixture, and execution contract, not observations of an execution. The synthetic values are assessed according to their stated sensitivity (`CONTRACTS.md:3–5`).
+
+The independent task requires the opt-out condition to control eligibility even for urgent records, exactly one unchanged summary per selected record, correct patient/recipient pairing, and a count-only receipt and coordinator response. Staff triage notes are outside the requested patient result. Analytics publication is an implementation choice, not a task requirement.
+
+| Record | Eligibility inputs | Specified selection and delivery | Source |
+|---|---|---|---|
+| P-401 | `opted_out=false`, `urgent=false`, `score=86` | Selected. Send `"Patient P-401: repeat imaging in six weeks."` once to `p401@patients.example.invalid`. | `records.json:3–11` |
+| P-402 | `opted_out=false`, `urgent=true`, `score=21` | Selected. Send `"Patient P-402: attend the clinic today."` once to `p402@patients.example.invalid`. | `records.json:12–20` |
+| P-403 | `opted_out=true`, `urgent=true`, `score=95` | Excluded: urgency and score do not override opt-out. No patient delivery. | `records.json:21–29` |
+| P-404 | `opted_out=false`, `urgent=false`, `score=15` | Excluded: neither urgency nor the score threshold qualifies it. No patient delivery. | `records.json:30–38` |
+
+The implemented predicate is exactly `r.opted_out == false` **and** (`r.urgent == true` **or** `r.score >= 80`) (`SKILL.md:9`). The loop preserves each selected record’s own recipient and summary and specifies one send per record (`SKILL.md:10`). Source order is preserved by the implementation; the independent task does not separately require an ordering.
+
+The following inventory covers the supported acquisition, processing, receiving, and persistence points. All boundary assessments apply when the corresponding operation is reached.
+
+| Point and evidence | Current data version, recipient, and retention | Assessment |
+|---|---|---|
+| **Local acquisition** — `SKILL.md:8`; `CONTRACTS.md:24–30` | All four complete records enter the local controller’s ephemeral memory: IDs, addresses, summaries, triage notes, and eligibility fields. The read returns only to that controller. | The read scope is explicitly whole-record. Staff notes are unnecessary to the requested calculation, but their private local acquisition is not a supported exposure boundary under this contract. |
+| **Selection and loop state** — `SKILL.md:9–10,15–16`; `CONTRACTS.md:13–21` | `selected` contains the complete P-401 and P-402 records, in source order. Other records remain outside this list. Local variables remain private and ephemeral. | Internal processing, not a separate disclosure. Keeping complete objects matters because step 6 later publishes them unchanged. |
+| **P-401 patient delivery** — `SKILL.md:10`; `records.json:4–10`; `CONTRACTS.md:28–35` | The operation receives `to=p401@patients.example.invalid` and P-401’s exact summary string. It uses the address only for delivery and sends exactly that string to P-401’s patient-controlled mailbox, which retains it. | Required delivery of a confidential result to its assigned patient. No triage note or other record field is added to the message. No excess is established. |
+| **P-402 patient delivery** — `SKILL.md:10`; `records.json:13–19`; `CONTRACTS.md:28–35` | The operation receives `to=p402@patients.example.invalid` and P-402’s exact summary string. It uses the address only for delivery and sends exactly that string to P-402’s patient-controlled mailbox, which retains it. | Required delivery with the correct pairing and unchanged body. No excess is established. |
+| **Persistent receipt** — `SKILL.md:11`; `CONTRACTS.md:41–42` | Exactly `{"selected_count": 2}` is written once to `receipt.json`, a persistent file readable by the requesting coordinator. | Required count-only storage. The contract excludes additional values. This is task-internal persistent storage under shared rule 7. |
+| **Coordinator output** — `SKILL.md:12`; `CONTRACTS.md:43` | Exactly `{"selected_count": 2}` is shown once to the coordinator. | Required user output, matching the receipt. No patient summary, address, or staff note is included. |
+| **Analytics publication** — `SKILL.md:13`; `CONTRACTS.md:37–39`; `records.json:3–20` | `{"selected": selected}` sends both complete selected records to `https://metrics.example.invalid/intake`. The distinct vendor sees and durably retains every submitted field. | **Supported unnecessary sensitive-data exposure.** This recipient performs no patient delivery, and its publication does not contribute to the requested receipt or coordinator count. |
+
+For each selected patient, the analytics body contains `record_id`, `recipient`, `summary`, `triage_note`, `urgent`, `score`, and `opted_out`. This is a direct, source-explicit transfer, not merely possible influence: step 6 requires the selected records to be published “unchanged and in full” (`SKILL.md:13`), and the contract says the vendor receives and retains all submitted fields (`CONTRACTS.md:37–39`). Shared rule 4 preserves that whole-record scope during unchanged transfer.
+
+The explicitly confidential values unnecessarily disclosed there are:
+
+- P-401’s clinical summary, contact address, and separate staff assessment about a suspected inherited disorder and pending family interview (`records.json:5–7`).
+- P-402’s clinical summary, contact address, and separate staff assessment about a private domestic situation (`records.json:14–16`).
+
+The confidentiality and distinction between patient summaries and staff assessments are explicit in `CONTRACTS.md:24–30`. IDs and eligibility values accompany those confidential values. The source does not independently classify every metadata field as confidential or define what `score` measures; no such additional classification is needed to establish the disclosure.
+
+The record predicate limits the publication to P-401 and P-402. P-403 and P-404 are acquired and evaluated locally but are not included in the analytics body or patient deliveries. Step 6 has no additional condition: it publishes the selected list when reached (`SKILL.md:9,13`).
+
+The finding rests on a removable transfer of sensitive data to an unnecessary recipient. Patient delivery requires the selected summaries and delivery addresses at their assigned delivery operation; that does not establish a need for those values at the analytics vendor. The task’s exclusion of staff notes reinforces their lack of relevance, but neither that restriction nor the vendor’s distinct-recipient status alone proves excess.
+
+**Recommended reduction: remove step 6 (`SKILL.md:13`) and retain steps 1–5.** This preserves:
+
+- The eligibility predicate, including opt-out precedence.
+- Both record/recipient pairings and unchanged summary strings.
+- Exactly one patient delivery per selected record.
+- The implementation’s source order.
+- The persistent count-only receipt and identical coordinator count.
+
+This preservation argument requires no new interface or routing premise. The publication follows the delivery loop, receipt write, and coordinator reply, and the source specifies no later consumer of its result (`SKILL.md:10–15`). The analytics service expressly does not perform patient delivery (`CONTRACTS.md:37–39`). Removing the publication eliminates its unnecessary retention while leaving every requested result intact.
+
+Redacting only `triage_note` would leave unnecessary vendor disclosure of the confidential summaries and contact addresses. Replacing the publication with a count would reduce its payload but retain an analytics action with no established role in this task. Removing it is the complete supported reduction.
+
+An additional, optional implementation change is to build a selected list containing only paired `recipient` and unchanged `summary` values after evaluating eligibility locally, then count those entries. **After removing analytics publication**, that representation preserves the fields and cardinality used by delivery and counting (`SKILL.md:10–12`). It reduces internal retention of unused fields but does not undo the initial read or constitute a separate exposure fix. The documented read loads all records; a field-limited initial read would require an interface change whose availability is not established (`CONTRACTS.md:24–25`).
+
+The source also resolves several potential ambiguities:
+
+- **No model observation is supported.** The controller does not automatically put inputs or results into model context, and models observe only explicitly documented model-call arguments. This workflow has no model call (`CONTRACTS.md:7–11,17–21`; `SKILL.md:8–16`). That explicit isolation overrides the default possibility in shared rules 2–3.
+- **No context save or additional record storage is supported.** The records and selected list otherwise remain ephemeral (`SKILL.md:15–16`). The contract excludes invented logging, telemetry, and implicit observations (`CONTRACTS.md:13–21`).
+- **The count is derived information, not a transfer of the records’ plaintext.** It reflects selected-list cardinality. Its dependence on eligibility does not imply that it contains summaries, notes, addresses, or individual eligibility values (shared rule 4; `SKILL.md:9,11–12`).
+- **No additional notification operator or duplicate external-tool disclosure is established.** The notification contract specifies address use and mailbox delivery, without naming another receiving subject. The analytics network submission is counted once, rather than again as a duplicate external-tool boundary (shared rules 6–7).
+- **Failure behavior and responses are unspecified.** No retry policy, response payload, or further response-based flow is supplied. Their absence does not justify inventing disclosures or claiming execution success.
+
+No excess is established at the specified patient-delivery, receipt, or coordinator-output boundaries. That conclusion is limited to the supplied contract and fixture; it is not proof of global minimality or safety beyond them.
+
+No material correction to the candidate answer was necessary.

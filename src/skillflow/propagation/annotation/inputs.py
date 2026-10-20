@@ -65,7 +65,10 @@ def read_material_parts(directory, *, task_baseline=None):
 
 def _material_chain(run_dir):
     directory, seen, chain = checked_run_path(run_dir), set(), []
-    supported = {"skill-ir-security-profile-v17", "skill-ir-annotation-refinement-v9", "skillflow-analysis-run-v6"}
+    from skillflow.propagation.annotation.runner import IDENTITY as annotation_identity
+    from skillflow.propagation.review.refinement import IDENTITY as refinement_identity
+    from skillflow.pipeline import IDENTITY as pipeline_identity
+    supported = {annotation_identity, refinement_identity, pipeline_identity}
     while True:
         if directory in seen:
             raise ValueError("Cyclic material ownership reference")
@@ -100,7 +103,8 @@ def load_prepared_material(run_dir, *, task_baseline=None):
     parts = read_source_parts(chain[-1][0])
     current = None
     for directory, manifest in chain:
-        if manifest["identity"] == "skillflow-analysis-run-v6":
+        from skillflow.pipeline import IDENTITY as pipeline_identity
+        if manifest["identity"] == pipeline_identity:
             continue
         reference = manifest.get("task_run_ref")
         if reference is None:

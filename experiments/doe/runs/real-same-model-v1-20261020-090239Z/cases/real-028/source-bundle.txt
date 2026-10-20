@@ -1,0 +1,671 @@
+FILE SKILL.md
+1: ---
+2: name: todo-tracker
+3: description: Persistent TODO scratch pad for tracking tasks across sessions. Use when the user asks to add, list, complete, remove, or summarize tasks in a portable workspace Markdown file. Uses stable task IDs and exact matching; heartbeat reporting is opt-in and count-only.
+4: ---
+5: 
+6: # TODO Tracker
+7: 
+8: Maintain a portable Markdown task file without a service or database. Use the bundled script for every operation; do not edit task lines with ad hoc regex commands.
+9: 
+10: Runtime requirements: Bash and standard `awk`, `cp`, `chmod`, `mkdir`, `mktemp`, and `mv` utilities. Tasks are stored in a user-configurable local Markdown file.
+11: 
+12: ## File and Script
+13: 
+14: - `TODO_FILE` selects the task file. Default: `TODO.md` in the current workspace.
+15: - Always invoke the bundled script through `{baseDir}` so execution does not depend on the current directory.
+16: - Read operations do not create a file.
+17: - Writes use an adjacent lock, atomic same-directory renames, mode `600`, and a recoverable previous-state backup at `${TODO_FILE}.bak`.
+18: - `${TODO_FILE}.next-id` is an adjacent mode-`600` monotonic ID counter. Keep it with the task file when moving or restoring the tracker; backup rotation must not replace or delete it.
+19: 
+20: ```bash
+21: TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" list
+22: ```
+23: 
+24: Do not use a machine-specific path. Quote `TODO_FILE`, IDs, and item text.
+25: 
+26: ## Stable Identity
+27: 
+28: New tasks receive monotonic IDs such as `T000001`. Task text is matched literally and exactly, never as a regex or substring.
+29: 
+30: - Under the same writer lock, the script bootstraps the counter from the current task file, `${TODO_FILE}.bak`, and any valid existing counter. It reserves and atomically persists the next counter value before publishing a task-file mutation, so a crash may create an ID gap but cannot reuse an ID.
+31: - Only the structured ID field immediately after a task checkbox participates in counter bootstrapping. ID-looking text inside a task title remains literal task content and never advances the counter.
+32: - A missing counter is created safely on the next write. A corrupt, symbolic-link, non-regular, or non-`0600` counter fails closed; do not delete or reset it to bypass the check.
+33: - Prefer an ID for `done` and always use an ID for approved removal.
+34: - An exact-text target must match one task only.
+35: - Duplicate open task text is rejected.
+36: - An ambiguous exact-text target is rejected and the script reports the matching IDs.
+37: - On the first operation that must resolve or mutate a legacy file, task lines without IDs are assigned deterministic IDs under the writer lock and the migration is persisted atomically; the original remains in the backup. A removal preview can trigger this recoverable metadata migration even though it removes no task.
+38: 
+39: ## Commands
+40: 
+41: ### Read
+42: 
+43: ```bash
+44: TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" list
+45: TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" list high
+46: TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" summary
+47: ```
+48: 
+49: If the file does not exist, `list` reports that fact and `summary` returns zero counts. Neither creates state.
+50: 
+51: ### Add
+52: 
+53: ```bash
+54: TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" add high "Review launch checklist"
+55: ```
+56: 
+57: Priority must be `high`, `medium`, or `low`. Capture the returned stable ID.
+58: 
+59: ### Complete
+60: 
+61: ```bash
+62: TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" done T000001
+63: ```
+64: 
+65: Exact text is accepted only when it identifies one open task. Completion preserves the stable ID and moves the task to Done.
+66: 
+67: ### Remove
+68: 
+69: Removal is destructive and requires an exact preview plus action-time approval.
+70: 
+71: 1. Resolve and preview without removing the task. For a legacy file, this first operation may atomically persist stable IDs and the adjacent monotonic counter before returning the preview. The pre-migration file remains in `${TODO_FILE}.bak`, and no task is removed:
+72: 
+73:    ```bash
+74:    TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" remove "exact task text"
+75:    ```
+76: 
+77:    The command exits without removal and prints the exact stable ID. Repeating the operation uses the persisted ID rather than migrating or advancing the counter again.
+78: 
+79: 2. Show the user that ID and task text. Ask for approval to remove that exact task.
+80: 3. Only after approval, run the command contract naming and confirming the same ID:
+81: 
+82:    ```bash
+83:    TODO_FILE="$PWD/TODO.md" bash "{baseDir}/scripts/todo.sh" remove T000001 --confirm T000001
+84:    ```
+85: 
+86: Never infer approval from a partial name, prior unrelated removal, or a bulk request. Remove tasks one exact stable ID at a time.
+87: 
+88: ## Heartbeat
+89: 
+90: Heartbeat access is off by default. Enable it only when the user explicitly opts in by configuring `TODO_HEARTBEAT_ENABLED=1` for that heartbeat workflow.
+91: 
+92: ```bash
+93: TODO_FILE="$PWD/TODO.md" TODO_HEARTBEAT_ENABLED=1 \
+94:   bash "{baseDir}/scripts/todo.sh" heartbeat
+95: ```
+96: 
+97: Heartbeat output contains counts only: total, high, medium, low, and stale. It never prints task titles or notes. Do not create a schedule merely because this skill is installed.
+98: 
+99: ## File Format
+100: 
+101: ```markdown
+102: # TODO Tracker
+103: 
+104: *Last updated: 2026-08-29*
+105: 
+106: ## 🔴 High Priority
+107: - [ ] [T000001] Review launch checklist (added: 2026-08-29)
+108: 
+109: ## 🟡 Medium Priority
+110: 
+111: ## 🟢 Nice to Have
+112: 
+113: ## ✅ Done
+114: - [x] [T000002] Verify release notes (done: 2026-08-29)
+115: ```
+116: 
+117: If a write fails because the lock exists, do not remove the lock while another process may be active. Investigate the writer and retry only after the lock is known to be stale.
+
+FILE scripts/todo.sh
+1: #!/usr/bin/env bash
+2: 
+3: set -euo pipefail
+4: 
+5: TODO_FILE="${TODO_FILE:-$PWD/TODO.md}"
+6: TODAY="${TODO_DATE:-$(date +%Y-%m-%d)}"
+7: LOCK_DIR="${TODO_FILE}.lock"
+8: COUNTER_FILE="${TODO_FILE}.next-id"
+9: LOCK_HELD=0
+10: TEMP_FILES=()
+11: NEW_TEMP=""
+12: SOURCE_FILE=""
+13: COUNTER_VALUE=""
+14: RESERVED_FIRST=""
+15: 
+16: cleanup() {
+17:     local path
+18:     for path in "${TEMP_FILES[@]:-}"; do
+19:         if [[ -n "$path" && -f "$path" ]]; then
+20:             rm -f -- "$path"
+21:         fi
+22:     done
+23:     if [[ "$LOCK_HELD" -eq 1 && -d "$LOCK_DIR" ]]; then
+24:         rmdir -- "$LOCK_DIR" 2>/dev/null || true
+25:     fi
+26: }
+27: 
+28: trap cleanup EXIT
+29: trap 'exit 130' INT
+30: trap 'exit 143' TERM
+31: 
+32: usage() {
+33:     cat <<'EOF'
+34: Usage: todo.sh <command> [args]
+35:   add <high|medium|low> <item>         Add a unique open task and print its ID
+36:   done <ID|exact-text>                 Mark one exact open task done
+37:   remove <ID|exact-text>               Preview removal and print confirmation command
+38:   remove <ID> --confirm <same-ID>      Remove one already-approved exact task
+39:   list [high|medium|low|done]          Read tasks without creating a file
+40:   summary                              Read count-only summary
+41:   heartbeat                            Count-only summary when explicitly enabled
+42: 
+43: Set TODO_FILE to choose the task file. It defaults to TODO.md in the current workspace.
+44: EOF
+45: }
+46: 
+47: die() {
+48:     printf 'ERROR: %s\n' "$*" >&2
+49:     exit 1
+50: }
+51: 
+52: require_parent_directory() {
+53:     local parent
+54:     parent=$(dirname -- "$TODO_FILE")
+55:     [[ -d "$parent" ]] || die "TODO parent directory does not exist: $parent"
+56:     [[ ! -L "$TODO_FILE" ]] || die "Refusing to replace a symbolic-link TODO file: $TODO_FILE"
+57:     if [[ -e "$TODO_FILE" && ! -f "$TODO_FILE" ]]; then
+58:         die "TODO path is not a regular file: $TODO_FILE"
+59:     fi
+60:     [[ ! -L "$COUNTER_FILE" ]] || die "Refusing a symbolic-link ID counter: $COUNTER_FILE"
+61:     if [[ -e "$COUNTER_FILE" && ! -f "$COUNTER_FILE" ]]; then
+62:         die "TODO ID counter is not a regular file: $COUNTER_FILE"
+63:     fi
+64: }
+65: 
+66: acquire_lock() {
+67:     require_parent_directory
+68:     umask 077
+69:     if ! mkdir -- "$LOCK_DIR" 2>/dev/null; then
+70:         die "TODO file is locked by another writer: $LOCK_DIR"
+71:     fi
+72:     chmod 700 "$LOCK_DIR"
+73:     LOCK_HELD=1
+74: }
+75: 
+76: make_temp_for() {
+77:     local destination="$1"
+78:     local parent
+79:     local base
+80:     parent=$(dirname -- "$destination")
+81:     base=$(basename -- "$destination")
+82:     NEW_TEMP=$(mktemp "$parent/.${base}.tmp.XXXXXX")
+83:     chmod 600 "$NEW_TEMP"
+84:     TEMP_FILES+=("$NEW_TEMP")
+85: }
+86: 
+87: make_temp() {
+88:     make_temp_for "$TODO_FILE"
+89: }
+90: 
+91: write_initial_file() {
+92:     local destination="$1"
+93:     cat >"$destination" <<EOF
+94: # TODO Tracker
+95: 
+96: *Last updated: $TODAY*
+97: 
+98: ## 🔴 High Priority
+99: 
+100: ## 🟡 Medium Priority
+101: 
+102: ## 🟢 Nice to Have
+103: 
+104: ## ✅ Done
+105: EOF
+106:     chmod 600 "$destination"
+107: }
+108: 
+109: max_task_number() {
+110:     local files=()
+111:     local path
+112: 
+113:     for path in "$@"; do
+114:         if [[ -f "$path" ]]; then
+115:             files+=("$path")
+116:         fi
+117:     done
+118:     if [[ "${#files[@]}" -eq 0 ]]; then
+119:         printf '0\n'
+120:         return
+121:     fi
+122: 
+123:     awk '
+124:         /^- \[[ x]\] \[T[0-9][0-9][0-9][0-9][0-9][0-9]\] / {
+125:             value = substr($0, 9, 6) + 0
+126:             if (value > max) max = value
+127:         }
+128:         END { print max + 0 }
+129:     ' "${files[@]}"
+130: }
+131: 
+132: file_mode() {
+133:     if stat -f '%Lp' "$1" >/dev/null 2>&1; then
+134:         stat -f '%Lp' "$1"
+135:     else
+136:         stat -c '%a' "$1"
+137:     fi
+138: }
+139: 
+140: read_counter() {
+141:     local value
+142: 
+143:     [[ -f "$COUNTER_FILE" && ! -L "$COUNTER_FILE" ]] || \
+144:         die "TODO ID counter is missing or not a regular file: $COUNTER_FILE"
+145:     [[ "$(file_mode "$COUNTER_FILE")" == "600" ]] || \
+146:         die "TODO ID counter must have mode 0600: $COUNTER_FILE"
+147:     value=$(<"$COUNTER_FILE")
+148:     [[ "$value" =~ ^[1-9][0-9]*$ ]] || \
+149:         die "TODO ID counter is corrupt; expected one positive decimal integer: $COUNTER_FILE"
+150:     ((value <= 1000000)) || die "TODO ID counter exceeds the T999999 ID limit"
+151:     printf '%s\n' "$value"
+152: }
+153: 
+154: persist_counter() {
+155:     local value="$1"
+156:     local counter_temp
+157: 
+158:     ((value >= 1 && value <= 1000000)) || die "TODO ID counter exceeds the T999999 ID limit"
+159:     make_temp_for "$COUNTER_FILE"
+160:     counter_temp="$NEW_TEMP"
+161:     printf '%s\n' "$value" >"$counter_temp"
+162:     chmod 600 "$counter_temp"
+163:     mv -f -- "$counter_temp" "$COUNTER_FILE"
+164: }
+165: 
+166: ensure_counter() {
+167:     local observed_next
+168:     local counter_value
+169: 
+170:     observed_next=$(($(max_task_number "$TODO_FILE" "${TODO_FILE}.bak") + 1))
+171:     if [[ -e "$COUNTER_FILE" ]]; then
+172:         counter_value=$(read_counter)
+173:         if ((counter_value < observed_next)); then
+174:             persist_counter "$observed_next"
+175:             counter_value="$observed_next"
+176:         fi
+177:     else
+178:         persist_counter "$observed_next"
+179:         counter_value="$observed_next"
+180:     fi
+181:     COUNTER_VALUE="$counter_value"
+182: }
+183: 
+184: reserve_ids() {
+185:     local count="$1"
+186:     local first
+187:     local next
+188: 
+189:     ((count >= 1)) || die "Internal error: ID reservation count must be positive"
+190:     ensure_counter
+191:     first="$COUNTER_VALUE"
+192:     next=$((first + count))
+193:     ((next <= 1000000)) || die "No stable task IDs remain after T999999"
+194: 
+195:     # Persist the reservation before the task file is published. A crash may leave
+196:     # a gap, but a later writer will never reuse an allocated ID.
+197:     persist_counter "$next"
+198:     RESERVED_FIRST="$first"
+199: }
+200: 
+201: legacy_task_count() {
+202:     awk '
+203:         /^- \[[ x]\] / && $0 !~ /^- \[[ x]\] \[T[0-9][0-9][0-9][0-9][0-9][0-9]\] / { count++ }
+204:         END { print count + 0 }
+205:     ' "$1"
+206: }
+207: 
+208: prepare_source() {
+209:     local legacy_count
+210:     local next_number
+211: 
+212:     if [[ ! -f "$TODO_FILE" ]]; then
+213:         make_temp
+214:         write_initial_file "$NEW_TEMP"
+215:         SOURCE_FILE="$NEW_TEMP"
+216:         return
+217:     fi
+218: 
+219:     # Tombstone every ID already visible in the current file or its recoverable
+220:     # backup before a mutation can remove either copy.
+221:     ensure_counter >/dev/null
+222: 
+223:     legacy_count=$(legacy_task_count "$TODO_FILE")
+224:     if [[ "$legacy_count" -eq 0 ]]; then
+225:         SOURCE_FILE="$TODO_FILE"
+226:         return
+227:     fi
+228: 
+229:     reserve_ids "$legacy_count"
+230:     next_number="$RESERVED_FIRST"
+231:     make_temp
+232:     awk -v next_number="$next_number" '
+233:         /^- \[[ x]\] / && $0 !~ /^- \[[ x]\] \[T[0-9][0-9][0-9][0-9][0-9][0-9]\] / {
+234:             printf "%s[T%06d] %s\n", substr($0, 1, 6), next_number, substr($0, 7)
+235:             next_number++
+236:             next
+237:         }
+238:         { print }
+239:     ' "$TODO_FILE" >"$NEW_TEMP"
+240:     SOURCE_FILE="$NEW_TEMP"
+241: }
+242: 
+243: commit_file() {
+244:     local replacement="$1"
+245:     local backup_temp
+246: 
+247:     if [[ -f "$TODO_FILE" ]]; then
+248:         make_temp
+249:         backup_temp="$NEW_TEMP"
+250:         cp -- "$TODO_FILE" "$backup_temp"
+251:         chmod 600 "$backup_temp"
+252:         mv -f -- "$backup_temp" "${TODO_FILE}.bak"
+253:     fi
+254: 
+255:     chmod 600 "$replacement"
+256:     mv -f -- "$replacement" "$TODO_FILE"
+257: }
+258: 
+259: validate_item_text() {
+260:     local item="$1"
+261:     [[ -n "$item" ]] || die "Task text must not be empty"
+262:     [[ "$item" != *$'\n'* && "$item" != *$'\r'* && "$item" != *$'\t'* ]] || \
+263:         die "Task text must be a single line without tabs"
+264: }
+265: 
+266: active_exact_count() {
+267:     local file="$1"
+268:     local target="$2"
+269:     TODO_AWK_TARGET="$target" awk '
+270:         BEGIN { target = ENVIRON["TODO_AWK_TARGET"] }
+271:         /^- \[ \] / {
+272:             text = $0
+273:             sub(/^- \[ \] \[T[0-9][0-9][0-9][0-9][0-9][0-9]\] /, "", text)
+274:             sub(/ \(added: [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/, "", text)
+275:             if (text == target) count++
+276:         }
+277:         END { print count + 0 }
+278:     ' "$file"
+279: }
+280: 
+281: find_matches() {
+282:     local file="$1"
+283:     local target="$2"
+284:     local state="$3"
+285:     local id_mode=0
+286:     if [[ "$target" =~ ^T[0-9]{6}$ ]]; then
+287:         id_mode=1
+288:     fi
+289: 
+290:     TODO_AWK_TARGET="$target" awk -v state="$state" -v id_mode="$id_mode" '
+291:         BEGIN { target = ENVIRON["TODO_AWK_TARGET"] }
+292:         /^- \[[ x]\] \[T[0-9][0-9][0-9][0-9][0-9][0-9]\] / {
+293:             if (state == "open" && $0 !~ /^- \[ \] /) next
+294:             id = substr($0, 8, 7)
+295:             text = $0
+296:             sub(/^- \[[ x]\] \[T[0-9][0-9][0-9][0-9][0-9][0-9]\] /, "", text)
+297:             sub(/ \((added|done): [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/, "", text)
+298:             if ((id_mode && id == target) || (!id_mode && text == target)) {
+299:                 printf "%d\t%s\t%s\n", NR, id, text
+300:             }
+301:         }
+302:     ' "$file"
+303: }
+304: 
+305: resolve_target() {
+306:     local file="$1"
+307:     local target="$2"
+308:     local state="$3"
+309:     local matches
+310:     local count
+311: 
+312:     matches=$(find_matches "$file" "$target" "$state")
+313:     count=$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }')
+314:     if [[ "$count" -eq 0 ]]; then
+315:         die "No exact $state task found for: $target"
+316:     fi
+317:     if [[ "$count" -gt 1 ]]; then
+318:         printf 'ERROR: Ambiguous exact text matched %s tasks; use one stable ID:\n%s\n' "$count" "$matches" >&2
+319:         exit 2
+320:     fi
+321:     printf '%s\n' "$matches"
+322: }
+323: 
+324: section_for_priority() {
+325:     case "$1" in
+326:         high) printf '%s\n' '## 🔴 High Priority' ;;
+327:         medium) printf '%s\n' '## 🟡 Medium Priority' ;;
+328:         low) printf '%s\n' '## 🟢 Nice to Have' ;;
+329:         *) die "Priority must be high, medium, or low" ;;
+330:     esac
+331: }
+332: 
+333: add_item() {
+334:     local priority="$1"
+335:     local item="$2"
+336:     local section
+337:     local next_number
+338:     local task_id
+339:     local entry
+340:     local output
+341: 
+342:     validate_item_text "$item"
+343:     section=$(section_for_priority "$priority")
+344:     acquire_lock
+345:     prepare_source
+346: 
+347:     if [[ "$(active_exact_count "$SOURCE_FILE" "$item")" -gt 0 ]]; then
+348:         die "An open task with that exact text already exists; use its stable ID"
+349:     fi
+350: 
+351:     reserve_ids 1
+352:     next_number="$RESERVED_FIRST"
+353:     printf -v task_id 'T%06d' "$next_number"
+354:     entry="- [ ] [$task_id] $item (added: $TODAY)"
+355:     make_temp
+356:     output="$NEW_TEMP"
+357:     if ! TODO_AWK_ENTRY="$entry" awk -v section="$section" -v today="$TODAY" '
+358:         BEGIN { entry = ENVIRON["TODO_AWK_ENTRY"] }
+359:         /^\*Last updated: / { print "*Last updated: " today "*"; next }
+360:         $0 == section { print; print entry; inserted = 1; next }
+361:         { print }
+362:         END { if (!inserted) exit 42 }
+363:     ' "$SOURCE_FILE" >"$output"; then
+364:         die "TODO file is missing the expected priority section: $section"
+365:     fi
+366:     commit_file "$output"
+367:     printf 'Added %s: %s\n' "$task_id" "$item"
+368: }
+369: 
+370: mark_done() {
+371:     local target="$1"
+372:     local match
+373:     local line_number
+374:     local task_id
+375:     local item
+376:     local output
+377: 
+378:     validate_item_text "$target"
+379:     [[ -f "$TODO_FILE" ]] || die "No TODO file found: $TODO_FILE"
+380:     acquire_lock
+381:     prepare_source
+382:     match=$(resolve_target "$SOURCE_FILE" "$target" "open")
+383:     IFS=$'\t' read -r line_number task_id item <<<"$match"
+384: 
+385:     make_temp
+386:     output="$NEW_TEMP"
+387:     if ! TODO_AWK_ITEM="$item" awk -v target_line="$line_number" -v task_id="$task_id" -v today="$TODAY" '
+388:         BEGIN { item = ENVIRON["TODO_AWK_ITEM"] }
+389:         NR == target_line { next }
+390:         /^\*Last updated: / { print "*Last updated: " today "*"; next }
+391:         $0 == "## ✅ Done" {
+392:             print
+393:             printf "- [x] [%s] %s (done: %s)\n", task_id, item, today
+394:             inserted = 1
+395:             next
+396:         }
+397:         { print }
+398:         END { if (!inserted) exit 42 }
+399:     ' "$SOURCE_FILE" >"$output"; then
+400:         die "TODO file is missing the Done section"
+401:     fi
+402:     commit_file "$output"
+403:     printf 'Completed %s: %s\n' "$task_id" "$item"
+404: }
+405: 
+406: remove_item() {
+407:     local target="$1"
+408:     local confirm_flag="${2:-}"
+409:     local confirmed_id="${3:-}"
+410:     local match
+411:     local line_number
+412:     local task_id
+413:     local item
+414:     local output
+415: 
+416:     validate_item_text "$target"
+417:     [[ -f "$TODO_FILE" ]] || die "No TODO file found: $TODO_FILE"
+418:     acquire_lock
+419:     prepare_source
+420: 
+421:     # A removal preview must return an ID that the confirmation command can
+422:     # resolve later. Persist a first-time legacy ID migration under the same
+423:     # lock before previewing; this changes task identity metadata only and does
+424:     # not remove any task.
+425:     if [[ "$SOURCE_FILE" != "$TODO_FILE" ]]; then
+426:         commit_file "$SOURCE_FILE"
+427:         SOURCE_FILE="$TODO_FILE"
+428:     fi
+429: 
+430:     match=$(resolve_target "$SOURCE_FILE" "$target" "any")
+431:     IFS=$'\t' read -r line_number task_id item <<<"$match"
+432: 
+433:     if [[ "$confirm_flag" != "--confirm" || "$confirmed_id" != "$task_id" ]]; then
+434:         printf 'Removal preview: [%s] %s\n' "$task_id" "$item" >&2
+435:         printf 'After explicit approval, run: remove %s --confirm %s\n' "$task_id" "$task_id" >&2
+436:         exit 2
+437:     fi
+438: 
+439:     [[ "$target" == "$task_id" ]] || die "Confirmed removal must target the exact stable ID: $task_id"
+440:     make_temp
+441:     output="$NEW_TEMP"
+442:     awk -v target_line="$line_number" -v today="$TODAY" '
+443:         NR == target_line { next }
+444:         /^\*Last updated: / { print "*Last updated: " today "*"; next }
+445:         { print }
+446:     ' "$SOURCE_FILE" >"$output"
+447:     commit_file "$output"
+448:     printf 'Removed %s: %s\n' "$task_id" "$item"
+449: }
+450: 
+451: list_items() {
+452:     local priority="${1:-}"
+453:     local section
+454: 
+455:     if [[ ! -f "$TODO_FILE" ]]; then
+456:         printf 'No TODO file found: %s\n' "$TODO_FILE"
+457:         return
+458:     fi
+459: 
+460:     if [[ -z "$priority" ]]; then
+461:         cat -- "$TODO_FILE"
+462:         return
+463:     fi
+464: 
+465:     case "$priority" in
+466:         high) section='## 🔴 High Priority' ;;
+467:         medium) section='## 🟡 Medium Priority' ;;
+468:         low) section='## 🟢 Nice to Have' ;;
+469:         done) section='## ✅ Done' ;;
+470:         *) die "List filter must be high, medium, low, or done" ;;
+471:     esac
+472: 
+473:     awk -v section="$section" '
+474:         $0 == section { found = 1 }
+475:         found && /^## / && $0 != section { exit }
+476:         found { print }
+477:     ' "$TODO_FILE"
+478: }
+479: 
+480: week_ago() {
+481:     date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d
+482: }
+483: 
+484: summary() {
+485:     local cutoff
+486:     if [[ ! -f "$TODO_FILE" ]]; then
+487:         printf 'TODO counts: total=0 high=0 medium=0 low=0 stale=0\n'
+488:         return
+489:     fi
+490: 
+491:     cutoff=$(week_ago)
+492:     awk -v cutoff="$cutoff" '
+493:         $0 == "## 🔴 High Priority" { priority = "high"; next }
+494:         $0 == "## 🟡 Medium Priority" { priority = "medium"; next }
+495:         $0 == "## 🟢 Nice to Have" { priority = "low"; next }
+496:         /^## / { priority = "" }
+497:         priority != "" && /^- \[ \] / {
+498:             counts[priority]++
+499:             total++
+500:             if (match($0, /\(added: [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/)) {
+501:                 added = substr($0, RSTART + 8, 10)
+502:                 if (added < cutoff) stale++
+503:             }
+504:         }
+505:         END {
+506:             printf "TODO counts: total=%d high=%d medium=%d low=%d stale=%d\n", \
+507:                 total + 0, counts["high"] + 0, counts["medium"] + 0, \
+508:                 counts["low"] + 0, stale + 0
+509:         }
+510:     ' "$TODO_FILE"
+511: }
+512: 
+513: heartbeat() {
+514:     if [[ "${TODO_HEARTBEAT_ENABLED:-0}" != "1" ]]; then
+515:         printf 'TODO heartbeat disabled\n'
+516:         return
+517:     fi
+518:     summary
+519: }
+520: 
+521: command="${1:-}"
+522: case "$command" in
+523:     add)
+524:         [[ $# -eq 3 ]] || die "Usage: add <high|medium|low> <item>"
+525:         add_item "$2" "$3"
+526:         ;;
+527:     done)
+528:         [[ $# -eq 2 ]] || die "Usage: done <ID|exact-text>"
+529:         mark_done "$2"
+530:         ;;
+531:     remove)
+532:         [[ $# -eq 2 || $# -eq 4 ]] || die "Usage: remove <ID|exact-text> [--confirm <same-ID>]"
+533:         remove_item "$2" "${3:-}" "${4:-}"
+534:         ;;
+535:     list)
+536:         [[ $# -le 2 ]] || die "Usage: list [high|medium|low|done]"
+537:         list_items "${2:-}"
+538:         ;;
+539:     summary)
+540:         [[ $# -eq 1 ]] || die "Usage: summary"
+541:         summary
+542:         ;;
+543:     heartbeat)
+544:         [[ $# -eq 1 ]] || die "Usage: heartbeat"
+545:         heartbeat
+546:         ;;
+547:     *)
+548:         usage >&2
+549:         exit 1
+550:         ;;
+551: esac

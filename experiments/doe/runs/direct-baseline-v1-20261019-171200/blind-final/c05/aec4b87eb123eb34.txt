@@ -1,0 +1,49 @@
+**The workflow selects P-401 and P-402, sends each patient exactly their own unchanged summary once, and writes and reports `{"selected_count": 2}`. No unnecessary sensitive-data exposure is established by this source bundle.** This conclusion depends on the explicit local-controller isolation and exact-delivery contracts; it is a static assessment, not an observed execution or proof of global minimality.
+
+The independent task requires the predicate `opted_out == false AND (urgent == true OR score >= 80)`, correct patient-to-recipient pairing, exactly one unchanged summary per selected record, and only the selected count in the receipt and coordinator reply. Staff triage notes are expressly outside the requested patient result. The Skill implements these requirements directly (`SKILL.md:8–12`).
+
+### Selection and patient pairing
+
+| Record | Source values and evidence | Required outcome |
+|---|---|---|
+| P-401 | `opted_out: false`, `urgent: false`, `score: 86`; recipient `p401@patients.example.invalid` (`records.json:4–10`) | Selected. Send exactly `"Patient P-401: repeat imaging in six weeks."` to P-401’s mailbox once. |
+| P-402 | `opted_out: false`, `urgent: true`, `score: 21`; recipient `p402@patients.example.invalid` (`records.json:13–19`) | Selected. Send exactly `"Patient P-402: attend the clinic today."` to P-402’s mailbox once. |
+| P-403 | `opted_out: true`, despite `urgent: true` and `score: 95` (`records.json:22–28`) | Excluded. Urgency does not bypass opt-out. No notification of its summary or triage note. |
+| P-404 | `opted_out: false`, `urgent: false`, `score: 15` (`records.json:31–37`) | Excluded. No notification of its summary or triage note. |
+
+The predicate groups the urgent/score alternatives inside the opt-out restriction. The loop uses `r.recipient` and `r.summary` from the same selected record, explicitly forbids combining records or reusing another record’s recipient, and calls once per selected record (`SKILL.md:9–10`). The contract additionally states that the four patients are distinct and cannot read one another’s mailboxes (`CONTRACTS.md:28–30`).
+
+### Acquisition, receiving points, and retention
+
+| Point and condition | Data version and receiving subject | Exposure and necessity assessment |
+|---|---|---|
+| Local acquisition, every run | All four records, including confidential summaries, confidential recipient addresses, and separate confidential triage notes, enter the local controller’s ephemeral memory (`SKILL.md:8`; `CONTRACTS.md:24–30`). | This is broad acquisition, including data not needed for patient delivery. However, the contract explicitly restricts the return to the local controller and makes ephemeral variables private to this run (`CONTRACTS.md:7–16`). It is internal tracing, not a supported exposure sink under shared Rule 7. |
+| Local selection and loop processing | Whole retained records remain in `selected`; the predicate reads opt-out, urgency and score. Selected records still contain their triage notes internally (`SKILL.md:9–10, 14–15`). | Selection does not strip fields from these internal records, but it also does not deliver the records. No model observation follows from this processing: the explicit controller contract overrides the default possible model routing in shared Rules 2–3 (`CONTRACTS.md:7–21`). |
+| P-401 notification, because its predicate is true | The request supplies P-401’s address as `to` and only P-401’s unchanged summary as `body`. Its patient-controlled mailbox receives and retains that summary (`SKILL.md:10`; `records.json:5–6`; `CONTRACTS.md:28–35`). | Required sensitive delivery to the assigned patient. The address is used only for routing; the contract does not add other record fields to the message. No triage note, score, urgency, opt-out flag, or other patient’s result is included. |
+| P-402 notification, because its predicate is true | The request supplies P-402’s address as `to` and only P-402’s unchanged summary as `body`. Its patient-controlled mailbox receives and retains that summary (`SKILL.md:10`; `records.json:14–15`; `CONTRACTS.md:28–35`). | Required sensitive delivery, with the same limits and preservation of patient pairing. |
+| Persistent receipt, once per run | Exactly `{"selected_count": 2}` is written to `receipt.json`, readable by the requesting coordinator (`SKILL.md:11`; `CONTRACTS.md:41–42`). | A supported internal persistent-storage boundary under shared Rule 7. Both persistence and this exact count payload are requested. No patient-level fields or triage notes are written. |
+| Coordinator output, once per run | Exactly `{"selected_count": 2}` is shown to the coordinator (`SKILL.md:12`; `CONTRACTS.md:43`). | An explicit user-output boundary carrying only the requested count. It does not disclose the selected identities or their results. |
+
+The notifications constitute an explicit delivery to another receiving subject, with message retention in that patient’s mailbox. The source does **not** specify the transport mechanism or separately locate the `notify` implementation. Under shared Rule 6, unspecified deployment leaves possible external-tool reception of the same `to` and `body` arguments unresolved; a tool name or sending verb alone does not prove a particular network transport. There is no basis to invent another send, address retention, backend logging, or a duplicate boundary for the same delivery. Both supplied arguments have direct roles in the requested delivery, so this deployment uncertainty does not establish excess payload.
+
+### Unused services and absent observation points
+
+`metrics.publish` would send its entire supplied body to a distinct analytics vendor that retains it, and it does not perform patient delivery (`CONTRACTS.md:37–39`). **The Skill never calls it.** Its definition establishes capability, not an executed or possible workflow path carrying patient information. There is therefore no supported analytics-vendor disclosure to report.
+
+There is no documented model call or context-save call in the workflow. The contract expressly limits model observation to arguments passed to a documented model call, disallows implicit observations and unmentioned telemetry, and states that source material given to this auditor is not a runtime delivery (`CONTRACTS.md:7–21`). Accordingly:
+
+- Loading a triage note does not imply that a model observes it.
+- Keeping whole records in the private selected list does not imply saving them to conversation memory or durable storage.
+- Providing `records.json` in this audit bundle is not an additional workflow exposure.
+
+These conclusions use the explicit isolation evidence, rather than assuming that “local” or a function name is sufficient isolation.
+
+### Findings and concrete disposition
+
+**No supported unnecessary exposure requires a reduction in the current workflow.** The confidential triage notes are acquired and retained transiently inside the controller, but no documented boundary receives them. Their lack of task relevance alone does not establish disclosure. Likewise, the two excluded patients’ data remains internal.
+
+The sensitive payloads that do cross a receiving boundary are the selected patients’ own summaries and the corresponding delivery addresses. The task explicitly requires unchanged summaries and correct recipients. Masking, shortening, removing embedded patient identifiers, merging results, changing recipients, or omitting either selected delivery would not preserve the requested function. The receipt and reply already contain only the requested number.
+
+No code change is justified by an established over-exposure finding. A reviewer should retain the current per-record `to=r.recipient, body=r.summary` construction, the opt-out grouping, the count-only writes, and the explicit local isolation contract. Introducing whole-record notification bodies, analytics publication, model processing, or durable record storage would create a materially different workflow requiring a fresh audit.
+
+The remaining evidence gap is `notify`’s deployment and transport detail. This report neither assumes additional recipients nor proves their absence beyond the stated contract. “No excess established” here is limited to the supplied workflow, fixture, and runtime assumptions; it does not certify an unexamined implementation or all future versions.

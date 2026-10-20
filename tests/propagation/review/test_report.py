@@ -122,9 +122,9 @@ def test_program_generated_semantic_correspondence_keeps_source_seed_and_gap():
     model = display_model(result, prepared)
     assert model["crosswalk"][0]["requirement_id"] == prepared["task"]["requirements"][0]["id"]
     assert model["crosswalk"][0]["realization"]["status"] == "unmapped"
-    assert model["crosswalk"][0]["seeds"] == []
+    assert model["crosswalk"][0]["declarations"] == []
     for rendered in (render_markdown(model), render_html(model)):
         assert "Per-requirement semantic correspondence" in rendered
-        assert "unmapped" in rendered and "No positive seed" in rendered
+        assert "unmapped" in rendered and "No executable declaration" in rendered
         assert "Expression status and review acceptance do not prove requirement satisfaction" in rendered
         assert "skill/SKILL" in rendered

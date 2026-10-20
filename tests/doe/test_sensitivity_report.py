@@ -13,15 +13,16 @@ def fixture():
         "declaration_index": 0, "declaration": declaration}}}
     item = {"id": "review-A", "operation_id": "op-A", "input_index": 1,
         "derivation_id": "SD1", "conclusion": "possible_excess", "reason": "A possible relation does not prove plaintext.",
-        "demand_refs": ["DD1"], "reduction": None}
+        "demand_refs": ["DD1"], "constraint_refs": [], "reduction": None}
     signal = {"data_id": "D-A", "label": "credential <script>", "property": "value", "path": ["secret"],
         "excluded_paths": [], "relation": "possible", "declaration_id": "S1", "parents": [], "rules": ["explicit_declaration"]}
-    result = {"schema_version": "skillflow-sensitivity-review-v3", "status": "complete", "sinks": [
+    result = {"schema_version": "skillflow-sensitivity-review-v4", "status": "complete", "sinks": [
         {"id": "sink-A", "boundary": {"target": "<img>"}, "actual_payload": [["D-A"], ["D-A"]],
          "related_requirements": ["R1"], "data_reviews": [item], "limitations": []},
         {"id": "sink-B", "boundary": {}, "actual_payload": [], "related_requirements": [],
          "data_reviews": [], "limitations": []}],
         "derivations": {"sensitivity": {"SD1": signal}, "demand": {"DD1": {}}},
+        "constraints": {"checks": {}, "preservation": {}, "influence": {}},
         "diagnostics": [], "coverage": {"sensitivity_basis": "declared_ranges_only"}}
     metadata = {"candidate_origin": "assistant_authored_offline", "source_files": {
         "skill/SKILL.md": "Header\r\nKeep credential private.\r\n"}, "task": {"requirements": [{"id": "R1", "text": "Return the original value."}]}}

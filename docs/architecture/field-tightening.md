@@ -11,7 +11,7 @@ Task v3：purpose / requirements / source_accounting / issues / 源与任务摘�
 canonical 编译标注：task_ref / realizations / 归一化 demands、expressions /
                     ir_semantics / locations / sink_boundaries / location_evidences
 编译映射：events / goals（raw_pointer → goal_id / requirement_id / target）
-审查：source_checks / requirement_checks / goal_checks / reviewed_ir_ids / findings
+审查：source_checks / requirement_checks / declaration_checks / reviewed_ir_ids / findings
 需求推导：seed_goal_id / requirement_id / node / property / path / parents / rules
 ```
 

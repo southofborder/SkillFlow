@@ -145,7 +145,7 @@ def display_lineage(exporter, tmp_path):
     directory = tmp_path / "child-display"
     cases = [{"case_id": f"{i:03}", "sample_id": sample, "basename": f"{i:03}-skill"}
              for i, sample in enumerate(exporter.SAMPLE_IDS, 1)]
-    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(),
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": exporter.IDENTITY, **contract_binding(),
                 "cases": cases, "renderer": {"path": "unused-renderer"}}
     exporter.write_json(directory / "manifest.json", manifest)
     value = {"schema_version": exporter.RERUN_FORMAT_VERSION, "identity": exporter.RERUN_IDENTITY,
@@ -221,7 +221,7 @@ def test_origin_is_display_only_and_plain_runs_remain_unchanged(exporter, case, 
     assert "parent-display" in exporter.suggestions(reused)
     assert exporter.render_samples({"cases": [reused]}) == before
     assert exporter.render_samples({"cases": [rerun]}) == before
-    result = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(),
+    result = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": exporter.IDENTITY, **contract_binding(),
               "cases": {c["case_id"]: {} for c in cases}}
     exporter.write_json(directory / "experiment-result.json", result)
     monkeypatch.setattr(exporter._png, "check_inventory", lambda *_: None)
@@ -348,9 +348,9 @@ def test_no_cfg_has_failure_card_and_no_fake_graph(exporter, case, tmp_path):
 
 
 def test_numbering_and_complete_batch_required(exporter, case, monkeypatch):
-    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(),
+    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": exporter.IDENTITY, **contract_binding(),
                 "renderer": {"path": "unused"}, "cases": [case["item"]]}
-    result = {"schema_version": 14, "profile_schema_version": "security-profile-v14", "identity": exporter.IDENTITY, **contract_binding(), "cases": {"001": case["result"]}}
+    result = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": exporter.IDENTITY, **contract_binding(), "cases": {"001": case["result"]}}
     exporter.write_json(case["run_dir"] / "manifest.json", manifest)
     exporter.write_json(case["run_dir"] / "experiment-result.json", result)
     with pytest.raises(ValueError, match="thirty-case"):
@@ -386,7 +386,7 @@ def _tiny_png(rgb=b"\xff\xff\xff"):
 
 def test_export_stages_exact_pairs_and_binds_actual_png_bytes(exporter, case, tmp_path, monkeypatch):
     row = load(exporter, case)
-    plan = {"schema_version": 8, "profile_schema_version": "security-profile-v14", "cases": [row], "run_id": "run", "manifest_sha256": "m", "experiment_result_sha256": "r"}
+    plan = {"schema_version": 8, "profile_schema_version": "security-profile-v15", "cases": [row], "run_id": "run", "manifest_sha256": "m", "experiment_result_sha256": "r"}
     monkeypatch.setattr(exporter, "build_export_plan", lambda *args, **kwargs: deepcopy(plan))
     def render(command, **kwargs):
         args = dict(zip(command[2::2], command[3::2]))
@@ -409,7 +409,7 @@ def test_export_stages_exact_pairs_and_binds_actual_png_bytes(exporter, case, tm
     before = sha_file(case["zip"])
     manifest = exporter.export(case["run_dir"], staging, skills_dir=case["skills"], node_modules=tmp_path)
     assert manifest["published"] is False and manifest["visual_review"] == "pending"
-    assert manifest["schema_version"] == 8 and manifest["profile_schema_version"] == "security-profile-v14"
+    assert manifest["schema_version"] == 8 and manifest["profile_schema_version"] == "security-profile-v15"
     assert sha_file(case["zip"]) == before
     assert exporter.validate_staging(plan, staging)[0]["kind"] == "cfg"
     png = staging / row["png_file"]

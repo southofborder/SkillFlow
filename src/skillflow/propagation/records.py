@@ -103,7 +103,7 @@ class PropagationRecords:
         initial_state: FlowState | None = None,
     ) -> None:
         if profile_schema_version != PROFILE_SCHEMA_VERSION:
-            raise PropagationRecordError("requires explicit security-profile-v14 annotation identity")
+            raise PropagationRecordError("requires explicit " + PROFILE_SCHEMA_VERSION + " annotation identity")
         if not isinstance(data_registry, DataRegistry):
             raise PropagationRecordError("data_registry must be a DataRegistry")
         self._cfg = _graph_payload(cfg)

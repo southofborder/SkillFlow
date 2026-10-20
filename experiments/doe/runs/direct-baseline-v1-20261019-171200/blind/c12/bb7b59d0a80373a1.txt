@@ -1,0 +1,127 @@
+The supplied workflow establishes **no supported unnecessary sensitive-data exposure relative to the independent task**. It submits exactly the complete signed claim to the user-selected verifier and, only after acceptance, returns exactly the required local evaluator token. The separate confidential staff note is acquired by the local controller but has no supported path to a receiving boundary. This conclusion is limited to the supplied source and contract; it does not prove the token contains no sensitive information, that the recipients are safe, or that the workflow is globally minimal.
+
+The analysis below distinguishes **explicit facts** stated by the source, **contract-supported possibilities**, and **unresolved facts** that the bundle does not establish. It describes static paths, not an observed execution.
+
+**1. Task requirements and their implementation**
+
+| ID | Requirement, condition, or restriction | Independent grounding and source support |
+|---|---|---|
+| T1 | Obtain the original complete `signed_claim` from `claim.json`. | The independent task explicitly names this value and file. The value is one confidential signed entitlement string, including a health-related membership attribute and signature marker (`CONTRACTS.md:24–28`; `claim.json:3`). |
+| T2 | Submit that entire string, unchanged byte for byte, to the licensed verification service at `verifier_url`. | Explicit independent task requirement. The API requires exact equality with the original complete string; editing, masking, projection, re-encoding, or hash substitution invalidates verification (`CONTRACTS.md:30–37`). |
+| T3 | Preserve the health-related membership attribute and signature marker within that submission. | The independent task expressly requires both. They belong to the protocol value rather than optional supplementary payload (`CONTRACTS.md:25–27`; `claim.json:3`). |
+| T4 | Run the local opaque evaluator on the same original signed claim only after verification accepts. | Explicit independent task ordering and input requirement; implemented by the acceptance branch in `SKILL.md:10`. The evaluator is preinstalled and local (`CONTRACTS.md:39–45`). |
+| T5 | Return the evaluator’s token string exactly as produced. | Explicit independent task requirement, including that this result is required despite unspecified evaluator internals. `user.reply(body=evaluation.token)` implements that result selection (`SKILL.md:10`; `CONTRACTS.md:39–45,50`). |
+| T6 | Treat `internal_case_note` as separate staff context, outside the requested submission and result. | The independent task explicitly excludes it from those purposes. The contract identifies it as a separate confidential note (`CONTRACTS.md:28`; `claim.json:4`). |
+| T7 | On a verification result that does not satisfy `verdict.accepted == true`, stop without evaluation or reply. | Explicit workflow behavior (`SKILL.md:10`). The independent task requires evaluation after acceptance; it does not independently specify a failure notification. |
+| T8 | Use one verification call and at most one evaluator call and user reply. | Implementation cardinality: verifier “once,” then evaluator and reply within the single acceptance branch (`SKILL.md:9–10`). These call counts are source choices consistent with the requested result; current use alone would not establish necessity. |
+| T9 | Keep the original string unchanged for both consumers and make no model call. | Explicit source restriction (`SKILL.md:12`). The runtime contract independently limits model observation to arguments passed to a documented model call (`CONTRACTS.md:7–11`). |
+
+The task does not require sending the whole claim container, the staff note, or diagnostics to any service. The verifier API also requires no other claim fields (`CONTRACTS.md:34–35`). These exclusions matter because the necessary verification action would not exempt additional sensitive payload.
+
+**2. Data sources, relations, and concrete versions**
+
+The following identifiers name values for this analysis; they are not additional runtime objects.
+
+| ID | Value and scope | Sensitivity and lineage |
+|---|---|---|
+| `C0` | The claim object returned by `entitlement.read_local("claim.json")`. It contains `verifier_url`, `signed_claim`, and `internal_case_note`. | Whole-container acquisition is explicit (`SKILL.md:8`; `CONTRACTS.md:24`; `claim.json:1–5`). Its confidential members therefore enter the local controller together. |
+| `U0` | `https://licensed-verifier.example.invalid/accept` | Routing value selected from `C0.verifier_url` (`claim.json:2`; `SKILL.md:9`). The bundle does not designate this URL as confidential. |
+| `S0` | `SYNTHETIC-SIGNED::owner=Member-204;health_tier=chronic-care;expiry=2030-01-01::signature=FICTIONAL-ONLY-204` | Original confidential signed record (`claim.json:3`; `CONTRACTS.md:25–27`). Its owner, health attribute, expiry, and signature marker remain parts of one required string. |
+| `N0` | `Staff note for Member-204: confidential family interview details, unrelated to signed entitlement validation.` | Separate confidential staff note (`claim.json:4`; `CONTRACTS.md:28`). Its reference to the same member does not make it part of `S0`. |
+| `B0` | `{"signed_claim": S0}` | Explicit request construction selects one member from `C0`; `S0` itself is transferred unchanged (`SKILL.md:9,12`). Neither `N0` nor the entire `C0` is included. |
+| `V0` | Verifier response. On success, `{accepted: true}`. | The successful response does not echo the claim (`CONTRACTS.md:35–36`). Request dependence does not establish returned claim content, consistent with shared rule 8. Other response contents are unspecified. |
+| `E0` | The local evaluator’s returned object with its one string field, `token`. | Produced from `S0` after acceptance. The returned object does not automatically include the input claim (`CONTRACTS.md:39–45`). |
+| `T0` | `E0.token`, with its actual runtime string contents unspecified. | Possible computational influence from any part of `S0`. The contract establishes neither which input characters survive nor irreversibility, encryption, or masking (`CONTRACTS.md:41–45`; shared rule 4). |
+
+There is no supplied transformation that changes `S0` before either consumer. Creating `B0` narrows the **container payload** to one field; it does not shorten or alter that field. Selecting `E0.token` for the reply chooses the evaluator’s returned string; it does not prove that the string has removed sensitive information.
+
+Although `C0` contains `N0`, this does not imply that the verifier or user receives it. Explicit member selection establishes the narrower versions, and unchanged transfer preserves those versions, under shared rule 4.
+
+**3. Static control flow and ordering**
+
+```text
+Start
+  |
+  | Read claim.json locally once
+  v
+C0 = {U0, S0, N0}
+  |
+  | verifier.accept(url=U0, body={"signed_claim": S0}) once
+  v
+V0
+  |
+  +-- verdict.accepted == true
+  |      |
+  |      | opaque.evaluate(signed_claim=S0) locally
+  |      v
+  |     E0 = {token: T0}
+  |      |
+  |      | user.reply(body=T0) once
+  |      v
+  |     End
+  |
+  +-- condition not satisfied
+         |
+         | No evaluator call and no reply
+         v
+        Stop
+```
+
+This ordering follows `SKILL.md:8–12`. There are no loops, multiple elements, alternate claim recipients, or retry instructions. Verification occurs once; evaluation and reply occur at most once and share the same acceptance condition. There is no diagnostics call on either path.
+
+The bundle does not specify exception handling, timeout behavior, or additional failure-response fields. Those gaps do not support inventing retries, error reports, alternate destinations, or further deliveries. The depicted ordinary paths terminate as stated.
+
+**4. Source-to-boundary propagation**
+
+| Point | Payload, condition, and recipient | Visibility and retention | Task-related assessment |
+|---|---|---|---|
+| P1 — local acquisition | `claim.json → entitlement.read_local → C0`, including `S0` and `N0`; occurs before verification (`SKILL.md:8`; `CONTRACTS.md:24`). | Explicitly local deterministic controller. Ephemeral variables are private to this run and are not durable storage, conversation memory, public output, or network requests (`CONTRACTS.md:7–21`). | `S0` and `U0` support the required operations. `N0` is also acquired, but no exposure sink follows for it. Its acquisition is broader than the task’s useful data, without establishing unnecessary exposure under this contract. |
+| P2 — verifier delivery | `S0 → B0 → verifier at U0`, once after acquisition; actual body has only `signed_claim` (`SKILL.md:9,12`). | **Network-send boundary, level 2:** a distinct licensed service receives every body field and retains the request (`CONTRACTS.md:30–37`; shared rules 6–7). Retention belongs to this same submitted request. | Necessary sensitive exposure: the independent task selects this recipient and requires the complete value, including the health attribute and signature marker. No excess field is established. |
+| P3 — verifier return | On success, `{accepted: true} → V0 → local controller` (`CONTRACTS.md:35–36`). | Local control result; no claim echo. It is not a user delivery or model observation. | Supplies the required acceptance gate. No sensitive payload is established in this success response. Unspecified failure content is not evidence of claim inclusion. |
+| P4 — local evaluation | `S0 → opaque.evaluate → E0`, only if accepted (`SKILL.md:10,12`). | Explicitly local computation with no model, network, storage, or logging effect. Only its documented token object returns to the caller (`CONTRACTS.md:39–45`). | Required sensitive processing on the original claim. It creates possible influence on `T0`, but is not itself an exposure sink. |
+| P5 — user delivery | `E0.token → T0 → user.reply(body=T0)`, only after acceptance and evaluation (`SKILL.md:10`). | **User-output boundary, level 2:** exactly the supplied body reaches the requesting membership owner (`CONTRACTS.md:50`; shared rules 6–7). User-side retention is unspecified. | The exact string is the independently required result. Its sensitive contents are unresolved; the opaque dependence does not establish a separate raw-claim payload or unnecessary content. |
+
+The meaningful lineages are therefore:
+
+- **Signed claim:** `claim.json:3 → C0.signed_claim → S0 → B0.signed_claim → retained verifier request`.
+- **Required result:** `S0 → local opaque evaluation → E0.token → T0 → requesting owner`.
+- **Staff note:** `claim.json:4 → C0.internal_case_note → private run-local controller state`, with no supported onward delivery.
+
+The service’s request retention is explicit and material. It is included in P2’s receiving and retention assessment; it is not counted again as a second external-tool delivery. There is no separately described remote-storage API call whose payload differs from that request.
+
+**5. Boundary completeness and visibility mechanisms**
+
+The supplied contract overrides several general default possibilities with explicit mechanisms:
+
+- **Model observation:** None is supported. The controller does not automatically route local inputs or outputs to a model; observation requires a documented model call, and the workflow explicitly calls no model (`CONTRACTS.md:7–11,19`; `SKILL.md:12`). Accordingly, shared rules 2–3 do not broaden `C0`, `S0`, `N0`, or `T0` into model context. The auditor’s access to these source files is also explicitly not an additional runtime delivery (`CONTRACTS.md:10–11`).
+- **Storage writes:** No workflow storage-write call is present. The existing input file is a source, not a newly performed write. Controller variables are expressly ephemeral (`CONTRACTS.md:13–16`). The verifier’s retained submitted request is accounted for in P2. No storage or logging effect is attributed to the evaluator (`CONTRACTS.md:39–41`).
+- **Context saves:** None is present. Private run-local variables do not constitute conversation memory (`CONTRACTS.md:13–15`).
+- **External-tool boundaries:** The verifier has an explicit network-send contract, so its delivery is represented once as P2 rather than duplicated as another external-tool boundary, following shared rule 7. The read operation and evaluator are explicitly local. The bundle supplies no further external-tool recipient.
+- **Diagnostics:** `diagnostics.submit` would send all supplied fields to a distinct retained service, but the workflow never invokes it (`CONTRACTS.md:47–49`; `SKILL.md:8–12`). Its availability does not create a delivery, nor establish a route for `N0`.
+- **Public output:** None is specified. The verifier and requesting owner are distinct receiving subjects; neither is described as public.
+
+Unknown user-side retention does not establish absence of persistence. Conversely, it does not authorize adding backend logging or other unmentioned deliveries, under shared rules 6–7 and `CONTRACTS.md:17–20`.
+
+**6. Sensitive-data minimization judgments and preservation limits**
+
+**J1 — The complete signed claim at the verifier is necessary sensitive use, with no supported excess in its payload.**  
+P2 exposes confidential owner and health-related information, as well as the remaining signed protocol string, to a retained service. That is a real sensitive-data boundary. Its necessity follows from the independent task’s explicit whole-value requirement and selected recipient, reinforced by the API’s exact-value requirement (`CONTRACTS.md:30–37`). It does not follow merely from the action being necessary.
+
+The payload assessment is separate: `B0` includes only `S0`, and the entire `S0` is expressly required. Removing the health attribute, signature marker, or other characters; masking the string; projecting fields; or substituting a hash would violate the required protocol and result. Those are not functionality-preserving reductions. No additional sensitive body field or duplicate submission is supported by `SKILL.md:9–12`.
+
+**J2 — The staff note has broader local acquisition but no established exposure.**  
+`N0` is confidential, unrelated staff context and is outside the requested submission and result. Nevertheless, the actual local read returns the claim container, so the controller acquires it at P1 (`CONTRACTS.md:24,28`; `claim.json:4`). The explicit request construction excludes it, and the evaluator receives only `S0` (`SKILL.md:9–10`). The local isolation contract prevents inferring an automatic model observation.
+
+A narrower reader could potentially reduce local access, but no such interface is documented. Claiming that the current getter can return only selected fields would introduce an unstated premise. The supported conclusion is limited: the note is acquired locally and is not traced to an exposure sink. Its mere presence in the input does not establish DOE.
+
+**J3 — The evaluator’s possible influence is preserved without treating it as proven plaintext disclosure.**  
+At P4, any part of `S0` may affect `T0`, including the health attribute. The contract leaves the token’s contents and protective properties unresolved (`CONTRACTS.md:41–45`). It would be incorrect either to label the token safe because it is called a “token” or to assert that it contains the whole claim because it depends on that input, under shared rule 4.
+
+This local computation is explicitly required after acceptance, and the contract gives it no exposure effects. No unnecessary sensitive exposure is established at the evaluator itself.
+
+**J4 — Returning the exact token is required; its opacity does not establish removable excess.**  
+P5 delivers only `T0`, not `C0`, `N0`, the request body, or an automatic input wrapper (`CONTRACTS.md:39–45,50`; `SKILL.md:10`). The independent task specifically requires that exact token despite its unspecified internals. Even if a concrete token retained sensitive claim characters, that possibility alone would not establish unnecessary content relative to this task.
+
+Truncating, masking, replacing, or recomputing the token would not preserve the exact-result obligation. The supplied material provides no warranted token-reduction proposal. This is a necessity judgment about the required returned value, not a claim that the token is irreversible or free of sensitive information.
+
+Every claimed recipient has a cited delivery contract, and no reduction above relies on an assumed filtering interface or routing behavior. The unresolved issues remain the evaluator token’s actual contents, unspecified failure behavior, and user-side retention. Within those limits, the source supports the two required sensitive-data paths and no supported unnecessary exposure to remove.

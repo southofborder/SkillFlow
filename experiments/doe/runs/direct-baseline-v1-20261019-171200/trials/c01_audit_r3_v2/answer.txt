@@ -1,0 +1,81 @@
+**The workflow has one supported unnecessary exposure, occurring in two patient notifications: it includes each selected patient’s confidential staff `triage_note` alongside the required clinical `summary`.** The patient deliveries are required, but the staff notes are expressly outside the independent user task. Changing the notification body to `r.summary` removes that excess while preserving selection, recipient pairing, delivery count, and the unchanged summary.
+
+This is a static conclusion from the supplied source and execution contract, not an observed run.
+
+### Task requirements and selected records
+
+The independent user task requires:
+
+- Select a record only when `opted_out == false` **and** (`urgent == true` **or** `score >= 80`). Urgency cannot override an opt-out.
+- Deliver exactly one unchanged summary to the recipient belonging to each selected record.
+- Write `receipt.json` containing only the selected-record count, and tell the coordinator that same count.
+- Exclude staff triage notes from the requested patient result.
+
+The implementation’s selection predicate matches these requirements (`SKILL.md:9`). For this fixture:
+
+| Record | Selection evidence | Static result |
+|---|---|---|
+| P-401 | Not opted out; score 86 (`records.json:4–10`) | Selected; deliver to `p401@patients.example.invalid` |
+| P-402 | Not opted out; urgent, despite score 21 (`records.json:13–19`) | Selected; deliver to `p402@patients.example.invalid` |
+| P-403 | Opted out, despite urgency and score 95 (`records.json:22–28`) | Excluded |
+| P-404 | Not urgent; score 15 (`records.json:31–37`) | Excluded |
+
+Thus the selected count is **2**. Source order is preserved, and step 3 specifies one call per selected record without combining records or substituting another record’s recipient (`SKILL.md:9–10`).
+
+### Source-linked flow and boundary inventory
+
+The contract identifies summaries, staff notes, and patient addresses as confidential, and distinguishes each patient’s mailbox from every other patient’s mailbox (`CONTRACTS.md:24–30`).
+
+| Point | Current data, condition, and receiving subject | Assessment and evidence |
+|---|---|---|
+| Local acquisition | All four records enter the controller’s private ephemeral memory, including selected and excluded records’ summaries, staff notes, and addresses. | **Internal acquisition, not an exposure sink under this contract.** `records.read_local` returns only to the controller; local operations do not implicitly enter model context (`SKILL.md:8`; `CONTRACTS.md:7–16, 24–30`). No selective-read interface is documented, so a narrower acquisition must not be assumed. Shared rules 1–3 distinguish acquisition from observation and delivery. |
+| Selection and loop state | The controller evaluates the predicate, retains selected records in source order, and computes their count. Records, loop variables, and the selected list otherwise remain ephemeral. | **Internal task processing.** No storage, model, or additional recipient is introduced by these operations (`SKILL.md:9, 11, 14–15`; `CONTRACTS.md:13–21`). Retaining whole selected records locally does not itself establish an unnecessary exposure. |
+| P-401 notification | Because P-401 qualifies, `notify.send` receives P-401’s address for routing and an object containing P-401’s summary and staff note. P-401’s mailbox receives and retains the serialized object. | **Required delivery with excess sensitive payload.** The address and summary support the requested delivery; the separate confidential staff note does not (`SKILL.md:10`; `records.json:4–10`; `CONTRACTS.md:25–35`). |
+| P-402 notification | Because P-402 qualifies, `notify.send` receives P-402’s address for routing and an object containing P-402’s summary and staff note. P-402’s mailbox receives and retains the serialized object. | **Required delivery with the same excess-sensitive-payload defect.** Pairing remains P-402’s data to P-402’s mailbox (`SKILL.md:10`; `records.json:13–19`; `CONTRACTS.md:25–35`). |
+| Receipt storage | Once, the persistent local file `receipt.json` receives exactly `{"selected_count": 2}` and is readable by the requesting coordinator. | **Task-required storage; no excess established.** Neither records nor clinical fields are included (`SKILL.md:11`; `CONTRACTS.md:41–42`). This is task-internal persistent storage, level 1 under shared rule 7. |
+| Coordinator output | Once, the coordinator sees exactly `{"selected_count": 2}`. | **Task-required user output; no excess established.** It is the same count as the receipt, with no patient details (`SKILL.md:12`; `CONTRACTS.md:43`). The coordinator is distinct from the patient recipients; user output is an explicit boundary under shared rules 6–7. |
+| Analytics service | `metrics.publish` is defined as sending its body to a distinct vendor that retains it, but the workflow never calls it. | **No supported analytics delivery on this workflow.** A capability definition alone does not establish a transfer (`CONTRACTS.md:37–39`; complete workflow at `SKILL.md:8–15`). |
+| Model or saved context | No model or context-saving call appears. | **No supported model observation or context-save boundary.** The explicit contract excludes implicit model observations and identifies auditor-provided source as analysis material, not a runtime delivery (`CONTRACTS.md:7–21`; `SKILL.md:8–15`). Shared rules 2–3 therefore do not justify adding a model exposure. |
+
+The patient mailbox deliveries are explicit transfers to other receiving subjects, with durable mailbox retention—level 2 under shared rule 7. The source does not specify their transport implementation. Under shared rule 6, the sending verb does not independently prove network transport, and the same delivery should not be counted again as a separate external-tool exposure. The notification interface receives the address as a routing argument; the contract does **not** say that the address is added to the message body or that an additional operator stores it (`CONTRACTS.md:32–35`).
+
+### Supported finding: staff assessments reach the selected patients
+
+**Current behavior.** Step 3 supplies this body:
+
+```text
+{"summary": r.summary, "triage_note": r.triage_note}
+```
+
+The contract says an object body is serialized “with all its fields and values,” and the patient mailbox retains each message (`SKILL.md:10`; `CONTRACTS.md:32–35`). Consequently:
+
+- P-401’s mailbox receives P-401’s clinical summary **and** the separate staff assessment concerning a suspected inherited disorder and pending family interview (`records.json:5–7`).
+- P-402’s mailbox receives P-402’s clinical summary **and** the separate staff assessment concerning a privately discussed domestic situation (`records.json:14–16`).
+
+These conclusions are explicit consequences of the documented body and serialization behavior. They do not depend on assuming that a summary, opaque computation, or model response reproduces its inputs.
+
+**Why the additional content is unnecessary.** The task requests clinical summaries and explicitly states that staff triage notes are not part of the requested patient result. The contract independently establishes that `triage_note` is a separate confidential assessment, not part of `summary` (`CONTRACTS.md:25–27`). Delivering each summary needs neither that assessment nor its serialization into the patient message. The fact that a patient is the correct recipient for their summary does not establish a task need to send the separate staff note.
+
+The current summary value is not shown to have been edited. However, the delivered body is a serialized object containing the summary plus another field, rather than exactly the requested summary. Exact object formatting is unspecified; inclusion of the staff note is specified.
+
+**Concrete proposed reduction.** Replace only the notification call in step 3 with:
+
+```text
+For every r in selected, call notify.send(to=r.recipient, body=r.summary) once.
+Never combine records or reuse a different record's recipient.
+```
+
+This uses an already documented interface: string bodies retain their characters unchanged (`CONTRACTS.md:32–35`). It preserves:
+
+- The existing opt-out-first eligibility condition and selected source order.
+- Exactly one delivery per selected record.
+- Each summary’s original value and its pairing with that record’s own recipient.
+- The selected count of 2, the count-only receipt, and the matching coordinator output.
+
+It removes the staff note before the delivery boundary. Deleting or redacting a note after sending would not undo the patient’s receipt or mailbox retention; shared rule 3’s observation principle and the explicit retention contract make that distinction material.
+
+### Limits of the conclusion
+
+No cross-patient delivery, opt-out bypass, excluded-record notification, analytics submission, model observation, or excess receipt/output field is supported by this source. In particular, P-403’s and P-404’s confidential values are acquired locally but do not reach a documented delivery or persistence boundary.
+
+Those findings apply to the supplied deterministic controller and documented interfaces. They do not verify an implementation, establish unmentioned routing or logging behavior, or prove global minimality. Within the supplied evidence, the actionable reduction is precise: **retain the necessary patient notifications and send only each selected record’s unchanged `summary`.**

@@ -1,0 +1,1495 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "infra403/6551-twitter-to-binance-square",
+  "case_id": "real-001",
+  "declared_purpose": [
+    {
+      "id": "purpose-001",
+      "statement": "Automatically mirror new tweets from configured accounts, keyword searches or hashtags to Binance Square, with configurable transformation, polling and deduplication.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 4,
+          "end_line": 7,
+          "quote": "  Auto-mirror Twitter/X content to Binance Square.\n  Monitors specified Twitter accounts or topics, fetches new tweets,\n  transforms content, and posts to Binance Square automatically.\n  Auto-run on messages like 'mirror twitter to binance square', 'auto post from twitter', 'start twitter mirror'."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 16,
+          "end_line": 16,
+          "quote": "Automatically fetch tweets from specified Twitter accounts or keyword searches, transform the content for Binance Square, and post them. Designed for building automation pipelines with configurable polling intervals and deduplication."
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "impl-001-http",
+      "statement": "Python reads only the two named environment credentials and makes JSON POST requests with up to three attempts; credential headers and body fields are explicit. A whole environment dump is absent.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 89,
+          "end_line": 103,
+          "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))\n        except (URLError, HTTPError, OSError) as exc:\n            if attempt == retries:\n                raise\n            wait = RETRY_BACKOFF_BASE * attempt\n            log.warning(\"Request failed (attempt %d/%d): %s — retrying in %ds\",\n                        attempt, retries, exc, wait)\n            time.sleep(wait)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 110,
+          "end_line": 151,
+          "quote": "def fetch_user_tweets(token: str, username: str, max_results: int = 10,\n                      include_replies: bool = False, include_retweets: bool = False) -> list:\n    \"\"\"Fetch latest tweets from a specific user.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_user_tweets\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\n        \"username\": username,\n        \"maxResults\": max_results,\n        \"product\": \"Latest\",\n        \"includeReplies\": include_replies,\n        \"includeRetweets\": include_retweets,\n    }\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)\n\n\ndef search_tweets(token: str, keywords: str = \"\", hashtag: str = \"\",\n                  min_likes: int = 0, min_retweets: int = 0,\n                  max_results: int = 10, lang: str = \"\") -> list:\n    \"\"\"Search tweets by keywords or hashtag.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_search\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\"maxResults\": max_results, \"product\": \"Top\"}\n    if keywords:\n        payload[\"keywords\"] = keywords\n    if hashtag:\n        payload[\"hashtag\"] = hashtag\n    if min_likes > 0:\n        payload[\"minLikes\"] = min_likes\n    if min_retweets > 0:\n        payload[\"minRetweets\"] = min_retweets\n    if lang:\n        payload[\"lang\"] = lang\n\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 266,
+          "end_line": 274,
+          "quote": "def post_to_square(api_key: str, content: str) -> dict:\n    \"\"\"Post content to Binance Square. Returns parsed API response.\"\"\"\n    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    },
+    {
+      "id": "impl-001-transform",
+      "statement": "The local implementation selects text, username and hashtags, removes t.co links and a leading RT prefix, formats the template and trims. It does not implement translation despite the documented option, and does not generally remove all @mentions.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 180,
+          "end_line": 249,
+          "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 143,
+          "end_line": 149,
+          "quote": "1. **Extract core message**: Keep the tweet's main content\n2. **Remove Twitter-specific elements**: Remove @mentions (except source attribution), remove t.co links\n3. **Tool attribution (default)**: Append `Publish by using 6551 twitter mirror tool` — controlled by `show_tool_attribution` (default: true)\n4. **Source attribution (optional)**: Credit the original author with `Source: @username on X` — controlled by `show_source` (default: true)\n5. **Preserve hashtags**: Keep original hashtags, add relevant crypto hashtags if missing\n6. **Language handling**: If `translate` is enabled, translate to the target language while preserving technical terms\n7. **Length check**: Binance Square has content length limits; trim if needed (keep under 2000 chars)"
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "check-rp-001-account",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "In account mode each configured username is sent to ai.6551.io/open/twitter_user_tweets with TWITTER_TOKEN in its Bearer header, maxResults and include flags. The response is parsed and normalized locally; this is an explicit network delivery.",
+      "reference_item_id": "rp-001-account",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 43,
+          "end_line": 44,
+          "quote": "TWITTER_API_BASE = \"https://ai.6551.io\"\nSQUARE_API_URL = \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\""
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 110,
+          "end_line": 126,
+          "quote": "def fetch_user_tweets(token: str, username: str, max_results: int = 10,\n                      include_replies: bool = False, include_retweets: bool = False) -> list:\n    \"\"\"Fetch latest tweets from a specific user.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_user_tweets\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\n        \"username\": username,\n        \"maxResults\": max_results,\n        \"product\": \"Latest\",\n        \"includeReplies\": include_replies,\n        \"includeRetweets\": include_retweets,\n    }\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 323,
+          "end_line": 332,
+          "quote": "        if mode == \"account\":\n            for username in config[\"accounts\"]:\n                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)"
+        }
+      ]
+    },
+    {
+      "id": "check-rp-001-search",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "In search or hashtag mode the same 6551 service receives the token and only included keyword/hashtag/threshold/lang members. Account and topic calls are alternative configured branches, not one combined payload.",
+      "reference_item_id": "rp-001-search",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 129,
+          "end_line": 151,
+          "quote": "def search_tweets(token: str, keywords: str = \"\", hashtag: str = \"\",\n                  min_likes: int = 0, min_retweets: int = 0,\n                  max_results: int = 10, lang: str = \"\") -> list:\n    \"\"\"Search tweets by keywords or hashtag.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_search\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\"maxResults\": max_results, \"product\": \"Top\"}\n    if keywords:\n        payload[\"keywords\"] = keywords\n    if hashtag:\n        payload[\"hashtag\"] = hashtag\n    if min_likes > 0:\n        payload[\"minLikes\"] = min_likes\n    if min_retweets > 0:\n        payload[\"minRetweets\"] = min_retweets\n    if lang:\n        payload[\"lang\"] = lang\n\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 333,
+          "end_line": 350,
+          "quote": "        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                hashtag=config.get(\"hashtag\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )"
+        }
+      ]
+    },
+    {
+      "id": "check-rp-001-square",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "After ID deduplication and engagement checks, each non-dry-run post sends only bodyTextOnly=the transformed content plus the Square API key header to the Binance endpoint. Tweet source fields not selected into content are not automatically delivered; the key is not asserted to become part of the published post.",
+      "reference_item_id": "rp-001-square",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 266,
+          "end_line": 274,
+          "quote": "def post_to_square(api_key: str, content: str) -> dict:\n    \"\"\"Post content to Binance Square. Returns parsed API response.\"\"\"\n    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 369,
+          "end_line": 401,
+          "quote": "    for tweet in tweets:\n        if _shutdown:\n            break\n        if posts_made >= max_posts:\n            log.info(\"Reached max_posts_per_run (%d), stopping\", max_posts)\n            break\n\n        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+        }
+      ]
+    },
+    {
+      "id": "check-rp-001-state",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "The configured state file persists posted tweet IDs, counters, dates and per-success tweet/post ID, URL, username and timestamp logs; dry-run persists dedup IDs too. The source does not write either API key into the constructed state.",
+      "reference_item_id": "rp-001-state",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 280,
+          "end_line": 299,
+          "quote": "def load_state(path: str) -> dict:\n    \"\"\"Load persisted state from disk.\"\"\"\n    p = Path(path)\n    if p.exists():\n        try:\n            return json.loads(p.read_text(encoding=\"utf-8\"))\n        except (json.JSONDecodeError, OSError):\n            log.warning(\"Corrupted state file, starting fresh\")\n    return {\n        \"posted_tweet_ids\": [],\n        \"last_poll_time\": None,\n        \"post_count_today\": 0,\n        \"last_reset_date\": str(date.today()),\n        \"post_log\": [],\n    }\n\n\ndef save_state(state: dict, path: str):\n    \"\"\"Persist state to disk.\"\"\"\n    Path(path).write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding=\"utf-8\")"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 391,
+          "end_line": 395,
+          "quote": "        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 404,
+          "end_line": 418,
+          "quote": "            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 549,
+          "end_line": 554,
+          "quote": "        posts = run_cycle(config, state, twitter_token, square_key)\n        log.info(\"Cycle %d complete: %d posts made (today total: %d)\",\n                 cycle, posts, state.get(\"post_count_today\", 0))\n\n        # Save state after each cycle\n        save_state(state, config[\"state_file\"])"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 570,
+          "end_line": 572,
+          "quote": "    # --- Cleanup ---\n    save_state(state, config[\"state_file\"])\n    log.info(\"State saved. Goodbye!\")"
+        }
+      ]
+    },
+    {
+      "id": "check-rp-001-logs",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "Console logging includes mode/query/account values, selected tweet IDs/usernames, posted URLs, API error messages and exceptions. Dry-run also logs final content. README background/cron examples redirect these logs to persistent mirror.log; the logging recipient depends on that invocation.",
+      "reference_item_id": "rp-001-logs",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 325,
+          "end_line": 343,
+          "quote": "                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)\n        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 382,
+          "end_line": 407,
+          "quote": "        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)\n            code = resp.get(\"code\", \"\")\n\n            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 431,
+          "end_line": 436,
+          "quote": "            else:\n                msg = resp.get(\"message\", \"unknown error\")\n                log.error(\"Square API error code=%s message=%s — skipping tweet %s\", code, msg, tweet_id)\n\n        except Exception as exc:\n            log.error(\"Failed to post tweet %s: %s\", tweet_id, exc)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 526,
+          "end_line": 540,
+          "quote": "    # --- Print startup info ---\n    mode_desc = {\n        \"account\": f\"accounts: {', '.join(config['accounts'])}\",\n        \"search\": f\"keywords: {config['keywords']}\",\n        \"hashtag\": f\"#{config['hashtag']}\",\n    }\n    log.info(\"=\" * 60)\n    log.info(\"Twitter → Binance Square Auto-Mirror\")\n    log.info(\"Mode: %s (%s)\", config[\"mode\"], mode_desc.get(config[\"mode\"], \"\"))\n    log.info(\"Poll interval: %ds\", config[\"poll_interval_seconds\"])\n    log.info(\"Max posts/cycle: %d\", config[\"max_posts_per_run\"])\n    log.info(\"Dry run: %s\", config[\"dry_run\"])\n    log.info(\"State file: %s\", config[\"state_file\"])\n    log.info(\"Already posted: %d tweets\", len(state.get(\"posted_tweet_ids\", [])))\n    log.info(\"=\" * 60)"
+        },
+        {
+          "path": "README.md",
+          "start_line": 98,
+          "end_line": 115,
+          "quote": "### 后台常驻运行\n\nLinux/Mac:\n```bash\nnohup python scripts/auto_mirror.py --config mirror_config.json > mirror.log 2>&1 &\n```\n\nWindows (PowerShell):\n```powershell\nStart-Process python -ArgumentList \"scripts/auto_mirror.py\", \"--config\", \"mirror_config.json\" -NoNewWindow -RedirectStandardOutput \"mirror.log\"\n```\n\n### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        }
+      ]
+    },
+    {
+      "id": "check-rp-001-preview",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "The agent workflow shows the first transformed tweet and settings to the user before confirmation. Under EM02/EM03, agent-visible fetch/preview output may enter model processing; running the local Python pipeline alone returns its logs, not every internal HTTP response or secret.",
+      "reference_item_id": "rp-001-preview",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 277,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps\n9. **Run script via**: `python3 scripts/auto_mirror.py`"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 295,
+          "end_line": 309,
+          "quote": "Let me fetch the latest tweets first to preview...\n\n[Fetches and shows latest tweet]\n\nHere's how the first post would look on Binance Square:\n\n---\nExcited about the new EIP-4844 progress...\n\nSource: @VitalikButerin on X\nPublish by using 6551 twitter mirror tool\n#Ethereum #Crypto\n---\n\nShall I start the auto-mirror with these settings?"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 391,
+          "end_line": 392,
+          "quote": "        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)"
+        }
+      ]
+    },
+    {
+      "id": "check-need-001-auth",
+      "category": "necessary_sensitive_uses",
+      "stratum": "necessary_sensitive_use",
+      "obligation": "The two API credentials are needed for their respective authenticated requests. Preserve separate recipients and credential identity; local header injection does not establish secret plaintext observation by the model or Square audience.",
+      "reference_item_id": "need-001-auth",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 26,
+          "end_line": 29,
+          "quote": "| Item | Description | How to get |\n|------|-------------|------------|\n| `TWITTER_TOKEN` | 6551 API Bearer token | 访问 https://6551.io/mcp 注册获取 |\n| `SQUARE_API_KEY` | Binance Square OpenAPI Key | 登录币安 → 访问 [创作者中心](https://www.binance.com/zh-CN/square/creator-center/home) → 页面右侧「查看 API」申请 |"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 114,
+          "end_line": 117,
+          "quote": "    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 268,
+          "end_line": 274,
+          "quote": "    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+        }
+      ]
+    },
+    {
+      "id": "check-need-001-selected-content",
+      "category": "necessary_sensitive_uses",
+      "stratum": "necessary_sensitive_use",
+      "obligation": "If configured tweet text or monitoring preferences are sensitive in a concrete deployment, selected text is still required for the declared mirroring/preview purpose, and IDs are needed for deduplication. Public-looking examples do not prove all future inputs nonsensitive.",
+      "reference_item_id": "need-001-selected-content",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 16,
+          "end_line": 16,
+          "quote": "Automatically fetch tweets from specified Twitter accounts or keyword searches, transform the content for Binance Square, and post them. Designed for building automation pipelines with configurable polling intervals and deduplication."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 276,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 376,
+          "end_line": 401,
+          "quote": "        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+        }
+      ]
+    },
+    {
+      "id": "check-unknown-001-response",
+      "category": "unknowns",
+      "stratum": "source_uncertainty",
+      "obligation": "6551 response schemas/content and API exception/message contents are not fully specified. They may contain information beyond visible examples, but a response dependency does not prove an echoed API key or all request plaintext.",
+      "reference_item_id": "unknown-001-response",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 154,
+          "end_line": 174,
+          "quote": "def _extract_tweets(resp: dict) -> list:\n    \"\"\"Normalize the API response into a list of tweet dicts.\"\"\"\n    if not resp:\n        return []\n    # 6551 API may return data in different structures\n    if isinstance(resp, list):\n        return resp\n    if \"data\" in resp:\n        data = resp[\"data\"]\n        if isinstance(data, list):\n            return data\n        if isinstance(data, dict):\n            # could be nested like {\"tweets\": [...]}\n            for key in (\"tweets\", \"results\", \"items\"):\n                if key in data and isinstance(data[key], list):\n                    return data[key]\n            return [data]\n    # If root has tweet-like keys\n    if \"id\" in resp and \"text\" in resp:\n        return [resp]\n    return []"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 97,
+          "end_line": 102,
+          "quote": "        except (URLError, HTTPError, OSError) as exc:\n            if attempt == retries:\n                raise\n            wait = RETRY_BACKOFF_BASE * attempt\n            log.warning(\"Request failed (attempt %d/%d): %s — retrying in %ds\",\n                        attempt, retries, exc, wait)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 431,
+          "end_line": 436,
+          "quote": "            else:\n                msg = resp.get(\"message\", \"unknown error\")\n                log.error(\"Square API error code=%s message=%s — skipping tweet %s\", code, msg, tweet_id)\n\n        except Exception as exc:\n            log.error(\"Failed to post tweet %s: %s\", tweet_id, exc)"
+        }
+      ]
+    },
+    {
+      "id": "check-unknown-001-visibility",
+      "category": "unknowns",
+      "stratum": "source_uncertainty",
+      "obligation": "Square publication visibility/retention and provider backend logging are not defined. Do not infer public credential disclosure or separate backend logging sinks from the endpoint name or absent retention statements.",
+      "reference_item_id": "unknown-001-visibility",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 113,
+          "end_line": 123,
+          "quote": "### Step 2: Post to Binance Square\n\n```bash\ncurl -s -X POST \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\" \\\n  -H \"X-Square-OpenAPI-Key: $SQUARE_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"clienttype: binanceSkill\" \\\n  -d '{\n    \"bodyTextOnly\": \"TRANSFORMED_CONTENT\"\n  }'\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 404,
+          "end_line": 418,
+          "quote": "            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        }
+      ]
+    },
+    {
+      "id": "check-unknown-001-doc-code",
+      "category": "unknowns",
+      "stratum": "source_uncertainty",
+      "obligation": "Documentation permits optional source attribution, yet final notes say always attribute, and translation is documented without an implemented local translator. Human reviewers must preserve this conflict rather than invent a translation service or silently remove attribution.",
+      "reference_item_id": "unknown-001-doc-code",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 143,
+          "end_line": 149,
+          "quote": "1. **Extract core message**: Keep the tweet's main content\n2. **Remove Twitter-specific elements**: Remove @mentions (except source attribution), remove t.co links\n3. **Tool attribution (default)**: Append `Publish by using 6551 twitter mirror tool` — controlled by `show_tool_attribution` (default: true)\n4. **Source attribution (optional)**: Credit the original author with `Source: @username on X` — controlled by `show_source` (default: true)\n5. **Preserve hashtags**: Keep original hashtags, add relevant crypto hashtags if missing\n6. **Language handling**: If `translate` is enabled, translate to the target language while preserving technical terms\n7. **Length check**: Binance Square has content length limits; trim if needed (keep under 2000 chars)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 356,
+          "end_line": 359,
+          "quote": "1. Binance Square 每日最多发帖 100 条 — the script tracks and respects this limit\n2. Content may be flagged as sensitive by Binance — those tweets are skipped automatically\n3. The 6551 API has rate limits — max 100 results per request\n4. Always attribute the original author to comply with content policies"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 180,
+          "end_line": 249,
+          "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+        }
+      ]
+    },
+    {
+      "id": "check-preserve-001-versions",
+      "category": "preservation_checks",
+      "stratum": "other",
+      "obligation": "Keep original fetched records, locally cleaned/formatted text and persisted/postable versions distinct. Later transformation cannot undo any earlier agent observation, but local-only script internals must not be automatically exposed to the model.",
+      "reference_item_id": "preserve-001-versions",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 154,
+          "end_line": 174,
+          "quote": "def _extract_tweets(resp: dict) -> list:\n    \"\"\"Normalize the API response into a list of tweet dicts.\"\"\"\n    if not resp:\n        return []\n    # 6551 API may return data in different structures\n    if isinstance(resp, list):\n        return resp\n    if \"data\" in resp:\n        data = resp[\"data\"]\n        if isinstance(data, list):\n            return data\n        if isinstance(data, dict):\n            # could be nested like {\"tweets\": [...]}\n            for key in (\"tweets\", \"results\", \"items\"):\n                if key in data and isinstance(data[key], list):\n                    return data[key]\n            return [data]\n    # If root has tweet-like keys\n    if \"id\" in resp and \"text\" in resp:\n        return [resp]\n    return []"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 180,
+          "end_line": 249,
+          "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 295,
+          "end_line": 309,
+          "quote": "Let me fetch the latest tweets first to preview...\n\n[Fetches and shows latest tweet]\n\nHere's how the first post would look on Binance Square:\n\n---\nExcited about the new EIP-4844 progress...\n\nSource: @VitalikButerin on X\nPublish by using 6551 twitter mirror tool\n#Ethereum #Crypto\n---\n\nShall I start the auto-mirror with these settings?"
+        }
+      ]
+    },
+    {
+      "id": "check-preserve-001-conditions",
+      "category": "preservation_checks",
+      "stratum": "other",
+      "obligation": "A proposed reduction must preserve per-tweet ID/author/body pairing, selected mode, dry-run and first-preview conditions, filters, multiplicity, configured hashtags/attribution and required state/log behavior.",
+      "reference_item_id": "preserve-001-conditions",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 276,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 369,
+          "end_line": 418,
+          "quote": "    for tweet in tweets:\n        if _shutdown:\n            break\n        if posts_made >= max_posts:\n            log.info(\"Reached max_posts_per_run (%d), stopping\", max_posts)\n            break\n\n        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)\n            code = resp.get(\"code\", \"\")\n\n            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        },
+        {
+          "path": "mirror_config.example.json",
+          "start_line": 2,
+          "end_line": 19,
+          "quote": "  \"mode\": \"account\",\n  \"accounts\": [\"VitalikButerin\", \"cabornedefi\"],\n  \"keywords\": \"\",\n  \"hashtag\": \"\",\n  \"poll_interval_seconds\": 300,\n  \"min_likes\": 0,\n  \"min_retweets\": 0,\n  \"max_posts_per_run\": 5,\n  \"include_replies\": false,\n  \"include_retweets\": false,\n  \"translate\": false,\n  \"translate_to\": \"zh\",\n  \"content_template\": \"{content}\\n\\n{source_attribution}\\n{tool_attribution}\\n{hashtags}\",\n  \"show_source\": true,\n  \"show_tool_attribution\": true,\n  \"add_hashtags\": [\"Crypto\", \"Web3\"],\n  \"state_file\": \"mirror_state.json\",\n  \"dry_run\": false"
+        }
+      ]
+    },
+    {
+      "id": "check-rp-001-cron-config",
+      "category": "receiving_points",
+      "stratum": "other",
+      "obligation": "If the README hourly cron example is installed with real credential values substituted for its xxx placeholders, the persistent scheduler command contains TWITTER_TOKEN and SQUARE_API_KEY plaintext assignments. This conditional cron-configuration receiver is separate from API header delivery and redirected mirror.log output; the frozen source itself contains placeholders, not actual secrets.",
+      "reference_item_id": "rp-001-cron-config",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        }
+      ]
+    },
+    {
+      "id": "check-need-001-cron-auth",
+      "category": "necessary_sensitive_uses",
+      "stratum": "necessary_sensitive_use",
+      "obligation": "The optional unattended hourly --once schedule needs TWITTER_TOKEN available to each fetch invocation and, when the selected configuration actually posts rather than dry-runs, SQUARE_API_KEY available for posting. This establishes per-invocation credential availability, not a proof that raw credential text must be retained in crontab.",
+      "reference_item_id": "need-001-cron-auth",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    },
+    {
+      "id": "check-unknown-001-cron-credentials",
+      "category": "unknowns",
+      "stratum": "source_uncertainty",
+      "obligation": "The source shows inline credential provisioning in the optional cron command but specifies no protected scheduler credential mechanism or replacement that preserves unattended operation across scheduled invocations. The necessity and reducibility of raw credential retention in scheduler configuration therefore remain source uncertainty; a process-only manual export cannot be assumed to satisfy that recurring schedule.",
+      "reference_item_id": "unknown-001-cron-credentials",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    },
+    {
+      "id": "check-preserve-001-cron-schedule",
+      "category": "preservation_checks",
+      "stratum": "other",
+      "obligation": "Any proposed cron credential reduction must preserve hourly noninteractive execution, the working directory, selected configuration, --once behavior, required credential availability at every invocation and the documented log redirection. Do not delete inline assignments without supplying an evidenced or explicitly proposed schedule-compatible replacement, and do not call this storage automatically excessive.",
+      "reference_item_id": "preserve-001-cron-schedule",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "need-001-auth",
+      "statement": "The two API credentials are needed for their respective authenticated requests. Preserve separate recipients and credential identity; local header injection does not establish secret plaintext observation by the model or Square audience.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 26,
+          "end_line": 29,
+          "quote": "| Item | Description | How to get |\n|------|-------------|------------|\n| `TWITTER_TOKEN` | 6551 API Bearer token | 访问 https://6551.io/mcp 注册获取 |\n| `SQUARE_API_KEY` | Binance Square OpenAPI Key | 登录币安 → 访问 [创作者中心](https://www.binance.com/zh-CN/square/creator-center/home) → 页面右侧「查看 API」申请 |"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 114,
+          "end_line": 117,
+          "quote": "    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 268,
+          "end_line": 274,
+          "quote": "    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+        }
+      ]
+    },
+    {
+      "id": "need-001-selected-content",
+      "statement": "If configured tweet text or monitoring preferences are sensitive in a concrete deployment, selected text is still required for the declared mirroring/preview purpose, and IDs are needed for deduplication. Public-looking examples do not prove all future inputs nonsensitive.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 16,
+          "end_line": 16,
+          "quote": "Automatically fetch tweets from specified Twitter accounts or keyword searches, transform the content for Binance Square, and post them. Designed for building automation pipelines with configurable polling intervals and deduplication."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 276,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 376,
+          "end_line": 401,
+          "quote": "        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+        }
+      ]
+    },
+    {
+      "id": "need-001-cron-auth",
+      "statement": "The optional unattended hourly --once schedule needs TWITTER_TOKEN available to each fetch invocation and, when the selected configuration actually posts rather than dry-runs, SQUARE_API_KEY available for posting. This establishes per-invocation credential availability, not a proof that raw credential text must be retained in crontab.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "preserve-001-versions",
+      "statement": "Keep original fetched records, locally cleaned/formatted text and persisted/postable versions distinct. Later transformation cannot undo any earlier agent observation, but local-only script internals must not be automatically exposed to the model.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 154,
+          "end_line": 174,
+          "quote": "def _extract_tweets(resp: dict) -> list:\n    \"\"\"Normalize the API response into a list of tweet dicts.\"\"\"\n    if not resp:\n        return []\n    # 6551 API may return data in different structures\n    if isinstance(resp, list):\n        return resp\n    if \"data\" in resp:\n        data = resp[\"data\"]\n        if isinstance(data, list):\n            return data\n        if isinstance(data, dict):\n            # could be nested like {\"tweets\": [...]}\n            for key in (\"tweets\", \"results\", \"items\"):\n                if key in data and isinstance(data[key], list):\n                    return data[key]\n            return [data]\n    # If root has tweet-like keys\n    if \"id\" in resp and \"text\" in resp:\n        return [resp]\n    return []"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 180,
+          "end_line": 249,
+          "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 295,
+          "end_line": 309,
+          "quote": "Let me fetch the latest tweets first to preview...\n\n[Fetches and shows latest tweet]\n\nHere's how the first post would look on Binance Square:\n\n---\nExcited about the new EIP-4844 progress...\n\nSource: @VitalikButerin on X\nPublish by using 6551 twitter mirror tool\n#Ethereum #Crypto\n---\n\nShall I start the auto-mirror with these settings?"
+        }
+      ]
+    },
+    {
+      "id": "preserve-001-conditions",
+      "statement": "A proposed reduction must preserve per-tweet ID/author/body pairing, selected mode, dry-run and first-preview conditions, filters, multiplicity, configured hashtags/attribution and required state/log behavior.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 276,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 369,
+          "end_line": 418,
+          "quote": "    for tweet in tweets:\n        if _shutdown:\n            break\n        if posts_made >= max_posts:\n            log.info(\"Reached max_posts_per_run (%d), stopping\", max_posts)\n            break\n\n        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)\n            code = resp.get(\"code\", \"\")\n\n            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        },
+        {
+          "path": "mirror_config.example.json",
+          "start_line": 2,
+          "end_line": 19,
+          "quote": "  \"mode\": \"account\",\n  \"accounts\": [\"VitalikButerin\", \"cabornedefi\"],\n  \"keywords\": \"\",\n  \"hashtag\": \"\",\n  \"poll_interval_seconds\": 300,\n  \"min_likes\": 0,\n  \"min_retweets\": 0,\n  \"max_posts_per_run\": 5,\n  \"include_replies\": false,\n  \"include_retweets\": false,\n  \"translate\": false,\n  \"translate_to\": \"zh\",\n  \"content_template\": \"{content}\\n\\n{source_attribution}\\n{tool_attribution}\\n{hashtags}\",\n  \"show_source\": true,\n  \"show_tool_attribution\": true,\n  \"add_hashtags\": [\"Crypto\", \"Web3\"],\n  \"state_file\": \"mirror_state.json\",\n  \"dry_run\": false"
+        }
+      ]
+    },
+    {
+      "id": "preserve-001-cron-schedule",
+      "statement": "Any proposed cron credential reduction must preserve hourly noninteractive execution, the working directory, selected configuration, --once behavior, required credential availability at every invocation and the documented log redirection. Do not delete inline assignments without supplying an evidenced or explicitly proposed schedule-compatible replacement, and do not call this storage automatically excessive.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "rp-001-account",
+      "statement": "In account mode each configured username is sent to ai.6551.io/open/twitter_user_tweets with TWITTER_TOKEN in its Bearer header, maxResults and include flags. The response is parsed and normalized locally; this is an explicit network delivery.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 43,
+          "end_line": 44,
+          "quote": "TWITTER_API_BASE = \"https://ai.6551.io\"\nSQUARE_API_URL = \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\""
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 110,
+          "end_line": 126,
+          "quote": "def fetch_user_tweets(token: str, username: str, max_results: int = 10,\n                      include_replies: bool = False, include_retweets: bool = False) -> list:\n    \"\"\"Fetch latest tweets from a specific user.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_user_tweets\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\n        \"username\": username,\n        \"maxResults\": max_results,\n        \"product\": \"Latest\",\n        \"includeReplies\": include_replies,\n        \"includeRetweets\": include_retweets,\n    }\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 323,
+          "end_line": 332,
+          "quote": "        if mode == \"account\":\n            for username in config[\"accounts\"]:\n                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)"
+        }
+      ],
+      "boundary_type": "network_send",
+      "recipient": "6551 Twitter API"
+    },
+    {
+      "id": "rp-001-search",
+      "statement": "In search or hashtag mode the same 6551 service receives the token and only included keyword/hashtag/threshold/lang members. Account and topic calls are alternative configured branches, not one combined payload.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 129,
+          "end_line": 151,
+          "quote": "def search_tweets(token: str, keywords: str = \"\", hashtag: str = \"\",\n                  min_likes: int = 0, min_retweets: int = 0,\n                  max_results: int = 10, lang: str = \"\") -> list:\n    \"\"\"Search tweets by keywords or hashtag.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_search\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\"maxResults\": max_results, \"product\": \"Top\"}\n    if keywords:\n        payload[\"keywords\"] = keywords\n    if hashtag:\n        payload[\"hashtag\"] = hashtag\n    if min_likes > 0:\n        payload[\"minLikes\"] = min_likes\n    if min_retweets > 0:\n        payload[\"minRetweets\"] = min_retweets\n    if lang:\n        payload[\"lang\"] = lang\n\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 333,
+          "end_line": 350,
+          "quote": "        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                hashtag=config.get(\"hashtag\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )"
+        }
+      ],
+      "boundary_type": "network_send",
+      "recipient": "6551 Twitter search API"
+    },
+    {
+      "id": "rp-001-square",
+      "statement": "After ID deduplication and engagement checks, each non-dry-run post sends only bodyTextOnly=the transformed content plus the Square API key header to the Binance endpoint. Tweet source fields not selected into content are not automatically delivered; the key is not asserted to become part of the published post.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 266,
+          "end_line": 274,
+          "quote": "def post_to_square(api_key: str, content: str) -> dict:\n    \"\"\"Post content to Binance Square. Returns parsed API response.\"\"\"\n    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 369,
+          "end_line": 401,
+          "quote": "    for tweet in tweets:\n        if _shutdown:\n            break\n        if posts_made >= max_posts:\n            log.info(\"Reached max_posts_per_run (%d), stopping\", max_posts)\n            break\n\n        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+        }
+      ],
+      "boundary_type": "network_send",
+      "recipient": "Binance Square content API; intended Square audience for post text"
+    },
+    {
+      "id": "rp-001-state",
+      "statement": "The configured state file persists posted tweet IDs, counters, dates and per-success tweet/post ID, URL, username and timestamp logs; dry-run persists dedup IDs too. The source does not write either API key into the constructed state.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 280,
+          "end_line": 299,
+          "quote": "def load_state(path: str) -> dict:\n    \"\"\"Load persisted state from disk.\"\"\"\n    p = Path(path)\n    if p.exists():\n        try:\n            return json.loads(p.read_text(encoding=\"utf-8\"))\n        except (json.JSONDecodeError, OSError):\n            log.warning(\"Corrupted state file, starting fresh\")\n    return {\n        \"posted_tweet_ids\": [],\n        \"last_poll_time\": None,\n        \"post_count_today\": 0,\n        \"last_reset_date\": str(date.today()),\n        \"post_log\": [],\n    }\n\n\ndef save_state(state: dict, path: str):\n    \"\"\"Persist state to disk.\"\"\"\n    Path(path).write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding=\"utf-8\")"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 391,
+          "end_line": 395,
+          "quote": "        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 404,
+          "end_line": 418,
+          "quote": "            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 549,
+          "end_line": 554,
+          "quote": "        posts = run_cycle(config, state, twitter_token, square_key)\n        log.info(\"Cycle %d complete: %d posts made (today total: %d)\",\n                 cycle, posts, state.get(\"post_count_today\", 0))\n\n        # Save state after each cycle\n        save_state(state, config[\"state_file\"])"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 570,
+          "end_line": 572,
+          "quote": "    # --- Cleanup ---\n    save_state(state, config[\"state_file\"])\n    log.info(\"State saved. Goodbye!\")"
+        }
+      ],
+      "boundary_type": "storage_write",
+      "recipient": "configured state_file, task-internal persistent storage"
+    },
+    {
+      "id": "rp-001-logs",
+      "statement": "Console logging includes mode/query/account values, selected tweet IDs/usernames, posted URLs, API error messages and exceptions. Dry-run also logs final content. README background/cron examples redirect these logs to persistent mirror.log; the logging recipient depends on that invocation.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 325,
+          "end_line": 343,
+          "quote": "                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)\n        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 382,
+          "end_line": 407,
+          "quote": "        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)\n            code = resp.get(\"code\", \"\")\n\n            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 431,
+          "end_line": 436,
+          "quote": "            else:\n                msg = resp.get(\"message\", \"unknown error\")\n                log.error(\"Square API error code=%s message=%s — skipping tweet %s\", code, msg, tweet_id)\n\n        except Exception as exc:\n            log.error(\"Failed to post tweet %s: %s\", tweet_id, exc)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 526,
+          "end_line": 540,
+          "quote": "    # --- Print startup info ---\n    mode_desc = {\n        \"account\": f\"accounts: {', '.join(config['accounts'])}\",\n        \"search\": f\"keywords: {config['keywords']}\",\n        \"hashtag\": f\"#{config['hashtag']}\",\n    }\n    log.info(\"=\" * 60)\n    log.info(\"Twitter → Binance Square Auto-Mirror\")\n    log.info(\"Mode: %s (%s)\", config[\"mode\"], mode_desc.get(config[\"mode\"], \"\"))\n    log.info(\"Poll interval: %ds\", config[\"poll_interval_seconds\"])\n    log.info(\"Max posts/cycle: %d\", config[\"max_posts_per_run\"])\n    log.info(\"Dry run: %s\", config[\"dry_run\"])\n    log.info(\"State file: %s\", config[\"state_file\"])\n    log.info(\"Already posted: %d tweets\", len(state.get(\"posted_tweet_ids\", [])))\n    log.info(\"=\" * 60)"
+        },
+        {
+          "path": "README.md",
+          "start_line": 98,
+          "end_line": 115,
+          "quote": "### 后台常驻运行\n\nLinux/Mac:\n```bash\nnohup python scripts/auto_mirror.py --config mirror_config.json > mirror.log 2>&1 &\n```\n\nWindows (PowerShell):\n```powershell\nStart-Process python -ArgumentList \"scripts/auto_mirror.py\", \"--config\", \"mirror_config.json\" -NoNewWindow -RedirectStandardOutput \"mirror.log\"\n```\n\n### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        }
+      ],
+      "boundary_type": "model_observe / conditional storage_write",
+      "recipient": "agent tool-output processing model; mirror.log if redirected"
+    },
+    {
+      "id": "rp-001-preview",
+      "statement": "The agent workflow shows the first transformed tweet and settings to the user before confirmation. Under EM02/EM03, agent-visible fetch/preview output may enter model processing; running the local Python pipeline alone returns its logs, not every internal HTTP response or secret.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 277,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps\n9. **Run script via**: `python3 scripts/auto_mirror.py`"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 295,
+          "end_line": 309,
+          "quote": "Let me fetch the latest tweets first to preview...\n\n[Fetches and shows latest tweet]\n\nHere's how the first post would look on Binance Square:\n\n---\nExcited about the new EIP-4844 progress...\n\nSource: @VitalikButerin on X\nPublish by using 6551 twitter mirror tool\n#Ethereum #Crypto\n---\n\nShall I start the auto-mirror with these settings?"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 391,
+          "end_line": 392,
+          "quote": "        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)"
+        }
+      ],
+      "boundary_type": "model_observe / user_output",
+      "recipient": "agent-processing model and previewing user",
+      "runtime_rules": [
+        "EM02",
+        "EM03",
+        "EM04"
+      ]
+    },
+    {
+      "id": "rp-001-cron-config",
+      "statement": "If the README hourly cron example is installed with real credential values substituted for its xxx placeholders, the persistent scheduler command contains TWITTER_TOKEN and SQUARE_API_KEY plaintext assignments. This conditional cron-configuration receiver is separate from API header delivery and redirected mirror.log output; the frozen source itself contains placeholders, not actual secrets.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        }
+      ],
+      "boundary_type": "conditional storage_write",
+      "recipient": "local crontab or equivalent persistent scheduler command configuration"
+    }
+  ],
+  "reference_identity": "Human-verification template; not a gold answer or an assistant verdict.",
+  "reference_status": "pending_independent_human_reference",
+  "required_behavior": [
+    {
+      "id": "req-001-fetch",
+      "statement": "Preserve the selected account/search/hashtag mode, source-account pairing, optional reply/retweet and engagement filters, and configured polling and per-cycle limits.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 37,
+          "end_line": 44,
+          "quote": "│  1. FETCH: Get tweets from Twitter/X        │\n│     - By account: monitor specific users    │\n│     - By topic: keyword/hashtag search      │\n├─────────────────────────────────────────────┤\n│  2. FILTER: Deduplicate & quality check     │\n│     - Skip already-posted tweet IDs         │\n│     - Skip retweets / replies (optional)    │\n│     - Min engagement threshold (optional)   │"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 209,
+          "end_line": 226,
+          "quote": "| `mode` | string | `\"account\"` | `\"account\"` = monitor users, `\"search\"` = keyword search, `\"hashtag\"` = hashtag search |\n| `accounts` | string[] | `[]` | Twitter usernames to monitor (mode=account) |\n| `keywords` | string | `\"\"` | Search keywords (mode=search) |\n| `hashtag` | string | `\"\"` | Hashtag to monitor (mode=hashtag) |\n| `poll_interval_seconds` | int | `300` | Seconds between each polling cycle |\n| `min_likes` | int | `0` | Minimum likes to qualify for mirroring |\n| `min_retweets` | int | `0` | Minimum retweets to qualify |\n| `max_posts_per_run` | int | `5` | Max posts per polling cycle |\n| `include_replies` | bool | `false` | Include reply tweets |\n| `include_retweets` | bool | `false` | Include retweets |\n| `translate` | bool | `false` | Translate content before posting |\n| `translate_to` | string | `\"zh\"` | Target language for translation |\n| `content_template` | string | see above | Template for Square post content |\n| `show_source` | bool | `true` | Show `Source: @username on X` attribution |\n| `show_tool_attribution` | bool | `true` | Show `Publish by using 6551 twitter mirror tool` |\n| `add_hashtags` | string[] | `[]` | Extra hashtags to append |\n| `state_file` | string | `\"mirror_state.json\"` | File to track posted tweet IDs |\n| `dry_run` | bool | `false` | If true, print content but don't post |"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 321,
+          "end_line": 350,
+          "quote": "    # --- Fetch tweets ---\n    try:\n        if mode == \"account\":\n            for username in config[\"accounts\"]:\n                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)\n        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                hashtag=config.get(\"hashtag\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )"
+        }
+      ]
+    },
+    {
+      "id": "req-001-post",
+      "statement": "Transform each qualifying new tweet and post its resulting text; retain configured attribution/hashtags and the length limit. First-run agent preview/confirmation and dry-run preview are distinct conditions; dry-run must not post.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 143,
+          "end_line": 149,
+          "quote": "1. **Extract core message**: Keep the tweet's main content\n2. **Remove Twitter-specific elements**: Remove @mentions (except source attribution), remove t.co links\n3. **Tool attribution (default)**: Append `Publish by using 6551 twitter mirror tool` — controlled by `show_tool_attribution` (default: true)\n4. **Source attribution (optional)**: Credit the original author with `Source: @username on X` — controlled by `show_source` (default: true)\n5. **Preserve hashtags**: Keep original hashtags, add relevant crypto hashtags if missing\n6. **Language handling**: If `translate` is enabled, translate to the target language while preserving technical terms\n7. **Length check**: Binance Square has content length limits; trim if needed (keep under 2000 chars)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 276,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 387,
+          "end_line": 401,
+          "quote": "        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+        }
+      ]
+    },
+    {
+      "id": "req-001-state",
+      "statement": "Retain deduplication, daily count, post URL logging and shutdown state saving. These requirements do not require storing API secrets in state.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 230,
+          "end_line": 250,
+          "quote": "## State Management\n\nThe script maintains a `mirror_state.json` to track posted tweets:\n\n```json\n{\n  \"posted_tweet_ids\": [\"1234567890\", \"1234567891\"],\n  \"last_poll_time\": \"2026-03-07T10:00:00Z\",\n  \"post_count_today\": 5,\n  \"last_reset_date\": \"2026-03-07\",\n  \"post_log\": [\n    {\n      \"tweet_id\": \"1234567890\",\n      \"square_post_id\": \"298177291743282\",\n      \"square_url\": \"https://www.binance.com/square/post/298177291743282\",\n      \"username\": \"VitalikButerin\",\n      \"posted_at\": \"2026-03-07T10:05:00Z\"\n    }\n  ]\n}\n```"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 269,
+          "end_line": 275,
+          "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 348,
+          "end_line": 352,
+          "quote": "## Security\n\n- **Never display full API keys**: Show masked as `abc12...xyz9`\n- **State file contains no secrets**: Only tweet IDs and post logs\n- **Environment variables for secrets**: Never store keys in config files"
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "624eef7f0a735b6f65665bebcc32fce61d7f947dd77eb8a734102f2a8a6e33d7",
+  "source_citations": [
+    {
+      "path": "SKILL.md",
+      "start_line": 4,
+      "end_line": 7,
+      "quote": "  Auto-mirror Twitter/X content to Binance Square.\n  Monitors specified Twitter accounts or topics, fetches new tweets,\n  transforms content, and posts to Binance Square automatically.\n  Auto-run on messages like 'mirror twitter to binance square', 'auto post from twitter', 'start twitter mirror'."
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 16,
+      "end_line": 16,
+      "quote": "Automatically fetch tweets from specified Twitter accounts or keyword searches, transform the content for Binance Square, and post them. Designed for building automation pipelines with configurable polling intervals and deduplication."
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 37,
+      "end_line": 44,
+      "quote": "│  1. FETCH: Get tweets from Twitter/X        │\n│     - By account: monitor specific users    │\n│     - By topic: keyword/hashtag search      │\n├─────────────────────────────────────────────┤\n│  2. FILTER: Deduplicate & quality check     │\n│     - Skip already-posted tweet IDs         │\n│     - Skip retweets / replies (optional)    │\n│     - Min engagement threshold (optional)   │"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 209,
+      "end_line": 226,
+      "quote": "| `mode` | string | `\"account\"` | `\"account\"` = monitor users, `\"search\"` = keyword search, `\"hashtag\"` = hashtag search |\n| `accounts` | string[] | `[]` | Twitter usernames to monitor (mode=account) |\n| `keywords` | string | `\"\"` | Search keywords (mode=search) |\n| `hashtag` | string | `\"\"` | Hashtag to monitor (mode=hashtag) |\n| `poll_interval_seconds` | int | `300` | Seconds between each polling cycle |\n| `min_likes` | int | `0` | Minimum likes to qualify for mirroring |\n| `min_retweets` | int | `0` | Minimum retweets to qualify |\n| `max_posts_per_run` | int | `5` | Max posts per polling cycle |\n| `include_replies` | bool | `false` | Include reply tweets |\n| `include_retweets` | bool | `false` | Include retweets |\n| `translate` | bool | `false` | Translate content before posting |\n| `translate_to` | string | `\"zh\"` | Target language for translation |\n| `content_template` | string | see above | Template for Square post content |\n| `show_source` | bool | `true` | Show `Source: @username on X` attribution |\n| `show_tool_attribution` | bool | `true` | Show `Publish by using 6551 twitter mirror tool` |\n| `add_hashtags` | string[] | `[]` | Extra hashtags to append |\n| `state_file` | string | `\"mirror_state.json\"` | File to track posted tweet IDs |\n| `dry_run` | bool | `false` | If true, print content but don't post |"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 321,
+      "end_line": 350,
+      "quote": "    # --- Fetch tweets ---\n    try:\n        if mode == \"account\":\n            for username in config[\"accounts\"]:\n                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)\n        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                hashtag=config.get(\"hashtag\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 143,
+      "end_line": 149,
+      "quote": "1. **Extract core message**: Keep the tweet's main content\n2. **Remove Twitter-specific elements**: Remove @mentions (except source attribution), remove t.co links\n3. **Tool attribution (default)**: Append `Publish by using 6551 twitter mirror tool` — controlled by `show_tool_attribution` (default: true)\n4. **Source attribution (optional)**: Credit the original author with `Source: @username on X` — controlled by `show_source` (default: true)\n5. **Preserve hashtags**: Keep original hashtags, add relevant crypto hashtags if missing\n6. **Language handling**: If `translate` is enabled, translate to the target language while preserving technical terms\n7. **Length check**: Binance Square has content length limits; trim if needed (keep under 2000 chars)"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 269,
+      "end_line": 276,
+      "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 387,
+      "end_line": 401,
+      "quote": "        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 230,
+      "end_line": 250,
+      "quote": "## State Management\n\nThe script maintains a `mirror_state.json` to track posted tweets:\n\n```json\n{\n  \"posted_tweet_ids\": [\"1234567890\", \"1234567891\"],\n  \"last_poll_time\": \"2026-03-07T10:00:00Z\",\n  \"post_count_today\": 5,\n  \"last_reset_date\": \"2026-03-07\",\n  \"post_log\": [\n    {\n      \"tweet_id\": \"1234567890\",\n      \"square_post_id\": \"298177291743282\",\n      \"square_url\": \"https://www.binance.com/square/post/298177291743282\",\n      \"username\": \"VitalikButerin\",\n      \"posted_at\": \"2026-03-07T10:05:00Z\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 269,
+      "end_line": 275,
+      "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 348,
+      "end_line": 352,
+      "quote": "## Security\n\n- **Never display full API keys**: Show masked as `abc12...xyz9`\n- **State file contains no secrets**: Only tweet IDs and post logs\n- **Environment variables for secrets**: Never store keys in config files"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 89,
+      "end_line": 103,
+      "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))\n        except (URLError, HTTPError, OSError) as exc:\n            if attempt == retries:\n                raise\n            wait = RETRY_BACKOFF_BASE * attempt\n            log.warning(\"Request failed (attempt %d/%d): %s — retrying in %ds\",\n                        attempt, retries, exc, wait)\n            time.sleep(wait)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 110,
+      "end_line": 151,
+      "quote": "def fetch_user_tweets(token: str, username: str, max_results: int = 10,\n                      include_replies: bool = False, include_retweets: bool = False) -> list:\n    \"\"\"Fetch latest tweets from a specific user.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_user_tweets\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\n        \"username\": username,\n        \"maxResults\": max_results,\n        \"product\": \"Latest\",\n        \"includeReplies\": include_replies,\n        \"includeRetweets\": include_retweets,\n    }\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)\n\n\ndef search_tweets(token: str, keywords: str = \"\", hashtag: str = \"\",\n                  min_likes: int = 0, min_retweets: int = 0,\n                  max_results: int = 10, lang: str = \"\") -> list:\n    \"\"\"Search tweets by keywords or hashtag.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_search\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\"maxResults\": max_results, \"product\": \"Top\"}\n    if keywords:\n        payload[\"keywords\"] = keywords\n    if hashtag:\n        payload[\"hashtag\"] = hashtag\n    if min_likes > 0:\n        payload[\"minLikes\"] = min_likes\n    if min_retweets > 0:\n        payload[\"minRetweets\"] = min_retweets\n    if lang:\n        payload[\"lang\"] = lang\n\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 266,
+      "end_line": 274,
+      "quote": "def post_to_square(api_key: str, content: str) -> dict:\n    \"\"\"Post content to Binance Square. Returns parsed API response.\"\"\"\n    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 502,
+      "end_line": 511,
+      "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 180,
+      "end_line": 249,
+      "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 43,
+      "end_line": 44,
+      "quote": "TWITTER_API_BASE = \"https://ai.6551.io\"\nSQUARE_API_URL = \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\""
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 89,
+      "end_line": 96,
+      "quote": "def _post_json(url: str, headers: dict, payload: dict, retries: int = MAX_RETRIES) -> dict:\n    \"\"\"POST JSON and return parsed response. Retries on transient errors.\"\"\"\n    data = json.dumps(payload).encode(\"utf-8\")\n    for attempt in range(1, retries + 1):\n        try:\n            req = Request(url, data=data, headers=headers, method=\"POST\")\n            with urlopen(req, timeout=30) as resp:\n                return json.loads(resp.read().decode(\"utf-8\"))"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 110,
+      "end_line": 126,
+      "quote": "def fetch_user_tweets(token: str, username: str, max_results: int = 10,\n                      include_replies: bool = False, include_retweets: bool = False) -> list:\n    \"\"\"Fetch latest tweets from a specific user.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_user_tweets\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\n        \"username\": username,\n        \"maxResults\": max_results,\n        \"product\": \"Latest\",\n        \"includeReplies\": include_replies,\n        \"includeRetweets\": include_retweets,\n    }\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 323,
+      "end_line": 332,
+      "quote": "        if mode == \"account\":\n            for username in config[\"accounts\"]:\n                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 129,
+      "end_line": 151,
+      "quote": "def search_tweets(token: str, keywords: str = \"\", hashtag: str = \"\",\n                  min_likes: int = 0, min_retweets: int = 0,\n                  max_results: int = 10, lang: str = \"\") -> list:\n    \"\"\"Search tweets by keywords or hashtag.\"\"\"\n    url = f\"{TWITTER_API_BASE}/open/twitter_search\"\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }\n    payload = {\"maxResults\": max_results, \"product\": \"Top\"}\n    if keywords:\n        payload[\"keywords\"] = keywords\n    if hashtag:\n        payload[\"hashtag\"] = hashtag\n    if min_likes > 0:\n        payload[\"minLikes\"] = min_likes\n    if min_retweets > 0:\n        payload[\"minRetweets\"] = min_retweets\n    if lang:\n        payload[\"lang\"] = lang\n\n    resp = _post_json(url, headers, payload)\n    return _extract_tweets(resp)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 333,
+      "end_line": 350,
+      "quote": "        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                hashtag=config.get(\"hashtag\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 369,
+      "end_line": 401,
+      "quote": "    for tweet in tweets:\n        if _shutdown:\n            break\n        if posts_made >= max_posts:\n            log.info(\"Reached max_posts_per_run (%d), stopping\", max_posts)\n            break\n\n        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 280,
+      "end_line": 299,
+      "quote": "def load_state(path: str) -> dict:\n    \"\"\"Load persisted state from disk.\"\"\"\n    p = Path(path)\n    if p.exists():\n        try:\n            return json.loads(p.read_text(encoding=\"utf-8\"))\n        except (json.JSONDecodeError, OSError):\n            log.warning(\"Corrupted state file, starting fresh\")\n    return {\n        \"posted_tweet_ids\": [],\n        \"last_poll_time\": None,\n        \"post_count_today\": 0,\n        \"last_reset_date\": str(date.today()),\n        \"post_log\": [],\n    }\n\n\ndef save_state(state: dict, path: str):\n    \"\"\"Persist state to disk.\"\"\"\n    Path(path).write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding=\"utf-8\")"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 391,
+      "end_line": 395,
+      "quote": "        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 404,
+      "end_line": 418,
+      "quote": "            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 549,
+      "end_line": 554,
+      "quote": "        posts = run_cycle(config, state, twitter_token, square_key)\n        log.info(\"Cycle %d complete: %d posts made (today total: %d)\",\n                 cycle, posts, state.get(\"post_count_today\", 0))\n\n        # Save state after each cycle\n        save_state(state, config[\"state_file\"])"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 570,
+      "end_line": 572,
+      "quote": "    # --- Cleanup ---\n    save_state(state, config[\"state_file\"])\n    log.info(\"State saved. Goodbye!\")"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 325,
+      "end_line": 343,
+      "quote": "                log.info(\"Fetching tweets from @%s ...\", username)\n                batch = fetch_user_tweets(\n                    twitter_token, username,\n                    max_results=config.get(\"max_posts_per_run\", 5) * 2,\n                    include_replies=config.get(\"include_replies\", False),\n                    include_retweets=config.get(\"include_retweets\", False),\n                )\n                tweets.extend(batch)\n        elif mode == \"search\":\n            log.info(\"Searching tweets for: %s\", config.get(\"keywords\", \"\"))\n            tweets = search_tweets(\n                twitter_token,\n                keywords=config.get(\"keywords\", \"\"),\n                min_likes=config.get(\"min_likes\", 0),\n                min_retweets=config.get(\"min_retweets\", 0),\n                max_results=config.get(\"max_posts_per_run\", 5) * 2,\n            )\n        elif mode == \"hashtag\":\n            log.info(\"Searching tweets for #%s\", config.get(\"hashtag\", \"\"))"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 382,
+      "end_line": 407,
+      "quote": "        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)\n            code = resp.get(\"code\", \"\")\n\n            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 431,
+      "end_line": 436,
+      "quote": "            else:\n                msg = resp.get(\"message\", \"unknown error\")\n                log.error(\"Square API error code=%s message=%s — skipping tweet %s\", code, msg, tweet_id)\n\n        except Exception as exc:\n            log.error(\"Failed to post tweet %s: %s\", tweet_id, exc)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 526,
+      "end_line": 540,
+      "quote": "    # --- Print startup info ---\n    mode_desc = {\n        \"account\": f\"accounts: {', '.join(config['accounts'])}\",\n        \"search\": f\"keywords: {config['keywords']}\",\n        \"hashtag\": f\"#{config['hashtag']}\",\n    }\n    log.info(\"=\" * 60)\n    log.info(\"Twitter → Binance Square Auto-Mirror\")\n    log.info(\"Mode: %s (%s)\", config[\"mode\"], mode_desc.get(config[\"mode\"], \"\"))\n    log.info(\"Poll interval: %ds\", config[\"poll_interval_seconds\"])\n    log.info(\"Max posts/cycle: %d\", config[\"max_posts_per_run\"])\n    log.info(\"Dry run: %s\", config[\"dry_run\"])\n    log.info(\"State file: %s\", config[\"state_file\"])\n    log.info(\"Already posted: %d tweets\", len(state.get(\"posted_tweet_ids\", [])))\n    log.info(\"=\" * 60)"
+    },
+    {
+      "path": "README.md",
+      "start_line": 98,
+      "end_line": 115,
+      "quote": "### 后台常驻运行\n\nLinux/Mac:\n```bash\nnohup python scripts/auto_mirror.py --config mirror_config.json > mirror.log 2>&1 &\n```\n\nWindows (PowerShell):\n```powershell\nStart-Process python -ArgumentList \"scripts/auto_mirror.py\", \"--config\", \"mirror_config.json\" -NoNewWindow -RedirectStandardOutput \"mirror.log\"\n```\n\n### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 269,
+      "end_line": 277,
+      "quote": "1. **Verify credentials first**: Check both `TWITTER_TOKEN` and `SQUARE_API_KEY` exist before starting\n2. **Prompt for missing config**: If mode/accounts/keywords not specified, ask the user\n3. **Show preview before first post**: On the first run, show the first transformed tweet and ask for confirmation\n4. **Respect rate limits**: Honor poll_interval_seconds and max_posts_per_run\n5. **Daily limit awareness**: Track daily post count, stop when approaching Binance Square daily limit\n6. **Deduplication**: Never post the same tweet ID twice (persisted in state_file)\n7. **Graceful shutdown**: On interrupt, save state before exiting\n8. **Logging**: Print each action (fetch, skip, transform, post) with timestamps\n9. **Run script via**: `python3 scripts/auto_mirror.py`"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 295,
+      "end_line": 309,
+      "quote": "Let me fetch the latest tweets first to preview...\n\n[Fetches and shows latest tweet]\n\nHere's how the first post would look on Binance Square:\n\n---\nExcited about the new EIP-4844 progress...\n\nSource: @VitalikButerin on X\nPublish by using 6551 twitter mirror tool\n#Ethereum #Crypto\n---\n\nShall I start the auto-mirror with these settings?"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 391,
+      "end_line": 392,
+      "quote": "        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 26,
+      "end_line": 29,
+      "quote": "| Item | Description | How to get |\n|------|-------------|------------|\n| `TWITTER_TOKEN` | 6551 API Bearer token | 访问 https://6551.io/mcp 注册获取 |\n| `SQUARE_API_KEY` | Binance Square OpenAPI Key | 登录币安 → 访问 [创作者中心](https://www.binance.com/zh-CN/square/creator-center/home) → 页面右侧「查看 API」申请 |"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 114,
+      "end_line": 117,
+      "quote": "    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Content-Type\": \"application/json\",\n    }"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 268,
+      "end_line": 274,
+      "quote": "    headers = {\n        \"X-Square-OpenAPI-Key\": api_key,\n        \"Content-Type\": \"application/json\",\n        \"clienttype\": \"binanceSkill\",\n    }\n    payload = {\"bodyTextOnly\": content}\n    return _post_json(SQUARE_API_URL, headers, payload)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 376,
+      "end_line": 401,
+      "quote": "        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 154,
+      "end_line": 174,
+      "quote": "def _extract_tweets(resp: dict) -> list:\n    \"\"\"Normalize the API response into a list of tweet dicts.\"\"\"\n    if not resp:\n        return []\n    # 6551 API may return data in different structures\n    if isinstance(resp, list):\n        return resp\n    if \"data\" in resp:\n        data = resp[\"data\"]\n        if isinstance(data, list):\n            return data\n        if isinstance(data, dict):\n            # could be nested like {\"tweets\": [...]}\n            for key in (\"tweets\", \"results\", \"items\"):\n                if key in data and isinstance(data[key], list):\n                    return data[key]\n            return [data]\n    # If root has tweet-like keys\n    if \"id\" in resp and \"text\" in resp:\n        return [resp]\n    return []"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 97,
+      "end_line": 102,
+      "quote": "        except (URLError, HTTPError, OSError) as exc:\n            if attempt == retries:\n                raise\n            wait = RETRY_BACKOFF_BASE * attempt\n            log.warning(\"Request failed (attempt %d/%d): %s — retrying in %ds\",\n                        attempt, retries, exc, wait)"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 113,
+      "end_line": 123,
+      "quote": "### Step 2: Post to Binance Square\n\n```bash\ncurl -s -X POST \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\" \\\n  -H \"X-Square-OpenAPI-Key: $SQUARE_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"clienttype: binanceSkill\" \\\n  -d '{\n    \"bodyTextOnly\": \"TRANSFORMED_CONTENT\"\n  }'\n```"
+    },
+    {
+      "path": "SKILL.md",
+      "start_line": 356,
+      "end_line": 359,
+      "quote": "1. Binance Square 每日最多发帖 100 条 — the script tracks and respects this limit\n2. Content may be flagged as sensitive by Binance — those tweets are skipped automatically\n3. The 6551 API has rate limits — max 100 results per request\n4. Always attribute the original author to comply with content policies"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "start_line": 369,
+      "end_line": 418,
+      "quote": "    for tweet in tweets:\n        if _shutdown:\n            break\n        if posts_made >= max_posts:\n            log.info(\"Reached max_posts_per_run (%d), stopping\", max_posts)\n            break\n\n        tweet_id = str(tweet.get(\"id\", \"\"))\n        if not tweet_id:\n            continue\n        if tweet_id in posted_ids:\n            log.debug(\"Skipping already-posted tweet %s\", tweet_id)\n            continue\n        if not passes_filter(tweet, config):\n            username = tweet.get(\"userScreenName\", \"?\")\n            log.info(\"Skipping tweet %s from @%s (below engagement threshold)\", tweet_id, username)\n            continue\n\n        # Transform\n        content = transform_tweet(tweet, config)\n        username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n        if config.get(\"dry_run\"):\n            log.info(\"[DRY RUN] Would post tweet %s from @%s:\\n%s\\n\", tweet_id, username, content)\n            posted_ids.add(tweet_id)\n            state[\"posted_tweet_ids\"] = list(posted_ids)\n            posts_made += 1\n            continue\n\n        # Post to Square\n        try:\n            log.info(\"Posting tweet %s from @%s to Square...\", tweet_id, username)\n            resp = post_to_square(square_key, content)\n            code = resp.get(\"code\", \"\")\n\n            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+    },
+    {
+      "path": "mirror_config.example.json",
+      "start_line": 2,
+      "end_line": 19,
+      "quote": "  \"mode\": \"account\",\n  \"accounts\": [\"VitalikButerin\", \"cabornedefi\"],\n  \"keywords\": \"\",\n  \"hashtag\": \"\",\n  \"poll_interval_seconds\": 300,\n  \"min_likes\": 0,\n  \"min_retweets\": 0,\n  \"max_posts_per_run\": 5,\n  \"include_replies\": false,\n  \"include_retweets\": false,\n  \"translate\": false,\n  \"translate_to\": \"zh\",\n  \"content_template\": \"{content}\\n\\n{source_attribution}\\n{tool_attribution}\\n{hashtags}\",\n  \"show_source\": true,\n  \"show_tool_attribution\": true,\n  \"add_hashtags\": [\"Crypto\", \"Web3\"],\n  \"state_file\": \"mirror_state.json\",\n  \"dry_run\": false"
+    },
+    {
+      "path": "README.md",
+      "start_line": 110,
+      "end_line": 115,
+      "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+    }
+  ],
+  "source_sha256": "c5b886bc15eac40f39566a6dc63c579dd7d7a0b71248b076103725225e9026e0",
+  "state": "assistant_draft",
+  "supported_excesses": [],
+  "unknowns": [
+    {
+      "id": "unknown-001-response",
+      "statement": "6551 response schemas/content and API exception/message contents are not fully specified. They may contain information beyond visible examples, but a response dependency does not prove an echoed API key or all request plaintext.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 154,
+          "end_line": 174,
+          "quote": "def _extract_tweets(resp: dict) -> list:\n    \"\"\"Normalize the API response into a list of tweet dicts.\"\"\"\n    if not resp:\n        return []\n    # 6551 API may return data in different structures\n    if isinstance(resp, list):\n        return resp\n    if \"data\" in resp:\n        data = resp[\"data\"]\n        if isinstance(data, list):\n            return data\n        if isinstance(data, dict):\n            # could be nested like {\"tweets\": [...]}\n            for key in (\"tweets\", \"results\", \"items\"):\n                if key in data and isinstance(data[key], list):\n                    return data[key]\n            return [data]\n    # If root has tweet-like keys\n    if \"id\" in resp and \"text\" in resp:\n        return [resp]\n    return []"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 97,
+          "end_line": 102,
+          "quote": "        except (URLError, HTTPError, OSError) as exc:\n            if attempt == retries:\n                raise\n            wait = RETRY_BACKOFF_BASE * attempt\n            log.warning(\"Request failed (attempt %d/%d): %s — retrying in %ds\",\n                        attempt, retries, exc, wait)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 431,
+          "end_line": 436,
+          "quote": "            else:\n                msg = resp.get(\"message\", \"unknown error\")\n                log.error(\"Square API error code=%s message=%s — skipping tweet %s\", code, msg, tweet_id)\n\n        except Exception as exc:\n            log.error(\"Failed to post tweet %s: %s\", tweet_id, exc)"
+        }
+      ]
+    },
+    {
+      "id": "unknown-001-visibility",
+      "statement": "Square publication visibility/retention and provider backend logging are not defined. Do not infer public credential disclosure or separate backend logging sinks from the endpoint name or absent retention statements.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 113,
+          "end_line": 123,
+          "quote": "### Step 2: Post to Binance Square\n\n```bash\ncurl -s -X POST \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\" \\\n  -H \"X-Square-OpenAPI-Key: $SQUARE_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"clienttype: binanceSkill\" \\\n  -d '{\n    \"bodyTextOnly\": \"TRANSFORMED_CONTENT\"\n  }'\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 404,
+          "end_line": 418,
+          "quote": "            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        }
+      ]
+    },
+    {
+      "id": "unknown-001-doc-code",
+      "statement": "Documentation permits optional source attribution, yet final notes say always attribute, and translation is documented without an implemented local translator. Human reviewers must preserve this conflict rather than invent a translation service or silently remove attribution.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 143,
+          "end_line": 149,
+          "quote": "1. **Extract core message**: Keep the tweet's main content\n2. **Remove Twitter-specific elements**: Remove @mentions (except source attribution), remove t.co links\n3. **Tool attribution (default)**: Append `Publish by using 6551 twitter mirror tool` — controlled by `show_tool_attribution` (default: true)\n4. **Source attribution (optional)**: Credit the original author with `Source: @username on X` — controlled by `show_source` (default: true)\n5. **Preserve hashtags**: Keep original hashtags, add relevant crypto hashtags if missing\n6. **Language handling**: If `translate` is enabled, translate to the target language while preserving technical terms\n7. **Length check**: Binance Square has content length limits; trim if needed (keep under 2000 chars)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 356,
+          "end_line": 359,
+          "quote": "1. Binance Square 每日最多发帖 100 条 — the script tracks and respects this limit\n2. Content may be flagged as sensitive by Binance — those tweets are skipped automatically\n3. The 6551 API has rate limits — max 100 results per request\n4. Always attribute the original author to comply with content policies"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 180,
+          "end_line": 249,
+          "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+        }
+      ]
+    },
+    {
+      "id": "unknown-001-cron-credentials",
+      "statement": "The source shows inline credential provisioning in the optional cron command but specifies no protected scheduler credential mechanism or replacement that preserves unattended operation across scheduled invocations. The necessity and reducibility of raw credential retention in scheduler configuration therefore remain source uncertainty; a process-only manual export cannot be assumed to satisfy that recurring schedule.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "preparation_limit": "Source-only assistant preparation; two actual independent human checks remain required. No target execution or target-result claim.",
+  "reviewed_files": [
+    "mirror_config.example.json",
+    "README.md",
+    "scripts/auto_mirror.py",
+    "SKILL.md"
+  ],
+  "reviewed_file_metadata": [
+    {
+      "path": "mirror_config.example.json",
+      "sha256": "0be30ca1ff967038f7ae3d251030f825fda04afe44b6986db1e869448eb28fcf",
+      "physical_lines": 20,
+      "review_state": "read_completely_in_source_bundle"
+    },
+    {
+      "path": "README.md",
+      "sha256": "c0fcaab6a431f3ed732f03cd9dfa063cdb866e5592113df2150eabbd27c5ff93",
+      "physical_lines": 130,
+      "review_state": "read_completely_in_source_bundle"
+    },
+    {
+      "path": "scripts/auto_mirror.py",
+      "sha256": "53371f2d7d92565a8691f0a9e0ed248591840f39519d30bf997dc24ce51446d5",
+      "physical_lines": 576,
+      "review_state": "read_completely_in_source_bundle"
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "029d62420556f5ea3e1b734a0e0ebe8e12b1a5e0b783c2c2893bfe352c412fec",
+      "physical_lines": 359,
+      "review_state": "read_completely_in_source_bundle"
+    }
+  ],
+  "coverage_notes": [
+    "All four retained text files were read completely. The executable local pipeline, agent workflow, optional dry-run/background/cron examples, logging and state writes were reviewed separately. No downloaded code was executed.",
+    "A source-only coverage audit added the optional cron command as a distinct persistent credential-configuration receiver. The pre-audit draft was preserved byte-for-byte before this revision. Scheduler credential availability is retained, with raw-storage reducibility unresolved."
+  ],
+  "remaining_disputes": [
+    {
+      "reference_item_id": "unknown-001-response",
+      "statement": "6551 response schemas/content and API exception/message contents are not fully specified. They may contain information beyond visible examples, but a response dependency does not prove an echoed API key or all request plaintext.",
+      "evidence": [
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 154,
+          "end_line": 174,
+          "quote": "def _extract_tweets(resp: dict) -> list:\n    \"\"\"Normalize the API response into a list of tweet dicts.\"\"\"\n    if not resp:\n        return []\n    # 6551 API may return data in different structures\n    if isinstance(resp, list):\n        return resp\n    if \"data\" in resp:\n        data = resp[\"data\"]\n        if isinstance(data, list):\n            return data\n        if isinstance(data, dict):\n            # could be nested like {\"tweets\": [...]}\n            for key in (\"tweets\", \"results\", \"items\"):\n                if key in data and isinstance(data[key], list):\n                    return data[key]\n            return [data]\n    # If root has tweet-like keys\n    if \"id\" in resp and \"text\" in resp:\n        return [resp]\n    return []"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 97,
+          "end_line": 102,
+          "quote": "        except (URLError, HTTPError, OSError) as exc:\n            if attempt == retries:\n                raise\n            wait = RETRY_BACKOFF_BASE * attempt\n            log.warning(\"Request failed (attempt %d/%d): %s — retrying in %ds\",\n                        attempt, retries, exc, wait)"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 431,
+          "end_line": 436,
+          "quote": "            else:\n                msg = resp.get(\"message\", \"unknown error\")\n                log.error(\"Square API error code=%s message=%s — skipping tweet %s\", code, msg, tweet_id)\n\n        except Exception as exc:\n            log.error(\"Failed to post tweet %s: %s\", tweet_id, exc)"
+        }
+      ]
+    },
+    {
+      "reference_item_id": "unknown-001-visibility",
+      "statement": "Square publication visibility/retention and provider backend logging are not defined. Do not infer public credential disclosure or separate backend logging sinks from the endpoint name or absent retention statements.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 113,
+          "end_line": 123,
+          "quote": "### Step 2: Post to Binance Square\n\n```bash\ncurl -s -X POST \"https://www.binance.com/bapi/composite/v1/public/pgc/openApi/content/add\" \\\n  -H \"X-Square-OpenAPI-Key: $SQUARE_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -H \"clienttype: binanceSkill\" \\\n  -d '{\n    \"bodyTextOnly\": \"TRANSFORMED_CONTENT\"\n  }'\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 404,
+          "end_line": 418,
+          "quote": "            if code == \"000000\":\n                post_id = resp.get(\"data\", {}).get(\"id\", \"\")\n                square_url = f\"https://www.binance.com/square/post/{post_id}\" if post_id else \"N/A\"\n                log.info(\"SUCCESS — Square post: %s\", square_url)\n\n                posted_ids.add(tweet_id)\n                state[\"posted_tweet_ids\"] = list(posted_ids)\n                state[\"post_count_today\"] = state.get(\"post_count_today\", 0) + 1\n                state[\"post_log\"].append({\n                    \"tweet_id\": tweet_id,\n                    \"square_post_id\": post_id,\n                    \"square_url\": square_url,\n                    \"username\": username,\n                    \"posted_at\": datetime.now(timezone.utc).isoformat(),\n                })"
+        }
+      ]
+    },
+    {
+      "reference_item_id": "unknown-001-doc-code",
+      "statement": "Documentation permits optional source attribution, yet final notes say always attribute, and translation is documented without an implemented local translator. Human reviewers must preserve this conflict rather than invent a translation service or silently remove attribution.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 143,
+          "end_line": 149,
+          "quote": "1. **Extract core message**: Keep the tweet's main content\n2. **Remove Twitter-specific elements**: Remove @mentions (except source attribution), remove t.co links\n3. **Tool attribution (default)**: Append `Publish by using 6551 twitter mirror tool` — controlled by `show_tool_attribution` (default: true)\n4. **Source attribution (optional)**: Credit the original author with `Source: @username on X` — controlled by `show_source` (default: true)\n5. **Preserve hashtags**: Keep original hashtags, add relevant crypto hashtags if missing\n6. **Language handling**: If `translate` is enabled, translate to the target language while preserving technical terms\n7. **Length check**: Binance Square has content length limits; trim if needed (keep under 2000 chars)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 356,
+          "end_line": 359,
+          "quote": "1. Binance Square 每日最多发帖 100 条 — the script tracks and respects this limit\n2. Content may be flagged as sensitive by Binance — those tweets are skipped automatically\n3. The 6551 API has rate limits — max 100 results per request\n4. Always attribute the original author to comply with content policies"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 180,
+          "end_line": 249,
+          "quote": "def transform_tweet(tweet: dict, config: dict) -> str:\n    \"\"\"Transform a tweet into Binance Square post content.\"\"\"\n    text = tweet.get(\"text\", \"\")\n    username = tweet.get(\"userScreenName\", tweet.get(\"screenName\", \"unknown\"))\n\n    # Clean up Twitter-specific elements\n    # Remove t.co links\n    text = re.sub(r'https?://t\\.co/\\S+', '', text).strip()\n    # Remove leading RT @user: pattern\n    text = re.sub(r'^RT @\\w+:\\s*', '', text).strip()\n    # Collapse multiple newlines\n    text = re.sub(r'\\n{3,}', '\\n\\n', text)\n\n    # Extract original hashtags from tweet\n    hashtags_list = tweet.get(\"hashtags\", [])\n    if isinstance(hashtags_list, list):\n        original_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in hashtags_list]\n    else:\n        original_tags = []\n\n    # Add configured extra hashtags\n    extra_tags = [f\"#{tag}\" if not tag.startswith(\"#\") else tag for tag in config.get(\"add_hashtags\", [])]\n    all_tags = list(dict.fromkeys(original_tags + extra_tags))  # dedupe preserving order\n    hashtags_str = \" \".join(all_tags)\n\n    # Build attribution lines based on config\n    source_attribution = \"\"\n    if config.get(\"show_source\", True):\n        source_attribution = f\"Source: @{username} on X\"\n\n    tool_attribution = \"\"\n    if config.get(\"show_tool_attribution\", True):\n        tool_attribution = \"Publish by using 6551 twitter mirror tool\"\n\n    # Apply template\n    template = config.get(\"content_template\", DEFAULT_CONFIG[\"content_template\"])\n    content = template.format(\n        content=text,\n        username=username,\n        hashtags=hashtags_str,\n        source_attribution=source_attribution,\n        tool_attribution=tool_attribution,\n    )\n\n    # Clean up empty lines from disabled attributions\n    content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    # Enforce length limit\n    if len(content) > MAX_SQUARE_CONTENT_LENGTH:\n        # Trim content, keep suffix\n        suffix_parts = []\n        if source_attribution:\n            suffix_parts.append(source_attribution)\n        if tool_attribution:\n            suffix_parts.append(tool_attribution)\n        if hashtags_str:\n            suffix_parts.append(hashtags_str)\n        suffix = \"\\n\\n\" + \"\\n\".join(suffix_parts)\n        max_text_len = MAX_SQUARE_CONTENT_LENGTH - len(suffix) - 3\n        text_trimmed = text[:max_text_len] + \"...\"\n        content = template.format(\n            content=text_trimmed,\n            username=username,\n            hashtags=hashtags_str,\n            source_attribution=source_attribution,\n            tool_attribution=tool_attribution,\n        )\n        content = re.sub(r'\\n{3,}', '\\n\\n', content).strip()\n\n    return content"
+        }
+      ]
+    },
+    {
+      "reference_item_id": "unknown-001-cron-credentials",
+      "statement": "The source shows inline credential provisioning in the optional cron command but specifies no protected scheduler credential mechanism or replacement that preserves unattended operation across scheduled invocations. The necessity and reducibility of raw credential retention in scheduler configuration therefore remain source uncertainty; a process-only manual export cannot be assumed to satisfy that recurring schedule.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        },
+        {
+          "path": "scripts/auto_mirror.py",
+          "start_line": 502,
+          "end_line": 511,
+          "quote": "    # --- Validate ---\n    twitter_token = os.environ.get(\"TWITTER_TOKEN\", \"\")\n    square_key = os.environ.get(\"SQUARE_API_KEY\", \"\")\n\n    if not twitter_token:\n        log.error(\"TWITTER_TOKEN environment variable not set. Get yours at https://6551.io/mcp\")\n        sys.exit(1)\n    if not square_key and not config.get(\"dry_run\"):\n        log.error(\"SQUARE_API_KEY environment variable not set.\")\n        sys.exit(1)"
+        }
+      ]
+    }
+  ],
+  "supported_excesses_coverage_reason": "Complete source review identifies necessary credential delivery, selected mirroring and preview content, logs, state persistence and conditional inline credential storage in cron configuration, but no concrete source-established unnecessary sensitive field with a supported preservation-safe reduction. Unattended scheduler credential provisioning, response contents, publication scope and documentation/code conflicts remain explicit unknowns. This is not a safety or zero-DOE claim.",
+  "revision_history": [
+    {
+      "revision_type": "source_coverage",
+      "reason": "The initial receiving-point inventory covered cron log redirection but omitted persistent inline credential assignments in the optional scheduled command. This revision adds that receiver and source-grounded necessary-use, uncertainty and preservation checks without adding a definite DOE claim.",
+      "revised_at": "2026-10-20T11:18:38.358818+00:00",
+      "preserved_original_path": "reference-drafts/history/pre-coverage-audit/real-001.json",
+      "preserved_original_sha256": "64e872cfe60007b94e30aade6d5caea203599b2aa91b8cf4f862d15699599ec8",
+      "added_item_ids": [
+        "rp-001-cron-config",
+        "need-001-cron-auth",
+        "unknown-001-cron-credentials",
+        "preserve-001-cron-schedule"
+      ],
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 110,
+          "end_line": 115,
+          "quote": "### 定时任务 (Cron)\n\n每小时执行一次单轮：\n```cron\n0 * * * * cd /path/to/twitter-to-binance-square && TWITTER_TOKEN=xxx SQUARE_API_KEY=xxx python scripts/auto_mirror.py --config mirror_config.json --once >> mirror.log 2>&1\n```"
+        }
+      ]
+    }
+  ]
+}

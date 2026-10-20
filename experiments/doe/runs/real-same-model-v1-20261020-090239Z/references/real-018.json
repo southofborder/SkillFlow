@@ -1,0 +1,758 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "victorcavero14/upload-post",
+  "case_id": "real-018",
+  "declared_purpose": [
+    {
+      "id": "P1",
+      "interpretation": "Publish/schedule selected social content through Upload-Post, inspect per-platform outcomes/history/analytics, and optionally process media server-side. This declared purpose is not user authorization to publish any particular content.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 1,
+          "end_line": 8,
+          "quote": "---\nname: upload-post\ndescription: \"Publish and schedule content to 15 social platforms through one Upload-Post API call: TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky, Reddit, Discord, Telegram, Mastodon, WordPress and Google Business Profile. Use when posting or scheduling videos, photo carousels, text or documents across several platforms at once, checking upload status, or pulling analytics.\"\nallowed-tools: Read, Write, Bash(curl:*), Bash(jq:*)\nversion: \"1.2.0\"\nauthor: Upload-Post <support@upload-post.com>\nlicense: MIT\ncompatibility: \"Works in Claude Code, OpenClaw and any agent runtime supporting the Agent Skills spec. Requires curl on PATH and the UPLOAD_POST_API_KEY environment variable (optionally UPLOAD_POST_PROFILE). No local media tooling needed — uploads are server-side.\""
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 20,
+          "end_line": 31,
+          "quote": "Post content to multiple social media platforms with a single API call.\n\n## Overview\n\nOne request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms.\n\nFour content types are supported: video, photo carousels, text-only posts and documents\n(LinkedIn). Each can be published immediately, scheduled for a future date, or added to a\nposting queue."
+        },
+        {
+          "path": "README.md",
+          "start_line": 20,
+          "end_line": 27,
+          "quote": "## Features\n\n- Upload videos, photos, carousels, text posts, and documents\n- Schedule posts for later\n- Cross-post to multiple platforms simultaneously\n- FFmpeg media processing (resize, transcode, etc.)\n- Analytics retrieval\n- Upload history tracking"
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "I1",
+      "interpretation": "A single service API key and profile route replace per-platform tokens within this skill; server-side processing, async polling, retry_request_id and optional idempotency are specified mechanisms, not evidence of global payload minimization.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 31,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms.\n\nFour content types are supported: video, photo carousels, text-only posts and documents\n(LinkedIn). Each can be published immediately, scheduled for a future date, or added to a\nposting queue."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 381,
+          "end_line": 417,
+          "quote": "**Retry only the platforms that failed**\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=mybrand\" -F \"video=@clip.mp4\" -F \"title=...\" \\\n  -F \"retry_request_id=req_8f21c04a\"\n```\n\n## Error Handling\n\n| Code | Meaning |\n|------|---------|\n| 400 | Bad request / missing params |\n| 401 | Invalid API key |\n| 404 | Resource not found |\n| 429 | Rate limit / quota exceeded |\n| 500 | Server error |\n\nThe failure modes that actually bite:\n\n- **`401 Invalid or expired token` with a key you know is good** — the key was sent as\n  `Bearer`. API keys use the `Apikey` scheme. The message is misleading: the key is fine,\n  the scheme is wrong.\n- **Some platforms succeeded, others failed** — this is normal, not an exception. Read\n  `results` per platform and retry only the failures with `retry_request_id` instead of\n  re-uploading everything.\n- **The request timed out** — uploads longer than 59 seconds switch to async automatically.\n  Do not treat a timeout as a failure; poll `/uploadposts/status` with the `request_id`.\n- **`reached_active_user_cap` on TikTok** — TikTok's daily cap was hit. By default the video\n  falls back to the TikTok inbox as a draft: `success` is still `true`, the result carries\n  `fallback_to_inbox: true`, and the id starts with `v_inbox_file`. The video is waiting in\n  the app, not live.\n- **Missing title on YouTube or Reddit** — both reject the upload; every other platform\n  accepts an empty title.\n- **Duplicate posts after a retry** — send an `Idempotency-Key` header. A retried request\n  with a matching key returns the existing job rather than publishing twice."
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "M1",
+      "interpretation": "Cover API upload and social fan-out as distinct recipients; include processing, management/status/analytics, API/model returns, final user report, local configuration and downloaded processed files.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 31,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms.\n\nFour content types are supported: video, photo carousels, text-only posts and documents\n(LinkedIn). Each can be published immediately, scheduled for a future date, or added to a\nposting queue."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 48,
+          "end_line": 86,
+          "quote": "The skill reads two environment variables. Nothing else needs to be installed or wired up:\nthe OAuth for every platform already happened in the dashboard.\n\n| Variable | Required | Purpose |\n|----------|----------|---------|\n| `UPLOAD_POST_API_KEY` | yes | API key from the dashboard. Sent as `Authorization: Apikey $UPLOAD_POST_API_KEY`. |\n| `UPLOAD_POST_PROFILE` | no | Default profile name for the `user` parameter, so it is not repeated on every request. |\n\nExport them in the shell that runs the agent:\n\n```bash\nexport UPLOAD_POST_API_KEY=\"...\"\nexport UPLOAD_POST_PROFILE=\"mybrand\"\n```\n\nOn **OpenClaw / ClawHub** the skill is gated on `UPLOAD_POST_API_KEY`: until the key is set it\nshows as ineligible in `openclaw skills list`. Put it in `~/.openclaw/openclaw.json` so it is\ninjected only for this skill (`apiKey` maps to `UPLOAD_POST_API_KEY`):\n\n```json5\n{\n  skills: {\n    entries: {\n      \"upload-post\": {\n        enabled: true,\n        apiKey: \"YOUR_UPLOAD_POST_API_KEY\",\n        env: { UPLOAD_POST_PROFILE: \"mybrand\" },\n      },\n    },\n  },\n}\n```\n\nThen confirm the key is accepted before posting anything:\n\n```bash\ncurl -s \"https://api.upload-post.com/api/uploadposts/me\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 98,
+          "end_line": 117,
+          "quote": "## Endpoints Reference\n\n| Endpoint | Method | Description |\n|----------|--------|-------------|\n| `/upload` | POST | Upload videos |\n| `/upload_photos` | POST | Upload photos/carousels |\n| `/upload_text` | POST | Text-only posts |\n| `/upload_document` | POST | Upload documents (LinkedIn only) |\n| `/uploadposts/status?request_id=X` | GET | Check async upload status |\n| `/uploadposts/history` | GET | Upload history |\n| `/uploadposts/schedule` | GET | List scheduled posts |\n| `/uploadposts/schedule/<job_id>` | DELETE | Cancel scheduled post |\n| `/uploadposts/schedule/<job_id>` | PATCH | Edit scheduled post |\n| `/uploadposts/me` | GET | Validate API key |\n| `/analytics/<profile>` | GET | Get analytics |\n| `/uploadposts/facebook/pages` | GET | List Facebook pages |\n| `/uploadposts/linkedin/pages` | GET | List LinkedIn pages |\n| `/uploadposts/pinterest/boards` | GET | List Pinterest boards |\n| `/uploadposts/reddit/detailed-posts` | GET | Get Reddit posts with media |\n| `/ffmpeg` | POST | Process media with FFmpeg |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 264,
+          "end_line": 317,
+          "quote": "## Analytics\n\n```bash\ncurl \"https://api.upload-post.com/api/analytics/profile_name?platforms=instagram,tiktok\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nSupported: Instagram, TikTok, LinkedIn, Facebook, X, YouTube, Threads, Pinterest, Reddit, Bluesky.\n\nReturns: followers, impressions, reach, profile views, time-series data.\n\n## Get Pages/Boards\n\n```bash\n# Facebook Pages\ncurl \"https://api.upload-post.com/api/uploadposts/facebook/pages\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n\n# LinkedIn Pages  \ncurl \"https://api.upload-post.com/api/uploadposts/linkedin/pages\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n\n# Pinterest Boards\ncurl \"https://api.upload-post.com/api/uploadposts/pinterest/boards\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\n## Reddit Detailed Posts\n\nGet posts with full media info (images, galleries, videos):\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/reddit/detailed-posts?profile_username=myprofile\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nReturns up to 2000 posts with media URLs, dimensions, thumbnails.\n\n## FFmpeg Editor\n\nProcess media with custom FFmpeg commands:\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/ffmpeg\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"file=@input.mp4\" \\\n  -F \"full_command=ffmpeg -y -i {input} -c:v libx264 -crf 23 {output}\" \\\n  -F \"output_extension=mp4\"\n```\n\n- Use `{input}` and `{output}` placeholders\n- Poll job status until `FINISHED`\n- Download result from `/ffmpeg/job/<job_id>/download`\n- Supports multiple inputs: `{input0}`, `{input1}`, etc."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 329,
+          "end_line": 352,
+          "quote": "## Output\n\nAn accepted upload returns a `request_id`. With `async_upload=true` the platforms are still\nprocessing at that point:\n\n```json\n{ \"success\": true, \"request_id\": \"req_8f21c04a\" }\n```\n\nPolling `/uploadposts/status?request_id=…` returns the per-platform outcome. Report each\nplatform separately — a request can partially succeed:\n\n```json\n{\n  \"status\": \"completed\",\n  \"results\": {\n    \"tiktok\":    { \"success\": true,  \"post_url\": \"https://tiktok.com/@brand/video/7412...\" },\n    \"instagram\": { \"success\": true,  \"post_url\": \"https://instagram.com/reel/C8xY2...\" },\n    \"youtube\":   { \"success\": false, \"error_code\": \"quota_exceeded\" }\n  }\n}\n```\n\nA scheduled post responds `202` with a `job_id` instead, which later appears in upload history."
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "M2",
+      "interpretation": "Preserve optional member conditions, profile/target pairing, audience restrictions, scheduling/queue state, partial results, failed-platform retry and the async-to-draft distinction. Do not infer DOE merely from an API key or intended publication.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 119,
+          "end_line": 134,
+          "quote": "## Instructions\n\n1. **Pick the endpoint** by content type — `/upload` for video, `/upload_photos` for photos\n   and carousels, `/upload_text` for text-only, `/upload_document` for LinkedIn documents.\n2. **Set `user`** to the profile name (`$UPLOAD_POST_PROFILE` when set), not a social handle. The profile determines which\n   connected accounts receive the content.\n3. **Repeat `platform[]`** once per target platform.\n4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ.\n5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed.\n\nTo schedule instead of publishing now, add `scheduled_date` (ISO-8601) and optionally\n`timezone` (IANA). To let Upload-Post pick the next free slot, send `add_to_queue=true`."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 381,
+          "end_line": 417,
+          "quote": "**Retry only the platforms that failed**\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=mybrand\" -F \"video=@clip.mp4\" -F \"title=...\" \\\n  -F \"retry_request_id=req_8f21c04a\"\n```\n\n## Error Handling\n\n| Code | Meaning |\n|------|---------|\n| 400 | Bad request / missing params |\n| 401 | Invalid API key |\n| 404 | Resource not found |\n| 429 | Rate limit / quota exceeded |\n| 500 | Server error |\n\nThe failure modes that actually bite:\n\n- **`401 Invalid or expired token` with a key you know is good** — the key was sent as\n  `Bearer`. API keys use the `Apikey` scheme. The message is misleading: the key is fine,\n  the scheme is wrong.\n- **Some platforms succeeded, others failed** — this is normal, not an exception. Read\n  `results` per platform and retry only the failures with `retry_request_id` instead of\n  re-uploading everything.\n- **The request timed out** — uploads longer than 59 seconds switch to async automatically.\n  Do not treat a timeout as a failure; poll `/uploadposts/status` with the `request_id`.\n- **`reached_active_user_cap` on TikTok** — TikTok's daily cap was hit. By default the video\n  falls back to the TikTok inbox as a draft: `success` is still `true`, the result carries\n  `fallback_to_inbox: true`, and the id starts with `v_inbox_file`. The video is waiting in\n  the app, not live.\n- **Missing title on YouTube or Reddit** — both reject the upload; every other platform\n  accepts an empty title.\n- **Duplicate posts after a retry** — send an `Idempotency-Key` header. A retried request\n  with a matching key returns the existing job rather than publishing twice."
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 3,
+          "end_line": 117,
+          "quote": "## TikTok\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `tiktok_title` | String | Override title for TikTok |\n| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |\n| `auto_add_music` | Boolean | Add background music to photos |\n| `disable_comment` | Boolean | Disable comments |\n| `brand_content_toggle` | Boolean | Paid partnership content |\n| `photo_cover_index` | Integer | Cover photo index (0-based) |\n\n## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |\n\nGet page IDs: `GET /api/uploadposts/linkedin/pages`\n\n## Facebook\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `facebook_title` | String | Override title |\n| `facebook_page_id` | String | Page ID (required for pages) |\n| `facebook_media_type` | String | `POSTS` or `STORIES` |\n\nGet page IDs: `GET /api/uploadposts/facebook/pages`\n\nNote: Personal profiles not supported by Meta API - only Pages.\n\n## X (Twitter)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `x_title` | String | Override title |\n| `x_long_text_as_post` | Boolean | Post long text as single post (default: thread) |\n| `reply_settings` | String | `following`, `mentionedUsers`, `subscribers`, `verified` |\n| `reply_to_id` | String | Tweet ID to reply to |\n| `community_id` | String | Post to community |\n| `tagged_user_ids` | Array | Users to tag in photos (max 10) |\n\nThread behavior: Long text auto-splits at 280 chars. Media attaches to first tweet only.\n\n## Threads\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `threads_title` | String | Override title |\n\nSupports mixed carousels (photos + videos).\n\n## Pinterest\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `pinterest_title` | String | Pin title |\n| `pinterest_board_id` | String | Target board ID (required) |\n| `pinterest_link` | String | Destination link |\n| `pinterest_alt_text` | String | Alt text for image |\n\nGet board IDs: `GET /api/uploadposts/pinterest/boards`\n\n## Reddit\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `reddit_title` | String | Post title |\n| `subreddit` | String | Target subreddit (required) |\n| `reddit_flair_id` | String | Flair ID |\n| `nsfw` | Boolean | Mark as NSFW |\n| `spoiler` | Boolean | Mark as spoiler |\n\n## Bluesky\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `bluesky_title` | String | Override title |\n| `alt_text` | String | Alt text for images |\n\nLimits: 4 images max, 1MB per image, 50 uploads/day.\n\n## Common Parameters (All Platforms)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `first_comment` | String | Auto-post first comment (Instagram, Facebook, Threads, Bluesky, Reddit, X, YouTube) |\n| `async_upload` | Boolean | Background processing |\n| `scheduled_date` | String | ISO-8601 schedule time |\n| `timezone` | String | IANA timezone for schedule |"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "MNN1",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: API key is needed for service authentication; selected profile and target-account identifiers are needed to choose recipients. The key is sent to Upload-Post, while per-platform OAuth is handled in the dashboard; do not claim the key is published to social viewers.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 27,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 48,
+          "end_line": 54,
+          "quote": "The skill reads two environment variables. Nothing else needs to be installed or wired up:\nthe OAuth for every platform already happened in the dashboard.\n\n| Variable | Required | Purpose |\n|----------|----------|---------|\n| `UPLOAD_POST_API_KEY` | yes | API key from the dashboard. Sent as `Authorization: Apikey $UPLOAD_POST_API_KEY`. |\n| `UPLOAD_POST_PROFILE` | no | Default profile name for the `user` parameter, so it is not repeated on every request. |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 88,
+          "end_line": 96,
+          "quote": "## Authentication\n\n```\nAuthorization: Apikey $UPLOAD_POST_API_KEY\n```\n\nBase URL: `https://api.upload-post.com/api`\n\nThe `user` parameter in all endpoints refers to your **profile name** (not username), which determines which connected social accounts receive the content."
+        }
+      ]
+    },
+    {
+      "id": "MNN2",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: Selected private media, captions, schedule times and optional location/tags may be sensitive but publishing/processing selected content is the declared service. Preserve platform-specific visibility and content intent; absence of an independent task prevents asserting all optional fields are unnecessary.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 119,
+          "end_line": 134,
+          "quote": "## Instructions\n\n1. **Pick the endpoint** by content type — `/upload` for video, `/upload_photos` for photos\n   and carousels, `/upload_text` for text-only, `/upload_document` for LinkedIn documents.\n2. **Set `user`** to the profile name (`$UPLOAD_POST_PROFILE` when set), not a social handle. The profile determines which\n   connected accounts receive the content.\n3. **Repeat `platform[]`** once per target platform.\n4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ.\n5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed.\n\nTo schedule instead of publishing now, add `scheduled_date` (ISO-8601) and optionally\n`timezone` (IANA). To let Upload-Post pick the next free slot, send `add_to_queue=true`."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 202,
+          "end_line": 207,
+          "quote": "Parameters:\n- `document`: PDF, PPT, PPTX, DOC, DOCX (max 100MB, 300 pages)\n- `title`: Document title (required)\n- `description`: Post commentary\n- `visibility`: PUBLIC, CONNECTIONS, LOGGED_IN, CONTAINER\n- `target_linkedin_page_id`: Post to company page"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 15,
+          "end_line": 43,
+          "quote": "## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 302,
+          "end_line": 317,
+          "quote": "## FFmpeg Editor\n\nProcess media with custom FFmpeg commands:\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/ffmpeg\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"file=@input.mp4\" \\\n  -F \"full_command=ffmpeg -y -i {input} -c:v libx264 -crf 23 {output}\" \\\n  -F \"output_extension=mp4\"\n```\n\n- Use `{input}` and `{output}` placeholders\n- Poll job status until `FINISHED`\n- Download result from `/ffmpeg/job/<job_id>/download`\n- Supports multiple inputs: `{input0}`, `{input1}`, etc."
+        }
+      ]
+    },
+    {
+      "id": "MUU1",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Actual user content, account ownership, backend storage, forwarding and platform defaults are absent. The source lists privacy options but no protective pre-upload redaction; public publication is conditional on the chosen audience and endpoint behavior, not guaranteed for every call.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 31,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms.\n\nFour content types are supported: video, photo carousels, text-only posts and documents\n(LinkedIn). Each can be published immediately, scheduled for a future date, or added to a\nposting queue."
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 8,
+          "end_line": 9,
+          "quote": "| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 29,
+          "end_line": 42,
+          "quote": "| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |"
+        }
+      ]
+    },
+    {
+      "id": "MUU2",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Metadata names fifteen supported platforms, but the retained detailed matrices/references describe ten. Additional external documentation and real platform behavior are not read or executed; retain unsupported coverage rather than inventing parameters for the other platforms.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 3,
+          "end_line": 3,
+          "quote": "description: \"Publish and schedule content to 15 social platforms through one Upload-Post API call: TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky, Reddit, Discord, Telegram, Mastodon, WordPress and Google Business Profile. Use when posting or scheduling videos, photo carousels, text or documents across several platforms at once, checking upload status, or pulling analytics.\""
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 209,
+          "end_line": 222,
+          "quote": "## Supported Platforms\n\n| Platform | Videos | Photos | Text | Documents |\n|----------|--------|--------|------|-----------|\n| TikTok | ✓ | ✓ | - | - |\n| Instagram | ✓ | ✓ | - | - |\n| YouTube | ✓ | - | - | - |\n| LinkedIn | ✓ | ✓ | ✓ | ✓ |\n| Facebook | ✓ | ✓ | ✓ | - |\n| X (Twitter) | ✓ | ✓ | ✓ | - |\n| Threads | ✓ | ✓ | ✓ | - |\n| Pinterest | ✓ | ✓ | - | - |\n| Reddit | - | ✓ | ✓ | - |\n| Bluesky | ✓ | ✓ | ✓ | - |"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 1,
+          "end_line": 117,
+          "quote": "# Platform-Specific Parameters\n\n## TikTok\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `tiktok_title` | String | Override title for TikTok |\n| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |\n| `auto_add_music` | Boolean | Add background music to photos |\n| `disable_comment` | Boolean | Disable comments |\n| `brand_content_toggle` | Boolean | Paid partnership content |\n| `photo_cover_index` | Integer | Cover photo index (0-based) |\n\n## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |\n\nGet page IDs: `GET /api/uploadposts/linkedin/pages`\n\n## Facebook\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `facebook_title` | String | Override title |\n| `facebook_page_id` | String | Page ID (required for pages) |\n| `facebook_media_type` | String | `POSTS` or `STORIES` |\n\nGet page IDs: `GET /api/uploadposts/facebook/pages`\n\nNote: Personal profiles not supported by Meta API - only Pages.\n\n## X (Twitter)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `x_title` | String | Override title |\n| `x_long_text_as_post` | Boolean | Post long text as single post (default: thread) |\n| `reply_settings` | String | `following`, `mentionedUsers`, `subscribers`, `verified` |\n| `reply_to_id` | String | Tweet ID to reply to |\n| `community_id` | String | Post to community |\n| `tagged_user_ids` | Array | Users to tag in photos (max 10) |\n\nThread behavior: Long text auto-splits at 280 chars. Media attaches to first tweet only.\n\n## Threads\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `threads_title` | String | Override title |\n\nSupports mixed carousels (photos + videos).\n\n## Pinterest\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `pinterest_title` | String | Pin title |\n| `pinterest_board_id` | String | Target board ID (required) |\n| `pinterest_link` | String | Destination link |\n| `pinterest_alt_text` | String | Alt text for image |\n\nGet board IDs: `GET /api/uploadposts/pinterest/boards`\n\n## Reddit\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `reddit_title` | String | Post title |\n| `subreddit` | String | Target subreddit (required) |\n| `reddit_flair_id` | String | Flair ID |\n| `nsfw` | Boolean | Mark as NSFW |\n| `spoiler` | Boolean | Mark as spoiler |\n\n## Bluesky\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `bluesky_title` | String | Override title |\n| `alt_text` | String | Alt text for images |\n\nLimits: 4 images max, 1MB per image, 50 uploads/day.\n\n## Common Parameters (All Platforms)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `first_comment` | String | Auto-post first comment (Instagram, Facebook, Threads, Bluesky, Reddit, X, YouTube) |\n| `async_upload` | Boolean | Background processing |\n| `scheduled_date` | String | ISO-8601 schedule time |\n| `timezone` | String | IANA timezone for schedule |"
+        }
+      ]
+    },
+    {
+      "id": "MUU3",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Title requirements conflict within source: upload-video parameter summary calls title required, whereas instructions and failure notes limit the requirement to YouTube/Reddit. Preserve this discrepancy rather than forcing blanket omission or inclusion.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 126,
+          "end_line": 127,
+          "quote": "4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 148,
+          "end_line": 157,
+          "quote": "Key parameters:\n- `user`: Profile username (required)\n- `platform[]`: Target platforms (required)\n- `video`: Video file or URL (required)\n- `title`: Caption/title (required)\n- `description`: Extended description\n- `scheduled_date`: ISO-8601 date for scheduling\n- `timezone`: IANA timezone (e.g., \"Europe/Madrid\")\n- `async_upload`: Set `true` for background processing\n- `first_comment`: Auto-post first comment"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 414,
+          "end_line": 415,
+          "quote": "- **Missing title on YouTube or Reddit** — both reject the upload; every other platform\n  accepts an empty title."
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "N1",
+      "interpretation": "API key is needed for service authentication; selected profile and target-account identifiers are needed to choose recipients. The key is sent to Upload-Post, while per-platform OAuth is handled in the dashboard; do not claim the key is published to social viewers.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 27,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 48,
+          "end_line": 54,
+          "quote": "The skill reads two environment variables. Nothing else needs to be installed or wired up:\nthe OAuth for every platform already happened in the dashboard.\n\n| Variable | Required | Purpose |\n|----------|----------|---------|\n| `UPLOAD_POST_API_KEY` | yes | API key from the dashboard. Sent as `Authorization: Apikey $UPLOAD_POST_API_KEY`. |\n| `UPLOAD_POST_PROFILE` | no | Default profile name for the `user` parameter, so it is not repeated on every request. |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 88,
+          "end_line": 96,
+          "quote": "## Authentication\n\n```\nAuthorization: Apikey $UPLOAD_POST_API_KEY\n```\n\nBase URL: `https://api.upload-post.com/api`\n\nThe `user` parameter in all endpoints refers to your **profile name** (not username), which determines which connected social accounts receive the content."
+        }
+      ]
+    },
+    {
+      "id": "N2",
+      "interpretation": "Selected private media, captions, schedule times and optional location/tags may be sensitive but publishing/processing selected content is the declared service. Preserve platform-specific visibility and content intent; absence of an independent task prevents asserting all optional fields are unnecessary.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 119,
+          "end_line": 134,
+          "quote": "## Instructions\n\n1. **Pick the endpoint** by content type — `/upload` for video, `/upload_photos` for photos\n   and carousels, `/upload_text` for text-only, `/upload_document` for LinkedIn documents.\n2. **Set `user`** to the profile name (`$UPLOAD_POST_PROFILE` when set), not a social handle. The profile determines which\n   connected accounts receive the content.\n3. **Repeat `platform[]`** once per target platform.\n4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ.\n5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed.\n\nTo schedule instead of publishing now, add `scheduled_date` (ISO-8601) and optionally\n`timezone` (IANA). To let Upload-Post pick the next free slot, send `add_to_queue=true`."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 202,
+          "end_line": 207,
+          "quote": "Parameters:\n- `document`: PDF, PPT, PPTX, DOC, DOCX (max 100MB, 300 pages)\n- `title`: Document title (required)\n- `description`: Post commentary\n- `visibility`: PUBLIC, CONNECTIONS, LOGGED_IN, CONTAINER\n- `target_linkedin_page_id`: Post to company page"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 15,
+          "end_line": 43,
+          "quote": "## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 302,
+          "end_line": 317,
+          "quote": "## FFmpeg Editor\n\nProcess media with custom FFmpeg commands:\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/ffmpeg\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"file=@input.mp4\" \\\n  -F \"full_command=ffmpeg -y -i {input} -c:v libx264 -crf 23 {output}\" \\\n  -F \"output_extension=mp4\"\n```\n\n- Use `{input}` and `{output}` placeholders\n- Poll job status until `FINISHED`\n- Download result from `/ffmpeg/job/<job_id>/download`\n- Supports multiple inputs: `{input0}`, `{input1}`, etc."
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "PC1",
+      "interpretation": "Retain each selected recipient, its own caption/visibility and desired media quality/cardinality. A necessary posting action does not justify arbitrary additional fields, but deleting the selected media or overriding its audience would defeat the declared workflow.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 119,
+          "end_line": 134,
+          "quote": "## Instructions\n\n1. **Pick the endpoint** by content type — `/upload` for video, `/upload_photos` for photos\n   and carousels, `/upload_text` for text-only, `/upload_document` for LinkedIn documents.\n2. **Set `user`** to the profile name (`$UPLOAD_POST_PROFILE` when set), not a social handle. The profile determines which\n   connected accounts receive the content.\n3. **Repeat `platform[]`** once per target platform.\n4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ.\n5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed.\n\nTo schedule instead of publishing now, add `scheduled_date` (ISO-8601) and optionally\n`timezone` (IANA). To let Upload-Post pick the next free slot, send `add_to_queue=true`."
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 3,
+          "end_line": 108,
+          "quote": "## TikTok\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `tiktok_title` | String | Override title for TikTok |\n| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |\n| `auto_add_music` | Boolean | Add background music to photos |\n| `disable_comment` | Boolean | Disable comments |\n| `brand_content_toggle` | Boolean | Paid partnership content |\n| `photo_cover_index` | Integer | Cover photo index (0-based) |\n\n## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |\n\nGet page IDs: `GET /api/uploadposts/linkedin/pages`\n\n## Facebook\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `facebook_title` | String | Override title |\n| `facebook_page_id` | String | Page ID (required for pages) |\n| `facebook_media_type` | String | `POSTS` or `STORIES` |\n\nGet page IDs: `GET /api/uploadposts/facebook/pages`\n\nNote: Personal profiles not supported by Meta API - only Pages.\n\n## X (Twitter)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `x_title` | String | Override title |\n| `x_long_text_as_post` | Boolean | Post long text as single post (default: thread) |\n| `reply_settings` | String | `following`, `mentionedUsers`, `subscribers`, `verified` |\n| `reply_to_id` | String | Tweet ID to reply to |\n| `community_id` | String | Post to community |\n| `tagged_user_ids` | Array | Users to tag in photos (max 10) |\n\nThread behavior: Long text auto-splits at 280 chars. Media attaches to first tweet only.\n\n## Threads\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `threads_title` | String | Override title |\n\nSupports mixed carousels (photos + videos).\n\n## Pinterest\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `pinterest_title` | String | Pin title |\n| `pinterest_board_id` | String | Target board ID (required) |\n| `pinterest_link` | String | Destination link |\n| `pinterest_alt_text` | String | Alt text for image |\n\nGet board IDs: `GET /api/uploadposts/pinterest/boards`\n\n## Reddit\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `reddit_title` | String | Post title |\n| `subreddit` | String | Target subreddit (required) |\n| `reddit_flair_id` | String | Flair ID |\n| `nsfw` | Boolean | Mark as NSFW |\n| `spoiler` | Boolean | Mark as spoiler |\n\n## Bluesky\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `bluesky_title` | String | Override title |\n| `alt_text` | String | Alt text for images |\n\nLimits: 4 images max, 1MB per image, 50 uploads/day."
+        },
+        {
+          "path": "references/requirements.md",
+          "start_line": 3,
+          "end_line": 112,
+          "quote": "## Photo Requirements\n\n### Instagram\n- Formats: JPEG, PNG, GIF\n- Aspect ratio: 4:5 to 1.91:1\n- Recommended: 1080x1350px (4:5)\n\n### TikTok\n- Formats: JPG, JPEG, WEBP only\n- Use for photo slideshows with `auto_add_music`\n\n### Facebook\n- Formats: JPEG, PNG, GIF, WebP\n- Max size: 10MB recommended\n\n### X (Twitter)\n- Formats: JPEG, PNG, GIF\n- Max size: 5MB (images), 15MB (GIFs)\n- Max 4 images per tweet\n\n### LinkedIn\n- Formats: JPEG, PNG, GIF\n- Recommended: 1200x627px\n\n### Threads\n- Formats: JPEG, PNG\n- Max size: 8MB\n- Aspect ratio: 10:1 to 1:10\n- Width: 320px min, 1440px max\n- Color space: sRGB (auto-converted)\n\n### Pinterest\n- Formats: BMP, JPEG, PNG, TIFF, GIF, WebP\n- Max size: 20MB\n- Recommended: 1000x1500px (2:3)\n- Min: 600x900px, Max: 2000x3000px\n- Carousel: up to 5 images, same dimensions\n\n### Reddit\n- Formats: JPG, PNG, GIF, WEBP\n- Max size: 10MB\n\n### Bluesky\n- Formats: JPEG, PNG, GIF, WebP\n- Max size: 1MB per image\n- Max 4 images per post\n- Daily limit: 50 uploads (photos + videos)\n\n## Video Requirements\n\n### TikTok\n- Formats: MP4, MOV, WebM\n- Duration: 3s to 10min\n- Max size: 4GB\n- Recommended: 1080x1920 (9:16)\n- Codec: H.264\n\n### Instagram\n- Formats: MP4, MOV\n- Reels: 0-90s, 9:16 aspect\n- Feed: up to 60s\n- Max size: 4GB\n- Codec: H.264, AAC audio\n\n### YouTube\n- Formats: MP4, MOV, AVI, WMV, FLV, WebM\n- Max size: 256GB\n- Max duration: 12 hours\n- Recommended: 1920x1080 or 3840x2160\n\n### LinkedIn\n- Formats: MP4\n- Duration: 3s to 10min\n- Max size: 5GB\n- Aspect: 1:2.4 to 2.4:1\n\n### Facebook\n- Formats: MP4, MOV\n- Max size: 10GB\n- Max duration: 240min\n- Recommended: H.264, AAC\n\n### X (Twitter)\n- Formats: MP4, MOV\n- Max size: 512MB\n- Max duration: 140s (2min 20s)\n- Codec: H.264\n\n### Threads\n- Formats: MP4, MOV\n- Max duration: 5min\n- Aspect: 9:16 recommended\n\n### Pinterest\n- Formats: MP4, MOV, M4V\n- Duration: 4s to 15min\n- Max size: 2GB\n- Aspect: 1:2 to 1.91:1\n\n### Bluesky\n- Formats: MP4\n- Max size: 50MB\n- Max duration: 60s\n- Daily limit: 50 uploads\n\n## Document Requirements (LinkedIn only)\n\n- Formats: PDF, PPT, PPTX, DOC, DOCX\n- Max size: 100MB\n- Max pages: 300"
+        }
+      ]
+    },
+    {
+      "id": "PC2",
+      "interpretation": "Keep request/job IDs paired across polling, avoid resending successful platforms, and preserve explicit idempotency and draft fallback. Do not invent an implemented local sanitizer from a media-format requirement or FFmpeg name.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 329,
+          "end_line": 352,
+          "quote": "## Output\n\nAn accepted upload returns a `request_id`. With `async_upload=true` the platforms are still\nprocessing at that point:\n\n```json\n{ \"success\": true, \"request_id\": \"req_8f21c04a\" }\n```\n\nPolling `/uploadposts/status?request_id=…` returns the per-platform outcome. Report each\nplatform separately — a request can partially succeed:\n\n```json\n{\n  \"status\": \"completed\",\n  \"results\": {\n    \"tiktok\":    { \"success\": true,  \"post_url\": \"https://tiktok.com/@brand/video/7412...\" },\n    \"instagram\": { \"success\": true,  \"post_url\": \"https://instagram.com/reel/C8xY2...\" },\n    \"youtube\":   { \"success\": false, \"error_code\": \"quota_exceeded\" }\n  }\n}\n```\n\nA scheduled post responds `202` with a `job_id` instead, which later appears in upload history."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 381,
+          "end_line": 417,
+          "quote": "**Retry only the platforms that failed**\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=mybrand\" -F \"video=@clip.mp4\" -F \"title=...\" \\\n  -F \"retry_request_id=req_8f21c04a\"\n```\n\n## Error Handling\n\n| Code | Meaning |\n|------|---------|\n| 400 | Bad request / missing params |\n| 401 | Invalid API key |\n| 404 | Resource not found |\n| 429 | Rate limit / quota exceeded |\n| 500 | Server error |\n\nThe failure modes that actually bite:\n\n- **`401 Invalid or expired token` with a key you know is good** — the key was sent as\n  `Bearer`. API keys use the `Apikey` scheme. The message is misleading: the key is fine,\n  the scheme is wrong.\n- **Some platforms succeeded, others failed** — this is normal, not an exception. Read\n  `results` per platform and retry only the failures with `retry_request_id` instead of\n  re-uploading everything.\n- **The request timed out** — uploads longer than 59 seconds switch to async automatically.\n  Do not treat a timeout as a failure; poll `/uploadposts/status` with the `request_id`.\n- **`reached_active_user_cap` on TikTok** — TikTok's daily cap was hit. By default the video\n  falls back to the TikTok inbox as a draft: `success` is still `true`, the result carries\n  `fallback_to_inbox: true`, and the id starts with `v_inbox_file`. The video is waiting in\n  the app, not live.\n- **Missing title on YouTube or Reddit** — both reject the upload; every other platform\n  accepts an empty title.\n- **Duplicate posts after a retry** — send an `Idempotency-Key` header. A retried request\n  with a matching key returns the existing job rather than publishing twice."
+        },
+        {
+          "path": "references/requirements.md",
+          "start_line": 114,
+          "end_line": 126,
+          "quote": "## FFmpeg Re-encoding\n\nIf videos fail platform validation, use the FFmpeg endpoint:\n\n```bash\n# Convert to H.264 MP4\nffmpeg -y -i {input} -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k {output}\n\n# Resize to 1080p\nffmpeg -y -i {input} -vf \"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2\" -c:v libx264 -crf 23 {output}\n\n# Convert to 9:16 vertical\nffmpeg -y -i {input} -vf \"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2\" -c:v libx264 -crf 23 {output}"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "R1",
+      "interpretation": "Upload-Post receives API-key authentication and selected content bytes or media URL, profile name, chosen platform set, captions and optional scheduling/recipient options in an upload request. This includes video/photo/text/document variants; it does not send the entire environment or all accounts.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 53,
+          "end_line": 54,
+          "quote": "| `UPLOAD_POST_API_KEY` | yes | API key from the dashboard. Sent as `Authorization: Apikey $UPLOAD_POST_API_KEY`. |\n| `UPLOAD_POST_PROFILE` | no | Default profile name for the `user` parameter, so it is not repeated on every request. |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 119,
+          "end_line": 183,
+          "quote": "## Instructions\n\n1. **Pick the endpoint** by content type — `/upload` for video, `/upload_photos` for photos\n   and carousels, `/upload_text` for text-only, `/upload_document` for LinkedIn documents.\n2. **Set `user`** to the profile name (`$UPLOAD_POST_PROFILE` when set), not a social handle. The profile determines which\n   connected accounts receive the content.\n3. **Repeat `platform[]`** once per target platform.\n4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ.\n5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed.\n\nTo schedule instead of publishing now, add `scheduled_date` (ISO-8601) and optionally\n`timezone` (IANA). To let Upload-Post pick the next free slot, send `add_to_queue=true`.\n\n## Upload Videos\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=profile_name\" \\\n  -F \"platform[]=instagram\" \\\n  -F \"platform[]=tiktok\" \\\n  -F \"video=@video.mp4\" \\\n  -F \"title=My caption\"\n```\n\nKey parameters:\n- `user`: Profile username (required)\n- `platform[]`: Target platforms (required)\n- `video`: Video file or URL (required)\n- `title`: Caption/title (required)\n- `description`: Extended description\n- `scheduled_date`: ISO-8601 date for scheduling\n- `timezone`: IANA timezone (e.g., \"Europe/Madrid\")\n- `async_upload`: Set `true` for background processing\n- `first_comment`: Auto-post first comment\n\n## Upload Photos\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload_photos\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=profile_name\" \\\n  -F \"platform[]=instagram\" \\\n  -F \"photos[]=@photo1.jpg\" \\\n  -F \"photos[]=@photo2.jpg\" \\\n  -F \"title=My caption\"\n```\n\nInstagram & Threads support mixed carousels (photos + videos in same post).\n\n## Upload Text\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload_text\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"user\": \"profile_name\",\n    \"platform\": [\"x\", \"threads\", \"bluesky\"],\n    \"title\": \"My text post\"\n  }'"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 188,
+          "end_line": 207,
+          "quote": "## Upload Document (LinkedIn only)\n\nUpload PDFs, PPTs, DOCs as native LinkedIn document posts (carousel viewer).\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload_document\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=profile_name\" \\\n  -F 'platform[]=linkedin' \\\n  -F \"document=@presentation.pdf\" \\\n  -F \"title=Document Title\" \\\n  -F \"description=Post text above document\"\n```\n\nParameters:\n- `document`: PDF, PPT, PPTX, DOC, DOCX (max 100MB, 300 pages)\n- `title`: Document title (required)\n- `description`: Post commentary\n- `visibility`: PUBLIC, CONNECTIONS, LOGGED_IN, CONTAINER\n- `target_linkedin_page_id`: Post to company page"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "https://api.upload-post.com/api upload endpoints",
+      "condition": "Chosen immediate/scheduled/queued upload",
+      "version": "Selected original media/content and actual included request members"
+    },
+    {
+      "id": "R2",
+      "interpretation": "Each chosen platform/account receives its intended content via the service fan-out. Preserve per-platform caption overrides, page/board/subreddit/account identities and privacy or draft modes; a platform can be public or restricted, so do not label all deliveries public.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 31,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms.\n\nFour content types are supported: video, photo carousels, text-only posts and documents\n(LinkedIn). Each can be published immediately, scheduled for a future date, or added to a\nposting queue."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 96,
+          "end_line": 96,
+          "quote": "The `user` parameter in all endpoints refers to your **profile name** (not username), which determines which connected social accounts receive the content."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 356,
+          "end_line": 378,
+          "quote": "**Publish a clip to three platforms with platform-specific captions**\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=mybrand\" \\\n  -F \"platform[]=tiktok\" -F \"platform[]=instagram\" -F \"platform[]=youtube\" \\\n  -F \"video=@clip.mp4\" \\\n  -F \"title=How to build better habits\" \\\n  -F \"tiktok_title=the 1 habit that changed everything 🔥 #fyp\" \\\n  -F \"youtube_title=How To Build Better Habits (5 Minute Guide)\" \\\n  -F \"async_upload=true\"\n```\n\n**Schedule a carousel for next Monday, Madrid time**\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload_photos\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=mybrand\" -F \"platform[]=instagram\" \\\n  -F \"photos[]=@slide1.jpg\" -F \"photos[]=@slide2.jpg\" \\\n  -F \"title=Five lessons from year one\" \\\n  -F \"scheduled_date=2026-09-01T09:00:00Z\" -F \"timezone=Europe/Madrid\""
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 3,
+          "end_line": 108,
+          "quote": "## TikTok\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `tiktok_title` | String | Override title for TikTok |\n| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |\n| `auto_add_music` | Boolean | Add background music to photos |\n| `disable_comment` | Boolean | Disable comments |\n| `brand_content_toggle` | Boolean | Paid partnership content |\n| `photo_cover_index` | Integer | Cover photo index (0-based) |\n\n## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |\n\nGet page IDs: `GET /api/uploadposts/linkedin/pages`\n\n## Facebook\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `facebook_title` | String | Override title |\n| `facebook_page_id` | String | Page ID (required for pages) |\n| `facebook_media_type` | String | `POSTS` or `STORIES` |\n\nGet page IDs: `GET /api/uploadposts/facebook/pages`\n\nNote: Personal profiles not supported by Meta API - only Pages.\n\n## X (Twitter)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `x_title` | String | Override title |\n| `x_long_text_as_post` | Boolean | Post long text as single post (default: thread) |\n| `reply_settings` | String | `following`, `mentionedUsers`, `subscribers`, `verified` |\n| `reply_to_id` | String | Tweet ID to reply to |\n| `community_id` | String | Post to community |\n| `tagged_user_ids` | Array | Users to tag in photos (max 10) |\n\nThread behavior: Long text auto-splits at 280 chars. Media attaches to first tweet only.\n\n## Threads\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `threads_title` | String | Override title |\n\nSupports mixed carousels (photos + videos).\n\n## Pinterest\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `pinterest_title` | String | Pin title |\n| `pinterest_board_id` | String | Target board ID (required) |\n| `pinterest_link` | String | Destination link |\n| `pinterest_alt_text` | String | Alt text for image |\n\nGet board IDs: `GET /api/uploadposts/pinterest/boards`\n\n## Reddit\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `reddit_title` | String | Post title |\n| `subreddit` | String | Target subreddit (required) |\n| `reddit_flair_id` | String | Flair ID |\n| `nsfw` | Boolean | Mark as NSFW |\n| `spoiler` | Boolean | Mark as spoiler |\n\n## Bluesky\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `bluesky_title` | String | Override title |\n| `alt_text` | String | Alt text for images |\n\nLimits: 4 images max, 1MB per image, 50 uploads/day."
+        }
+      ],
+      "boundary": "network_send/publication",
+      "recipient": "Selected profile-connected social account for each requested platform",
+      "condition": "Per-platform publication/schedule/draft outcome",
+      "version": "That platform-specific media/caption/options; X long text can split into a thread"
+    },
+    {
+      "id": "R3",
+      "interpretation": "Upload-Post receives credential-authenticated status/history/schedule/analytics/page/board/Reddit-detail queries, plus selected request/job/profile and optional filters. Editing or cancellation sends only the supported job-specific request, not the old entire content by default.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 224,
+          "end_line": 300,
+          "quote": "## Upload History\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/history?page=1&limit=20\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nParameters:\n- `page`: Page number (default: 1)\n- `limit`: 10, 20, 50, or 100 (default: 10)\n\nReturns: upload timestamp, platform, success status, post URLs, errors.\n\n## Scheduling\n\nAdd `scheduled_date` parameter (ISO-8601):\n\n```json\n{\n  \"scheduled_date\": \"2026-02-01T10:00:00Z\",\n  \"timezone\": \"Europe/Madrid\"\n}\n```\n\nResponse includes `job_id`. Manage with:\n- `GET /uploadposts/schedule` - List all scheduled\n- `DELETE /uploadposts/schedule/<job_id>` - Cancel\n- `PATCH /uploadposts/schedule/<job_id>` - Edit (date, title, caption)\n\n## Check Upload Status\n\nFor async uploads or scheduled posts:\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/status?request_id=XXX\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nOr use `job_id` for scheduled posts.\n\n## Analytics\n\n```bash\ncurl \"https://api.upload-post.com/api/analytics/profile_name?platforms=instagram,tiktok\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nSupported: Instagram, TikTok, LinkedIn, Facebook, X, YouTube, Threads, Pinterest, Reddit, Bluesky.\n\nReturns: followers, impressions, reach, profile views, time-series data.\n\n## Get Pages/Boards\n\n```bash\n# Facebook Pages\ncurl \"https://api.upload-post.com/api/uploadposts/facebook/pages\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n\n# LinkedIn Pages  \ncurl \"https://api.upload-post.com/api/uploadposts/linkedin/pages\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n\n# Pinterest Boards\ncurl \"https://api.upload-post.com/api/uploadposts/pinterest/boards\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\n## Reddit Detailed Posts\n\nGet posts with full media info (images, galleries, videos):\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/reddit/detailed-posts?profile_username=myprofile\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nReturns up to 2000 posts with media URLs, dimensions, thumbnails."
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Upload-Post management/query endpoints",
+      "condition": "Requested lookup, poll, schedule edit or cancellation",
+      "version": "API key and endpoint-specific identifiers/filters/edit fields"
+    },
+    {
+      "id": "R4",
+      "interpretation": "Server-side FFmpeg receives selected file(s), actual command and output-extension parameters. Processing/transcoding is not evidence that private media content has been removed.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 302,
+          "end_line": 317,
+          "quote": "## FFmpeg Editor\n\nProcess media with custom FFmpeg commands:\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/ffmpeg\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"file=@input.mp4\" \\\n  -F \"full_command=ffmpeg -y -i {input} -c:v libx264 -crf 23 {output}\" \\\n  -F \"output_extension=mp4\"\n```\n\n- Use `{input}` and `{output}` placeholders\n- Poll job status until `FINISHED`\n- Download result from `/ffmpeg/job/<job_id>/download`\n- Supports multiple inputs: `{input0}`, `{input1}`, etc."
+        },
+        {
+          "path": "references/requirements.md",
+          "start_line": 114,
+          "end_line": 126,
+          "quote": "## FFmpeg Re-encoding\n\nIf videos fail platform validation, use the FFmpeg endpoint:\n\n```bash\n# Convert to H.264 MP4\nffmpeg -y -i {input} -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k {output}\n\n# Resize to 1080p\nffmpeg -y -i {input} -vf \"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2\" -c:v libx264 -crf 23 {output}\n\n# Convert to 9:16 vertical\nffmpeg -y -i {input} -vf \"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2\" -c:v libx264 -crf 23 {output}"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Upload-Post FFmpeg endpoint",
+      "condition": "Media processing requested or validation conversion needed",
+      "version": "Original selected media input plus conversion instructions"
+    },
+    {
+      "id": "R5",
+      "interpretation": "Curl-returned account validation, history, analytics, job outcomes/media URLs and FFmpeg results can enter the agent model under EM02/EM03. There is no local-only result-routing guarantee for these textual responses; acquisition scope is the actual endpoint response, not all media bytes internal to service processing.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 81,
+          "end_line": 86,
+          "quote": "Then confirm the key is accepted before posting anything:\n\n```bash\ncurl -s \"https://api.upload-post.com/api/uploadposts/me\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 224,
+          "end_line": 300,
+          "quote": "## Upload History\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/history?page=1&limit=20\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nParameters:\n- `page`: Page number (default: 1)\n- `limit`: 10, 20, 50, or 100 (default: 10)\n\nReturns: upload timestamp, platform, success status, post URLs, errors.\n\n## Scheduling\n\nAdd `scheduled_date` parameter (ISO-8601):\n\n```json\n{\n  \"scheduled_date\": \"2026-02-01T10:00:00Z\",\n  \"timezone\": \"Europe/Madrid\"\n}\n```\n\nResponse includes `job_id`. Manage with:\n- `GET /uploadposts/schedule` - List all scheduled\n- `DELETE /uploadposts/schedule/<job_id>` - Cancel\n- `PATCH /uploadposts/schedule/<job_id>` - Edit (date, title, caption)\n\n## Check Upload Status\n\nFor async uploads or scheduled posts:\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/status?request_id=XXX\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nOr use `job_id` for scheduled posts.\n\n## Analytics\n\n```bash\ncurl \"https://api.upload-post.com/api/analytics/profile_name?platforms=instagram,tiktok\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nSupported: Instagram, TikTok, LinkedIn, Facebook, X, YouTube, Threads, Pinterest, Reddit, Bluesky.\n\nReturns: followers, impressions, reach, profile views, time-series data.\n\n## Get Pages/Boards\n\n```bash\n# Facebook Pages\ncurl \"https://api.upload-post.com/api/uploadposts/facebook/pages\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n\n# LinkedIn Pages  \ncurl \"https://api.upload-post.com/api/uploadposts/linkedin/pages\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n\n# Pinterest Boards\ncurl \"https://api.upload-post.com/api/uploadposts/pinterest/boards\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\n## Reddit Detailed Posts\n\nGet posts with full media info (images, galleries, videos):\n\n```bash\ncurl \"https://api.upload-post.com/api/uploadposts/reddit/detailed-posts?profile_username=myprofile\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\"\n```\n\nReturns up to 2000 posts with media URLs, dimensions, thumbnails."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 329,
+          "end_line": 352,
+          "quote": "## Output\n\nAn accepted upload returns a `request_id`. With `async_upload=true` the platforms are still\nprocessing at that point:\n\n```json\n{ \"success\": true, \"request_id\": \"req_8f21c04a\" }\n```\n\nPolling `/uploadposts/status?request_id=…` returns the per-platform outcome. Report each\nplatform separately — a request can partially succeed:\n\n```json\n{\n  \"status\": \"completed\",\n  \"results\": {\n    \"tiktok\":    { \"success\": true,  \"post_url\": \"https://tiktok.com/@brand/video/7412...\" },\n    \"instagram\": { \"success\": true,  \"post_url\": \"https://instagram.com/reel/C8xY2...\" },\n    \"youtube\":   { \"success\": false, \"error_code\": \"quota_exceeded\" }\n  }\n}\n```\n\nA scheduled post responds `202` with a `job_id` instead, which later appears in upload history."
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Agent model via API responses",
+      "condition": "Management, validation, upload or processing response consumed",
+      "version": "Returned JSON/status/URL/analytics version"
+    },
+    {
+      "id": "R6",
+      "interpretation": "The instructed final user report conveys per-platform success/failure and associated result URLs/errors. A success acceptance flag alone cannot substitute for the terminal per-platform report.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 128,
+          "end_line": 131,
+          "quote": "5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 329,
+          "end_line": 352,
+          "quote": "## Output\n\nAn accepted upload returns a `request_id`. With `async_upload=true` the platforms are still\nprocessing at that point:\n\n```json\n{ \"success\": true, \"request_id\": \"req_8f21c04a\" }\n```\n\nPolling `/uploadposts/status?request_id=…` returns the per-platform outcome. Report each\nplatform separately — a request can partially succeed:\n\n```json\n{\n  \"status\": \"completed\",\n  \"results\": {\n    \"tiktok\":    { \"success\": true,  \"post_url\": \"https://tiktok.com/@brand/video/7412...\" },\n    \"instagram\": { \"success\": true,  \"post_url\": \"https://instagram.com/reel/C8xY2...\" },\n    \"youtube\":   { \"success\": false, \"error_code\": \"quota_exceeded\" }\n  }\n}\n```\n\nA scheduled post responds `202` with a `job_id` instead, which later appears in upload history."
+        }
+      ],
+      "boundary": "user_output",
+      "recipient": "Requesting user",
+      "condition": "Reporting async publication outcome",
+      "version": "Per-platform terminal result and URLs/errors"
+    },
+    {
+      "id": "R7",
+      "interpretation": "Setup exports API key/profile to task environment or persists them in ~/.openclaw/openclaw.json, which declares skill-specific injection. That local scope declaration is not proof that model plaintext is observed or that runtime implementation is independently verified.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 48,
+          "end_line": 79,
+          "quote": "The skill reads two environment variables. Nothing else needs to be installed or wired up:\nthe OAuth for every platform already happened in the dashboard.\n\n| Variable | Required | Purpose |\n|----------|----------|---------|\n| `UPLOAD_POST_API_KEY` | yes | API key from the dashboard. Sent as `Authorization: Apikey $UPLOAD_POST_API_KEY`. |\n| `UPLOAD_POST_PROFILE` | no | Default profile name for the `user` parameter, so it is not repeated on every request. |\n\nExport them in the shell that runs the agent:\n\n```bash\nexport UPLOAD_POST_API_KEY=\"...\"\nexport UPLOAD_POST_PROFILE=\"mybrand\"\n```\n\nOn **OpenClaw / ClawHub** the skill is gated on `UPLOAD_POST_API_KEY`: until the key is set it\nshows as ineligible in `openclaw skills list`. Put it in `~/.openclaw/openclaw.json` so it is\ninjected only for this skill (`apiKey` maps to `UPLOAD_POST_API_KEY`):\n\n```json5\n{\n  skills: {\n    entries: {\n      \"upload-post\": {\n        enabled: true,\n        apiKey: \"YOUR_UPLOAD_POST_API_KEY\",\n        env: { UPLOAD_POST_PROFILE: \"mybrand\" },\n      },\n    },\n  },\n}\n```"
+        }
+      ],
+      "boundary": "storage_write/context_save",
+      "recipient": "Local OpenClaw config and task environment",
+      "condition": "Configured setup route",
+      "version": "API key and optional default profile"
+    },
+    {
+      "id": "R8",
+      "interpretation": "FFmpeg workflow downloads its completed processed media result. This is a conditional local file with persistent retention by the common file default; no cleanup is specified.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 314,
+          "end_line": 317,
+          "quote": "- Use `{input}` and `{output}` placeholders\n- Poll job status until `FINISHED`\n- Download result from `/ffmpeg/job/<job_id>/download`\n- Supports multiple inputs: `{input0}`, `{input1}`, etc."
+        }
+      ],
+      "boundary": "storage_write",
+      "recipient": "Local downloaded processed-media file",
+      "condition": "FFmpeg completes and download is performed",
+      "version": "Processed output media, possible influence from originals without guaranteed sanitization"
+    }
+  ],
+  "reference_identity": "Source-only assistant reference draft; not human-confirmed gold.",
+  "reference_status": "assistant_draft_pending_two_independent_human_verifiers",
+  "required_behavior": [
+    {
+      "id": "B1",
+      "interpretation": "Choose endpoint by content type, preserve selected profile-to-connected-account routing, repeat platform selection per target and use platform-specific title overrides. Scheduling/queue state and recipient privacy choices must remain attached to the correct content.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 96,
+          "end_line": 134,
+          "quote": "The `user` parameter in all endpoints refers to your **profile name** (not username), which determines which connected social accounts receive the content.\n\n## Endpoints Reference\n\n| Endpoint | Method | Description |\n|----------|--------|-------------|\n| `/upload` | POST | Upload videos |\n| `/upload_photos` | POST | Upload photos/carousels |\n| `/upload_text` | POST | Text-only posts |\n| `/upload_document` | POST | Upload documents (LinkedIn only) |\n| `/uploadposts/status?request_id=X` | GET | Check async upload status |\n| `/uploadposts/history` | GET | Upload history |\n| `/uploadposts/schedule` | GET | List scheduled posts |\n| `/uploadposts/schedule/<job_id>` | DELETE | Cancel scheduled post |\n| `/uploadposts/schedule/<job_id>` | PATCH | Edit scheduled post |\n| `/uploadposts/me` | GET | Validate API key |\n| `/analytics/<profile>` | GET | Get analytics |\n| `/uploadposts/facebook/pages` | GET | List Facebook pages |\n| `/uploadposts/linkedin/pages` | GET | List LinkedIn pages |\n| `/uploadposts/pinterest/boards` | GET | List Pinterest boards |\n| `/uploadposts/reddit/detailed-posts` | GET | Get Reddit posts with media |\n| `/ffmpeg` | POST | Process media with FFmpeg |\n\n## Instructions\n\n1. **Pick the endpoint** by content type — `/upload` for video, `/upload_photos` for photos\n   and carousels, `/upload_text` for text-only, `/upload_document` for LinkedIn documents.\n2. **Set `user`** to the profile name (`$UPLOAD_POST_PROFILE` when set), not a social handle. The profile determines which\n   connected accounts receive the content.\n3. **Repeat `platform[]`** once per target platform.\n4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ.\n5. **Set `async_upload=true`** for anything but the smallest files, then poll\n   `/uploadposts/status?request_id=…` until it reaches a terminal state.\n6. **Read the per-platform result** and report which platforms published and which failed —\n   a request can partially succeed.\n\nTo schedule instead of publishing now, add `scheduled_date` (ISO-8601) and optionally\n`timezone` (IANA). To let Upload-Post pick the next free slot, send `add_to_queue=true`."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 188,
+          "end_line": 207,
+          "quote": "## Upload Document (LinkedIn only)\n\nUpload PDFs, PPTs, DOCs as native LinkedIn document posts (carousel viewer).\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload_document\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=profile_name\" \\\n  -F 'platform[]=linkedin' \\\n  -F \"document=@presentation.pdf\" \\\n  -F \"title=Document Title\" \\\n  -F \"description=Post text above document\"\n```\n\nParameters:\n- `document`: PDF, PPT, PPTX, DOC, DOCX (max 100MB, 300 pages)\n- `title`: Document title (required)\n- `description`: Post commentary\n- `visibility`: PUBLIC, CONNECTIONS, LOGGED_IN, CONTAINER\n- `target_linkedin_page_id`: Post to company page"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 3,
+          "end_line": 43,
+          "quote": "## TikTok\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `tiktok_title` | String | Override title for TikTok |\n| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |\n| `auto_add_music` | Boolean | Add background music to photos |\n| `disable_comment` | Boolean | Disable comments |\n| `brand_content_toggle` | Boolean | Paid partnership content |\n| `photo_cover_index` | Integer | Cover photo index (0-based) |\n\n## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "interpretation": "Distinguish accepted async jobs from published posts; poll the same request/job and report every platform separately. Retry failed platforms only, use idempotency where retried, and retain TikTok inbox fallback as draft rather than live publication.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 329,
+          "end_line": 352,
+          "quote": "## Output\n\nAn accepted upload returns a `request_id`. With `async_upload=true` the platforms are still\nprocessing at that point:\n\n```json\n{ \"success\": true, \"request_id\": \"req_8f21c04a\" }\n```\n\nPolling `/uploadposts/status?request_id=…` returns the per-platform outcome. Report each\nplatform separately — a request can partially succeed:\n\n```json\n{\n  \"status\": \"completed\",\n  \"results\": {\n    \"tiktok\":    { \"success\": true,  \"post_url\": \"https://tiktok.com/@brand/video/7412...\" },\n    \"instagram\": { \"success\": true,  \"post_url\": \"https://instagram.com/reel/C8xY2...\" },\n    \"youtube\":   { \"success\": false, \"error_code\": \"quota_exceeded\" }\n  }\n}\n```\n\nA scheduled post responds `202` with a `job_id` instead, which later appears in upload history."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 381,
+          "end_line": 417,
+          "quote": "**Retry only the platforms that failed**\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/upload\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"user=mybrand\" -F \"video=@clip.mp4\" -F \"title=...\" \\\n  -F \"retry_request_id=req_8f21c04a\"\n```\n\n## Error Handling\n\n| Code | Meaning |\n|------|---------|\n| 400 | Bad request / missing params |\n| 401 | Invalid API key |\n| 404 | Resource not found |\n| 429 | Rate limit / quota exceeded |\n| 500 | Server error |\n\nThe failure modes that actually bite:\n\n- **`401 Invalid or expired token` with a key you know is good** — the key was sent as\n  `Bearer`. API keys use the `Apikey` scheme. The message is misleading: the key is fine,\n  the scheme is wrong.\n- **Some platforms succeeded, others failed** — this is normal, not an exception. Read\n  `results` per platform and retry only the failures with `retry_request_id` instead of\n  re-uploading everything.\n- **The request timed out** — uploads longer than 59 seconds switch to async automatically.\n  Do not treat a timeout as a failure; poll `/uploadposts/status` with the `request_id`.\n- **`reached_active_user_cap` on TikTok** — TikTok's daily cap was hit. By default the video\n  falls back to the TikTok inbox as a draft: `success` is still `true`, the result carries\n  `fallback_to_inbox: true`, and the id starts with `v_inbox_file`. The video is waiting in\n  the app, not live.\n- **Missing title on YouTube or Reddit** — both reject the upload; every other platform\n  accepts an empty title.\n- **Duplicate posts after a retry** — send an `Idempotency-Key` header. A retried request\n  with a matching key returns the existing job rather than publishing twice."
+        }
+      ]
+    },
+    {
+      "id": "B3",
+      "interpretation": "Respect platform-specific media requirements and selected optional tags/location/board/subreddit fields. FFmpeg processing is server-side and generated media can be downloaded; re-encoding is conditional on format/validation needs.",
+      "evidence": [
+        {
+          "path": "references/platforms.md",
+          "start_line": 15,
+          "end_line": 117,
+          "quote": "## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |\n\nGet page IDs: `GET /api/uploadposts/linkedin/pages`\n\n## Facebook\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `facebook_title` | String | Override title |\n| `facebook_page_id` | String | Page ID (required for pages) |\n| `facebook_media_type` | String | `POSTS` or `STORIES` |\n\nGet page IDs: `GET /api/uploadposts/facebook/pages`\n\nNote: Personal profiles not supported by Meta API - only Pages.\n\n## X (Twitter)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `x_title` | String | Override title |\n| `x_long_text_as_post` | Boolean | Post long text as single post (default: thread) |\n| `reply_settings` | String | `following`, `mentionedUsers`, `subscribers`, `verified` |\n| `reply_to_id` | String | Tweet ID to reply to |\n| `community_id` | String | Post to community |\n| `tagged_user_ids` | Array | Users to tag in photos (max 10) |\n\nThread behavior: Long text auto-splits at 280 chars. Media attaches to first tweet only.\n\n## Threads\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `threads_title` | String | Override title |\n\nSupports mixed carousels (photos + videos).\n\n## Pinterest\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `pinterest_title` | String | Pin title |\n| `pinterest_board_id` | String | Target board ID (required) |\n| `pinterest_link` | String | Destination link |\n| `pinterest_alt_text` | String | Alt text for image |\n\nGet board IDs: `GET /api/uploadposts/pinterest/boards`\n\n## Reddit\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `reddit_title` | String | Post title |\n| `subreddit` | String | Target subreddit (required) |\n| `reddit_flair_id` | String | Flair ID |\n| `nsfw` | Boolean | Mark as NSFW |\n| `spoiler` | Boolean | Mark as spoiler |\n\n## Bluesky\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `bluesky_title` | String | Override title |\n| `alt_text` | String | Alt text for images |\n\nLimits: 4 images max, 1MB per image, 50 uploads/day.\n\n## Common Parameters (All Platforms)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `first_comment` | String | Auto-post first comment (Instagram, Facebook, Threads, Bluesky, Reddit, X, YouTube) |\n| `async_upload` | Boolean | Background processing |\n| `scheduled_date` | String | ISO-8601 schedule time |\n| `timezone` | String | IANA timezone for schedule |"
+        },
+        {
+          "path": "references/requirements.md",
+          "start_line": 3,
+          "end_line": 126,
+          "quote": "## Photo Requirements\n\n### Instagram\n- Formats: JPEG, PNG, GIF\n- Aspect ratio: 4:5 to 1.91:1\n- Recommended: 1080x1350px (4:5)\n\n### TikTok\n- Formats: JPG, JPEG, WEBP only\n- Use for photo slideshows with `auto_add_music`\n\n### Facebook\n- Formats: JPEG, PNG, GIF, WebP\n- Max size: 10MB recommended\n\n### X (Twitter)\n- Formats: JPEG, PNG, GIF\n- Max size: 5MB (images), 15MB (GIFs)\n- Max 4 images per tweet\n\n### LinkedIn\n- Formats: JPEG, PNG, GIF\n- Recommended: 1200x627px\n\n### Threads\n- Formats: JPEG, PNG\n- Max size: 8MB\n- Aspect ratio: 10:1 to 1:10\n- Width: 320px min, 1440px max\n- Color space: sRGB (auto-converted)\n\n### Pinterest\n- Formats: BMP, JPEG, PNG, TIFF, GIF, WebP\n- Max size: 20MB\n- Recommended: 1000x1500px (2:3)\n- Min: 600x900px, Max: 2000x3000px\n- Carousel: up to 5 images, same dimensions\n\n### Reddit\n- Formats: JPG, PNG, GIF, WEBP\n- Max size: 10MB\n\n### Bluesky\n- Formats: JPEG, PNG, GIF, WebP\n- Max size: 1MB per image\n- Max 4 images per post\n- Daily limit: 50 uploads (photos + videos)\n\n## Video Requirements\n\n### TikTok\n- Formats: MP4, MOV, WebM\n- Duration: 3s to 10min\n- Max size: 4GB\n- Recommended: 1080x1920 (9:16)\n- Codec: H.264\n\n### Instagram\n- Formats: MP4, MOV\n- Reels: 0-90s, 9:16 aspect\n- Feed: up to 60s\n- Max size: 4GB\n- Codec: H.264, AAC audio\n\n### YouTube\n- Formats: MP4, MOV, AVI, WMV, FLV, WebM\n- Max size: 256GB\n- Max duration: 12 hours\n- Recommended: 1920x1080 or 3840x2160\n\n### LinkedIn\n- Formats: MP4\n- Duration: 3s to 10min\n- Max size: 5GB\n- Aspect: 1:2.4 to 2.4:1\n\n### Facebook\n- Formats: MP4, MOV\n- Max size: 10GB\n- Max duration: 240min\n- Recommended: H.264, AAC\n\n### X (Twitter)\n- Formats: MP4, MOV\n- Max size: 512MB\n- Max duration: 140s (2min 20s)\n- Codec: H.264\n\n### Threads\n- Formats: MP4, MOV\n- Max duration: 5min\n- Aspect: 9:16 recommended\n\n### Pinterest\n- Formats: MP4, MOV, M4V\n- Duration: 4s to 15min\n- Max size: 2GB\n- Aspect: 1:2 to 1.91:1\n\n### Bluesky\n- Formats: MP4\n- Max size: 50MB\n- Max duration: 60s\n- Daily limit: 50 uploads\n\n## Document Requirements (LinkedIn only)\n\n- Formats: PDF, PPT, PPTX, DOC, DOCX\n- Max size: 100MB\n- Max pages: 300\n\n## FFmpeg Re-encoding\n\nIf videos fail platform validation, use the FFmpeg endpoint:\n\n```bash\n# Convert to H.264 MP4\nffmpeg -y -i {input} -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 128k {output}\n\n# Resize to 1080p\nffmpeg -y -i {input} -vf \"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2\" -c:v libx264 -crf 23 {output}\n\n# Convert to 9:16 vertical\nffmpeg -y -i {input} -vf \"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2\" -c:v libx264 -crf 23 {output}"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 302,
+          "end_line": 317,
+          "quote": "## FFmpeg Editor\n\nProcess media with custom FFmpeg commands:\n\n```bash\ncurl -X POST \"https://api.upload-post.com/api/ffmpeg\" \\\n  -H \"Authorization: Apikey $UPLOAD_POST_API_KEY\" \\\n  -F \"file=@input.mp4\" \\\n  -F \"full_command=ffmpeg -y -i {input} -c:v libx264 -crf 23 {output}\" \\\n  -F \"output_extension=mp4\"\n```\n\n- Use `{input}` and `{output}` placeholders\n- Poll job status until `FINISHED`\n- Download result from `/ffmpeg/job/<job_id>/download`\n- Supports multiple inputs: `{input0}`, `{input1}`, etc."
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "e86dd17483c0cd9fc56e1b67106177b90735e06b61508cf5025be1b254c44d59",
+  "source_citations": [],
+  "source_sha256": "183c29e23822f4c8e2e321843503e4af13143b749a475b4b820f2060e71faecb",
+  "state": "assistant_draft",
+  "supported_excesses": [],
+  "unknowns": [
+    {
+      "id": "U1",
+      "interpretation": "Actual user content, account ownership, backend storage, forwarding and platform defaults are absent. The source lists privacy options but no protective pre-upload redaction; public publication is conditional on the chosen audience and endpoint behavior, not guaranteed for every call.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 31,
+          "quote": "One request fans out to every target platform and reports a per-platform result. Accounts are\nconnected once through OAuth in the Upload-Post dashboard, so this skill never handles\nper-platform developer apps, review processes or token refresh — a single API key covers all\n15 platforms.\n\nFour content types are supported: video, photo carousels, text-only posts and documents\n(LinkedIn). Each can be published immediately, scheduled for a future date, or added to a\nposting queue."
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 8,
+          "end_line": 9,
+          "quote": "| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 29,
+          "end_line": 42,
+          "quote": "| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "interpretation": "Metadata names fifteen supported platforms, but the retained detailed matrices/references describe ten. Additional external documentation and real platform behavior are not read or executed; retain unsupported coverage rather than inventing parameters for the other platforms.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 3,
+          "end_line": 3,
+          "quote": "description: \"Publish and schedule content to 15 social platforms through one Upload-Post API call: TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky, Reddit, Discord, Telegram, Mastodon, WordPress and Google Business Profile. Use when posting or scheduling videos, photo carousels, text or documents across several platforms at once, checking upload status, or pulling analytics.\""
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 209,
+          "end_line": 222,
+          "quote": "## Supported Platforms\n\n| Platform | Videos | Photos | Text | Documents |\n|----------|--------|--------|------|-----------|\n| TikTok | ✓ | ✓ | - | - |\n| Instagram | ✓ | ✓ | - | - |\n| YouTube | ✓ | - | - | - |\n| LinkedIn | ✓ | ✓ | ✓ | ✓ |\n| Facebook | ✓ | ✓ | ✓ | - |\n| X (Twitter) | ✓ | ✓ | ✓ | - |\n| Threads | ✓ | ✓ | ✓ | - |\n| Pinterest | ✓ | ✓ | - | - |\n| Reddit | - | ✓ | ✓ | - |\n| Bluesky | ✓ | ✓ | ✓ | - |"
+        },
+        {
+          "path": "references/platforms.md",
+          "start_line": 1,
+          "end_line": 117,
+          "quote": "# Platform-Specific Parameters\n\n## TikTok\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `tiktok_title` | String | Override title for TikTok |\n| `post_mode` | String | `DIRECT_POST` (default) or `MEDIA_UPLOAD` (draft) |\n| `privacy_level` | String | `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |\n| `auto_add_music` | Boolean | Add background music to photos |\n| `disable_comment` | Boolean | Disable comments |\n| `brand_content_toggle` | Boolean | Paid partnership content |\n| `photo_cover_index` | Integer | Cover photo index (0-based) |\n\n## Instagram\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `instagram_title` | String | Override title |\n| `media_type` | String | `IMAGE`, `STORIES`, `REELS` |\n| `collaborators` | String | Comma-separated usernames |\n| `user_tags` | String | Comma-separated users to tag |\n| `location_id` | String | Instagram location ID |\n\n## YouTube\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `youtube_title` | String | Video title |\n| `youtube_description` | String | Video description |\n| `privacy_status` | String | `public`, `private`, `unlisted` |\n| `category_id` | String | YouTube category ID |\n| `tags` | Array | Video tags |\n| `made_for_kids` | Boolean | COPPA compliance |\n| `playlist_id` | String | Add to playlist |\n\n## LinkedIn\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `linkedin_title` | String | Override title |\n| `visibility` | String | `PUBLIC`, `CONNECTIONS`, `LOGGED_IN` |\n| `target_linkedin_page_id` | String | Organization/page URN |\n\nGet page IDs: `GET /api/uploadposts/linkedin/pages`\n\n## Facebook\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `facebook_title` | String | Override title |\n| `facebook_page_id` | String | Page ID (required for pages) |\n| `facebook_media_type` | String | `POSTS` or `STORIES` |\n\nGet page IDs: `GET /api/uploadposts/facebook/pages`\n\nNote: Personal profiles not supported by Meta API - only Pages.\n\n## X (Twitter)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `x_title` | String | Override title |\n| `x_long_text_as_post` | Boolean | Post long text as single post (default: thread) |\n| `reply_settings` | String | `following`, `mentionedUsers`, `subscribers`, `verified` |\n| `reply_to_id` | String | Tweet ID to reply to |\n| `community_id` | String | Post to community |\n| `tagged_user_ids` | Array | Users to tag in photos (max 10) |\n\nThread behavior: Long text auto-splits at 280 chars. Media attaches to first tweet only.\n\n## Threads\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `threads_title` | String | Override title |\n\nSupports mixed carousels (photos + videos).\n\n## Pinterest\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `pinterest_title` | String | Pin title |\n| `pinterest_board_id` | String | Target board ID (required) |\n| `pinterest_link` | String | Destination link |\n| `pinterest_alt_text` | String | Alt text for image |\n\nGet board IDs: `GET /api/uploadposts/pinterest/boards`\n\n## Reddit\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `reddit_title` | String | Post title |\n| `subreddit` | String | Target subreddit (required) |\n| `reddit_flair_id` | String | Flair ID |\n| `nsfw` | Boolean | Mark as NSFW |\n| `spoiler` | Boolean | Mark as spoiler |\n\n## Bluesky\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `bluesky_title` | String | Override title |\n| `alt_text` | String | Alt text for images |\n\nLimits: 4 images max, 1MB per image, 50 uploads/day.\n\n## Common Parameters (All Platforms)\n\n| Parameter | Type | Description |\n|-----------|------|-------------|\n| `first_comment` | String | Auto-post first comment (Instagram, Facebook, Threads, Bluesky, Reddit, X, YouTube) |\n| `async_upload` | Boolean | Background processing |\n| `scheduled_date` | String | ISO-8601 schedule time |\n| `timezone` | String | IANA timezone for schedule |"
+        }
+      ]
+    },
+    {
+      "id": "U3",
+      "interpretation": "Title requirements conflict within source: upload-video parameter summary calls title required, whereas instructions and failure notes limit the requirement to YouTube/Reddit. Preserve this discrepancy rather than forcing blanket omission or inclusion.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 126,
+          "end_line": 127,
+          "quote": "4. **Add a `title`.** Required for YouTube and Reddit, optional everywhere else. Override it\n   per platform with `<platform>_title` when the copy should differ."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 148,
+          "end_line": 157,
+          "quote": "Key parameters:\n- `user`: Profile username (required)\n- `platform[]`: Target platforms (required)\n- `video`: Video file or URL (required)\n- `title`: Caption/title (required)\n- `description`: Extended description\n- `scheduled_date`: ISO-8601 date for scheduling\n- `timezone`: IANA timezone (e.g., \"Europe/Madrid\")\n- `async_upload`: Set `true` for background processing\n- `first_comment`: Auto-post first comment"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 414,
+          "end_line": 415,
+          "quote": "- **Missing title on YouTube or Reddit** — both reject the upload; every other platform\n  accepts an empty title."
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "reviewed_files": [
+    "README.md",
+    "references/platforms.md",
+    "references/requirements.md",
+    "SKILL.md"
+  ],
+  "reviewed_file_inventory": [
+    {
+      "path": "README.md",
+      "sha256": "71f9ac6b5f2334210ab30518daee30038a627bbc494387f75ea750cc2b22151b",
+      "physical_lines": 89,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "references/platforms.md",
+      "sha256": "b410b3478eac6b3b85200e10a4c16d4e5cfe9b68cd40fee610a3a5929a862515",
+      "physical_lines": 117,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "references/requirements.md",
+      "sha256": "3d444b5d9ea32a25a22957d03baf88c18f05eee35c4c16ab52a9fc00ad05d36b",
+      "physical_lines": 127,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "115504b692ff33ad2e66c2ea018a7f759d822209f2766c3a9bdd40751cd63c31",
+      "physical_lines": 433,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    }
+  ],
+  "review_limitations": [
+    "Static source-only interpretation, never execution evidence. No independent user task or actual authorization is supplied. Opaque dependency and service internals are not inferred. Human verification remains pending."
+  ],
+  "explanation": "All four retained operational files were read completely in numbered and physical form. No concrete unnecessary sensitive payload with a source-supported preserving reduction is established. Selected media publication and credential authentication are intentional flows; uncertain platform coverage, title requirements and backend behaviors are explicitly retained."
+}

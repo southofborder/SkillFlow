@@ -58,8 +58,8 @@ from skillflow.propagation.annotation.requests import (validate_repair_context, 
 from skillflow.propagation.annotation.inputs import (write_material_parts, load_prepared_material,
     read_component, resolve_material_owner)
 
-IDENTITY = "skill-ir-security-profile-v17"
-FORMAT_VERSION = 17
+IDENTITY = "skill-ir-security-profile-v18"
+FORMAT_VERSION = 18
 CALL_PREFIX = "calls/annotation"
 CALL_PATH = CALL_PREFIX + "/a001"
 POLICY = {"structural_correction": STRUCTURAL_VERSION, "structural_attempt_limit": None,

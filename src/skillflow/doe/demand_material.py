@@ -121,7 +121,7 @@ def validate_demand_result(result):
     result = validate_result_shape(result)
     if set(result) != {"schema_version", "status", "goals", "derivations", "sinks", "diagnostics", "coverage", "traceability"}:
         raise ValueError("Demand result fields differ")
-    if result["schema_version"] != "skillflow-demand-v3" or result["status"] not in {"complete", "partial"}:
+    if result["schema_version"] != "skillflow-demand-v4" or result["status"] not in {"complete", "partial"}:
         raise ValueError("Unsupported demand result version or status")
     if not isinstance(result["derivations"], dict) or not isinstance(result["sinks"], list):
         raise ValueError("Invalid demand collections")

@@ -55,7 +55,7 @@ def test_adjudication_binds_exact_review_and_requires_every_finding_classified()
     candidate["findings"] = [{"domain": "annotation", "target_ids": [target["id"]],
         "explanation": "人工响应：将title需求扩大为完整notice。", "suggestion": "改在真实返回结果建立需求。",
         "evidences": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1, "reason": "只要求title。"}]}]
-    candidate["goal_checks"][0].update(status="issue", finding_indexes=[0])
+    candidate["declaration_checks"][0].update(status="issue", finding_indexes=[0])
     review = validate_response(candidate, prepared).model_dump(mode="json")
     ledger = {"case_id": case["id"], "review_sha256": canonical_sha256(review), "reviewer": "工程测试人工响应",
         "judgments": [{"finding_id": "F001", "disposition": "matches_oracle", "oracle_ids": ["O1"],

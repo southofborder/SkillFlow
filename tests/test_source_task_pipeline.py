@@ -114,7 +114,7 @@ def test_recorded_paths_and_readonly_replay(tmp_path, domain, expected_calls):
         assert set(revision) == {"previous_task", "objections"}
         assert set(revision["objections"][0]) == {"code", "source_spans", "requirement_ids"}
         assert "REPAIR_CONTEXT" not in repair.prompts[0]
-        assert "goal_index" not in task_repair.prompts[0]
+        assert "declaration_index" not in task_repair.prompts[0]
         old = json.loads((run / "task/task.json").read_text(encoding="utf-8"))
         new = json.loads((run / "refinement/task-revision/task.json").read_text(encoding="utf-8"))
         assert old["task_sha256"] != new["task_sha256"]

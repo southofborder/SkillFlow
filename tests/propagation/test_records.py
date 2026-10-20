@@ -11,6 +11,7 @@ from skillflow.propagation.models import IRFlowRecord
 from skillflow.propagation.records import PropagationRecords
 from skillflow.propagation.records import cfg_sha256
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
+from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
 
 
 def graph_payload():
@@ -63,7 +64,7 @@ def records_case():
     clean = registry.create_result("clean", content=WholeExceptContent(base=raw.id, excluded_parts=[["api_key"]]), origin=Origin(at="ir_action", inputs=[raw.id]))
     cfg, annotation = graph_payload(), annotation_payload()
     entry = FlowState.from_mapping({FlowLocation(kind="runtime_context", name="A"): frozenset({raw.id})})
-    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg), initial_data=seed, initial_state=entry)
+    store = PropagationRecords(cfg, annotation, registry, profile_schema_version=SCHEMA_VERSION, annotation_cfg_sha256=cfg_sha256(cfg), initial_data=seed, initial_state=entry)
     target = FlowLocation(kind="model_context", name="llm")
     record = IRFlowRecord(order="fixed", precedence=[], entry_state=entry, exit_state=FlowState.from_mapping({
         FlowLocation(kind="runtime_context", name="A"): frozenset({raw.id}),
@@ -176,7 +177,7 @@ def test_unknown_order_preserved_without_pretending_verified(records_case):
     _, registry, cfg, annotation, _, _, record = records_case
     annotation["ir_semantics"]["ir_action"]["order"] = "partial"
     record = record.model_copy(update={"order": "partial"})
-    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg))
+    store = PropagationRecords(cfg, annotation, registry, profile_schema_version=SCHEMA_VERSION, annotation_cfg_sha256=cfg_sha256(cfg))
     store.put("ir_action", record)
     assert not store.effect_order_known("ir_action")
     assert PropagationRecords.from_records(store.records_dict(), **materials(store)).get("ir_action").order == "partial"
@@ -187,7 +188,7 @@ def test_null_effect_event_keeps_possible_computation(records_case):
     annotation["ir_semantics"]["ir_action"].update(semantics_fields(False))
     annotation["ir_semantics"]["ir_action"]["events"] = [{"effect": None, "atomic_ops": [{"op": "compute", "inputs": [{"kind": "input", "index": 0}], "dependencies": ["possible"], "output": "filtered", "evidences": [ev()]}]}]
     annotation["sink_boundaries"] = []
-    store = PropagationRecords(cfg, annotation, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg))
+    store = PropagationRecords(cfg, annotation, registry, profile_schema_version=SCHEMA_VERSION, annotation_cfg_sha256=cfg_sha256(cfg))
     record = IRFlowRecord(order="fixed", precedence=[], entry_state=record.entry_state, exit_state=record.exit_state, events=[EffectEvent(effect=None, atomic_ops=[AtomicOpRecord(op="compute", inputs=[frozenset({raw.id})], outputs=[frozenset({clean.id})])])])
     store.put("ir_action", record)
     assert store.get("ir_action").events[0].effect is None

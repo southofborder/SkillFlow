@@ -39,8 +39,8 @@ def test_one_call_exact_input_resume_and_offline_replay(tmp_path, monkeypatch):
     client = FakeClient()
     first = runner.run_annotation(directory, client=client)
     assert first["status"] == "complete"
-    assert first["schema_version"] == 17
-    assert first["profile_schema_version"] == "security-profile-v14"
+    assert first["schema_version"] == 18
+    assert first["profile_schema_version"] == "security-profile-v15"
     assert first["request_validation"]["transport"] == "injected"
     assert first["request_validation"]["observed"] is False
     assert len(client.prompts) == first["counts"]["logical_calls"] == 1

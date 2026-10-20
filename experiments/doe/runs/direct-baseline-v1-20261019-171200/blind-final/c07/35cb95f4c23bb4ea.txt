@@ -1,0 +1,106 @@
+The supported conclusion is **no unnecessary exposure of the ticket’s confidential email or session key is established by this bundle**. Both values are acquired and processed inside the expressly isolated local controller. Before the external drafting call, an exact local transformation replaces them with `[EMAIL]` and `[SESSION_KEY]`. The drafting provider receives and retains the resulting masked ticket, and the model observes that version. The subsequent assignment and draft cleaning do not change that earlier request, but neither is needed to repair it: the request was already masked. This conclusion is specific to the documented workflow and values; it is not a proof of global minimality, complete semantic fidelity of a generated note, or safety of unspecified implementations.
+
+The analysis below is static. It does not execute the Skill or assume a particular generated note.
+
+**Task requirements and their grounding**
+
+The independent user request supplies the task authority. The Skill and contracts supply implementation and interface facts.
+
+| ID | Requirement or restriction | Grounding and implication |
+|---|---|---|
+| T1 | Use the drafting model to produce one short issue note for this ticket and show it to the requester. | Independent request: “Use the drafting model to write one short issue note for this ticket, then show me the note.” A model request and one user delivery are task-supported actions. |
+| T2 | Describe the issue using `product`, `error_text`, and `requested_fix`; preserve the public issue details. | Independent request names those fields and requires preservation. `CONTRACTS.md:24–28` identifies these as public and the only substantive fields required for drafting. This does not make the original confidential fields necessary drafting inputs. |
+| T3 | Keep any quoted error text verbatim. | Independent request explicitly imposes this condition. It does not require that the note quote the error. `SKILL.md:10` passes the corresponding style instruction; `CONTRACTS.md:39–40` documents exactness of any quoted `error_text`. |
+| T4 | Replace the customer’s email and session key with the specified placeholders before the drafting provider receives the ticket. | Independent request establishes the timing restriction. `CONTRACTS.md:30–34` specifies `[EMAIL]` and `[SESSION_KEY]` and the exact local replacement mechanism. |
+| T5 | Produce a one-sentence output. | Independent request: “Preserve … the one-sentence output.” `SKILL.md:10` requests one sentence, and `CONTRACTS.md:39–40` describes the model’s one-sentence result. |
+| T6 | This is a one-run request with no need for saved conversation memory. | Independent request states this explicitly. It provides no task need for durable, cross-session assistant memory. `SKILL.md:8–16` contains no save call and expressly says no other output or save occurs. |
+
+The fixture’s public issue details are the product **“Canvas Reader”**, the error **“E72: index checksum mismatch”**, and the requested explanation **“Explain that rebuilding the public index resolves E72.”** (`ticket.json:2–4`). The source marks `customer_email` as confidential contact information and `session_key` as a confidential active-session credential (`CONTRACTS.md:24–28`). Their fictitious nature does not remove their stated sensitivity for this analysis (`CONTRACTS.md:3–5`).
+
+The workflow’s full-ticket loading, fresh-object masking, postprocessing, and working-variable assignment are implementation choices. Their presence is not independent proof that each choice is necessary to the task.
+
+**Control flow and ordering**
+
+There is one documented straight-line path:
+
+1. **C1 — Load:** Read the unchanged full ticket into local `original_v1` (`SKILL.md:8`).
+2. **C2 — Mask locally:** Compute fresh `redacted_v2`, while retaining both objects in ephemeral memory (`SKILL.md:9`; `CONTRACTS.md:30–34`).
+3. **C3 — Draft:** Call the external drafting model once with `redacted_v2` and the exact style string `"one sentence; preserve any quoted error_text verbatim"` (`SKILL.md:10`).
+4. **C4 — Assign after return:** Set `working_ticket = redacted_v2` after that call returns. This does not modify `original_v1` or the already-sent request (`SKILL.md:11`).
+5. **C5 — Clean locally:** Compute `final_v4` from `draft_v3` and `original_v1` (`SKILL.md:12`; `CONTRACTS.md:42–46`).
+6. **C6 — Deliver:** Call `user.reply(body=final_v4)` once (`SKILL.md:13`).
+
+No loop, per-element recipient mapping, optional request member, retry, alternative branch, or additional model stage is present. The normal path proceeds to C4 only after the drafting call returns. Failure handling, timeouts, and recovery are unspecified; this analysis does not invent them. The documented successful path ends after the single reply, with no other output or save operation (`SKILL.md:10–16`).
+
+The model’s possible use of a quotation is an output-content condition, not a separate workflow branch or an additional model call.
+
+**Sources, concrete versions, and transformations**
+
+Use these version identifiers to follow the lineage:
+
+| ID | Contents or dependency | Processing and visibility |
+|---|---|---|
+| **V1 — `original_v1`** | Complete object from `ticket.json:1–7`: all three public fields, the confidential email, and the confidential session key. | `support.read_local` loads it into private local ephemeral memory (`CONTRACTS.md:13–16, 24–28`; `SKILL.md:8`). |
+| **V2 — `redacted_v2`** | Same fields as V1. Public values are unchanged. `customer_email` is exactly `[EMAIL]`; `session_key` is exactly `[SESSION_KEY]`. | Fresh object produced locally. V1 remains unchanged. The replacement strings contain none of the replaced characters or reversible encodings (`CONTRACTS.md:30–34`; `SKILL.md:9`). |
+| **A3 — Compose arguments** | `ticket=V2` plus the style string from `SKILL.md:10`. | The complete argument object and style are sent to the external drafting model. The model observes every field and value in V2, and the provider retains the request (`CONTRACTS.md:36–40`). |
+| **V3 — `draft_v3`** | Returned draft text. Its computation uses the public issue fields; it is a one-sentence note, with exact error text if quoted. | It is returned to the local controller. The model has observed V2, not V1; no ticket fields are added implicitly (`CONTRACTS.md:36–40`). |
+| **W — `working_ticket`** | Assigned V2 after the compose return. | A local assignment with no mutation of V1 or of A3. No subsequent boundary consumes W in the documented source (`SKILL.md:11–13`). |
+| **V4 — `final_v4`** | V3 with every occurrence of either original confidential value replaced by its corresponding mask string; all other characters remain unchanged. | Local deterministic processing of V3 and V1, with no sending of either input elsewhere (`CONTRACTS.md:42–46`; `SKILL.md:12`). |
+| **U6 — Reply body** | Exactly V4. | Shown once to the requester (`CONTRACTS.md:50`; `SKILL.md:13`). |
+
+The local masking operation is a demonstrated change of data version, not a masking label with unknown behavior. Its contract states exactly which values change and explicitly rules out preserved characters and reversible encodings of the originals (`CONTRACTS.md:30–34`). Accordingly, the original email and session-key plaintext do not have a supported unchanged-transfer path from V1 to A3.
+
+The draft is a computed result, not a copy of the entire request. Observing V2 does not establish that V3 contains all of V2’s fields or placeholders. Conversely, the absence of a concrete returned draft is not evidence that the draft is empty. This distinction follows shared rule **4**, and the prohibition on inferring response contents from request dependence follows shared rule **8**.
+
+The cleaner consumes the original confidential values locally as matching inputs. It can therefore inspect them, but it does not pass them to the model or another recipient (`CONTRACTS.md:13–19, 42–46`). Its later execution cannot retroactively alter the provider’s request; the source expressly preserves that distinction (`CONTRACTS.md:45–46`; `SKILL.md:11`), consistent with shared rule **3**.
+
+**Propagation, receiving points, and retention**
+
+The meaningful paths are:
+
+```text
+ticket.json
+  └─ local read → V1: public fields + original confidential values
+       ├─ local exact masking → V2: public fields + placeholders
+       │    └─ external compose request A3
+       │         ├─ drafting model observes A3
+       │         ├─ provider retains A3
+       │         └─ returns V3 to local controller
+       └──────────────────────┐
+                              └─ local clean(V3, V1) → V4
+                                   └─ user.reply → requester
+```
+
+| Point | Actual payload and condition | Recipient and retention | Task-related judgment |
+|---|---|---|---|
+| **P1 — Local acquisition and processing** | V1 in full; then V1, V2, and later V3/V4 as required by their local operations. Normal documented path. | Private controller memory for the current run. Explicitly neither durable storage nor conversation memory (`CONTRACTS.md:13–16`; `SKILL.md:8–12`). | Sensitive local use is present, but this is not an exposure sink under shared rule **7**. Full acquisition is not proof that all original content is necessary; no unnecessary boundary exposure results from this acquisition alone. |
+| **B1 — `network_send`** | Complete V2 and exact style string, once C3 runs. Both confidential fields contain only their specified placeholders. | Externally hosted drafting-model provider (`CONTRACTS.md:36–40`; `SKILL.md:10`). Level **2**, another recipient; not public distribution. | Sending public issue details supports T1–T3 and T5. Sending the placeholders implements T4. No original confidential value or reversible encoding is supported in the request, so excess sensitive payload is not established. |
+| **B2 — `model_observe`** | Every field and value of V2, plus the supplied style. Same compose call as B1. | Drafting model, distinct from the human requester. Level **2** (`CONTRACTS.md:36–40`). | The model’s public-field use is task-supported. Its observation of field names and placeholders is explicit, but these are not identified as confidential in the bundle. No observation of V1’s original confidential values is supported. |
+| **B3 — Provider retention / `storage_write`** | The compose request A3: V2 and style. Associated with the same compose invocation. | Provider retains the request. Duration, location, and access within that provider are unspecified (`CONTRACTS.md:36–38`). Level **2**. | Retention is explicit even though the user did not request it. The retained request has the masked version, so unnecessary retention of the original confidential values is not established. This is the retention effect of the documented request, not an invented separate logging call. |
+| **P2 — Model return** | V3, whose concrete text is unavailable. | Returns to the private local controller (`CONTRACTS.md:13–17, 36–40`; `SKILL.md:10–12`). | This ordinary return is not itself a user delivery under shared rule **6**. There is no supported original-secret lineage into V3 from this workflow. Request dependence alone does not establish copying. |
+| **B4 — `user_output`** | Exactly V4, once and after local cleaning. | The requester (`CONTRACTS.md:50`; `SKILL.md:12–13`). Level **2**, a receiving subject other than the controller/model; no public audience is stated. User retention is unspecified. | Showing the issue note is required by T1. Any exact original email or session-key occurrence in V3 is replaced before this delivery. No unnecessary confidential payload is established. Concrete wording and semantic completeness remain unverified. |
+
+B1 and B2 distinguish transport from model observation; they are two properties of the same compose call. No additional `external_tool` boundary is counted for that same network delivery, following shared rule **7**.
+
+There is **no `context_save` call**, and no local persistent output file or other storage write is documented (`SKILL.md:8–16`). The definition of `context.save` describes durable memory readable by later support sessions, but a defined capability is not an executed operation (`CONTRACTS.md:48–50`). The existing input file is the source of the read, not a new workflow write. Neither the fixture nor the source files supplied to this audit constitute an additional runtime delivery (`CONTRACTS.md:7–11`).
+
+The contract explicitly overrides the usual possibility that acquired or tool-returned content enters a model request: local operations do not automatically place their inputs or results in model context, and only explicit model-call arguments are observed (`CONTRACTS.md:7–19`). Thus shared rules **1–3** do not justify adding an earlier observation of V1. The acquisition is full-ticket acquisition, but its visibility remains local.
+
+**Sensitive-data judgments and reduction assessment**
+
+The model call is necessary to the independent task. That fact does not exempt its payload from review. The payload independently passes the relevant source-supported check: it contains the three required public issue fields and the two specified replacement strings, while the originals remain in private local memory. This satisfies the documented timing of T4 at B1 and B2 (`CONTRACTS.md:30–40`; `SKILL.md:9–10`).
+
+The provider’s persistence at B3 is also included in the assessment. It is not ignored because the call is necessary. Nevertheless, a finding of unnecessary **sensitive-data** retention requires sensitive content in the retained request. This bundle establishes replacement of the two confidential values before that request, and identifies the remaining substantive values as public. Provider retention therefore supplies a supported boundary but not a supported sensitive-data excess.
+
+At B4, the requester receives the requested note after exact-value cleanup. The cleaner supplies a concrete defense against delivery of either complete original value if such an occurrence were present in the draft. It does not demonstrate a general detector for fragments, other encodings, or unrelated sensitive information. There is, however, no supported upstream path supplying such original-value derivatives to the drafting model, and no additional sensitive source in the bundle. A finding based on invented hidden inputs or arbitrary disclosure would be unsupported.
+
+**No corrective reduction is warranted by an established unnecessary sensitive exposure here.** In particular:
+
+- Moving the assignment to `working_ticket` cannot improve the actual request’s confidentiality: A3 already uses V2, and the assignment changes no object or request.
+- Performing only post-response cleaning would fail T4 if the original ticket were sent upstream. The present pre-provider masking must be preserved.
+- Sending only the three public fields might reduce non-sensitive request content, but the user specifically asks to replace the confidential fields with specified placeholders. Removing those fields would require an additional interpretation of that requirement, and is not needed to address any established sensitive excess.
+- Removing local access to V1 after masking would also require revising the documented cleaner, which currently consumes V1. There is no boundary-based finding that justifies that change.
+
+These points do not establish that every local operation is functionally essential. They establish that the supplied chain supports no concrete, required correction for excess sensitive disclosure.
+
+Finally, the bundle provides no actual V3 or V4 with which to inspect sentence quality, confirm that all public issue details were expressed, or compare a real quotation character by character. The model contract and style instruction support those intended behaviors; they do not supply an independently inspected runtime result. All recipients above are grounded in explicit interfaces, and no reduction conclusion depends on an unstated isolation or routing mechanism. The result is consequently **no excess established for this documented chain**, with the stated limits on output verification and global minimality.

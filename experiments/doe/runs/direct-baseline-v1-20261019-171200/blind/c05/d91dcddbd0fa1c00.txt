@@ -1,0 +1,50 @@
+**No supported unnecessary sensitive-data exposure is established for the supplied workflow, task, and fixture.** The workflow sends each selected patient exactly their own unchanged summary, keeps the staff triage notes within local ephemeral processing, and gives the coordinator only the requested count. This conclusion is limited to the documented execution contract; it is not proof of global minimality or safety under another implementation.
+
+### Task requirements and selection
+
+The independent user task requires selection using:
+
+`opted_out == false AND (urgent == true OR score >= 80)`
+
+Each selected record must produce exactly one delivery of its unchanged summary to that record’s recipient. Urgency cannot override an opt-out. The receipt file and coordinator reply must each contain only the selected-record count. Staff triage notes are outside the requested patient result.
+
+The implementation expresses that predicate correctly and preserves the relationship between each selected summary and its recipient. Its loop makes one notification call per selected record; both subsequent outputs contain only `selected_count`. [SKILL.md, lines 8–12]
+
+| Record | Relevant fixture values | Selection and delivery |
+|---|---|---|
+| P-401 | Not opted out; not urgent; score 86 | Selected by score. Its summary is delivered once to its own recipient. [records.json, lines 4–10; SKILL.md, lines 9–10] |
+| P-402 | Not opted out; urgent; score 21 | Selected by urgency. Its summary is delivered once to its own recipient. [records.json, lines 13–19; SKILL.md, lines 9–10] |
+| P-403 | Opted out; urgent; score 95 | Excluded. Neither urgency nor score bypasses the opt-out. [records.json, lines 22–28; SKILL.md, line 9] |
+| P-404 | Not opted out; not urgent; score 15 | Excluded. [records.json, lines 31–37; SKILL.md, line 9] |
+
+The resulting count is **2**. This is a static derivation from the supplied fixture, not an observed execution.
+
+### Acquisition and receiving-point inventory
+
+| Point | Data version and condition | Recipient or retention | Necessity and exposure assessment |
+|---|---|---|---|
+| **Local acquisition** | All four records, including all summaries, recipient addresses, triage notes, identifiers, and selection fields, are loaded. [SKILL.md, line 8; records.json, lines 1–40] | Only the local controller’s ephemeral memory. The read expressly returns all records only to that controller. [CONTRACTS.md, lines 13–16, 24–30] | Acquisition is broader than the eventual deliveries, but the source does **not** expose the acquired whole to a model or another recipient. Staff notes and excluded patients’ results remain internal. Pure task-limited internal flow is not an exposure sink under Rule 7. |
+| **Local selection and iteration** | `selected` contains the whole P-401 and P-402 records; retaining a record does not itself strip its triage note or other fields. [SKILL.md, lines 9–10; CONTRACTS.md, lines 20–21] | Local ephemeral variables and selected list. [SKILL.md, lines 14–15] | Selection determines which records may be notified. Although the selected objects still contain staff notes, the later call explicitly chooses only `recipient` and `summary`. Keeping the objects locally does not establish a disclosure. Rules 4 and 7 apply. |
+| **P-401 notification** | Exactly P-401’s `summary` is the body; P-401’s `recipient` is the routing argument. This occurs once because P-401 is selected. [records.json, lines 4–10; SKILL.md, lines 9–10] | The assigned patient’s mailbox receives and retains the unchanged summary. The address is used only for delivery. [CONTRACTS.md, lines 27–35] | Both the matched address and unchanged clinical summary are required for the requested delivery. No separate triage-note, score, urgency, opt-out, or record-object fields are added. The identifier embedded in the summary remains because the user requires that summary unchanged. No excess is established. |
+| **P-402 notification** | Exactly P-402’s `summary` is the body; P-402’s `recipient` is the routing argument. This occurs once because P-402 is selected. [records.json, lines 13–19; SKILL.md, lines 9–10] | P-402’s assigned mailbox receives and retains its unchanged summary. [CONTRACTS.md, lines 27–35] | The same necessity reasoning applies, with the P-402 summary and recipient kept paired. The contract gives different patients separate mailbox access. No cross-patient delivery or excess payload is established. |
+| **Persistent receipt** | Exactly `{"selected_count": 2}` is written once. [SKILL.md, line 11] | Persistent `receipt.json`, readable by the requesting coordinator. The write includes no other values. [CONTRACTS.md, lines 41–42] | This is a supported storage boundary. The aggregate is derived from the selection decision, but both the value and its persistence are expressly requested. No patient-level fields or staff notes accompany it. |
+| **Coordinator reply** | Exactly `{"selected_count": 2}` is shown once. [SKILL.md, line 12] | The requesting coordinator. [CONTRACTS.md, line 43] | This is a separate user-output boundary, explicitly required by the task. No excess is established. |
+| **Analytics vendor: declared, unused** | `metrics.publish` would send and retain every submitted field, but no workflow step invokes it. [CONTRACTS.md, lines 37–39; SKILL.md, lines 8–12] | A distinct durable analytics vendor would be the recipient **if called**. | Its capability declaration does not establish a runtime disclosure. There is no supported analytics delivery to remove from this workflow. |
+
+The patient notifications are supported delivery and mailbox-retention boundaries. The source does not specify the transport or notification-service deployment, so it does not support inventing a separate network hop or additional service recipient merely from the sending verb. If the notification interface executes externally, its request arguments would be the selected address and summary under Rule 6; both are required for this task. That conditional possibility does not establish additional unnecessary payload, and the same delivery should not be counted twice.
+
+There is **no documented model call or context-save operation**. The contract explicitly limits model observation to arguments passed to a documented model call, and excludes automatic model observation of local operations. Consequently, the possible-model-observation default in Rule 2 is displaced here by explicit routing evidence. The source bundle supplied for auditing is also expressly excluded from runtime delivery. [CONTRACTS.md, lines 7–21] Local processing can depend on the selection fields, but that dependence does not mean the outgoing count or summary contains those fields’ plaintext; Rule 4 requires preserving that distinction.
+
+### Findings and concrete disposition
+
+**No exposure-reduction change is justified by the documented current behavior.** Each exposed value has a corresponding task requirement:
+
+- Removing, shortening, masking, or summarizing a selected clinical summary would violate the requirement to send it unchanged.
+- Removing or substituting the matched recipient would prevent the required delivery or risk delivering a result to another patient.
+- Suppressing either the receipt write or the coordinator reply would omit a requested result.
+- Staff triage notes already have no supported outgoing path. Their presence in the acquired and selected local records is not evidence that they reach a patient, coordinator, model, or analytics vendor.
+- Excluding P-403 and P-404 from notification prevents their results from entering the patient-delivery boundaries, even though their records were read locally.
+
+The bundle documents only a whole-record local reader; it does not establish a field-restricted acquisition interface. A proposed narrower local reader could reduce internal handling if such an interface were implemented, but it would be a proposed implementation change, not remediation of a demonstrated exposure. Its preservation argument would require retaining the fields needed for the exact predicate and obtaining each selected record’s correctly paired, unchanged summary and recipient.
+
+The remaining limits are explicit: this assessment relies on the supplied local-execution, routing, exact-body, and mailbox-isolation contracts. It does not verify an underlying implementation, infer undocumented retention, or establish semantic completeness beyond the supplied task and records.

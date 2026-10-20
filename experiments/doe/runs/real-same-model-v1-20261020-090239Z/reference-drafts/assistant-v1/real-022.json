@@ -1,0 +1,407 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "steipete/model-usage",
+  "case_id": "real-022",
+  "declared_purpose": [
+    {
+      "id": "P1",
+      "interpretation": "Summarize Codex or Claude local usage costs by current model or all models using CodexBar cost JSON; this is an author-declared audit purpose, without actual-user authorization.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 2,
+          "end_line": 10,
+          "quote": "name: model-usage\ndescription: Use CodexBar CLI local cost usage to summarize per-model usage for Codex or Claude, including the current (most recent) model or a full model breakdown. Trigger when asked for model-level usage/cost data from codexbar, or when you need a scriptable per-model summary from codexbar cost JSON.\nmetadata: {\"clawdbot\":{\"emoji\":\"📊\",\"os\":[\"darwin\"],\"requires\":{\"bins\":[\"codexbar\"]},\"install\":[{\"id\":\"brew-cask\",\"kind\":\"brew\",\"cask\":\"steipete/tap/codexbar\",\"bins\":[\"codexbar\"],\"label\":\"Install CodexBar (brew cask)\"}]}}\n---\n\n# Model usage\n\n## Overview\nGet per-model usage cost from CodexBar's local cost logs. Supports \"current model\" (most recent daily entry) or \"all models\" summaries for Codex or Claude."
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "I1",
+      "interpretation": "Bundled Python parses JSON locally and emits selected aggregate metadata, rather than forwarding JSONL session contents. CodexBar is a subprocess with provider-only arguments. Raw input files/stdin are read internally.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 24,
+          "end_line": 61,
+          "quote": "def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:\n    cmd = [\"codexbar\", \"cost\", \"--format\", \"json\", \"--provider\", provider]\n    try:\n        output = subprocess.check_output(cmd, text=True)\n    except FileNotFoundError:\n        raise RuntimeError(\"codexbar not found on PATH. Install CodexBar CLI first.\")\n    except subprocess.CalledProcessError as exc:\n        raise RuntimeError(f\"codexbar cost failed (exit {exc.returncode}).\")\n    try:\n        payload = json.loads(output)\n    except json.JSONDecodeError as exc:\n        raise RuntimeError(f\"Failed to parse codexbar JSON output: {exc}\")\n    if not isinstance(payload, list):\n        raise RuntimeError(\"Expected codexbar cost JSON array.\")\n    return payload\n\n\ndef load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:\n    if input_path:\n        if input_path == \"-\":\n            raw = sys.stdin.read()\n        else:\n            with open(input_path, \"r\", encoding=\"utf-8\") as handle:\n                raw = handle.read()\n        data = json.loads(raw)\n    else:\n        data = run_codexbar_cost(provider)\n\n    if isinstance(data, dict):\n        return data\n\n    if isinstance(data, list):\n        for entry in data:\n            if isinstance(entry, dict) and entry.get(\"provider\") == provider:\n                return entry\n        raise RuntimeError(f\"Provider '{provider}' not found in codexbar payload.\")\n\n    raise RuntimeError(\"Unsupported JSON input format.\")"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 197,
+          "end_line": 233,
+          "quote": "def render_text_all(provider: str, totals: Dict[str, float]) -> str:\n    lines = [f\"Provider: {provider}\", \"Models:\"]\n    for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True):\n        lines.append(f\"- {model}: {usd(cost)}\")\n    return \"\\n\".join(lines)\n\n\ndef build_json_current(\n    provider: str,\n    model: str,\n    latest_date: Optional[str],\n    total_cost: Optional[float],\n    latest_cost: Optional[float],\n    latest_cost_date: Optional[str],\n    entry_count: int,\n) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"current\",\n        \"model\": model,\n        \"latestModelDate\": latest_date,\n        \"totalCostUSD\": total_cost,\n        \"latestDayCostUSD\": latest_cost,\n        \"latestDayCostDate\": latest_cost_date,\n        \"dailyRowCount\": entry_count,\n    }\n\n\ndef build_json_all(provider: str, totals: Dict[str, float]) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"all\",\n        \"models\": [\n            {\"model\": model, \"totalCostUSD\": cost}\n            for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True)\n        ],\n    }"
+        }
+      ]
+    },
+    {
+      "id": "I2",
+      "interpretation": "Documentation includes an optional shell redirection that saves full cost JSON to /tmp/cost.json; its name is not a cleanup mechanism. Cost field schema contains usage totals and model/daily breakdowns.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 30,
+          "end_line": 38,
+          "quote": "## Inputs\n- Default: runs `codexbar cost --format json --provider <codex|claude>`.\n- File or stdin:\n\n```bash\ncodexbar cost --provider codex --format json > /tmp/cost.json\npython {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all\ncat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode current\n```"
+        },
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 15,
+          "end_line": 28,
+          "quote": "## Cost JSON fields\nThe payload is an array (one per provider).\n- provider, source, updatedAt\n- sessionTokens, sessionCostUSD\n- last30DaysTokens, last30DaysCostUSD\n- daily[]: date, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost, modelsUsed, modelBreakdowns[]\n- modelBreakdowns[]: modelName, cost\n- totals: totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost\n\n## Notes\n- Cost usage is local-only. It reads JSONL logs under:\n  - Codex: ~/.codex/sessions/**/*.jsonl\n  - Claude: ~/.config/claude/projects/**/*.jsonl or ~/.claude/projects/**/*.jsonl\n- If web usage is required (non-local), use codexbar usage (not cost)."
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "C1",
+      "stratum": "necessary_sensitive_use",
+      "obligation": "Separate locally scanned account logs, full cost JSON and returned summary; retain legitimate aggregate usage sensitivity and purpose without inventing raw-prompt delivery.",
+      "evidence": [
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 15,
+          "end_line": 28,
+          "quote": "## Cost JSON fields\nThe payload is an array (one per provider).\n- provider, source, updatedAt\n- sessionTokens, sessionCostUSD\n- last30DaysTokens, last30DaysCostUSD\n- daily[]: date, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost, modelsUsed, modelBreakdowns[]\n- modelBreakdowns[]: modelName, cost\n- totals: totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost\n\n## Notes\n- Cost usage is local-only. It reads JSONL logs under:\n  - Codex: ~/.codex/sessions/**/*.jsonl\n  - Claude: ~/.config/claude/projects/**/*.jsonl or ~/.claude/projects/**/*.jsonl\n- If web usage is required (non-local), use codexbar usage (not cost)."
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 204,
+          "end_line": 233,
+          "quote": "def build_json_current(\n    provider: str,\n    model: str,\n    latest_date: Optional[str],\n    total_cost: Optional[float],\n    latest_cost: Optional[float],\n    latest_cost_date: Optional[str],\n    entry_count: int,\n) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"current\",\n        \"model\": model,\n        \"latestModelDate\": latest_date,\n        \"totalCostUSD\": total_cost,\n        \"latestDayCostUSD\": latest_cost,\n        \"latestDayCostDate\": latest_cost_date,\n        \"dailyRowCount\": entry_count,\n    }\n\n\ndef build_json_all(provider: str, totals: Dict[str, float]) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"all\",\n        \"models\": [\n            {\"model\": model, \"totalCostUSD\": cost}\n            for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True)\n        ],\n    }"
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "stratum": "other",
+      "obligation": "Cover optional persistent cost JSON and selected stdout/stderr versions; preserve modes, filters, current-model selection and totals.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 34,
+          "end_line": 38,
+          "quote": "```bash\ncodexbar cost --provider codex --format json > /tmp/cost.json\npython {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all\ncat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode current\n```"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 236,
+          "end_line": 305,
+          "quote": "def main() -> int:\n    parser = argparse.ArgumentParser(description=\"Summarize CodexBar model usage from local cost logs.\")\n    parser.add_argument(\"--provider\", choices=[\"codex\", \"claude\"], default=\"codex\")\n    parser.add_argument(\"--mode\", choices=[\"current\", \"all\"], default=\"current\")\n    parser.add_argument(\"--model\", help=\"Explicit model name to report instead of auto-current.\")\n    parser.add_argument(\"--input\", help=\"Path to codexbar cost JSON (or '-' for stdin).\")\n    parser.add_argument(\"--days\", type=int, help=\"Limit to last N days (based on daily rows).\")\n    parser.add_argument(\"--format\", choices=[\"text\", \"json\"], default=\"text\")\n    parser.add_argument(\"--pretty\", action=\"store_true\", help=\"Pretty-print JSON output.\")\n\n    args = parser.parse_args()\n\n    try:\n        payload = load_payload(args.input, args.provider)\n    except Exception as exc:\n        eprint(str(exc))\n        return 1\n\n    entries = parse_daily_entries(payload)\n    entries = filter_by_days(entries, args.days)\n\n    if args.mode == \"current\":\n        model = args.model\n        latest_date = None\n        if not model:\n            model, latest_date = pick_current_model(entries)\n        if not model:\n            eprint(\"No model data found in codexbar cost payload.\")\n            return 2\n        totals = aggregate_costs(entries)\n        total_cost = totals.get(model)\n        latest_cost_date, latest_cost = latest_day_cost(entries, model)\n\n        if args.format == \"json\":\n            payload_out = build_json_current(\n                provider=args.provider,\n                model=model,\n                latest_date=latest_date,\n                total_cost=total_cost,\n                latest_cost=latest_cost,\n                latest_cost_date=latest_cost_date,\n                entry_count=len(entries),\n            )\n            indent = 2 if args.pretty else None\n            print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n        else:\n            print(\n                render_text_current(\n                    provider=args.provider,\n                    model=model,\n                    latest_date=latest_date,\n                    total_cost=total_cost,\n                    latest_cost=latest_cost,\n                    latest_cost_date=latest_cost_date,\n                    entry_count=len(entries),\n                )\n            )\n        return 0\n\n    totals = aggregate_costs(entries)\n    if not totals:\n        eprint(\"No model breakdowns found in codexbar cost payload.\")\n        return 2\n\n    if args.format == \"json\":\n        payload_out = build_json_all(provider=args.provider, totals=totals)\n        indent = 2 if args.pretty else None\n        print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n    else:\n        print(render_text_all(provider=args.provider, totals=totals))"
+        }
+      ]
+    },
+    {
+      "id": "C3",
+      "stratum": "source_uncertainty",
+      "obligation": "Keep opaque CodexBar internals and downstream output routing unknown; do not turn local-only declaration into a measured safety guarantee or unsupported positive.",
+      "evidence": [
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 24,
+          "end_line": 28,
+          "quote": "## Notes\n- Cost usage is local-only. It reads JSONL logs under:\n  - Codex: ~/.codex/sessions/**/*.jsonl\n  - Claude: ~/.config/claude/projects/**/*.jsonl or ~/.claude/projects/**/*.jsonl\n- If web usage is required (non-local), use codexbar usage (not cost)."
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 24,
+          "end_line": 38,
+          "quote": "def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:\n    cmd = [\"codexbar\", \"cost\", \"--format\", \"json\", \"--provider\", provider]\n    try:\n        output = subprocess.check_output(cmd, text=True)\n    except FileNotFoundError:\n        raise RuntimeError(\"codexbar not found on PATH. Install CodexBar CLI first.\")\n    except subprocess.CalledProcessError as exc:\n        raise RuntimeError(f\"codexbar cost failed (exit {exc.returncode}).\")\n    try:\n        payload = json.loads(output)\n    except json.JSONDecodeError as exc:\n        raise RuntimeError(f\"Failed to parse codexbar JSON output: {exc}\")\n    if not isinstance(payload, list):\n        raise RuntimeError(\"Expected codexbar cost JSON array.\")\n    return payload"
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "N1",
+      "interpretation": "If real account records are supplied, provider/model/date/cost/count aggregates can reveal usage and spending behavior. Local reading and the requested summary are functionally related to this declared purpose; this does not establish authorization or justify unrelated session content.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 9,
+          "end_line": 10,
+          "quote": "## Overview\nGet per-model usage cost from CodexBar's local cost logs. Supports \"current model\" (most recent daily entry) or \"all models\" summaries for Codex or Claude."
+        },
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 15,
+          "end_line": 27,
+          "quote": "## Cost JSON fields\nThe payload is an array (one per provider).\n- provider, source, updatedAt\n- sessionTokens, sessionCostUSD\n- last30DaysTokens, last30DaysCostUSD\n- daily[]: date, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost, modelsUsed, modelBreakdowns[]\n- modelBreakdowns[]: modelName, cost\n- totals: totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost\n\n## Notes\n- Cost usage is local-only. It reads JSONL logs under:\n  - Codex: ~/.codex/sessions/**/*.jsonl\n  - Claude: ~/.config/claude/projects/**/*.jsonl or ~/.claude/projects/**/*.jsonl"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 204,
+          "end_line": 233,
+          "quote": "def build_json_current(\n    provider: str,\n    model: str,\n    latest_date: Optional[str],\n    total_cost: Optional[float],\n    latest_cost: Optional[float],\n    latest_cost_date: Optional[str],\n    entry_count: int,\n) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"current\",\n        \"model\": model,\n        \"latestModelDate\": latest_date,\n        \"totalCostUSD\": total_cost,\n        \"latestDayCostUSD\": latest_cost,\n        \"latestDayCostDate\": latest_cost_date,\n        \"dailyRowCount\": entry_count,\n    }\n\n\ndef build_json_all(provider: str, totals: Dict[str, float]) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"all\",\n        \"models\": [\n            {\"model\": model, \"totalCostUSD\": cost}\n            for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True)\n        ],\n    }"
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "PC1",
+      "interpretation": "Any minimization must retain provider, day cutoff, explicit model override, current-model fallback/order, costs and date/count results, output modes, and missing-data errors. Replacing local processing with a model reading raw logs is not the existing mechanism.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 86,
+          "end_line": 148,
+          "quote": "def filter_by_days(entries: List[Dict[str, Any]], days: Optional[int]) -> List[Dict[str, Any]]:\n    if not days:\n        return entries\n    cutoff = date.today() - timedelta(days=days - 1)\n    filtered: List[Dict[str, Any]] = []\n    for entry in entries:\n        day = entry.get(\"date\")\n        if not isinstance(day, str):\n            continue\n        parsed = parse_date(day)\n        if parsed and parsed >= cutoff:\n            filtered.append(entry)\n    return filtered\n\n\ndef aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:\n    totals: Dict[str, float] = {}\n    for entry in entries:\n        breakdowns = entry.get(\"modelBreakdowns\")\n        if not breakdowns:\n            continue\n        if not isinstance(breakdowns, list):\n            continue\n        for item in breakdowns:\n            if not isinstance(item, dict):\n                continue\n            model = item.get(\"modelName\")\n            cost = item.get(\"cost\")\n            if not isinstance(model, str):\n                continue\n            if not isinstance(cost, (int, float)):\n                continue\n            totals[model] = totals.get(model, 0.0) + float(cost)\n    return totals\n\n\ndef pick_current_model(entries: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:\n    if not entries:\n        return None, None\n    sorted_entries = sorted(\n        entries,\n        key=lambda entry: entry.get(\"date\") or \"\",\n    )\n    for entry in reversed(sorted_entries):\n        breakdowns = entry.get(\"modelBreakdowns\")\n        if isinstance(breakdowns, list) and breakdowns:\n            scored: List[ModelCost] = []\n            for item in breakdowns:\n                if not isinstance(item, dict):\n                    continue\n                model = item.get(\"modelName\")\n                cost = item.get(\"cost\")\n                if isinstance(model, str) and isinstance(cost, (int, float)):\n                    scored.append(ModelCost(model=model, cost=float(cost)))\n            if scored:\n                scored.sort(key=lambda item: item.cost, reverse=True)\n                return scored[0].model, entry.get(\"date\") if isinstance(entry.get(\"date\"), str) else None\n        models_used = entry.get(\"modelsUsed\")\n        if isinstance(models_used, list) and models_used:\n            last = models_used[-1]\n            if isinstance(last, str):\n                return last, entry.get(\"date\") if isinstance(entry.get(\"date\"), str) else None\n    return None, None"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 236,
+          "end_line": 305,
+          "quote": "def main() -> int:\n    parser = argparse.ArgumentParser(description=\"Summarize CodexBar model usage from local cost logs.\")\n    parser.add_argument(\"--provider\", choices=[\"codex\", \"claude\"], default=\"codex\")\n    parser.add_argument(\"--mode\", choices=[\"current\", \"all\"], default=\"current\")\n    parser.add_argument(\"--model\", help=\"Explicit model name to report instead of auto-current.\")\n    parser.add_argument(\"--input\", help=\"Path to codexbar cost JSON (or '-' for stdin).\")\n    parser.add_argument(\"--days\", type=int, help=\"Limit to last N days (based on daily rows).\")\n    parser.add_argument(\"--format\", choices=[\"text\", \"json\"], default=\"text\")\n    parser.add_argument(\"--pretty\", action=\"store_true\", help=\"Pretty-print JSON output.\")\n\n    args = parser.parse_args()\n\n    try:\n        payload = load_payload(args.input, args.provider)\n    except Exception as exc:\n        eprint(str(exc))\n        return 1\n\n    entries = parse_daily_entries(payload)\n    entries = filter_by_days(entries, args.days)\n\n    if args.mode == \"current\":\n        model = args.model\n        latest_date = None\n        if not model:\n            model, latest_date = pick_current_model(entries)\n        if not model:\n            eprint(\"No model data found in codexbar cost payload.\")\n            return 2\n        totals = aggregate_costs(entries)\n        total_cost = totals.get(model)\n        latest_cost_date, latest_cost = latest_day_cost(entries, model)\n\n        if args.format == \"json\":\n            payload_out = build_json_current(\n                provider=args.provider,\n                model=model,\n                latest_date=latest_date,\n                total_cost=total_cost,\n                latest_cost=latest_cost,\n                latest_cost_date=latest_cost_date,\n                entry_count=len(entries),\n            )\n            indent = 2 if args.pretty else None\n            print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n        else:\n            print(\n                render_text_current(\n                    provider=args.provider,\n                    model=model,\n                    latest_date=latest_date,\n                    total_cost=total_cost,\n                    latest_cost=latest_cost,\n                    latest_cost_date=latest_cost_date,\n                    entry_count=len(entries),\n                )\n            )\n        return 0\n\n    totals = aggregate_costs(entries)\n    if not totals:\n        eprint(\"No model breakdowns found in codexbar cost payload.\")\n        return 2\n\n    if args.format == \"json\":\n        payload_out = build_json_all(provider=args.provider, totals=totals)\n        indent = 2 if args.pretty else None\n        print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n    else:\n        print(render_text_all(provider=args.provider, totals=totals))"
+        }
+      ]
+    },
+    {
+      "id": "PC2",
+      "interpretation": "A proposal to avoid the optional intermediate cost file can use the already supported stdin path while preserving the same JSON input and summary; it does not erase file copies from earlier runs.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 34,
+          "end_line": 38,
+          "quote": "```bash\ncodexbar cost --provider codex --format json > /tmp/cost.json\npython {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all\ncat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode current\n```"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 41,
+          "end_line": 50,
+          "quote": "def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:\n    if input_path:\n        if input_path == \"-\":\n            raw = sys.stdin.read()\n        else:\n            with open(input_path, \"r\", encoding=\"utf-8\") as handle:\n                raw = handle.read()\n        data = json.loads(raw)\n    else:\n        data = run_codexbar_cost(provider)"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "R1",
+      "recipient": "Task-local CodexBar subprocess",
+      "boundary_event": "internal_request",
+      "version": "Provider literal codex or claude; no session-log contents in command arguments.",
+      "condition": "Default input path absent.",
+      "interpretation": "Known local cost CLI reads its own local cost logs. Its internal session parsing is not an additional model observation of all logs.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 24,
+          "end_line": 38,
+          "quote": "def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:\n    cmd = [\"codexbar\", \"cost\", \"--format\", \"json\", \"--provider\", provider]\n    try:\n        output = subprocess.check_output(cmd, text=True)\n    except FileNotFoundError:\n        raise RuntimeError(\"codexbar not found on PATH. Install CodexBar CLI first.\")\n    except subprocess.CalledProcessError as exc:\n        raise RuntimeError(f\"codexbar cost failed (exit {exc.returncode}).\")\n    try:\n        payload = json.loads(output)\n    except json.JSONDecodeError as exc:\n        raise RuntimeError(f\"Failed to parse codexbar JSON output: {exc}\")\n    if not isinstance(payload, list):\n        raise RuntimeError(\"Expected codexbar cost JSON array.\")\n    return payload"
+        },
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 24,
+          "end_line": 28,
+          "quote": "## Notes\n- Cost usage is local-only. It reads JSONL logs under:\n  - Codex: ~/.codex/sessions/**/*.jsonl\n  - Claude: ~/.config/claude/projects/**/*.jsonl or ~/.claude/projects/**/*.jsonl\n- If web usage is required (non-local), use codexbar usage (not cost)."
+        }
+      ]
+    },
+    {
+      "id": "R2",
+      "recipient": "Task-internal persistent /tmp/cost.json",
+      "boundary_event": "storage_write",
+      "version": "CodexBar cost JSON before Python aggregation.",
+      "condition": "Documented optional file-input command is used.",
+      "interpretation": "The explicit redirect can persist account usage and billing metadata; source specifies no cleanup.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 30,
+          "end_line": 38,
+          "quote": "## Inputs\n- Default: runs `codexbar cost --format json --provider <codex|claude>`.\n- File or stdin:\n\n```bash\ncodexbar cost --provider codex --format json > /tmp/cost.json\npython {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all\ncat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode current\n```"
+        },
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 15,
+          "end_line": 22,
+          "quote": "## Cost JSON fields\nThe payload is an array (one per provider).\n- provider, source, updatedAt\n- sessionTokens, sessionCostUSD\n- last30DaysTokens, last30DaysCostUSD\n- daily[]: date, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost, modelsUsed, modelBreakdowns[]\n- modelBreakdowns[]: modelName, cost\n- totals: totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost"
+        }
+      ]
+    },
+    {
+      "id": "R3",
+      "recipient": "Calling tool/stdout and possibly agent model",
+      "boundary_event": "model_observe",
+      "version": "Current summary fields or all-model cost list, rendered text or JSON; filtered by days/provider/model as selected.",
+      "condition": "Successful bundled-script invocation; model routing is possible under EM02/EM03, not observed execution.",
+      "interpretation": "Only script output crosses the local-processing return; do not replace it with the original session logs or full input JSON.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 178,
+          "end_line": 233,
+          "quote": "def render_text_current(\n    provider: str,\n    model: str,\n    latest_date: Optional[str],\n    total_cost: Optional[float],\n    latest_cost: Optional[float],\n    latest_cost_date: Optional[str],\n    entry_count: int,\n) -> str:\n    lines = [f\"Provider: {provider}\", f\"Current model: {model}\"]\n    if latest_date:\n        lines.append(f\"Latest model date: {latest_date}\")\n    lines.append(f\"Total cost (rows): {usd(total_cost)}\")\n    if latest_cost_date:\n        lines.append(f\"Latest day cost: {usd(latest_cost)} ({latest_cost_date})\")\n    lines.append(f\"Daily rows: {entry_count}\")\n    return \"\\n\".join(lines)\n\n\ndef render_text_all(provider: str, totals: Dict[str, float]) -> str:\n    lines = [f\"Provider: {provider}\", \"Models:\"]\n    for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True):\n        lines.append(f\"- {model}: {usd(cost)}\")\n    return \"\\n\".join(lines)\n\n\ndef build_json_current(\n    provider: str,\n    model: str,\n    latest_date: Optional[str],\n    total_cost: Optional[float],\n    latest_cost: Optional[float],\n    latest_cost_date: Optional[str],\n    entry_count: int,\n) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"current\",\n        \"model\": model,\n        \"latestModelDate\": latest_date,\n        \"totalCostUSD\": total_cost,\n        \"latestDayCostUSD\": latest_cost,\n        \"latestDayCostDate\": latest_cost_date,\n        \"dailyRowCount\": entry_count,\n    }\n\n\ndef build_json_all(provider: str, totals: Dict[str, float]) -> Dict[str, Any]:\n    return {\n        \"provider\": provider,\n        \"mode\": \"all\",\n        \"models\": [\n            {\"model\": model, \"totalCostUSD\": cost}\n            for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True)\n        ],\n    }"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 269,
+          "end_line": 305,
+          "quote": "        if args.format == \"json\":\n            payload_out = build_json_current(\n                provider=args.provider,\n                model=model,\n                latest_date=latest_date,\n                total_cost=total_cost,\n                latest_cost=latest_cost,\n                latest_cost_date=latest_cost_date,\n                entry_count=len(entries),\n            )\n            indent = 2 if args.pretty else None\n            print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n        else:\n            print(\n                render_text_current(\n                    provider=args.provider,\n                    model=model,\n                    latest_date=latest_date,\n                    total_cost=total_cost,\n                    latest_cost=latest_cost,\n                    latest_cost_date=latest_cost_date,\n                    entry_count=len(entries),\n                )\n            )\n        return 0\n\n    totals = aggregate_costs(entries)\n    if not totals:\n        eprint(\"No model breakdowns found in codexbar cost payload.\")\n        return 2\n\n    if args.format == \"json\":\n        payload_out = build_json_all(provider=args.provider, totals=totals)\n        indent = 2 if args.pretty else None\n        print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n    else:\n        print(render_text_all(provider=args.provider, totals=totals))"
+        }
+      ]
+    },
+    {
+      "id": "R4",
+      "recipient": "Calling tool/stderr and possibly agent model",
+      "boundary_event": "model_observe",
+      "version": "CLI/input parse exception text or missing-data diagnostic.",
+      "condition": "CLI failure, malformed input or no usable model rows.",
+      "interpretation": "Error text is a separate returned version; it does not prove original logs are printed or sent to any remote network service.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 24,
+          "end_line": 37,
+          "quote": "def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:\n    cmd = [\"codexbar\", \"cost\", \"--format\", \"json\", \"--provider\", provider]\n    try:\n        output = subprocess.check_output(cmd, text=True)\n    except FileNotFoundError:\n        raise RuntimeError(\"codexbar not found on PATH. Install CodexBar CLI first.\")\n    except subprocess.CalledProcessError as exc:\n        raise RuntimeError(f\"codexbar cost failed (exit {exc.returncode}).\")\n    try:\n        payload = json.loads(output)\n    except json.JSONDecodeError as exc:\n        raise RuntimeError(f\"Failed to parse codexbar JSON output: {exc}\")\n    if not isinstance(payload, list):\n        raise RuntimeError(\"Expected codexbar cost JSON array.\")"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 248,
+          "end_line": 264,
+          "quote": "    try:\n        payload = load_payload(args.input, args.provider)\n    except Exception as exc:\n        eprint(str(exc))\n        return 1\n\n    entries = parse_daily_entries(payload)\n    entries = filter_by_days(entries, args.days)\n\n    if args.mode == \"current\":\n        model = args.model\n        latest_date = None\n        if not model:\n            model, latest_date = pick_current_model(entries)\n        if not model:\n            eprint(\"No model data found in codexbar cost payload.\")\n            return 2"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 295,
+          "end_line": 298,
+          "quote": "    totals = aggregate_costs(entries)\n    if not totals:\n        eprint(\"No model breakdowns found in codexbar cost payload.\")\n        return 2"
+        }
+      ]
+    }
+  ],
+  "reference_identity": "Source-only assistant reference draft; not a human-verified gold answer.",
+  "reference_status": "assistant_draft_pending_two_independent_human_verifications",
+  "required_behavior": [
+    {
+      "id": "B1",
+      "interpretation": "Accept provider cost JSON from CodexBar, a file, or stdin; choose provider; support days filtering, explicit model, current/all modes, and text/JSON output.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 14,
+          "end_line": 42,
+          "quote": "## Quick start\n1) Fetch cost JSON via CodexBar CLI or pass a JSON file.\n2) Use the bundled script to summarize by model.\n\n```bash\npython {baseDir}/scripts/model_usage.py --provider codex --mode current\npython {baseDir}/scripts/model_usage.py --provider codex --mode all\npython {baseDir}/scripts/model_usage.py --provider claude --mode all --format json --pretty\n```\n\n## Current model logic\n- Uses the most recent daily row with `modelBreakdowns`.\n- Picks the model with the highest cost in that row.\n- Falls back to the last entry in `modelsUsed` when breakdowns are missing.\n- Override with `--model <name>` when you need a specific model.\n\n## Inputs\n- Default: runs `codexbar cost --format json --provider <codex|claude>`.\n- File or stdin:\n\n```bash\ncodexbar cost --provider codex --format json > /tmp/cost.json\npython {baseDir}/scripts/model_usage.py --input /tmp/cost.json --mode all\ncat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode current\n```\n\n## Output\n- Text (default) or JSON (`--format json --pretty`).\n- Values are cost-only per model; tokens are not split by model in CodexBar output."
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 236,
+          "end_line": 255,
+          "quote": "def main() -> int:\n    parser = argparse.ArgumentParser(description=\"Summarize CodexBar model usage from local cost logs.\")\n    parser.add_argument(\"--provider\", choices=[\"codex\", \"claude\"], default=\"codex\")\n    parser.add_argument(\"--mode\", choices=[\"current\", \"all\"], default=\"current\")\n    parser.add_argument(\"--model\", help=\"Explicit model name to report instead of auto-current.\")\n    parser.add_argument(\"--input\", help=\"Path to codexbar cost JSON (or '-' for stdin).\")\n    parser.add_argument(\"--days\", type=int, help=\"Limit to last N days (based on daily rows).\")\n    parser.add_argument(\"--format\", choices=[\"text\", \"json\"], default=\"text\")\n    parser.add_argument(\"--pretty\", action=\"store_true\", help=\"Pretty-print JSON output.\")\n\n    args = parser.parse_args()\n\n    try:\n        payload = load_payload(args.input, args.provider)\n    except Exception as exc:\n        eprint(str(exc))\n        return 1\n\n    entries = parse_daily_entries(payload)\n    entries = filter_by_days(entries, args.days)"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "interpretation": "Current selection is the most recent dated usable row, highest-cost breakdown model, falling back to last modelsUsed; aggregate selected-model cost and latest model cost over filtered rows. All-mode aggregates every valid model cost.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 86,
+          "end_line": 148,
+          "quote": "def filter_by_days(entries: List[Dict[str, Any]], days: Optional[int]) -> List[Dict[str, Any]]:\n    if not days:\n        return entries\n    cutoff = date.today() - timedelta(days=days - 1)\n    filtered: List[Dict[str, Any]] = []\n    for entry in entries:\n        day = entry.get(\"date\")\n        if not isinstance(day, str):\n            continue\n        parsed = parse_date(day)\n        if parsed and parsed >= cutoff:\n            filtered.append(entry)\n    return filtered\n\n\ndef aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:\n    totals: Dict[str, float] = {}\n    for entry in entries:\n        breakdowns = entry.get(\"modelBreakdowns\")\n        if not breakdowns:\n            continue\n        if not isinstance(breakdowns, list):\n            continue\n        for item in breakdowns:\n            if not isinstance(item, dict):\n                continue\n            model = item.get(\"modelName\")\n            cost = item.get(\"cost\")\n            if not isinstance(model, str):\n                continue\n            if not isinstance(cost, (int, float)):\n                continue\n            totals[model] = totals.get(model, 0.0) + float(cost)\n    return totals\n\n\ndef pick_current_model(entries: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:\n    if not entries:\n        return None, None\n    sorted_entries = sorted(\n        entries,\n        key=lambda entry: entry.get(\"date\") or \"\",\n    )\n    for entry in reversed(sorted_entries):\n        breakdowns = entry.get(\"modelBreakdowns\")\n        if isinstance(breakdowns, list) and breakdowns:\n            scored: List[ModelCost] = []\n            for item in breakdowns:\n                if not isinstance(item, dict):\n                    continue\n                model = item.get(\"modelName\")\n                cost = item.get(\"cost\")\n                if isinstance(model, str) and isinstance(cost, (int, float)):\n                    scored.append(ModelCost(model=model, cost=float(cost)))\n            if scored:\n                scored.sort(key=lambda item: item.cost, reverse=True)\n                return scored[0].model, entry.get(\"date\") if isinstance(entry.get(\"date\"), str) else None\n        models_used = entry.get(\"modelsUsed\")\n        if isinstance(models_used, list) and models_used:\n            last = models_used[-1]\n            if isinstance(last, str):\n                return last, entry.get(\"date\") if isinstance(entry.get(\"date\"), str) else None\n    return None, None"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 157,
+          "end_line": 175,
+          "quote": "def latest_day_cost(entries: List[Dict[str, Any]], model: str) -> Tuple[Optional[str], Optional[float]]:\n    if not entries:\n        return None, None\n    sorted_entries = sorted(\n        entries,\n        key=lambda entry: entry.get(\"date\") or \"\",\n    )\n    for entry in reversed(sorted_entries):\n        breakdowns = entry.get(\"modelBreakdowns\")\n        if not isinstance(breakdowns, list):\n            continue\n        for item in breakdowns:\n            if not isinstance(item, dict):\n                continue\n            if item.get(\"modelName\") == model:\n                cost = item.get(\"cost\") if isinstance(item.get(\"cost\"), (int, float)) else None\n                day = entry.get(\"date\") if isinstance(entry.get(\"date\"), str) else None\n                return day, float(cost) if cost is not None else None\n    return None, None"
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 257,
+          "end_line": 305,
+          "quote": "    if args.mode == \"current\":\n        model = args.model\n        latest_date = None\n        if not model:\n            model, latest_date = pick_current_model(entries)\n        if not model:\n            eprint(\"No model data found in codexbar cost payload.\")\n            return 2\n        totals = aggregate_costs(entries)\n        total_cost = totals.get(model)\n        latest_cost_date, latest_cost = latest_day_cost(entries, model)\n\n        if args.format == \"json\":\n            payload_out = build_json_current(\n                provider=args.provider,\n                model=model,\n                latest_date=latest_date,\n                total_cost=total_cost,\n                latest_cost=latest_cost,\n                latest_cost_date=latest_cost_date,\n                entry_count=len(entries),\n            )\n            indent = 2 if args.pretty else None\n            print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n        else:\n            print(\n                render_text_current(\n                    provider=args.provider,\n                    model=model,\n                    latest_date=latest_date,\n                    total_cost=total_cost,\n                    latest_cost=latest_cost,\n                    latest_cost_date=latest_cost_date,\n                    entry_count=len(entries),\n                )\n            )\n        return 0\n\n    totals = aggregate_costs(entries)\n    if not totals:\n        eprint(\"No model breakdowns found in codexbar cost payload.\")\n        return 2\n\n    if args.format == \"json\":\n        payload_out = build_json_all(provider=args.provider, totals=totals)\n        indent = 2 if args.pretty else None\n        print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n    else:\n        print(render_text_all(provider=args.provider, totals=totals))"
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "bc5129d4ef2723e767214c30426afa405768500f2adcf3db86fd6e549984ec2c",
+  "source_citations": [],
+  "source_sha256": "c1aa66ad58cd8bf7268f2488cf351e48caa83b6b191fad42b767e31191089fda",
+  "state": "assistant_draft",
+  "supported_excesses": [],
+  "unknowns": [
+    {
+      "id": "U1",
+      "interpretation": "CodexBar implementation is absent. Local-only cost-log reading is an author-declared contract; which raw session fields it scans internally and whether unknown fields exist in supplied JSON remain unmeasured. There is no source basis to call these full prompts model-visible.",
+      "evidence": [
+        {
+          "path": "references/codexbar-cli.md",
+          "start_line": 24,
+          "end_line": 28,
+          "quote": "## Notes\n- Cost usage is local-only. It reads JSONL logs under:\n  - Codex: ~/.codex/sessions/**/*.jsonl\n  - Claude: ~/.config/claude/projects/**/*.jsonl or ~/.claude/projects/**/*.jsonl\n- If web usage is required (non-local), use codexbar usage (not cost)."
+        },
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 24,
+          "end_line": 38,
+          "quote": "def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:\n    cmd = [\"codexbar\", \"cost\", \"--format\", \"json\", \"--provider\", provider]\n    try:\n        output = subprocess.check_output(cmd, text=True)\n    except FileNotFoundError:\n        raise RuntimeError(\"codexbar not found on PATH. Install CodexBar CLI first.\")\n    except subprocess.CalledProcessError as exc:\n        raise RuntimeError(f\"codexbar cost failed (exit {exc.returncode}).\")\n    try:\n        payload = json.loads(output)\n    except json.JSONDecodeError as exc:\n        raise RuntimeError(f\"Failed to parse codexbar JSON output: {exc}\")\n    if not isinstance(payload, list):\n        raise RuntimeError(\"Expected codexbar cost JSON array.\")\n    return payload"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "interpretation": "The source does not establish downstream stdout routing to a user, model retention, or the sensitivity of a concrete supplied account. No supported extra-sensitive exposure is established after reviewing all three files; this is not a no-DOE guarantee.",
+      "evidence": [
+        {
+          "path": "scripts/model_usage.py",
+          "start_line": 269,
+          "end_line": 305,
+          "quote": "        if args.format == \"json\":\n            payload_out = build_json_current(\n                provider=args.provider,\n                model=model,\n                latest_date=latest_date,\n                total_cost=total_cost,\n                latest_cost=latest_cost,\n                latest_cost_date=latest_cost_date,\n                entry_count=len(entries),\n            )\n            indent = 2 if args.pretty else None\n            print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n        else:\n            print(\n                render_text_current(\n                    provider=args.provider,\n                    model=model,\n                    latest_date=latest_date,\n                    total_cost=total_cost,\n                    latest_cost=latest_cost,\n                    latest_cost_date=latest_cost_date,\n                    entry_count=len(entries),\n                )\n            )\n        return 0\n\n    totals = aggregate_costs(entries)\n    if not totals:\n        eprint(\"No model breakdowns found in codexbar cost payload.\")\n        return 2\n\n    if args.format == \"json\":\n        payload_out = build_json_all(provider=args.provider, totals=totals)\n        indent = 2 if args.pretty else None\n        print(json.dumps(payload_out, indent=indent, sort_keys=args.pretty))\n    else:\n        print(render_text_all(provider=args.provider, totals=totals))"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 40,
+          "end_line": 42,
+          "quote": "## Output\n- Text (default) or JSON (`--format json --pretty`).\n- Values are cost-only per model; tokens are not split by model in CodexBar output."
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "reviewed_files": [
+    "references/codexbar-cli.md",
+    "scripts/model_usage.py",
+    "SKILL.md"
+  ]
+}

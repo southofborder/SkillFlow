@@ -113,10 +113,10 @@ def test_new_timeout_does_not_rewrite_historical_baseline_config(driver):
 def test_from_source_stage_order_no_initial_graph_and_exact_source_binding(driver, wired, tmp_path):
     result = driver.execute(tmp_path / "live", workers=1)
     assert result["schema_version"] == 14
-    assert result["profile_schema_version"] == "security-profile-v14"
+    assert result["profile_schema_version"] == "security-profile-v15"
     assert result["contract_sha256"] == contract_binding()["contract_sha256"]
     manifest = read_json(tmp_path / "live/manifest.json")
-    assert manifest["profile_schema_version"] == "security-profile-v14"
+    assert manifest["profile_schema_version"] == "security-profile-v15"
     assert manifest["contract_version"] == contract_binding()["contract_version"]
     assert result["summary"]["feedback_statuses"] == {"audit_passed": 2}
     assert result["summary"]["annotation_statuses"] == {"complete": 2}

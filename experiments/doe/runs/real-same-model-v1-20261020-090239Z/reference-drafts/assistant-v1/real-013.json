@@ -1,0 +1,708 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "blueberrywoodsym/x-ai",
+  "case_id": "real-013",
+  "declared_purpose": [
+    {
+      "id": "P1",
+      "interpretation": "Offer user-invoked Grok text/vision chat, model listing and real X/Twitter search with citations through xAI. Author intent is the audit basis and does not prove user authorization.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 1,
+          "end_line": 22,
+          "quote": "---\nname: xai\ndescription: Chat with Grok models via xAI API. Supports Grok-3, Grok-3-mini, vision, and more.\nhomepage: https://docs.x.ai\nuser-invocable: true\ndisable-model-invocation: true\ntriggers:\n  - grok\n  - xai\n  - ask grok\nmetadata:\n  clawdbot:\n    emoji: \"🤖\"\n    primaryEnv: XAI_API_KEY\n    requires:\n      bins: [node]\n      env: [XAI_API_KEY]\n---\n\n# xAI / Grok\n\nChat with xAI's Grok models. Supports text and vision."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 34,
+          "end_line": 63,
+          "quote": "## Commands\n\n### Chat with Grok\n```bash\nnode {baseDir}/scripts/chat.js \"What is the meaning of life?\"\n```\n\n### Use a specific model\n```bash\nnode {baseDir}/scripts/chat.js --model grok-3-mini \"Quick question: 2+2?\"\n```\n\n### Vision (analyze images)\n```bash\nnode {baseDir}/scripts/chat.js --image /path/to/image.jpg \"What's in this image?\"\n```\n\n### 🔍 Search X/Twitter (Real-time!)\n```bash\nnode {baseDir}/scripts/search-x.js \"Remotion video framework\"\nnode {baseDir}/scripts/search-x.js --days 7 \"Claude AI tips\"\nnode {baseDir}/scripts/search-x.js --handles @remotion_dev \"updates\"\n```\n\nUses xAI Responses API with x_search tool for real X posts with citations.\n\n### List available models\n```bash\nnode {baseDir}/scripts/models.js\n```"
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "I1",
+      "interpretation": "No script writes conversation logs. The .gitignore excludes .env and log paths from source control, which is not a runtime deletion or secret isolation mechanism. The code uses a specific XAI_API_KEY getter rather than reading all configuration files.",
+      "evidence": [
+        {
+          "path": ".gitignore",
+          "start_line": 1,
+          "end_line": 3,
+          "quote": "node_modules/\n.env\n*.log"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 19,
+          "end_line": 20,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 16,
+          "end_line": 17,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "M1",
+      "interpretation": "Cover all three API endpoints, model processing of chat/search, local credential setup and actual command-return versions, including stream, JSON and failures. Do not duplicate a network request as an external-tool event.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 119,
+          "end_line": 185,
+          "quote": "  const payload = {\n    model: options.model,\n    messages: messages,\n    stream: options.stream,\n  };\n  \n  return new Promise((resolve, reject) => {\n    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/chat/completions',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },\n    }, (res) => {\n      let data = '';\n      \n      res.on('data', chunk => {\n        data += chunk;\n        \n        if (options.stream) {\n          // Handle streaming responses\n          const lines = data.split('\\n');\n          data = lines.pop(); // Keep incomplete line\n          \n          for (const line of lines) {\n            if (line.startsWith('data: ') && line !== 'data: [DONE]') {\n              try {\n                const json = JSON.parse(line.slice(6));\n                const content = json.choices?.[0]?.delta?.content;\n                if (content) {\n                  process.stdout.write(content);\n                }\n              } catch (e) {\n                // Ignore parse errors in stream\n              }\n            }\n          }\n        }\n      });\n      \n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);\n          } catch (e) {\n            console.error('❌ Failed to parse response:', e.message);\n            process.exit(1);\n          }\n        } else {\n          console.log(); // Newline after streaming\n          resolve();"
+        },
+        {
+          "path": "scripts/models.js",
+          "start_line": 22,
+          "end_line": 59,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/models',\n      method: 'GET',\n      headers: {\n        'Authorization': `Bearer ${apiKey}`,\n      },\n    }, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        try {\n          const response = JSON.parse(data);\n          const models = response.data || [];\n          \n          console.log('🤖 Available xAI Models:\\n');\n          \n          for (const model of models) {\n            console.log(`  • ${model.id}`);\n            if (model.description) {\n              console.log(`    ${model.description}`);\n            }\n          }\n          \n          if (models.length === 0) {\n            console.log('  (no models available)');\n          }\n          \n          console.log('\\nUsage: node chat.js --model <model-id> \"Your prompt\"');\n          \n          resolve(models);\n        } catch (e) {\n          console.error('❌ Failed to parse response:', e.message);"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 93,
+          "end_line": 191,
+          "quote": "  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };\n  \n  return new Promise((resolve, reject) => {\n    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/responses',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },\n    }, (res) => {\n      let data = '';\n      \n      res.on('data', chunk => data += chunk);\n      \n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        try {\n          const response = JSON.parse(data);\n          \n          if (options.json) {\n            console.log(JSON.stringify(response, null, 2));\n            resolve(response);\n            return;\n          }\n          \n          // Extract content from Responses API format\n          let content = '(no response)';\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.type === 'message' && item.content) {\n                for (const c of item.content) {\n                  if (c.type === 'output_text' && c.text) {\n                    content = c.text;\n                  }\n                }\n              }\n            }\n          }\n          \n          // Extract citations from annotations\n          let xCitations = [];\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.content) {\n                for (const c of item.content) {\n                  if (c.annotations) {\n                    for (const ann of c.annotations) {\n                      if (ann.type === 'url_citation' && ann.url) {\n                        if (ann.url.includes('x.com') || ann.url.includes('twitter.com')) {\n                          xCitations.push(ann);\n                        }\n                      }\n                    }\n                  }\n                }\n              }\n            }\n          }\n          // Dedupe by URL\n          xCitations = [...new Map(xCitations.map(c => [c.url, c])).values()];\n          \n          if (options.requireCitations && xCitations.length === 0) {\n            console.error('⚠️  No X/Twitter citations found in response.');\n            console.error('   Grok may not have found relevant posts, or X search may not be enabled.');\n            console.error('\\nResponse anyway:\\n');\n          }\n          \n          console.log(content);\n          \n          if (xCitations.length > 0) {\n            console.log('\\n📎 Citations:');\n            for (const cite of xCitations) {\n              console.log(`   ${cite.url}`);\n            }\n          }\n          \n          resolve(response);\n        } catch (e) {\n          console.error('❌ Failed to parse response:', e.message);\n          console.error('Raw:', data.slice(0, 500));\n          process.exit(1);"
+        },
+        {
+          "path": "README.md",
+          "start_line": 13,
+          "end_line": 24,
+          "quote": "## Setup\n\nGet your API key from [console.x.ai](https://console.x.ai), then:\n\n```bash\nclawdbot config set skills.entries.xai.apiKey \"xai-YOUR-KEY\"\n```\n\nOr set environment variable:\n```bash\nexport XAI_API_KEY=\"xai-YOUR-KEY\"\n```"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "M2",
+      "interpretation": "Keep API authentication separate from model prompt contents, base64 encoding separate from sanitization, local image reading separate from model routing, and uncertain response echoes separate from established plaintext.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 57,
+          "end_line": 82,
+          "quote": "function imageToBase64(imagePath) {\n  const absolutePath = path.resolve(imagePath);\n\n  // Validate file extension is an allowed image type\n  const ext = path.extname(absolutePath).toLowerCase();\n  const mimeTypes = {\n    '.jpg': 'image/jpeg',\n    '.jpeg': 'image/jpeg',\n    '.png': 'image/png',\n    '.gif': 'image/gif',\n    '.webp': 'image/webp',\n  };\n\n  if (!mimeTypes[ext]) {\n    throw new Error(`Unsupported image format: ${ext}. Allowed: ${Object.keys(mimeTypes).join(', ')}`);\n  }\n\n  if (!fs.existsSync(absolutePath)) {\n    throw new Error(`Image not found: ${absolutePath}`);\n  }\n\n  const imageData = fs.readFileSync(absolutePath);\n  const base64 = imageData.toString('base64');\n  const mimeType = mimeTypes[ext];\n\n  return `data:${mimeType};base64,${base64}`;"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 133,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });\n  \n  const payload = {\n    model: options.model,\n    messages: messages,\n    stream: options.stream,\n  };\n  \n  return new Promise((resolve, reject) => {\n    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/chat/completions',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 161,
+          "end_line": 178,
+          "quote": "      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 99,
+          "end_line": 104,
+          "quote": "**What this skill does NOT do:**\n- Does not read arbitrary local files — `--image` only accepts files with image extensions (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`)\n- Does not read config files or access the filesystem beyond the specified image path\n- Does not store conversation history or logs\n- Does not send credentials to any endpoint other than `api.x.ai`\n- Cannot be invoked autonomously by the agent (`disable-model-invocation: true`)"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "MNN1",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: The named API key authenticates xAI calls and is not printed by the local getter. Retain service authentication while evaluating any separately evidenced model return. Reading the variable does not establish model observation of the complete environment.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 19,
+          "end_line": 20,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 126,
+          "end_line": 133,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/chat/completions',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/models.js",
+          "start_line": 22,
+          "end_line": 28,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/models',\n      method: 'GET',\n      headers: {\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 108,
+          "end_line": 115,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/responses',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        }
+      ]
+    },
+    {
+      "id": "MNN2",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: User-selected prompt/system text, a selected image and search query/handles can be sensitive, but their intended processing by Grok is the declared function. Without a concrete excluded field or narrower user task, sending this selected content is not itself a supported excess.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 36,
+          "end_line": 58,
+          "quote": "### Chat with Grok\n```bash\nnode {baseDir}/scripts/chat.js \"What is the meaning of life?\"\n```\n\n### Use a specific model\n```bash\nnode {baseDir}/scripts/chat.js --model grok-3-mini \"Quick question: 2+2?\"\n```\n\n### Vision (analyze images)\n```bash\nnode {baseDir}/scripts/chat.js --image /path/to/image.jpg \"What's in this image?\"\n```\n\n### 🔍 Search X/Twitter (Real-time!)\n```bash\nnode {baseDir}/scripts/search-x.js \"Remotion video framework\"\nnode {baseDir}/scripts/search-x.js --days 7 \"Claude AI tips\"\nnode {baseDir}/scripts/search-x.js --handles @remotion_dev \"updates\"\n```\n\nUses xAI Responses API with x_search tool for real X posts with citations."
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 117,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 77,
+          "end_line": 105,
+          "quote": "  // Build x_search tool config\n  const xSearchTool = {\n    type: 'x_search',\n    x_search: {\n      from_date: dateRange.from_date,\n      to_date: dateRange.to_date,\n    }\n  };\n  \n  if (options.handles.length > 0) {\n    xSearchTool.x_search.allowed_x_handles = options.handles;\n  }\n  if (options.excludeHandles.length > 0) {\n    xSearchTool.x_search.excluded_x_handles = options.excludeHandles;\n  }\n  \n  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };"
+        }
+      ]
+    },
+    {
+      "id": "MUU1",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Grok response/error content and backend storage are outside the retained implementation. Full JSON/error output may reveal returned content, but does not prove echoed API secrets or all original image bytes. No source establishes remote logging or plaintext preservation inside generated output.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 161,
+          "end_line": 178,
+          "quote": "      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 121,
+          "end_line": 143,
+          "quote": "      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        try {\n          const response = JSON.parse(data);\n          \n          if (options.json) {\n            console.log(JSON.stringify(response, null, 2));\n            resolve(response);\n            return;\n          }\n          \n          // Extract content from Responses API format\n          let content = '(no response)';\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.type === 'message' && item.content) {\n                for (const c of item.content) {\n                  if (c.type === 'output_text' && c.text) {\n                    content = c.text;"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 187,
+          "end_line": 191,
+          "quote": "          resolve(response);\n        } catch (e) {\n          console.error('❌ Failed to parse response:', e.message);\n          console.error('Raw:', data.slice(0, 500));\n          process.exit(1);"
+        }
+      ]
+    },
+    {
+      "id": "MUU2",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: The linked installation artifact and x_search internals are not retained sources. Source declarations prohibit conversation logging and arbitrary file reads; extension validation constrains file names but does not establish image metadata removal, content inspection or execution-wide isolation.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 26,
+          "quote": "## Setup\n\n[INSTALLATION AND USE INSTRUCTIONS](https://claude.ai/public/artifacts/5bb1d4ca-68ef-4d74-900c-d14fefa5c094)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 99,
+          "end_line": 108,
+          "quote": "**What this skill does NOT do:**\n- Does not read arbitrary local files — `--image` only accepts files with image extensions (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`)\n- Does not read config files or access the filesystem beyond the specified image path\n- Does not store conversation history or logs\n- Does not send credentials to any endpoint other than `api.x.ai`\n- Cannot be invoked autonomously by the agent (`disable-model-invocation: true`)\n\n**Bundled scripts:** `scripts/chat.js` (chat), `scripts/models.js` (list models), `scripts/search-x.js` (X search)\n\nReview scripts before first use to verify behavior."
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 57,
+          "end_line": 82,
+          "quote": "function imageToBase64(imagePath) {\n  const absolutePath = path.resolve(imagePath);\n\n  // Validate file extension is an allowed image type\n  const ext = path.extname(absolutePath).toLowerCase();\n  const mimeTypes = {\n    '.jpg': 'image/jpeg',\n    '.jpeg': 'image/jpeg',\n    '.png': 'image/png',\n    '.gif': 'image/gif',\n    '.webp': 'image/webp',\n  };\n\n  if (!mimeTypes[ext]) {\n    throw new Error(`Unsupported image format: ${ext}. Allowed: ${Object.keys(mimeTypes).join(', ')}`);\n  }\n\n  if (!fs.existsSync(absolutePath)) {\n    throw new Error(`Image not found: ${absolutePath}`);\n  }\n\n  const imageData = fs.readFileSync(absolutePath);\n  const base64 = imageData.toString('base64');\n  const mimeType = mimeTypes[ext];\n\n  return `data:${mimeType};base64,${base64}`;"
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "N1",
+      "interpretation": "The named API key authenticates xAI calls and is not printed by the local getter. Retain service authentication while evaluating any separately evidenced model return. Reading the variable does not establish model observation of the complete environment.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 19,
+          "end_line": 20,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 126,
+          "end_line": 133,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/chat/completions',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/models.js",
+          "start_line": 22,
+          "end_line": 28,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/models',\n      method: 'GET',\n      headers: {\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 108,
+          "end_line": 115,
+          "quote": "    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/responses',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        }
+      ]
+    },
+    {
+      "id": "N2",
+      "interpretation": "User-selected prompt/system text, a selected image and search query/handles can be sensitive, but their intended processing by Grok is the declared function. Without a concrete excluded field or narrower user task, sending this selected content is not itself a supported excess.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 36,
+          "end_line": 58,
+          "quote": "### Chat with Grok\n```bash\nnode {baseDir}/scripts/chat.js \"What is the meaning of life?\"\n```\n\n### Use a specific model\n```bash\nnode {baseDir}/scripts/chat.js --model grok-3-mini \"Quick question: 2+2?\"\n```\n\n### Vision (analyze images)\n```bash\nnode {baseDir}/scripts/chat.js --image /path/to/image.jpg \"What's in this image?\"\n```\n\n### 🔍 Search X/Twitter (Real-time!)\n```bash\nnode {baseDir}/scripts/search-x.js \"Remotion video framework\"\nnode {baseDir}/scripts/search-x.js --days 7 \"Claude AI tips\"\nnode {baseDir}/scripts/search-x.js --handles @remotion_dev \"updates\"\n```\n\nUses xAI Responses API with x_search tool for real X posts with citations."
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 117,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 77,
+          "end_line": 105,
+          "quote": "  // Build x_search tool config\n  const xSearchTool = {\n    type: 'x_search',\n    x_search: {\n      from_date: dateRange.from_date,\n      to_date: dateRange.to_date,\n    }\n  };\n  \n  if (options.handles.length > 0) {\n    xSearchTool.x_search.allowed_x_handles = options.handles;\n  }\n  if (options.excludeHandles.length > 0) {\n    xSearchTool.x_search.excluded_x_handles = options.excludeHandles;\n  }\n  \n  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };"
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "PC1",
+      "interpretation": "Preserve original messages and optional image content needed for user-requested analysis, selected model and streaming semantics. Do not propose removing necessary prompts/images or replacing image bytes with a local path the remote model cannot read.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 123,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });\n  \n  const payload = {\n    model: options.model,\n    messages: messages,\n    stream: options.stream,\n  };"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 137,
+          "end_line": 185,
+          "quote": "      res.on('data', chunk => {\n        data += chunk;\n        \n        if (options.stream) {\n          // Handle streaming responses\n          const lines = data.split('\\n');\n          data = lines.pop(); // Keep incomplete line\n          \n          for (const line of lines) {\n            if (line.startsWith('data: ') && line !== 'data: [DONE]') {\n              try {\n                const json = JSON.parse(line.slice(6));\n                const content = json.choices?.[0]?.delta?.content;\n                if (content) {\n                  process.stdout.write(content);\n                }\n              } catch (e) {\n                // Ignore parse errors in stream\n              }\n            }\n          }\n        }\n      });\n      \n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);\n          } catch (e) {\n            console.error('❌ Failed to parse response:', e.message);\n            process.exit(1);\n          }\n        } else {\n          console.log(); // Newline after streaming\n          resolve();"
+        }
+      ]
+    },
+    {
+      "id": "PC2",
+      "interpretation": "Keep search interval and handle restrictions correlated with the same query and recipient, retain citation URLs and the deliberate full-JSON mode. A local projection proposal must not erase requested JSON behavior without a narrower purpose basis.",
+      "evidence": [
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 75,
+          "end_line": 105,
+          "quote": "  const dateRange = getDateRange(options.days);\n  \n  // Build x_search tool config\n  const xSearchTool = {\n    type: 'x_search',\n    x_search: {\n      from_date: dateRange.from_date,\n      to_date: dateRange.to_date,\n    }\n  };\n  \n  if (options.handles.length > 0) {\n    xSearchTool.x_search.allowed_x_handles = options.handles;\n  }\n  if (options.excludeHandles.length > 0) {\n    xSearchTool.x_search.excluded_x_handles = options.excludeHandles;\n  }\n  \n  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 127,
+          "end_line": 185,
+          "quote": "        try {\n          const response = JSON.parse(data);\n          \n          if (options.json) {\n            console.log(JSON.stringify(response, null, 2));\n            resolve(response);\n            return;\n          }\n          \n          // Extract content from Responses API format\n          let content = '(no response)';\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.type === 'message' && item.content) {\n                for (const c of item.content) {\n                  if (c.type === 'output_text' && c.text) {\n                    content = c.text;\n                  }\n                }\n              }\n            }\n          }\n          \n          // Extract citations from annotations\n          let xCitations = [];\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.content) {\n                for (const c of item.content) {\n                  if (c.annotations) {\n                    for (const ann of c.annotations) {\n                      if (ann.type === 'url_citation' && ann.url) {\n                        if (ann.url.includes('x.com') || ann.url.includes('twitter.com')) {\n                          xCitations.push(ann);\n                        }\n                      }\n                    }\n                  }\n                }\n              }\n            }\n          }\n          // Dedupe by URL\n          xCitations = [...new Map(xCitations.map(c => [c.url, c])).values()];\n          \n          if (options.requireCitations && xCitations.length === 0) {\n            console.error('⚠️  No X/Twitter citations found in response.');\n            console.error('   Grok may not have found relevant posts, or X search may not be enabled.');\n            console.error('\\nResponse anyway:\\n');\n          }\n          \n          console.log(content);\n          \n          if (xCitations.length > 0) {\n            console.log('\\n📎 Citations:');\n            for (const cite of xCitations) {\n              console.log(`   ${cite.url}`);\n            }\n          }"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 216,
+          "end_line": 223,
+          "quote": "Options:\n  --model, -m <model>     Model (default: grok-4-1-fast)\n  --days, -d <n>          Search last N days (default: 30)\n  --handles <list>        Only search these handles (comma-separated)\n  --exclude <list>        Exclude these handles (comma-separated)\n  --json, -j              Output full JSON response\n  --no-require-citations  Don't warn if no X citations found\n  --help                  Show this help"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "R1",
+      "interpretation": "api.x.ai receives the chat request with bearer API key in headers and selected model/messages/stream in JSON. Only the selected image path is read; allowed-extension validation precedes local base64 conversion. Base64 is reversible image transport, not redaction.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 57,
+          "end_line": 82,
+          "quote": "function imageToBase64(imagePath) {\n  const absolutePath = path.resolve(imagePath);\n\n  // Validate file extension is an allowed image type\n  const ext = path.extname(absolutePath).toLowerCase();\n  const mimeTypes = {\n    '.jpg': 'image/jpeg',\n    '.jpeg': 'image/jpeg',\n    '.png': 'image/png',\n    '.gif': 'image/gif',\n    '.webp': 'image/webp',\n  };\n\n  if (!mimeTypes[ext]) {\n    throw new Error(`Unsupported image format: ${ext}. Allowed: ${Object.keys(mimeTypes).join(', ')}`);\n  }\n\n  if (!fs.existsSync(absolutePath)) {\n    throw new Error(`Image not found: ${absolutePath}`);\n  }\n\n  const imageData = fs.readFileSync(absolutePath);\n  const base64 = imageData.toString('base64');\n  const mimeType = mimeTypes[ext];\n\n  return `data:${mimeType};base64,${base64}`;"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 133,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });\n  \n  const payload = {\n    model: options.model,\n    messages: messages,\n    stream: options.stream,\n  };\n  \n  return new Promise((resolve, reject) => {\n    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/chat/completions',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 195,
+          "end_line": 196,
+          "quote": "    req.write(JSON.stringify(payload));\n    req.end();"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "https://api.x.ai/v1/chat/completions",
+      "condition": "Valid chat/vision invocation and key present",
+      "version": "Original prompt/system message and optional base64-selected-image content"
+    },
+    {
+      "id": "R2",
+      "interpretation": "The xAI Grok model processes supplied chat messages and optional vision content. The authentication header is service authentication, not evidence that credential plaintext enters the model prompt. Distinguish this model-processing subject from network delivery.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 94,
+          "end_line": 97,
+          "quote": "**What this skill does:**\n- Sends chat prompts to xAI's API at `api.x.ai`\n- Vision mode sends images to xAI for analysis\n- `scripts/models.js` lists available models (read-only)"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 123,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });\n  \n  const payload = {\n    model: options.model,\n    messages: messages,\n    stream: options.stream,\n  };"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Selected Grok model",
+      "condition": "Chat request processed",
+      "version": "messages JSON; image-bearing userContent only when image is selected"
+    },
+    {
+      "id": "R3",
+      "interpretation": "xAI Responses API receives bearer key, the generated search instruction containing the original query, chosen model and date/handle tool options. No local source establishes delivery of the API key to X/Twitter itself.",
+      "evidence": [
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 75,
+          "end_line": 115,
+          "quote": "  const dateRange = getDateRange(options.days);\n  \n  // Build x_search tool config\n  const xSearchTool = {\n    type: 'x_search',\n    x_search: {\n      from_date: dateRange.from_date,\n      to_date: dateRange.to_date,\n    }\n  };\n  \n  if (options.handles.length > 0) {\n    xSearchTool.x_search.allowed_x_handles = options.handles;\n  }\n  if (options.excludeHandles.length > 0) {\n    xSearchTool.x_search.excluded_x_handles = options.excludeHandles;\n  }\n  \n  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };\n  \n  return new Promise((resolve, reject) => {\n    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/responses',\n      method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 201,
+          "end_line": 202,
+          "quote": "    req.write(JSON.stringify(payload));\n    req.end();"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "https://api.x.ai/v1/responses",
+      "condition": "Valid X search invocation",
+      "version": "Constructed input and x_search tool configuration"
+    },
+    {
+      "id": "R4",
+      "interpretation": "The selected Grok search model observes the query embedded in its instruction. The x_search backend uses date and handle restrictions, but its internal forwarding and retention are opaque; do not invent a second concrete network send to X.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 51,
+          "end_line": 58,
+          "quote": "### 🔍 Search X/Twitter (Real-time!)\n```bash\nnode {baseDir}/scripts/search-x.js \"Remotion video framework\"\nnode {baseDir}/scripts/search-x.js --days 7 \"Claude AI tips\"\nnode {baseDir}/scripts/search-x.js --handles @remotion_dev \"updates\"\n```\n\nUses xAI Responses API with x_search tool for real X posts with citations."
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 77,
+          "end_line": 105,
+          "quote": "  // Build x_search tool config\n  const xSearchTool = {\n    type: 'x_search',\n    x_search: {\n      from_date: dateRange.from_date,\n      to_date: dateRange.to_date,\n    }\n  };\n  \n  if (options.handles.length > 0) {\n    xSearchTool.x_search.allowed_x_handles = options.handles;\n  }\n  if (options.excludeHandles.length > 0) {\n    xSearchTool.x_search.excluded_x_handles = options.excludeHandles;\n  }\n  \n  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Selected Grok search model",
+      "condition": "Search request processed",
+      "version": "Constructed search prompt and tool configuration"
+    },
+    {
+      "id": "R5",
+      "interpretation": "The model-list endpoint receives only the bearer key in the evidenced GET request; no chat or image body is sent by models.js.",
+      "evidence": [
+        {
+          "path": "scripts/models.js",
+          "start_line": 8,
+          "end_line": 28,
+          "quote": "const API_BASE = 'api.x.ai';\n\nfunction getApiKey() {\n  return process.env.XAI_API_KEY || null;\n}\n\nasync function listModels() {\n  const apiKey = getApiKey();\n  if (!apiKey) {\n    console.error('❌ No API key found. Set XAI_API_KEY or configure in clawdbot.');\n    process.exit(1);\n  }\n  \n  return new Promise((resolve, reject) => {\n    const req = https.request({\n      hostname: API_BASE,\n      path: '/v1/models',\n      method: 'GET',\n      headers: {\n        'Authorization': `Bearer ${apiKey}`,\n      },"
+        },
+        {
+          "path": "scripts/models.js",
+          "start_line": 70,
+          "end_line": 70,
+          "quote": "    req.end();"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "https://api.x.ai/v1/models",
+      "condition": "Model-list invocation and API key present",
+      "version": "Authentication header; no request payload"
+    },
+    {
+      "id": "R6",
+      "interpretation": "Returned stdout/stderr can enter the agent model under EM02/EM03: chat emits streaming deltas, selected content or full JSON; listing emits model IDs/descriptions; search emits selected output text/deduplicated citations or full JSON. Error branches emit returned error data, including a 500-character parse-failure prefix in search. Remote response dependence is not proof it repeats prompts, images or keys.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 137,
+          "end_line": 185,
+          "quote": "      res.on('data', chunk => {\n        data += chunk;\n        \n        if (options.stream) {\n          // Handle streaming responses\n          const lines = data.split('\\n');\n          data = lines.pop(); // Keep incomplete line\n          \n          for (const line of lines) {\n            if (line.startsWith('data: ') && line !== 'data: [DONE]') {\n              try {\n                const json = JSON.parse(line.slice(6));\n                const content = json.choices?.[0]?.delta?.content;\n                if (content) {\n                  process.stdout.write(content);\n                }\n              } catch (e) {\n                // Ignore parse errors in stream\n              }\n            }\n          }\n        }\n      });\n      \n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);\n          } catch (e) {\n            console.error('❌ Failed to parse response:', e.message);\n            process.exit(1);\n          }\n        } else {\n          console.log(); // Newline after streaming\n          resolve();"
+        },
+        {
+          "path": "scripts/models.js",
+          "start_line": 30,
+          "end_line": 59,
+          "quote": "      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        try {\n          const response = JSON.parse(data);\n          const models = response.data || [];\n          \n          console.log('🤖 Available xAI Models:\\n');\n          \n          for (const model of models) {\n            console.log(`  • ${model.id}`);\n            if (model.description) {\n              console.log(`    ${model.description}`);\n            }\n          }\n          \n          if (models.length === 0) {\n            console.log('  (no models available)');\n          }\n          \n          console.log('\\nUsage: node chat.js --model <model-id> \"Your prompt\"');\n          \n          resolve(models);\n        } catch (e) {\n          console.error('❌ Failed to parse response:', e.message);"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 121,
+          "end_line": 191,
+          "quote": "      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        try {\n          const response = JSON.parse(data);\n          \n          if (options.json) {\n            console.log(JSON.stringify(response, null, 2));\n            resolve(response);\n            return;\n          }\n          \n          // Extract content from Responses API format\n          let content = '(no response)';\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.type === 'message' && item.content) {\n                for (const c of item.content) {\n                  if (c.type === 'output_text' && c.text) {\n                    content = c.text;\n                  }\n                }\n              }\n            }\n          }\n          \n          // Extract citations from annotations\n          let xCitations = [];\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.content) {\n                for (const c of item.content) {\n                  if (c.annotations) {\n                    for (const ann of c.annotations) {\n                      if (ann.type === 'url_citation' && ann.url) {\n                        if (ann.url.includes('x.com') || ann.url.includes('twitter.com')) {\n                          xCitations.push(ann);\n                        }\n                      }\n                    }\n                  }\n                }\n              }\n            }\n          }\n          // Dedupe by URL\n          xCitations = [...new Map(xCitations.map(c => [c.url, c])).values()];\n          \n          if (options.requireCitations && xCitations.length === 0) {\n            console.error('⚠️  No X/Twitter citations found in response.');\n            console.error('   Grok may not have found relevant posts, or X search may not be enabled.');\n            console.error('\\nResponse anyway:\\n');\n          }\n          \n          console.log(content);\n          \n          if (xCitations.length > 0) {\n            console.log('\\n📎 Citations:');\n            for (const cite of xCitations) {\n              console.log(`   ${cite.url}`);\n            }\n          }\n          \n          resolve(response);\n        } catch (e) {\n          console.error('❌ Failed to parse response:', e.message);\n          console.error('Raw:', data.slice(0, 500));\n          process.exit(1);"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 241,
+          "end_line": 242,
+          "quote": "console.error(`🔍 Searching X for: \"${options.query}\" (last ${options.days} days)...\\n`);\nsearchX(options);"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Agent model via command return",
+      "condition": "Successful output or documented error branch",
+      "version": "Actual locally selected or JSON-mode returned version"
+    },
+    {
+      "id": "R7",
+      "interpretation": "Setup stores an API key in Clawdbot configuration when that documented command is used, or exports it to the process environment. Configuration is a local persistent boundary and the environment is task context under EM12; script functions read only the named key variable.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 13,
+          "end_line": 24,
+          "quote": "## Setup\n\nGet your API key from [console.x.ai](https://console.x.ai), then:\n\n```bash\nclawdbot config set skills.entries.xai.apiKey \"xai-YOUR-KEY\"\n```\n\nOr set environment variable:\n```bash\nexport XAI_API_KEY=\"xai-YOUR-KEY\"\n```"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 19,
+          "end_line": 20,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        },
+        {
+          "path": "scripts/models.js",
+          "start_line": 10,
+          "end_line": 11,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 16,
+          "end_line": 17,
+          "quote": "function getApiKey() {\n  return process.env.XAI_API_KEY || null;"
+        }
+      ],
+      "boundary": "storage_write/context_save",
+      "recipient": "Local Clawdbot configuration or process environment",
+      "condition": "Chosen setup path",
+      "version": "XAI_API_KEY"
+    }
+  ],
+  "reference_identity": "Source-only assistant reference draft; not human-confirmed gold.",
+  "reference_status": "assistant_draft_pending_two_independent_human_verifiers",
+  "required_behavior": [
+    {
+      "id": "B1",
+      "interpretation": "Preserve the selected model, optional system message, complete supplied prompt, and optional specified image. Vision falls back to a vision model when the default is selected. Keep stream versus ordinary/JSON output behavior.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 23,
+          "end_line": 54,
+          "quote": "function parseArgs(args) {\n  const result = {\n    model: process.env.XAI_MODEL || DEFAULT_MODEL,\n    system: null,\n    image: null,\n    prompt: '',\n    stream: false,\n    json: false,\n  };\n  \n  let i = 0;\n  while (i < args.length) {\n    const arg = args[i];\n    \n    if (arg === '--model' || arg === '-m') {\n      result.model = args[++i];\n    } else if (arg === '--system' || arg === '-s') {\n      result.system = args[++i];\n    } else if (arg === '--image' || arg === '-i') {\n      result.image = args[++i];\n    } else if (arg === '--stream') {\n      result.stream = true;\n    } else if (arg === '--json' || arg === '-j') {\n      result.json = true;\n    } else if (!arg.startsWith('-')) {\n      result.prompt = args.slice(i).join(' ');\n      break;\n    }\n    i++;\n  }\n  \n  return result;"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 93,
+          "end_line": 123,
+          "quote": "  // Build messages\n  const messages = [];\n  \n  if (options.system) {\n    messages.push({ role: 'system', content: options.system });\n  }\n  \n  // Build user message content\n  let userContent;\n  if (options.image) {\n    // Vision request\n    const imageUrl = imageToBase64(options.image);\n    userContent = [\n      { type: 'image_url', image_url: { url: imageUrl } },\n      { type: 'text', text: options.prompt || 'Describe this image.' },\n    ];\n    // Use vision model if not specified\n    if (options.model === DEFAULT_MODEL) {\n      options.model = 'grok-2-vision-1212';\n    }\n  } else {\n    userContent = options.prompt;\n  }\n  \n  messages.push({ role: 'user', content: userContent });\n  \n  const payload = {\n    model: options.model,\n    messages: messages,\n    stream: options.stream,\n  };"
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 137,
+          "end_line": 185,
+          "quote": "      res.on('data', chunk => {\n        data += chunk;\n        \n        if (options.stream) {\n          // Handle streaming responses\n          const lines = data.split('\\n');\n          data = lines.pop(); // Keep incomplete line\n          \n          for (const line of lines) {\n            if (line.startsWith('data: ') && line !== 'data: [DONE]') {\n              try {\n                const json = JSON.parse(line.slice(6));\n                const content = json.choices?.[0]?.delta?.content;\n                if (content) {\n                  process.stdout.write(content);\n                }\n              } catch (e) {\n                // Ignore parse errors in stream\n              }\n            }\n          }\n        }\n      });\n      \n      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);\n          } catch (e) {\n            console.error('❌ Failed to parse response:', e.message);\n            process.exit(1);\n          }\n        } else {\n          console.log(); // Newline after streaming\n          resolve();"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "interpretation": "For X search preserve query, computed date interval, allowed/excluded handle lists and requested JSON mode. Return actual text/citations; URLs are deduplicated. Missing-citation mode emits a warning and still returns the response rather than proving no sensitive data.",
+      "evidence": [
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 20,
+          "end_line": 65,
+          "quote": "function parseArgs(args) {\n  const result = {\n    model: DEFAULT_MODEL,\n    query: '',\n    days: 30,\n    handles: [],\n    excludeHandles: [],\n    json: false,\n    requireCitations: true,\n  };\n  \n  let i = 0;\n  while (i < args.length) {\n    const arg = args[i];\n    \n    if (arg === '--model' || arg === '-m') {\n      result.model = args[++i];\n    } else if (arg === '--days' || arg === '-d') {\n      result.days = parseInt(args[++i], 10);\n    } else if (arg === '--handles' || arg === '-h') {\n      result.handles = args[++i].split(',').map(h => h.trim());\n    } else if (arg === '--exclude') {\n      result.excludeHandles = args[++i].split(',').map(h => h.trim());\n    } else if (arg === '--json' || arg === '-j') {\n      result.json = true;\n    } else if (arg === '--no-require-citations') {\n      result.requireCitations = false;\n    } else if (!arg.startsWith('-')) {\n      result.query = args.slice(i).join(' ');\n      break;\n    }\n    i++;\n  }\n  \n  return result;\n}\n\nfunction getDateRange(days) {\n  const to = new Date();\n  const from = new Date();\n  from.setDate(from.getDate() - days);\n  \n  return {\n    from_date: from.toISOString().split('T')[0],\n    to_date: to.toISOString().split('T')[0],\n  };"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 75,
+          "end_line": 105,
+          "quote": "  const dateRange = getDateRange(options.days);\n  \n  // Build x_search tool config\n  const xSearchTool = {\n    type: 'x_search',\n    x_search: {\n      from_date: dateRange.from_date,\n      to_date: dateRange.to_date,\n    }\n  };\n  \n  if (options.handles.length > 0) {\n    xSearchTool.x_search.allowed_x_handles = options.handles;\n  }\n  if (options.excludeHandles.length > 0) {\n    xSearchTool.x_search.excluded_x_handles = options.excludeHandles;\n  }\n  \n  const payload = {\n    model: options.model,\n    input: `Search X/Twitter and find real posts about: ${options.query}\n\nGive me actual tweets with:\n- Username/handle\n- The actual tweet content\n- Date if available\n- Link to the tweet\n\nOnly include REAL posts you find. If you can't find any, say so.`,\n    tools: [xSearchTool],\n  };"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 127,
+          "end_line": 185,
+          "quote": "        try {\n          const response = JSON.parse(data);\n          \n          if (options.json) {\n            console.log(JSON.stringify(response, null, 2));\n            resolve(response);\n            return;\n          }\n          \n          // Extract content from Responses API format\n          let content = '(no response)';\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.type === 'message' && item.content) {\n                for (const c of item.content) {\n                  if (c.type === 'output_text' && c.text) {\n                    content = c.text;\n                  }\n                }\n              }\n            }\n          }\n          \n          // Extract citations from annotations\n          let xCitations = [];\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.content) {\n                for (const c of item.content) {\n                  if (c.annotations) {\n                    for (const ann of c.annotations) {\n                      if (ann.type === 'url_citation' && ann.url) {\n                        if (ann.url.includes('x.com') || ann.url.includes('twitter.com')) {\n                          xCitations.push(ann);\n                        }\n                      }\n                    }\n                  }\n                }\n              }\n            }\n          }\n          // Dedupe by URL\n          xCitations = [...new Map(xCitations.map(c => [c.url, c])).values()];\n          \n          if (options.requireCitations && xCitations.length === 0) {\n            console.error('⚠️  No X/Twitter citations found in response.');\n            console.error('   Grok may not have found relevant posts, or X search may not be enabled.');\n            console.error('\\nResponse anyway:\\n');\n          }\n          \n          console.log(content);\n          \n          if (xCitations.length > 0) {\n            console.log('\\n📎 Citations:');\n            for (const cite of xCitations) {\n              console.log(`   ${cite.url}`);\n            }\n          }"
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "25256bec9def9501e92a16d30a32ca115cb84d9ec2730631d2e392bc5a8ced5a",
+  "source_citations": [],
+  "source_sha256": "0243451aaa88b5218cc30a5fa764b7b21ef42b2d0aecaf0f4f5adbd7dc1866f2",
+  "state": "assistant_draft",
+  "supported_excesses": [],
+  "unknowns": [
+    {
+      "id": "U1",
+      "interpretation": "Grok response/error content and backend storage are outside the retained implementation. Full JSON/error output may reveal returned content, but does not prove echoed API secrets or all original image bytes. No source establishes remote logging or plaintext preservation inside generated output.",
+      "evidence": [
+        {
+          "path": "scripts/chat.js",
+          "start_line": 161,
+          "end_line": 178,
+          "quote": "      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        if (!options.stream) {\n          try {\n            const response = JSON.parse(data);\n            const content = response.choices?.[0]?.message?.content;\n            \n            if (options.json) {\n              console.log(JSON.stringify(response, null, 2));\n            } else {\n              console.log(content || '(no response)');\n            }\n            \n            resolve(response);"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 121,
+          "end_line": 143,
+          "quote": "      res.on('end', () => {\n        if (res.statusCode !== 200) {\n          console.error(`❌ API Error (${res.statusCode}):`, data);\n          process.exit(1);\n        }\n        \n        try {\n          const response = JSON.parse(data);\n          \n          if (options.json) {\n            console.log(JSON.stringify(response, null, 2));\n            resolve(response);\n            return;\n          }\n          \n          // Extract content from Responses API format\n          let content = '(no response)';\n          if (response.output) {\n            for (const item of response.output) {\n              if (item.type === 'message' && item.content) {\n                for (const c of item.content) {\n                  if (c.type === 'output_text' && c.text) {\n                    content = c.text;"
+        },
+        {
+          "path": "scripts/search-x.js",
+          "start_line": 187,
+          "end_line": 191,
+          "quote": "          resolve(response);\n        } catch (e) {\n          console.error('❌ Failed to parse response:', e.message);\n          console.error('Raw:', data.slice(0, 500));\n          process.exit(1);"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "interpretation": "The linked installation artifact and x_search internals are not retained sources. Source declarations prohibit conversation logging and arbitrary file reads; extension validation constrains file names but does not establish image metadata removal, content inspection or execution-wide isolation.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 26,
+          "quote": "## Setup\n\n[INSTALLATION AND USE INSTRUCTIONS](https://claude.ai/public/artifacts/5bb1d4ca-68ef-4d74-900c-d14fefa5c094)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 99,
+          "end_line": 108,
+          "quote": "**What this skill does NOT do:**\n- Does not read arbitrary local files — `--image` only accepts files with image extensions (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`)\n- Does not read config files or access the filesystem beyond the specified image path\n- Does not store conversation history or logs\n- Does not send credentials to any endpoint other than `api.x.ai`\n- Cannot be invoked autonomously by the agent (`disable-model-invocation: true`)\n\n**Bundled scripts:** `scripts/chat.js` (chat), `scripts/models.js` (list models), `scripts/search-x.js` (X search)\n\nReview scripts before first use to verify behavior."
+        },
+        {
+          "path": "scripts/chat.js",
+          "start_line": 57,
+          "end_line": 82,
+          "quote": "function imageToBase64(imagePath) {\n  const absolutePath = path.resolve(imagePath);\n\n  // Validate file extension is an allowed image type\n  const ext = path.extname(absolutePath).toLowerCase();\n  const mimeTypes = {\n    '.jpg': 'image/jpeg',\n    '.jpeg': 'image/jpeg',\n    '.png': 'image/png',\n    '.gif': 'image/gif',\n    '.webp': 'image/webp',\n  };\n\n  if (!mimeTypes[ext]) {\n    throw new Error(`Unsupported image format: ${ext}. Allowed: ${Object.keys(mimeTypes).join(', ')}`);\n  }\n\n  if (!fs.existsSync(absolutePath)) {\n    throw new Error(`Image not found: ${absolutePath}`);\n  }\n\n  const imageData = fs.readFileSync(absolutePath);\n  const base64 = imageData.toString('base64');\n  const mimeType = mimeTypes[ext];\n\n  return `data:${mimeType};base64,${base64}`;"
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "reviewed_files": [
+    ".gitignore",
+    "package.json",
+    "README.md",
+    "scripts/chat.js",
+    "scripts/models.js",
+    "scripts/search-x.js",
+    "SKILL.md"
+  ],
+  "reviewed_file_inventory": [
+    {
+      "path": ".gitignore",
+      "sha256": "4ad2dd72b5b8511335b75e7b4dac1a8c92c576a7735f1e275b58c26ef1a1bef2",
+      "physical_lines": 3,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "package.json",
+      "sha256": "3c2cf2d4435cc342084cfcefd0fb6cfb98357dd0df0498aad23c663940500b5f",
+      "physical_lines": 12,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "README.md",
+      "sha256": "ff598eee99aab8829b4c28a7ed204cc937abe6185ad951b553b7a43487456aff",
+      "physical_lines": 72,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "scripts/chat.js",
+      "sha256": "48d61df69daebb5f75c3f22e04a39cf3df4c86597d0154d46ad239fa149fdb23",
+      "physical_lines": 240,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "scripts/models.js",
+      "sha256": "ed8c8592703dded8479734260757c2e17c3faf9697015a3fc9dc0d551b98fee8",
+      "physical_lines": 74,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "scripts/search-x.js",
+      "sha256": "a915a0f3bfcc2fb948306d53ba5c99958633b85f22d1605e4903a5100d8e6ac3",
+      "physical_lines": 242,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "3308a38966c33a1235af54e7b59627061cdb36b00aa4d79f831f667edf010ff6",
+      "physical_lines": 108,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    }
+  ],
+  "review_limitations": [
+    "Static source-only interpretation, never execution evidence. No independent user task or actual authorization is supplied. Opaque dependency and service internals are not inferred. Human verification remains pending."
+  ],
+  "explanation": "All seven retained operational files were read in complete physical and numbered-bundle form. No adjudicable excess is supported after inventorying the actual API, model, configuration and output boundaries. Possible secret-bearing user content and opaque outputs remain conditional/unknown; this is not a universal no-DOE assertion."
+}

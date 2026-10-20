@@ -30,7 +30,7 @@ def test_partial_observation_causality_is_explicit_and_survives_propagation():
         spec['order'] = 'partial'
     raw['ir_semantics']['ir_read']['events'][0]['mode'] = 'default'
     checked, compiled, mapping = compile_response(raw, prepared)
-    assert mapping['compiler_version'].endswith('-v8')
+    assert mapping['compiler_version'].endswith('-v9')
     for ir, before, after in [('ir_read', (0,None,0), (1,None,0)),
                               ('ir_filter', (0,None,0), (1,None,0))]:
         spec = IRSemantics.model_validate(compiled['ir_semantics'][ir])

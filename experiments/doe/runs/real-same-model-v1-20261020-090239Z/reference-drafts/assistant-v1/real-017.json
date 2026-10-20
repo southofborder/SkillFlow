@@ -1,0 +1,1091 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "iswalle/getnote",
+  "case_id": "real-017",
+  "declared_purpose": [
+    {
+      "id": "P1",
+      "interpretation": "Connect and diagnose the official GetNote CLI and let users save, find, read and manage their own real notes, knowledge bases and tags. Scope is the authorized account and requested objects; author instructions do not establish actual user consent.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 1,
+          "end_line": 4,
+          "quote": "---\nname: getnote\nversion: 2.3.1\ndescription: 通过官方 getnote CLI 连接得到大脑，完成浏览器授权、连接诊断、CLI 升级，以及保存、查询、搜索和管理真实笔记。用户要按录音台或录音卡来源找笔记、保存链接/图片、上传文件到知识库、查询文件限制、读取标记/发芽报告/时间线、整理知识库/文件夹、订阅博主、管理标签，或明确要求登录、诊断或升级时使用；不会自行安装或更新 Skill。"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 20,
+          "end_line": 28,
+          "quote": "让用户在当前 AI 中直接连接、诊断、升级 CLI，以及保存、查找和整理自己的得到大脑内容。本 Skill 理解用户意图、加载对应领域参考，并交给官方 `getnote` CLI 执行真实操作。\n\n## 能力与外部影响\n\n- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。\n- 保存、更新、归档、分享和删除会修改远端笔记数据，并遵守下方的确认规则。\n- 只有用户明确要求升级时才执行 `getnote update`；不会自行运行 npm、安装其他软件、下载并覆盖本 Skill 或修改其他 Skill 文件。\n- `getnote` 缺失时使用平台根据 frontmatter `install` 声明提供的官方安装流程；平台要求确认时只请求这一次确认，不查找或运行 `scripts/install.sh`。"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 32,
+          "end_line": 39,
+          "quote": "| 用户想做什么 | 典型说法 | 完成后应返回什么 |\n| --- | --- | --- |\n| 保存内容 | “记一下”“保存这个链接”“把这张图存起来” | 真实标题、字符串笔记 ID、可打开的笔记链接；异步内容必须等生成完成 |\n| 查找内容 | “最近记了什么”“帮我找客户反馈” | 按相关度或时间排列的真实标题、摘要和链接 |\n| 深入阅读 | “打开这条笔记”“看录音原文”“有哪些会议待办” | 用户点名的详情视图，不用总结代替原文 |\n| 整理知识 | “放进产品研究的竞品文件夹” | 真实知识库、目录和归档结果；写后复读验证 |\n| 管理内容 | “加标签”“更新正文”“分享或删除” | 最终状态；危险操作先确认 |\n| 连接与排障 | “登录得到大脑”“检查为什么不能用”“更新到最新版” | CLI、授权和 API 的实际检查结果及下一步 |"
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "I1",
+      "interpretation": "The source supplies local CLI and declarative interfaces rather than code. Current mechanisms include explicit note subviews, batch field/budget selection, masked auth status, controlled token stdin/files, metadata-only ingestion and conditional audio exclusion. The E1/E2 local projection wrappers are proposals.",
+      "evidence": [
+        {
+          "path": "references/auth.md",
+          "start_line": 37,
+          "end_line": 39,
+          "quote": "| `getnote auth login` | 浏览器已确认，凭证已写入本机 | 再运行 `doctor -o json`；不在聊天中展示凭证。 |\n| `getnote auth status` | `Authenticated` / `Not authenticated` 或环境变量登录状态 | 未登录才启动 `auth login`；状态里只能出现掩码。 |\n| `getnote auth logout` | `Logged out successfully.` | 只说明本机已退出；不声称已撤销服务端授权。 |"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 116,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。\n\n得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。\n\n```bash\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。\n\n## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 165,
+          "end_line": 165,
+          "quote": "4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。"
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "M1",
+      "interpretation": "Cover official API requests, login persistence/isolation, direct OSS file delivery, metadata-only MCP ingestion, controlled files, all returned model versions including diagnostic/type-discovery steps, private/group user output and public sharing/audio.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 28,
+          "quote": "- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。\n- 保存、更新、归档、分享和删除会修改远端笔记数据，并遵守下方的确认规则。\n- 只有用户明确要求升级时才执行 `getnote update`；不会自行运行 npm、安装其他软件、下载并覆盖本 Skill 或修改其他 Skill 文件。\n- `getnote` 缺失时使用平台根据 frontmatter `install` 声明提供的官方安装流程；平台要求确认时只请求这一次确认，不查找或运行 `scripts/install.sh`。"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 54,
+          "end_line": 55,
+          "quote": "4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。\n5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 147,
+          "end_line": 189,
+          "quote": "1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。\n5. 不拿 `content` 中的 AI 摘要冒充原文。\n6. 标记从 `getnote marks` 的 `data.marks[]` 读取，不使用 Timeline 的条数或内容替代。发芽从 `getnote sprouts` 列出报告，再用 `getnote sprout` 读取正文；`has_sprout=false` 如实表示没有可读报告，不把标记或笔记总结当作发芽。\n\n## 修改、删除和分享\n\n1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。\n\n## 每条命令的结果与回复格式\n\n| 命令 | 成功结果必须包含 | 回复规则 |\n|---|---|---|\n| `getnote save … -o json` | `success=true`、`data.note.note_id/title/note_url` | 回复“已保存《标题》”和真实链接。链接/图片先只得到 `task_id` 时还未成功，继续查任务。 |\n| `getnote task <task_id> -o json` | `data.task_id/status/note_id?/msg?/error_msg?` | 仅 `done`/`success` 且有 `note_id` 为完成；`pending`/`processing` 是处理中；`failed` 说明真实原因。 |\n| `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |\n| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |\n| `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |\n| `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |\n| `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |\n| `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |\n| `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |\n| `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |\n| `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |\n| `getnote note update <id> … -o json` | `success=true`、`data?` | 修改正文或全量标签前必须 `--yes`；需要展示最终内容时再读一次 `note`。 |\n| `getnote note delete <id> --yes -o json` | `success=true`、`data?` | 只能说“已移入回收站”，不是永久删除。 |\n| `getnote note share <id> --yes -o json` | `success=true`、`data.note_id/share_id/share_url` | 只返回真实 `share_url`，并明确其为公开链接。 |\n\nAPI 失败时回复失败步骤、`error.message/reason`、是否可重试和 `request_id`；不能把 HTTP 200 当业务成功。\n\n群聊或共享会话中只先展示必要标题和链接，不主动展开私密全文。"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "M2",
+      "interpretation": "Do not treat source prohibitions as implemented general filtering; preserve specific interface/credential routing guarantees where declared. Do not infer full plaintext from summaries or publicly expose private content merely because the model received it.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 25,
+          "end_line": 25,
+          "quote": "- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 99,
+          "end_line": 99,
+          "quote": "- 群聊或共享会话中不主动展开私密全文，先确认请求者和展示范围。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 62,
+          "end_line": 84,
+          "quote": "列表接口只返回定位信息，再用详情接口读取完整笔记。`display_title` 是展示标题，不覆盖原始 `title`；引用笔记空标题很正常。`preview` 是带来源和截断标记的定位片段，不是全文。\n\n```bash\ngetnote notes --source dedao --note-type ref --page-size 20 -o json\ngetnote note '<note_id>' -o json\ngetnote note original '<note_id>' -o json\n```\n\n| note_type | 原文字段 | content 的语义 |\n|---|---|---|\n| ref | ref_content | 用户评论，不是引用原文 |\n| plain_text | content | 用户正文 |\n| link | web_page.content | 通常是摘要 |\n| audio / local_audio | audio.original | 通常是摘要 |\n\n录音按真实类型选择：即时录音/普通录音用 `--note-type audio`，上传的音频文件用 `local_audio`，自己录制的课堂笔记用 `class_audio`，会议录音用 `meeting`，系统内录用 `internal_record`，录音卡长录音/闪念分别用 `recorder_audio` / `recorder_flash_audio`。这些类型与得到课程引用不同；用户未限定平台时不加 `--source dedao` 或课程筛选。只说“录音”且模式不明时保留候选并说明类型，不能把上传音频当即时录音。\n\n```bash\ngetnote notes --note-type audio --all -o json\ngetnote notes --note-type local_audio --all -o json\n```\n\n`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 165,
+          "end_line": 166,
+          "quote": "4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 125,
+          "end_line": 125,
+          "quote": "- 检索结果可能包含私密正文。群聊或共享会话默认只展示标题、必要摘要和真实链接；用户明确要求后再展开全文。"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "MNN1",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: Reading selected private originals/transcripts/comments is necessary when that is the requested view. Current IDs, scope/filter and per-note membership are needed for accurate requested updates and retrieval; task necessity must not be inferred for unrelated body content from merely using note details.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 108,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。\n\n得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。\n\n```bash\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 147,
+          "end_line": 156,
+          "quote": "1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 162,
+          "end_line": 166,
+          "quote": "1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 68,
+          "end_line": 72,
+          "quote": "### 读取原文与评论\n\n对不超过20个已定位的个人笔记，使用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`；引用原文来自 ref_content，查个人评论改用 fields=content。保留每条 status、content_state、pending_ids、partial；deferred_budget 表示整条待读，不能说完整，也不自动并发20次单条读取。用户确需未读全文时使用旧 `getnote note original '<note_id>' -o json`。知识库共享详情继续原单条权限路径，不用个人批量绕过权限。\n\n只记得评论时先语义搜索实质文本并读 content 核对；已指定课程就先按课程缩小，不因 preview 没出现评论而排除。定位候选多于20条时保留用户线索继续缩小或分页按需读取，不下载整个账号正文。同一篇文稿的不同笔记 ID 是不同划线，不按文章 ID 合并。"
+        }
+      ]
+    },
+    {
+      "id": "MNN2",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: GetNote/OSS authentication and selected local upload bytes are supported for authorized save/upload. Explicit local CLI credential handling and metadata-only cloud ingestion limit routing; do not invent model receipt of full login credentials or cloud receipt of file bytes.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 25,
+          "quote": "- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ]
+    },
+    {
+      "id": "MUU1",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Official CLI/library/service implementation is absent. Browser credential isolation, field-limited interfaces, batch budgets and upload separation are source-declared contracts rather than measured runtime guarantees; retain unspecified transport details/backend retention without inventing logging.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 20,
+          "end_line": 25,
+          "quote": "让用户在当前 AI 中直接连接、诊断、升级 CLI，以及保存、查找和整理自己的得到大脑内容。本 Skill 理解用户意图、加载对应领域参考，并交给官方 `getnote` CLI 执行真实操作。\n\n## 能力与外部影响\n\n- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 116,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。\n\n得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。\n\n```bash\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。\n\n## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ]
+    },
+    {
+      "id": "MUU2",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Capabilities, applied_filters, partial metadata, warnings and missing course lessons are material limitations even when pagination ends. Missing originals or IDs cannot be replaced with fabricated data; unsupported course+topic intersection must remain unsupported.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 92,
+          "end_line": 108,
+          "quote": "课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 49,
+          "end_line": 55,
+          "quote": "只传已知的 query/author，至少一个；二者为 AND 条件，query 只匹配课程名，author 精确匹配老师。课程名不完整时显式用 `--match-mode prefix`；不把“讲概率”这样的正文主题塞进课程名。结果同名或版本不明时列候选消歧；用返回的 `course_type`+`course_id`，当前支持66，不解析标题、URL或课节 ID 生成课程 ID。空结果页若 `pagination.has_more=true` 仍按真实 `next_cursor` 继续，保持所有条件；循环或失败表示遍历未完成。`--all` 成功的 `traversal.completed=true` 只证明当前同步、授权范围内的遍历，不是得到 App 的全部划线。\n\n课程筛选同时包含课程直接引用和所属课节；显式增加 `--reference-type course_article` 会再限制为课节引用，`--reference-id` 仍是原课节 ID，组合按交集。需要时间条件时保留对应创建/编辑/记录更新时间参数。首版只支持个人笔记，course+topic_id 明确不支持；用户同时指定真实知识库时说明当前交集尚不可用，不能改查个人笔记后声称满足库范围。课程内语义搜索尚未开放，不能在全局 Top-K 后过滤冒充；可先精确列出课程笔记，再按需读正文核实主题。\n\n新请求需当前服务端声明 `reference.resources.v1` / `note.course_filter.v1`，并核对 applied_filters。服务未支持时报告能力缺失，不自动删除课程条件继续，不把 CLI 安装成功当作服务已发布。旧参数和默认调用继续可用。\n\n每页的 `partial`、`warnings` 和候选 `metadata_state` 都要保留。`course_directory_no_lessons` 表示目录缺少课节；翻到末页或 `traversal.completed=true` 不会消除这个缺口，回复“已找到这些，部分课程目录不完整，无法保证全部”。`candidate_work_budget` 且有下一游标时按原条件继续；游标结束后仍有目录警告，就保留部分完成结论，不改用账号全量扫描来宣称目录已经补齐。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 118,
+          "end_line": 125,
+          "quote": "若 `data.partial=true` 或存在 `data.warnings`，先说明检索有部分结果未能完成权限验证或读取，并按 warnings 解释原因；空结果也不能表述为完整检索后无命中。若 `data.results=[]` 或结果均不符合用户指定来源，先按已选路径完成同一请求范围内的来源补查；补查不是跨知识库或跨账号扩大范围。只有主题搜索且无可用来源线索时，说明“这次语义搜索未找到”，不要说接口失败或全库没有；不创建笔记、不编造结果。\n\n## 失败、隐私与后续动作\n\n- `success=false` 或退出码非 0：回复失败步骤、`error.message` / `error.reason`、是否 `retryable` 和可选 `request_id`；不要将 HTTP 成功或空输出说成搜索成功。\n- 参数错误先读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒的重试，Agent 不再叠加无界重试；日/月配额和写操作不自动重试。\n- 若 CLI 提示“搜索服务响应超时”，这是检索未完成，不是“没有结果”。建议稍后重试，或缩小关键词、指定知识库后再试；不要伪造空列表。\n- 检索结果可能包含私密正文。群聊或共享会话默认只展示标题、必要摘要和真实链接；用户明确要求后再展开全文。"
+        }
+      ]
+    },
+    {
+      "id": "MUU3",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: The concrete user task/content and audience are absent. Excesses above are restricted to the specified diagnostic/type-only conditions; they do not condemn requested full-note reading, real note acceptance itself, or all private output.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 32,
+          "end_line": 39,
+          "quote": "| 用户想做什么 | 典型说法 | 完成后应返回什么 |\n| --- | --- | --- |\n| 保存内容 | “记一下”“保存这个链接”“把这张图存起来” | 真实标题、字符串笔记 ID、可打开的笔记链接；异步内容必须等生成完成 |\n| 查找内容 | “最近记了什么”“帮我找客户反馈” | 按相关度或时间排列的真实标题、摘要和链接 |\n| 深入阅读 | “打开这条笔记”“看录音原文”“有哪些会议待办” | 用户点名的详情视图，不用总结代替原文 |\n| 整理知识 | “放进产品研究的竞品文件夹” | 真实知识库、目录和归档结果；写后复读验证 |\n| 管理内容 | “加标签”“更新正文”“分享或删除” | 最终状态；危险操作先确认 |\n| 连接与排障 | “登录得到大脑”“检查为什么不能用”“更新到最新版” | CLI、授权和 API 的实际检查结果及下一步 |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 99,
+          "end_line": 99,
+          "quote": "- 群聊或共享会话中不主动展开私密全文，先确认请求者和展示范围。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 149,
+          "end_line": 156,
+          "quote": "3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 175,
+          "end_line": 175,
+          "quote": "| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |"
+        }
+      ]
+    },
+    {
+      "id": "MXE1",
+      "stratum": "excess_payload_on_necessary_action",
+      "interpretation": "Resolve this supported excess and preserve the stated function: For connection/upgrade acceptance only, possible model observation of the recent private-note title/ID/URL is unnecessary sensitive payload on a necessary API-read check. A proposed local wrapper can perform the same notes --limit 1 check and return exit status, success and a readability/count result without the note metadata; the actual API acceptance still occurs.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 54,
+          "end_line": 55,
+          "quote": "4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。\n5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 13,
+          "end_line": 14,
+          "quote": "4. 执行 `getnote doctor -o json`。只有退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能宣布连接完成；先处理 `issues[].blocking=true`，再按 `next_actions[]` 修复。\n5. 先用 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意创建测试内容时，才保存测试笔记。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 54,
+          "end_line": 57,
+          "quote": "1. 执行 `getnote update --check`，随后执行 `getnote update`；默认流程会升级 CLI、同步五个领域 Skill 并运行 doctor。\n2. 如果 CLI 明确要求由宿主或包管理器完成升级，使用平台声明的 `@getnote/cli` 安装流程，不下载或执行本地脚本。\n3. 使用 ClawHub/OpenClaw 的宿主流程检查当前独立 Skill；需要用户确认时只提供唯一必要的确认动作。\n4. 确认更新输出中的 CLI 版本、Skills 同步结果和 doctor 结果；再用最近笔记读取做验收。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 174,
+          "end_line": 174,
+          "quote": "| `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 166,
+          "end_line": 166,
+          "quote": "5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        }
+      ]
+    },
+    {
+      "id": "MXE2",
+      "stratum": "excess_payload_on_necessary_action",
+      "interpretation": "Resolve this supported excess and preserve the stated function: For a request limited to a selected view such as attachments or transcript, preliminary type discovery needlessly exposes the private full body to the agent model. Proposed local projection of the same detail response to note_type and verified identity preserves routing, then the existing selected-view command obtains the requested content.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 84,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 147,
+          "end_line": 157,
+          "quote": "1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。\n5. 不拿 `content` 中的 AI 摘要冒充原文。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 175,
+          "end_line": 182,
+          "quote": "| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |\n| `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |\n| `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |\n| `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |\n| `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |\n| `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |\n| `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |\n| `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 86,
+          "end_line": 86,
+          "quote": "- **笔记详情**：按用户点名的视图展示标题、总结、原文、录音转写、附件、时间线、快捷笔记或会议待办，不用其他字段冒充。"
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "N1",
+      "interpretation": "Reading selected private originals/transcripts/comments is necessary when that is the requested view. Current IDs, scope/filter and per-note membership are needed for accurate requested updates and retrieval; task necessity must not be inferred for unrelated body content from merely using note details.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 108,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。\n\n得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。\n\n```bash\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 147,
+          "end_line": 156,
+          "quote": "1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 162,
+          "end_line": 166,
+          "quote": "1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 68,
+          "end_line": 72,
+          "quote": "### 读取原文与评论\n\n对不超过20个已定位的个人笔记，使用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`；引用原文来自 ref_content，查个人评论改用 fields=content。保留每条 status、content_state、pending_ids、partial；deferred_budget 表示整条待读，不能说完整，也不自动并发20次单条读取。用户确需未读全文时使用旧 `getnote note original '<note_id>' -o json`。知识库共享详情继续原单条权限路径，不用个人批量绕过权限。\n\n只记得评论时先语义搜索实质文本并读 content 核对；已指定课程就先按课程缩小，不因 preview 没出现评论而排除。定位候选多于20条时保留用户线索继续缩小或分页按需读取，不下载整个账号正文。同一篇文稿的不同笔记 ID 是不同划线，不按文章 ID 合并。"
+        }
+      ]
+    },
+    {
+      "id": "N2",
+      "interpretation": "GetNote/OSS authentication and selected local upload bytes are supported for authorized save/upload. Explicit local CLI credential handling and metadata-only cloud ingestion limit routing; do not invent model receipt of full login credentials or cloud receipt of file bytes.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 25,
+          "quote": "- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "PC1",
+      "interpretation": "For E1 keep the real read-only acceptance request and its exit/business result, while projecting only the command return locally. For E2 keep original acquisition, verified identity/type and the downstream selected-view retrieval. These are proposed mechanisms; the source does not already implement either wrapper.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 54,
+          "end_line": 55,
+          "quote": "4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。\n5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 84,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 149,
+          "end_line": 156,
+          "quote": "3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 174,
+          "end_line": 182,
+          "quote": "| `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |\n| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |\n| `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |\n| `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |\n| `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |\n| `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |\n| `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |\n| `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |\n| `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |"
+        }
+      ]
+    },
+    {
+      "id": "PC2",
+      "interpretation": "Preserve exact string IDs and recipient scope, all source/course/book/time filters, note identity deduplication, full traversal versus partial warnings, bounded reads/retries, confirmed public audio choice and metadata-only cloud upload.",
+      "evidence": [
+        {
+          "path": "references/kb.md",
+          "start_line": 69,
+          "end_line": 79,
+          "quote": "- 作者未知时省略 `--author`。先用 `name`、`scope=BOOKSPACE`、`book_info.title/author/book_id` 核对候选；同名多作者、多版本仍不唯一时请用户选择，不能用第一项代替。已有真实书 ID 可加 `--book-id`，它不是知识库 ID。\n- query/author 会做 NFKC、外围书名号/引号和大小写归一化，但不是自动分词或模糊纠错。全名未匹配时可用用户原话中的稳定片段找候选（如作者姓氏、连续书名片段），再核对完整书名/作者；不擅自更换作者、季数或版本，不无提示忽略冲突条件。\n- `BOOKSPACE` 表示书籍库，不等于全部来自得到。用户明确“得到电子书”时核对 `book_info.source` 与引用的 `reference.source`；不要把豆瓣等其它来源的同名书当作得到来源。只说某本书时不擅自加平台限制。\n- 普通知识库在笔记的 `topics[]` 中仍只有 `id/name`；书籍关联才附带 `scope/book_info`。标签、知识库名称都不能代替 `reference` 来源证据。\n- 新查询核对 `meta.capabilities`（`knowledge.lookup.v1`、`pagination.v1`；笔记筛选还需 `note.filters.v1`，引用筛选还需 `note.reference.v1`）和 `applied_filters`。CLI 会拒绝不支持或未应用的条件；不得去掉条件后把未筛选结果交差。列表只返回定位信息，需要完整内容时按 `note_id` 调用 `getnote note`。\n- 候选知识库的 `stats.note_count` 可能滞后，也不代表筛选后的划线数；回答以本次验证过的分页结果和去重 ID 为准。\n- `--all` 只有退出码为 0、`success=true`、`data.traversal.completed=true` 且 `pagination_verified=true` 才能确认完成了当前授权范围的遍历。按字符串笔记 ID 去重；`traversal.returned_count` 是本次实际取回数，`traversal.total_count=null` 仍表示服务端精确总数未知。旧 `total` 保留兼容语义，不能当新的筛选总数。\n- 手动翻页或 MCP：保持 scope、全部筛选和 page_size 不变；按 `pagination.next_page` / `next_cursor` 原样继续，直到 `has_more=false`。记录已经访问的页码/游标和笔记 ID；循环、空页仍声称有下一页、重复结果无进展或中途失败都不能声称“全部找到”。\n- 书库不存在、无匹配、或库内无划线，不等于账号没有该书来源的引用。用户已明确得到电子书时，可用 `getnote notes --source dedao --note-type ref --reference-type ebook --page-size 20 -o json` 按来源补查，在 `reference.title/author/book_id` 匹配；按搜索参考的预算和分页规则继续，必要时用真实 `reference.resource_id` 精确筛选。只对当前授权范围下结论，不新建库、不修改归属。\n- 平台未限定且书库路线无匹配时，可用 `getnote notes --note-type ref --page-size 20 -o json` 读取个人引用定位信息，再按真实 `reference.resource_type/book_id/title/author` 核对书籍候选；保留已知时间、平台及知识库约束，不自加 dedao。一次发现最多5页，未翻完说明范围未查完；只按需读取匹配候选正文。用户限定只查某库时就在该库补查，不扩大到个人笔记。\n- `book_info.author` 是书籍目录作者，`reference.author` 是同步引用保存的来源作者。两者冲突时分别标注来源，把引用保留为待核验候选，不把空书库查询说成账号没有笔记，也不直接认定该候选就是所问作者的著作；不会自动改写作者或笔记归属。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 102,
+          "end_line": 116,
+          "quote": "平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。\n\n## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 160,
+          "end_line": 166,
+          "quote": "## 修改、删除和分享\n\n1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 32,
+          "end_line": 34,
+          "quote": "多条件查询要保留用户全部约束；从候选转入精确文稿列表时也保留已指定的 topic/time/source。条件冲突或作者、版本不符时说明实际候选，不静默删除条件。有正文主题限制时，来源匹配只证明“来自这里”，还需核对正文；截断 preview 未出现某词不能当作全文不包含。多个库/多本书合并结果时按字符串 note_id 去重，不能合并不同 ID 的不同划线。\n\n增强结果的 `resource_type` 使用小写 note/file 等资源类型，旧顶层 `note_type` 保留大写 NOTE/FILE 兼容值；真正笔记类型在 `note.note_type`。用 `note.display_title` 展示，用 `snippet`（旧接口为 `content`）解释命中，不拿详情 preview 替换搜索片段。`snippet_source=unknown` 如实保留；`score=null` 是未知，不是 0；`returned_count` 是片段数，`distinct_note_count` 是去重笔记数。FILE 等非笔记结果没有笔记 ID 时只呈现真实资源信息，不能拼笔记链接。"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "R1",
+      "interpretation": "The official GetNote API receives account-bound note/search/book/course/KB/tag IDs, filters, selected user content and requested mutations through CLI. Storage of notes, edits, folder membership, tags and subscriptions is part of the stated remote operation. Keep actual sources/recipients and selected version; network mechanism is stated but endpoint URLs/CLI internals are not supplied.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 26,
+          "quote": "- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。\n- 保存、更新、归档、分享和删除会修改远端笔记数据，并遵守下方的确认规则。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 118,
+          "end_line": 166,
+          "quote": "## 保存流程\n\n### 文字与长文\n\n1. 保留用户原意，不擅自扩写；未指定时不添加知识库、父笔记、标签或公开分享。\n2. 短文本可作为参数传入。长文本、Markdown、含复杂引号或换行的内容必须使用 `--content-file` 或 `--stdin`，避免截断和转义损坏。\n3. 重试同一次创建时复用同一个 `--idempotency-key`。\n4. 只有命令退出码为 0，且最终结构中存在非空字符串 `data.note.note_id`、`data.note.title`、`data.note.note_url`，才回复保存成功。\n\n### 链接\n\n1. 以 `http://` 或 `https://` 开头且用户表达保存意图时按链接保存，不当作普通文字。\n2. CLI 会轮询异步任务。处理中可以告诉用户“正在抓取并生成笔记”，但不能提前给出成功结论。\n3. 最终成功必须满足文字保存的三项字段，并且 `data.note` 已能读取；不要自行拼接链接。\n\n### 图片\n\n1. 使用本轮用户明确给出的本地图片路径，不把文件名保存成文字，也不带上历史图片。\n2. CLI 会校验真实文件格式、上传图片并轮询识别任务。\n3. 只有最终笔记详情返回有效 `note_id/title/note_url` 才算成功；“图片已上传”不是“笔记已生成”。\n\n### 异步超时与安全重试\n\n- `getnote save ... -o json` 正常会等待最终结果；若退出码非 0 且输出含 `task_id`、`status=pending|processing`，操作结果仍不确定。\n- 结果不确定时使用 `getnote task <task_id> -o json` 查询原任务。`done|success` 且有有效 `note_id` 后再读取笔记；`failed` 时展示 `error_msg` 或 `msg`。\n- 超时、断流或网络错误后禁止直接再次保存；先查询原任务或最近笔记。只有 CLI/API 明确 `retryable=true` 且已确认原操作没有成功时才重试。\n\n## 查询和深层读取\n\n1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。\n5. 不拿 `content` 中的 AI 摘要冒充原文。\n6. 标记从 `getnote marks` 的 `data.marks[]` 读取，不使用 Timeline 的条数或内容替代。发芽从 `getnote sprouts` 列出报告，再用 `getnote sprout` 读取正文；`has_sprout=false` 如实表示没有可读报告，不把标记或笔记总结当作发芽。\n\n## 修改、删除和分享\n\n1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 81,
+          "end_line": 87,
+          "quote": "## 文件夹和归档流程\n\n1. 用户要求放入文件夹时，用 `gnote kb dir <topic_id> -o json` 读取根目录或指定目录。\n2. 已有文件夹使用 `data.directories[].id` 返回的真实目录 ID；浏览指定目录时把该值传给 `--directory-id`。缺失时先询问是否创建，再用 `mkdir`。\n3. `getnote kb add` 同时传真实 `topic_id`、字符串 `note_id` 和 CLI 帮助中规定的目录参数。\n4. 每批最多 20 条。移出笔记和删除目录必须先确认；删除目录还必须由 CLI/服务校验为空。\n5. 移动或重命名时只改变用户指定项，未指定的名称或父目录保持不变。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 98,
+          "end_line": 124,
+          "quote": "## 博主和直播\n\n1. 用户给出抖音主页并要求持续关注时，先确认目标知识库和写权限，再使用 `blogger-follow`；只是找某条内容时先查询，不创建订阅。\n2. 列表先返回博主/直播名称、真实字符串 ID 和必要状态，选中后再读取完整内容。\n3. 博主内容详情中的 `post_media_text` 才是完整原文，不用摘要冒充。\n\n## 每条命令的结果与回复格式\n\n| 命令 | 成功结果必须包含 | 回复规则 |\n|---|---|---|\n| `getnote kbs --scope <scope> -o json` | `success=true`、`data.topics[].topic_id/name/scope/stats`、`has_more/total` | 默认 scope 为 `DEFAULT`；特殊类型必须显式传 scope。 |\n| `getnote kbs-sub --scope <scope> -o json` | `success=true`、`data.topics[].topic_id/name/scope`、`has_more/total` | 只返回该 scope 下真实订阅的他人知识库，通常只读。 |\n| `getnote kb <topic_id> -o json` | `success=true`、`data.notes[].note_id/title/note_type`、`has_more/total` | 返回知识库内真实笔记；需要链接时再用 `note` 读取详情。 |\n| `getnote kb create <name> -o json` | `success=true`、`data?` | 仅创建个人知识库；不得在没有返回 ID 时虚构 `topic_id`。 |\n| `getnote kb add <topic_id> <note_id…> -o json` | `success=true`、`data?` | 最多 20 条；需要确认最终目录归属时重新读取目录。 |\n| `getnote kb remove <topic_id> <note_id…> --yes -o json` | `success=true`、`data?` | 最多 20 条；先确认，再说明已从该知识库移出。 |\n| `gnote kb dir <topic_id> -o json` | `success=true`、`data.current_directory?`、`directories[].id/name`、`resources[].id/directory_id/note_id?/name/type/status`、`total` | 目录主键读取 `directories[].id`；资源归属读取 `resources[].directory_id`，笔记资源用 `resources[].note_id` 验证；旧环境回退 `getnote kb directories`。 |\n| `gnote kb mkdir <topic_id> --name <name> -o json` | `success=true`、`data?` | 也兼容位置参数 `<name>`；二者不可同时使用。若需给出新目录 ID 或层级，随后重新读取目录。 |\n| `gnote kb mvdir <topic_id> <directory_id> … -o json` | `success=true`、`data?` | 只确认用户指定的改名/移动；需要最终名称或父级时重新读取目录。 |\n| `gnote kb rmdir <topic_id> <directory_id> --yes -o json` | `success=true`、`data?` | 只删除空目录；说明已删除前必须拿到业务成功。 |\n| `getnote kb bloggers <topic_id> -o json` | `success=true`、`data.bloggers[].follow_id_str/account_name/platform`、`has_more/total` | 列表中使用 `follow_id_str` 作为后续查询 ID。 |\n| `getnote kb blogger-follow <topic_id> <link> -o json` | `success=true`、`data.follow_id_str/url/platform/type/created_at` | 说明实际订阅的平台和对象；先确认目标知识库有写权限。 |\n| `getnote kb blogger-contents <topic_id> <follow_id> -o json` | `success=true`、`data.contents[].post_id_alias/post_title/post_publish_time`、`has_more/total` | 返回标题与摘要；阅读全文前让用户选择具体内容。 |\n| `getnote kb blogger-content <topic_id> <post_id> -o json` | `success=true`、`data.post_title/post_summary?/post_media_text?/post_url?/post_publish_time` | `post_media_text` 才是完整原文，摘要不能替代它。 |\n| `getnote kb lives <topic_id> -o json` | `success=true`、`data.lives[].live_id/name/status`、`has_more/total` | 先列出真实直播，再按用户选择读取详情。 |\n| `getnote kb live <topic_id> <live_id> -o json` | `success=true`、`data.post_title/post_summary?/post_media_text?/post_publish_time` | `post_media_text` 是直播原文/转写；没有时不凭摘要补写。 |\n| `getnote kb live-follow <topic_id> <link> -o json` | `success=true`、`data.follow_id_str/url/platform/type/created_at` | 说明真实订阅对象和平台。 |"
+        },
+        {
+          "path": "references/tag.md",
+          "start_line": 8,
+          "end_line": 15,
+          "quote": "| 用户意图 | 命令 | 不能做什么 |\n|---|---|---|\n| “这条笔记有哪些标签” | `getnote tag list <note_id>` | 不自动添加或删除。 |\n| “给这条笔记加上产品优化” | `getnote tag add <note_id> <tag>` | 只新增指定标签，不覆盖原标签。 |\n| “删掉这个标签” | 先 `tag list`，再 `getnote tag remove <note_id> <tag_id>` | 不能把标签名称直接当作 `tag_id`。 |\n| “替换为这些标签” | 先读取当前标签，再交给 `getnote note update --help` | 属于覆盖性操作，必须先确认。 |\n\n笔记 ID、标签 ID 及任何雪花 ID 始终作为字符串原样传递。系统标签不可删除；权限不足、标签不存在或笔记不存在时不能说“已经删掉”。"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Official GetNote API / selected authorized account and knowledge base",
+      "condition": "Corresponding requested CLI operation",
+      "version": "Actual command fields, selected content and identifiers"
+    },
+    {
+      "id": "R2",
+      "interpretation": "Login opens browser authorization and the CLI stores authorization in its local configuration directory. Explicit source contract says the skill does not read/display/forward complete credentials and status is masked; preserve this constraint instead of applying whole-secret model visibility by default.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 25,
+          "quote": "- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 53,
+          "end_line": 53,
+          "quote": "3. 尚未授权时运行 `getnote auth login` 并让用户只在浏览器确认；不得索要 API Key、Cookie 或 Authorization。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 37,
+          "end_line": 39,
+          "quote": "| `getnote auth login` | 浏览器已确认，凭证已写入本机 | 再运行 `doctor -o json`；不在聊天中展示凭证。 |\n| `getnote auth status` | `Authenticated` / `Not authenticated` 或环境变量登录状态 | 未登录才启动 `auth login`；状态里只能出现掩码。 |\n| `getnote auth logout` | `Logged out successfully.` | 只说明本机已退出；不声称已撤销服务端授权。 |"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 60,
+          "end_line": 64,
+          "quote": "## 安全与恢复\n\n- 不展示或记录完整凭证；`auth status` 只能出现掩码。\n- 用户未明确要求时不退出登录。\n- 授权超时、拒绝或验证码过期时重新启动一次登录流程，不复用旧 code。"
+        }
+      ],
+      "boundary": "storage_write",
+      "recipient": "CLI-controlled local authorization configuration",
+      "condition": "Browser authorization completed",
+      "version": "CLI authorization material; only masked status returned to skill"
+    },
+    {
+      "id": "R3",
+      "interpretation": "In the cloud-MCP-authorized direct-upload branch, local getnote upload sends selected file bytes directly to OSS using temporary upload credentials read from controlled token file or stdin. It neither requires CLI identity token nor returns file bytes to cloud MCP.",
+      "evidence": [
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "OSS upload endpoint selected by temporary upload token",
+      "condition": "User requests local file upload and valid size/format capability",
+      "version": "Selected original file bytes and upload credentials; no arbitrary token commands"
+    },
+    {
+      "id": "R4",
+      "interpretation": "The same authorized knowledge-base ingestion tool receives only file_name/file_type/md5/url metadata plus real topic_id/directory_id after OSS upload. Preserve metadata-versus-bytes separation and the subsequent SUCCESS check; oss_uploaded is not completed ingestion.",
+      "evidence": [
+        {
+          "path": "references/kb.md",
+          "start_line": 91,
+          "end_line": 96,
+          "quote": "1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ],
+      "boundary": "external_tool",
+      "recipient": "Same authorized cloud MCP knowledge-base ingestion tool",
+      "condition": "Successful OSS upload and ingestion continuation",
+      "version": "Returned upload metadata and selected knowledge-base/directory IDs, without file bytes"
+    },
+    {
+      "id": "R5",
+      "interpretation": "The controlled temporary upload-token file, and optional upload-result metadata file, are local persistent files by EM12 unless cleanup is actually specified. Current-user file permissions and no credential-in-command/chat/log rules are explicit; the word temporary alone does not implement deletion.",
+      "evidence": [
+        {
+          "path": "references/kb.md",
+          "start_line": 92,
+          "end_line": 96,
+          "quote": "2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ],
+      "boundary": "storage_write",
+      "recipient": "Controlled local upload-token/metadata files",
+      "condition": "File-based rather than stdin upload path",
+      "version": "Temporary upload credential or selected upload-result metadata"
+    },
+    {
+      "id": "R6",
+      "interpretation": "CLI-returned locating records/snippets, real IDs, search/filter/traversal metadata, diagnostic states and selected note fields can enter the agent model under EM02/EM03. Returned version matters: locating lists omit full body, original/transcript/attachments/chapters commands return distinct views, and batch fields/budget constrain actual returned content.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 62,
+          "end_line": 65,
+          "quote": "4. **执行官方 CLI**：机器调用加 `-o json`；长内容使用领域参考规定的文件或标准输入方式。\n5. **判断结果**：同时检查退出码、`success` 和领域结果字段。异步任务轮询到最终状态，不能把“已提交”说成“已完成”。\n6. **必要时复读**：归档、更新、删除标签等操作按领域参考重新读取结果，确认服务端最终状态。\n7. **回复用户**：先给结论，再给标题、链接或必要摘要；失败时说明原因、是否可重试、下一步和 `request_id`。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 62,
+          "end_line": 84,
+          "quote": "列表接口只返回定位信息，再用详情接口读取完整笔记。`display_title` 是展示标题，不覆盖原始 `title`；引用笔记空标题很正常。`preview` 是带来源和截断标记的定位片段，不是全文。\n\n```bash\ngetnote notes --source dedao --note-type ref --page-size 20 -o json\ngetnote note '<note_id>' -o json\ngetnote note original '<note_id>' -o json\n```\n\n| note_type | 原文字段 | content 的语义 |\n|---|---|---|\n| ref | ref_content | 用户评论，不是引用原文 |\n| plain_text | content | 用户正文 |\n| link | web_page.content | 通常是摘要 |\n| audio / local_audio | audio.original | 通常是摘要 |\n\n录音按真实类型选择：即时录音/普通录音用 `--note-type audio`，上传的音频文件用 `local_audio`，自己录制的课堂笔记用 `class_audio`，会议录音用 `meeting`，系统内录用 `internal_record`，录音卡长录音/闪念分别用 `recorder_audio` / `recorder_flash_audio`。这些类型与得到课程引用不同；用户未限定平台时不加 `--source dedao` 或课程筛选。只说“录音”且模式不明时保留候选并说明类型，不能把上传音频当即时录音。\n\n```bash\ngetnote notes --note-type audio --all -o json\ngetnote notes --note-type local_audio --all -o json\n```\n\n`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 110,
+          "end_line": 116,
+          "quote": "## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 170,
+          "end_line": 185,
+          "quote": "| 命令 | 成功结果必须包含 | 回复规则 |\n|---|---|---|\n| `getnote save … -o json` | `success=true`、`data.note.note_id/title/note_url` | 回复“已保存《标题》”和真实链接。链接/图片先只得到 `task_id` 时还未成功，继续查任务。 |\n| `getnote task <task_id> -o json` | `data.task_id/status/note_id?/msg?/error_msg?` | 仅 `done`/`success` 且有 `note_id` 为完成；`pending`/`processing` 是处理中；`failed` 说明真实原因。 |\n| `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |\n| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |\n| `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |\n| `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |\n| `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |\n| `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |\n| `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |\n| `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |\n| `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |\n| `getnote note update <id> … -o json` | `success=true`、`data?` | 修改正文或全量标签前必须 `--yes`；需要展示最终内容时再读一次 `note`。 |\n| `getnote note delete <id> --yes -o json` | `success=true`、`data?` | 只能说“已移入回收站”，不是永久删除。 |\n| `getnote note share <id> --yes -o json` | `success=true`、`data.note_id/share_id/share_url` | 只返回真实 `share_url`，并明确其为公开链接。 |"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 78,
+          "end_line": 105,
+          "quote": "定位时可显式使用 `getnote search '<主题>' --response-mode snippet --max-snippet-chars 400 -o json`，需当前接口声明 search.snippet.v1。旧调用不加参数仍返回原契约。摘要 full 只表示本次命中的完整片段，不是全文；保留 snippet_source、truncated、content_state 和资源身份，未知来源/类型原样保留。需要全文时读真实笔记详情。\n\n1. 用户没有指定知识库时，执行 `getnote search <query> --limit <1-10> -o json`。默认上限是 10，不能自行放大。\n2. 用户指定知识库名称时，先按其类型执行 `getnote kbs --scope <scope> -o json`；默认查 `DEFAULT`，书籍、客户档案和团队知识库分别使用 `BOOKSPACE`、`CUSTOMER`、`TEAMSPACE`。用返回的真实 `topic_id` 和 `scope` 匹配；同名或意图不明确时必须让用户选择。\n3. 已确认知识库后执行 `getnote search <query> --kb <topic_id> --limit <1-10> -o json`。\n4. 只从返回值读取标题、摘要、字符串 `note_id` 和真实 `note_url`。没有 `note_id/note_url` 的非笔记结果可以展示内容，但不能伪造“打开笔记”链接。\n5. 同一篇笔记可能因命中多个片段出现多次。面向用户列“几篇笔记”时必须按字符串 `note_id` 去重；若去重后不足用户要求的数量，可在上限 10 内增大 `--limit` 重搜，仍不足时如实返回实际数量。\n\n## 命令结果与用户呈现\n\n### 搜索\n\n```bash\ngetnote search \"支付流程\" --limit 10 -o json\ngetnote search \"客户反馈\" --kb <topic_id> --limit 5 -o json\n```\n\n成功 JSON 的稳定字段：\n\n| 字段 | 含义 | Agent 如何使用 |\n|---|---|---|\n| `success` | 业务是否成功 | 只有 `true` 才继续呈现结果。 |\n| `data.results[]` | 搜索结果 | 空数组是一次成功的“未找到”，不是失败。 |\n| `data.results[].title` | 笔记标题 | 优先用 note.display_title；旧响应再用 title，均缺失才显示未命名。 |\n| `data.results[].note_id` | 笔记雪花 ID | 始终作为字符串原样传入后续 `note` 命令。 |\n| `data.results[].note_url` | 真实笔记链接 | 只有非空时才给用户“打开笔记”。 |\n| `data.results[].content` | 命中摘要或正文片段 | 只摘取与问题相关的短片段，不能冒充全文。 |\n| `data.results[].score` | 相关性分数，可为 null | null 表示未知；仅用于内部排序，不向用户虚构“准确率”。 |"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Agent model through CLI JSON results",
+      "condition": "Requested lookup/content processing",
+      "version": "Endpoint-specific locating/selected/budgeted returned version"
+    },
+    {
+      "id": "R7",
+      "interpretation": "First-connection/upgrade acceptance reads one recent note. The CLI returns the locating note metadata, which can enter model context even though the diagnostic task only needs the successful readable result. This is an earlier possible observation, independent of later user-output restrictions.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 54,
+          "end_line": 55,
+          "quote": "4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。\n5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 13,
+          "end_line": 14,
+          "quote": "4. 执行 `getnote doctor -o json`。只有退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能宣布连接完成；先处理 `issues[].blocking=true`，再按 `next_actions[]` 修复。\n5. 先用 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意创建测试内容时，才保存测试笔记。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 54,
+          "end_line": 57,
+          "quote": "1. 执行 `getnote update --check`，随后执行 `getnote update`；默认流程会升级 CLI、同步五个领域 Skill 并运行 doctor。\n2. 如果 CLI 明确要求由宿主或包管理器完成升级，使用平台声明的 `@getnote/cli` 安装流程，不下载或执行本地脚本。\n3. 使用 ClawHub/OpenClaw 的宿主流程检查当前独立 Skill；需要用户确认时只提供唯一必要的确认动作。\n4. 确认更新输出中的 CLI 版本、Skills 同步结果和 doctor 结果；再用最近笔记读取做验收。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 174,
+          "end_line": 174,
+          "quote": "| `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Agent model in connection diagnostic segment",
+      "condition": "Connection/upgrade acceptance uses notes --limit 1",
+      "version": "Most recent note locating metadata including title, note_id and private note_url"
+    },
+    {
+      "id": "R8",
+      "interpretation": "When note type is uncertain, the instructed preliminary getnote note response includes complete body and metadata before routing to a selected transcript/attachments/chapter/etc. view. EM02/EM03 retain possible observation of that original full response; later selected-view calls do not undo it.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 84,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 147,
+          "end_line": 157,
+          "quote": "1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。\n5. 不拿 `content` 中的 AI 摘要冒充原文。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 175,
+          "end_line": 182,
+          "quote": "| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |\n| `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |\n| `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |\n| `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |\n| `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |\n| `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |\n| `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |\n| `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Agent model during type-discovery step",
+      "condition": "Only a selected subview is requested and note type is uncertain",
+      "version": "Full getnote note detail response before selected-view retrieval"
+    },
+    {
+      "id": "R9",
+      "interpretation": "The requesting user receives real titles/IDs/links, requested original/derived views, final status and errors/request_id. Group/shared sessions normally get titles, necessary snippets and links; expanding private full text requires matching requester/scope confirmation.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 82,
+          "end_line": 100,
+          "quote": "## 结果呈现标准\n\n- **保存成功**：回复标题、字符串 `note_id` 和真实 `note_url`。链接或图片仍在生成时持续等待；超时则明确说仍在处理，不伪造完成。\n- **笔记列表与搜索**：优先展示 display_title 和真实链接；summary/preview 用于定位，不能冒充全文。相同 note_id 的多个搜索片段去重，Top-K 不代表全量；全量以领域参考中的遍历完成证据为准。\n- **笔记详情**：按用户点名的视图展示标题、总结、原文、录音转写、附件、时间线、快捷笔记或会议待办，不用其他字段冒充。\n- **知识库与目录**：展示真实名称、Scope 和字符串 ID；归档完成后说明笔记进入了哪个知识库及目录。\n- **更新、分享与删除**：明确最终状态和影响范围。取消或权限不足不能回复成功。\n- **空结果**：说明没有找到以及实际搜索范围，可建议换关键词、时间或知识库，但不能编造候选项。\n- **失败**：用用户能理解的话解释，并保留错误码和 `request_id` 供排查；敏感凭证不得出现在回复中。\n\n## 统一规则\n\n- 所有真实操作由官方 `getnote` CLI 完成；参数不确定时读取对应命令 `--help`，机器调用统一加 `-o json`。\n- 退出码非 0 一律是失败。成功结果读取 `success=true` 和领域 Skill 指定的 `data` 字段；失败结果读取 `error.code/message/reason/retryable` 和可选 `request_id`，不能根据自然语言猜成功。\n- ID 始终按字符串原样传递；链接只使用真实返回值，不自行拼接域名。\n- 写操作结果不确定时先查询原任务或最近结果，禁止盲目重复创建。\n- 删除、覆盖、替换全部标签、公开分享和批量移出必须先确认。\n- 群聊或共享会话中不主动展开私密全文，先确认请求者和展示范围。\n- 失败时说明真实原因、是否可重试和下一步，并保留 `request_id`；不能伪造成功。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 189,
+          "end_line": 189,
+          "quote": "群聊或共享会话中只先展示必要标题和链接，不主动展开私密全文。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 120,
+          "end_line": 126,
+          "quote": "## 失败、隐私与后续动作\n\n- `success=false` 或退出码非 0：回复失败步骤、`error.message` / `error.reason`、是否 `retryable` 和可选 `request_id`；不要将 HTTP 成功或空输出说成搜索成功。\n- 参数错误先读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒的重试，Agent 不再叠加无界重试；日/月配额和写操作不自动重试。\n- 若 CLI 提示“搜索服务响应超时”，这是检索未完成，不是“没有结果”。建议稍后重试，或缩小关键词、指定知识库后再试；不要伪造空列表。\n- 检索结果可能包含私密正文。群聊或共享会话默认只展示标题、必要摘要和真实链接；用户明确要求后再展开全文。\n- 用户选中结果后，复用返回的字符串 `note_id`，再读取 `getnote note <note_id> -o json`；不要从 URL 截取或转换为数字。"
+        },
+        {
+          "path": "references/tag.md",
+          "start_line": 57,
+          "end_line": 57,
+          "quote": "- 在群聊中仅展示用户当前要求的标签信息；不通过标签列表推断或泄露笔记其他正文。"
+        }
+      ],
+      "boundary": "user_output",
+      "recipient": "Requesting user or actual shared-conversation audience",
+      "condition": "Result presentation under requested view/audience",
+      "version": "Selected user-facing fields and requested private content"
+    },
+    {
+      "id": "R10",
+      "interpretation": "Explicitly confirmed note sharing produces a public share link, conditionally with audio. If user excludes audio, the source directs --exclude-audio; this is a declared interface mechanism, not proof of an independently measured service implementation.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 160,
+          "end_line": 166,
+          "quote": "## 修改、删除和分享\n\n1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 185,
+          "end_line": 185,
+          "quote": "| `getnote note share <id> --yes -o json` | `success=true`、`data.note_id/share_id/share_url` | 只返回真实 `share_url`，并明确其为公开链接。 |"
+        }
+      ],
+      "boundary": "public publication",
+      "recipient": "Public share-link viewers",
+      "condition": "User requests and confirms public sharing; audio inclusion follows confirmed choice",
+      "version": "Shared note version with or without audio according to selected option"
+    }
+  ],
+  "reference_identity": "Source-only assistant reference draft; not human-confirmed gold.",
+  "reference_status": "assistant_draft_pending_two_independent_human_verifiers",
+  "required_behavior": [
+    {
+      "id": "B1",
+      "interpretation": "Use real string identifiers, preserve scope/source/book-author/course identity, time ranges and all pagination filters. Distinguish locating snippets, private commentary, source original, transcripts, attachments, chapters, marks and derived todos; never substitute summaries for requested originals.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 57,
+          "end_line": 65,
+          "quote": "## 每次任务的执行闭环\n\n1. **理解目标**：识别用户要处理的对象、动作和目标位置；“这条笔记”“这个博主”等指代不明确时先澄清。\n2. **加载领域参考**：只读取本次任务涉及的 `references/*.md`，不要凭印象猜命令、参数或返回字段。\n3. **确认真实对象**：先读取笔记、知识库、文件夹或标签的真实字符串 ID。名称重名时让用户选择。\n4. **执行官方 CLI**：机器调用加 `-o json`；长内容使用领域参考规定的文件或标准输入方式。\n5. **判断结果**：同时检查退出码、`success` 和领域结果字段。异步任务轮询到最终状态，不能把“已提交”说成“已完成”。\n6. **必要时复读**：归档、更新、删除标签等操作按领域参考重新读取结果，确认服务端最终状态。\n7. **回复用户**：先给结论，再给标题、链接或必要摘要；失败时说明原因、是否可重试、下一步和 `request_id`。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 44,
+          "end_line": 79,
+          "quote": "## 按书名、作者定位，再选择内容范围\n\n用户要某本书或某位作者的划线时，先定位书籍知识库，不把语义搜索的 Top-K 当全量。`--query` 只匹配知识库名或书名，`--author` 匹配书籍作者；两个参数同时传时是 AND，不是任选其一。\n\n- “找《某本书》的笔记”：传 `--query`，查询词只放书名，不把“我的笔记”“全部划线”或作者名拼进去。\n- “找某位作者的书籍笔记”：只传 `--author`，省略 `--query`，再按返回书籍库读取。用户要该作者全部书籍时逐库遍历；仅要其中一本但候选不唯一时再消歧。\n- “找某位作者写的《某本书》”：同时传书名 `--query` 和作者 `--author`。作者关键词误传 query 得到空列表不能解释为用户没有该作者的笔记。\n\n```bash\n# 只有作者线索，无需先猜书名\ngetnote kbs --scope BOOKSPACE --author '用户提供的作者' --all -o json\n# 同时知道书名与作者\ngetnote kbs --scope BOOKSPACE --query '书名' --author '用户提供的作者' --all -o json\n# 用户明确查订阅库时保持原有条件；只知作者仍只传 author\ngetnote kbs-sub --scope BOOKSPACE --author '用户提供的作者' --all -o json\n# 只要划线 / 摘录\ngetnote kb '<返回的 topic_id>' --note-type ref --page-size 20 --all -o json\n# 要这本书里的全部笔记：不加 note-type，避免漏掉读书心得等其它类型\ngetnote kb '<返回的 topic_id>' --page-size 20 --all -o json\ngetnote note original '<返回的 note_id>' -o json\n```\n\n- “全部笔记”和“全部划线”不是同一范围：只在用户明确要划线/摘录时加 `--note-type ref`。用户要某章划线时，在候选 `reference.location.chapter_name/chapter_id` 核对，不把章节名当书名；字段缺失不能证明该章没有笔记。\n- “书里关于某主题的内容”：定位书库后用 `getnote search '主题' --kb '<topic_id>' --limit 10 -o json`，不退回全局搜索再把别处内容归到这本书。搜索为空或结果不符合主题时，用 `getnote kb '<topic_id>' --page-size 20 -o json` 在同一库内补查；沿真实 pagination 翻页，先匹配定位信息，截断或不足时按需读候选详情的真实正文/原文。发现与深读预算沿用搜索参考，超出预算说明范围未查完而非判定没有。用户要求全部时按完整分页逐项核验，Top-K 不能给全量承诺。\n- 自有书库无匹配且用户未限定“只查我的”时，可以查询真实订阅书库，保留原有 scope/query/author/book-id；用户明确只查订阅库则直接用 kbs-sub。命令报错、权限不足或解析失败不能当空库，不能去掉条件后称筛选成功。\n- 作者未知时省略 `--author`。先用 `name`、`scope=BOOKSPACE`、`book_info.title/author/book_id` 核对候选；同名多作者、多版本仍不唯一时请用户选择，不能用第一项代替。已有真实书 ID 可加 `--book-id`，它不是知识库 ID。\n- query/author 会做 NFKC、外围书名号/引号和大小写归一化，但不是自动分词或模糊纠错。全名未匹配时可用用户原话中的稳定片段找候选（如作者姓氏、连续书名片段），再核对完整书名/作者；不擅自更换作者、季数或版本，不无提示忽略冲突条件。\n- `BOOKSPACE` 表示书籍库，不等于全部来自得到。用户明确“得到电子书”时核对 `book_info.source` 与引用的 `reference.source`；不要把豆瓣等其它来源的同名书当作得到来源。只说某本书时不擅自加平台限制。\n- 普通知识库在笔记的 `topics[]` 中仍只有 `id/name`；书籍关联才附带 `scope/book_info`。标签、知识库名称都不能代替 `reference` 来源证据。\n- 新查询核对 `meta.capabilities`（`knowledge.lookup.v1`、`pagination.v1`；笔记筛选还需 `note.filters.v1`，引用筛选还需 `note.reference.v1`）和 `applied_filters`。CLI 会拒绝不支持或未应用的条件；不得去掉条件后把未筛选结果交差。列表只返回定位信息，需要完整内容时按 `note_id` 调用 `getnote note`。\n- 候选知识库的 `stats.note_count` 可能滞后，也不代表筛选后的划线数；回答以本次验证过的分页结果和去重 ID 为准。\n- `--all` 只有退出码为 0、`success=true`、`data.traversal.completed=true` 且 `pagination_verified=true` 才能确认完成了当前授权范围的遍历。按字符串笔记 ID 去重；`traversal.returned_count` 是本次实际取回数，`traversal.total_count=null` 仍表示服务端精确总数未知。旧 `total` 保留兼容语义，不能当新的筛选总数。\n- 手动翻页或 MCP：保持 scope、全部筛选和 page_size 不变；按 `pagination.next_page` / `next_cursor` 原样继续，直到 `has_more=false`。记录已经访问的页码/游标和笔记 ID；循环、空页仍声称有下一页、重复结果无进展或中途失败都不能声称“全部找到”。\n- 书库不存在、无匹配、或库内无划线，不等于账号没有该书来源的引用。用户已明确得到电子书时，可用 `getnote notes --source dedao --note-type ref --reference-type ebook --page-size 20 -o json` 按来源补查，在 `reference.title/author/book_id` 匹配；按搜索参考的预算和分页规则继续，必要时用真实 `reference.resource_id` 精确筛选。只对当前授权范围下结论，不新建库、不修改归属。\n- 平台未限定且书库路线无匹配时，可用 `getnote notes --note-type ref --page-size 20 -o json` 读取个人引用定位信息，再按真实 `reference.resource_type/book_id/title/author` 核对书籍候选；保留已知时间、平台及知识库约束，不自加 dedao。一次发现最多5页，未翻完说明范围未查完；只按需读取匹配候选正文。用户限定只查某库时就在该库补查，不扩大到个人笔记。\n- `book_info.author` 是书籍目录作者，`reference.author` 是同步引用保存的来源作者。两者冲突时分别标注来源，把引用保留为待核验候选，不把空书库查询说成账号没有笔记，也不直接认定该候选就是所问作者的著作；不会自动改写作者或笔记归属。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 60,
+          "end_line": 116,
+          "quote": "## 来源筛选、轻量定位与原文\n\n列表接口只返回定位信息，再用详情接口读取完整笔记。`display_title` 是展示标题，不覆盖原始 `title`；引用笔记空标题很正常。`preview` 是带来源和截断标记的定位片段，不是全文。\n\n```bash\ngetnote notes --source dedao --note-type ref --page-size 20 -o json\ngetnote note '<note_id>' -o json\ngetnote note original '<note_id>' -o json\n```\n\n| note_type | 原文字段 | content 的语义 |\n|---|---|---|\n| ref | ref_content | 用户评论，不是引用原文 |\n| plain_text | content | 用户正文 |\n| link | web_page.content | 通常是摘要 |\n| audio / local_audio | audio.original | 通常是摘要 |\n\n录音按真实类型选择：即时录音/普通录音用 `--note-type audio`，上传的音频文件用 `local_audio`，自己录制的课堂笔记用 `class_audio`，会议录音用 `meeting`，系统内录用 `internal_record`，录音卡长录音/闪念分别用 `recorder_audio` / `recorder_flash_audio`。这些类型与得到课程引用不同；用户未限定平台时不加 `--source dedao` 或课程筛选。只说“录音”且模式不明时保留候选并说明类型，不能把上传音频当即时录音。\n\n```bash\ngetnote notes --note-type audio --all -o json\ngetnote notes --note-type local_audio --all -o json\n```\n\n`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。\n\n得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。\n\n```bash\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。\n\n## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 19,
+          "end_line": 55,
+          "quote": "## 容易混淆的组合问法\n\n| 用户说法 | 路径与不能丢失的条件 |\n|---|---|\n| “找博尔赫斯的书籍笔记” / “找提到博尔赫斯的笔记” | 前者按书籍 author 定位；后者是内容主题搜索，不把所有提到一个人的笔记都限制为其著作。 |\n| “某课程共读《某本书》那篇文稿” | 明确课程/文稿时优先课程引用路径，书名在这里是文稿线索，不跳去 BOOKSPACE。 |\n| “课程笔记” | 先区分得到课程引用与自己录制的课堂笔记；只有用户明确来源时才设 dedao/course_article，不能把课堂录音排除掉。 |\n| “即时录音” / “上传的音频” | 前者用 notes --note-type audio，后者用 local_audio；课堂录音为 class_audio，会议为 meeting。平台未限定时不加 dedao 或课程条件。 |\n| “某库/某书里关于某主题” | 先定位真实 topic_id，再 search --kb；未命中按知识库参考在该库列表补查，不把空搜索当作库内没有，不得遗漏库范围。 |\n| “上周保存/昨天修改的某课程笔记” | 列表用对应时间筛选；search 没有时间/来源筛选参数，语义候选需核对 timestamps/reference。不能把时间词拼进 query 就宣称完成了时间筛选。 |\n| “某课程链接下的笔记” / “这篇文稿链接的划线” | 已知课程名/老师时查课程容器；只有主页 URL 时核对真实 reference.url，不猜课程 ID。文稿 URL 才传 --article-url。 |\n| “全部笔记” / “全部划线” | 前者不默认加 note-type ref；书籍库可能有心得等非引用笔记。得到课程引用路径只能证明该来源下的划线集合，不能涵盖用户另写的课程心得或录音。 |\n\n多条件查询要保留用户全部约束；从候选转入精确文稿列表时也保留已指定的 topic/time/source。条件冲突或作者、版本不符时说明实际候选，不静默删除条件。有正文主题限制时，来源匹配只证明“来自这里”，还需核对正文；截断 preview 未出现某词不能当作全文不包含。多个库/多本书合并结果时按字符串 note_id 去重，不能合并不同 ID 的不同划线。\n\n增强结果的 `resource_type` 使用小写 note/file 等资源类型，旧顶层 `note_type` 保留大写 NOTE/FILE 兼容值；真正笔记类型在 `note.note_type`。用 `note.display_title` 展示，用 `snippet`（旧接口为 `content`）解释命中，不拿详情 preview 替换搜索片段。`snippet_source=unknown` 如实保留；`score=null` 是未知，不是 0；`returned_count` 是片段数，`distinct_note_count` 是去重笔记数。FILE 等非笔记结果没有笔记 ID 时只呈现真实资源信息，不能拼笔记链接。\n\n## 课程、文稿与评论定位\n\n先区分课程容器和单篇文稿；`search` 是 Top-K 语义召回，来源元数据出现在结果中不能证明课程范围参与召回。课程名、老师、主题、评论、时间和真实知识库范围均需保留。\n\n### 已知课程名或老师：先查课程容器\n\n使用 `getnote references list`，无需用户提供内部 ID，也不需要先建知识库：\n\n```bash\ngetnote references list --source dedao --resource-type course --query '<课程名>' --author '<准确老师姓名>' --match-mode exact --all -o json\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n只传已知的 query/author，至少一个；二者为 AND 条件，query 只匹配课程名，author 精确匹配老师。课程名不完整时显式用 `--match-mode prefix`；不把“讲概率”这样的正文主题塞进课程名。结果同名或版本不明时列候选消歧；用返回的 `course_type`+`course_id`，当前支持66，不解析标题、URL或课节 ID 生成课程 ID。空结果页若 `pagination.has_more=true` 仍按真实 `next_cursor` 继续，保持所有条件；循环或失败表示遍历未完成。`--all` 成功的 `traversal.completed=true` 只证明当前同步、授权范围内的遍历，不是得到 App 的全部划线。\n\n课程筛选同时包含课程直接引用和所属课节；显式增加 `--reference-type course_article` 会再限制为课节引用，`--reference-id` 仍是原课节 ID，组合按交集。需要时间条件时保留对应创建/编辑/记录更新时间参数。首版只支持个人笔记，course+topic_id 明确不支持；用户同时指定真实知识库时说明当前交集尚不可用，不能改查个人笔记后声称满足库范围。课程内语义搜索尚未开放，不能在全局 Top-K 后过滤冒充；可先精确列出课程笔记，再按需读正文核实主题。\n\n新请求需当前服务端声明 `reference.resources.v1` / `note.course_filter.v1`，并核对 applied_filters。服务未支持时报告能力缺失，不自动删除课程条件继续，不把 CLI 安装成功当作服务已发布。旧参数和默认调用继续可用。\n\n每页的 `partial`、`warnings` 和候选 `metadata_state` 都要保留。`course_directory_no_lessons` 表示目录缺少课节；翻到末页或 `traversal.completed=true` 不会消除这个缺口，回复“已找到这些，部分课程目录不完整，无法保证全部”。`candidate_work_budget` 且有下一游标时按原条件继续；游标结束后仍有目录警告，就保留部分完成结论，不改用账号全量扫描来宣称目录已经补齐。"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "interpretation": "Preserve explicit budgets and completion evidence: semantic Top-K <=10 is not full traversal; discovery limits and selected detail reading do not authorize whole-account scans. Batch <=20 notes has character budgets/per-item states, with at most two extra CLI read-only transient retries totaling five seconds; do not add retries to writes/credentials.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 110,
+          "end_line": 116,
+          "quote": "## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 66,
+          "end_line": 84,
+          "quote": "仅有文稿标题时可语义查候选并核对真实 reference.article.title；找到了课程线索就进入课程容器流程缩小范围。课程主页 URL 与文稿 URL 不互换，不从编码链接猜 ID。没有名称线索的课程主页可沿用既有来源列表核对 reference.url，但不得假称服务端按课程名筛选；定位前5页的预算到达时说明未完成，用户要全部时继续合法分页。metadata_state.reference 为 partial/unavailable 时保留为待核验候选，不能凭缺失字段排除。\n\n### 读取原文与评论\n\n对不超过20个已定位的个人笔记，使用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`；引用原文来自 ref_content，查个人评论改用 fields=content。保留每条 status、content_state、pending_ids、partial；deferred_budget 表示整条待读，不能说完整，也不自动并发20次单条读取。用户确需未读全文时使用旧 `getnote note original '<note_id>' -o json`。知识库共享详情继续原单条权限路径，不用个人批量绕过权限。\n\n只记得评论时先语义搜索实质文本并读 content 核对；已指定课程就先按课程缩小，不因 preview 没出现评论而排除。定位候选多于20条时保留用户线索继续缩小或分页按需读取，不下载整个账号正文。同一篇文稿的不同笔记 ID 是不同划线，不按文章 ID 合并。\n\n## 语义搜索执行步骤\n\n仅当上面的路径选择需要语义搜索时执行；没有指定知识库不等于必须先语义搜索。\n\n定位时可显式使用 `getnote search '<主题>' --response-mode snippet --max-snippet-chars 400 -o json`，需当前接口声明 search.snippet.v1。旧调用不加参数仍返回原契约。摘要 full 只表示本次命中的完整片段，不是全文；保留 snippet_source、truncated、content_state 和资源身份，未知来源/类型原样保留。需要全文时读真实笔记详情。\n\n1. 用户没有指定知识库时，执行 `getnote search <query> --limit <1-10> -o json`。默认上限是 10，不能自行放大。\n2. 用户指定知识库名称时，先按其类型执行 `getnote kbs --scope <scope> -o json`；默认查 `DEFAULT`，书籍、客户档案和团队知识库分别使用 `BOOKSPACE`、`CUSTOMER`、`TEAMSPACE`。用返回的真实 `topic_id` 和 `scope` 匹配；同名或意图不明确时必须让用户选择。\n3. 已确认知识库后执行 `getnote search <query> --kb <topic_id> --limit <1-10> -o json`。\n4. 只从返回值读取标题、摘要、字符串 `note_id` 和真实 `note_url`。没有 `note_id/note_url` 的非笔记结果可以展示内容，但不能伪造“打开笔记”链接。\n5. 同一篇笔记可能因命中多个片段出现多次。面向用户列“几篇笔记”时必须按字符串 `note_id` 去重；若去重后不足用户要求的数量，可在上限 10 内增大 `--limit` 重搜，仍不足时如实返回实际数量。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 118,
+          "end_line": 125,
+          "quote": "若 `data.partial=true` 或存在 `data.warnings`，先说明检索有部分结果未能完成权限验证或读取，并按 warnings 解释原因；空结果也不能表述为完整检索后无命中。若 `data.results=[]` 或结果均不符合用户指定来源，先按已选路径完成同一请求范围内的来源补查；补查不是跨知识库或跨账号扩大范围。只有主题搜索且无可用来源线索时，说明“这次语义搜索未找到”，不要说接口失败或全库没有；不创建笔记、不编造结果。\n\n## 失败、隐私与后续动作\n\n- `success=false` 或退出码非 0：回复失败步骤、`error.message` / `error.reason`、是否 `retryable` 和可选 `request_id`；不要将 HTTP 成功或空输出说成搜索成功。\n- 参数错误先读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒的重试，Agent 不再叠加无界重试；日/月配额和写操作不自动重试。\n- 若 CLI 提示“搜索服务响应超时”，这是检索未完成，不是“没有结果”。建议稍后重试，或缩小关键词、指定知识库后再试；不要伪造空列表。\n- 检索结果可能包含私密正文。群聊或共享会话默认只展示标题、必要摘要和真实链接；用户明确要求后再展开全文。"
+        }
+      ]
+    },
+    {
+      "id": "B3",
+      "interpretation": "Keep confirmation and outcome rules for destructive edits, public sharing/audio and folder movement, preserve write-then-reread verification, and do not repeat uncertain writes. Cloud-authorized local upload must not trigger another CLI login.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 49,
+          "end_line": 55,
+          "quote": "例外：用户已授权云 MCP、只需要本地上传文件时，安装 CLI 后仅执行 `getnote upload`，不运行 `setup`、`auth login` 或要求第二次身份授权。按 `references/kb.md` 的直传流程完成；无需上传文件时继续使用云 MCP。\n\n1. 执行 `command -v getnote`。如果 CLI 不存在，调用平台根据 frontmatter `install` 声明提供的 `@getnote/cli` 安装流程；不要让用户选择安装方式，也不要查找本地安装脚本。\n2. 执行 `getnote setup`，让 CLI 检测本机 AI、同步五个领域 Skill 并引导授权。当前独立 Skill 仍由平台管理，CLI 不覆盖它。\n3. 尚未授权时运行 `getnote auth login` 并让用户只在浏览器确认；不得索要 API Key、Cookie 或 Authorization。\n4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。\n5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 94,
+          "end_line": 109,
+          "quote": "- 所有真实操作由官方 `getnote` CLI 完成；参数不确定时读取对应命令 `--help`，机器调用统一加 `-o json`。\n- 退出码非 0 一律是失败。成功结果读取 `success=true` 和领域 Skill 指定的 `data` 字段；失败结果读取 `error.code/message/reason/retryable` 和可选 `request_id`，不能根据自然语言猜成功。\n- ID 始终按字符串原样传递；链接只使用真实返回值，不自行拼接域名。\n- 写操作结果不确定时先查询原任务或最近结果，禁止盲目重复创建。\n- 删除、覆盖、替换全部标签、公开分享和批量移出必须先确认。\n- 群聊或共享会话中不主动展开私密全文，先确认请求者和展示范围。\n- 失败时说明真实原因、是否可重试和下一步，并保留 `request_id`；不能伪造成功。\n\n## 常见恢复方式\n\n- `unauthorized` 或授权过期：读 `references/auth.md`，引导浏览器重新授权，不索取凭证。\n- `forbidden`：说明当前账号或团队角色没有权限，不绕过权限或换 ID 猜测。\n- `not_found`：重新解析真实笔记、知识库或目录 ID；环境不同的链接和 ID 不能混用。\n- `conflict`：先读取当前版本或既有目录，避免覆盖和重复创建。\n- `rate_limited`：按返回的重试提示等待，不高频循环调用。\n- 网络中断或结果不确定：只做查询核验，不自动重复写入。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 81,
+          "end_line": 96,
+          "quote": "## 文件夹和归档流程\n\n1. 用户要求放入文件夹时，用 `gnote kb dir <topic_id> -o json` 读取根目录或指定目录。\n2. 已有文件夹使用 `data.directories[].id` 返回的真实目录 ID；浏览指定目录时把该值传给 `--directory-id`。缺失时先询问是否创建，再用 `mkdir`。\n3. `getnote kb add` 同时传真实 `topic_id`、字符串 `note_id` 和 CLI 帮助中规定的目录参数。\n4. 每批最多 20 条。移出笔记和删除目录必须先确认；删除目录还必须由 CLI/服务校验为空。\n5. 移动或重命名时只改变用户指定项，未指定的名称或父目录保持不变。\n\n## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 118,
+          "end_line": 143,
+          "quote": "## 保存流程\n\n### 文字与长文\n\n1. 保留用户原意，不擅自扩写；未指定时不添加知识库、父笔记、标签或公开分享。\n2. 短文本可作为参数传入。长文本、Markdown、含复杂引号或换行的内容必须使用 `--content-file` 或 `--stdin`，避免截断和转义损坏。\n3. 重试同一次创建时复用同一个 `--idempotency-key`。\n4. 只有命令退出码为 0，且最终结构中存在非空字符串 `data.note.note_id`、`data.note.title`、`data.note.note_url`，才回复保存成功。\n\n### 链接\n\n1. 以 `http://` 或 `https://` 开头且用户表达保存意图时按链接保存，不当作普通文字。\n2. CLI 会轮询异步任务。处理中可以告诉用户“正在抓取并生成笔记”，但不能提前给出成功结论。\n3. 最终成功必须满足文字保存的三项字段，并且 `data.note` 已能读取；不要自行拼接链接。\n\n### 图片\n\n1. 使用本轮用户明确给出的本地图片路径，不把文件名保存成文字，也不带上历史图片。\n2. CLI 会校验真实文件格式、上传图片并轮询识别任务。\n3. 只有最终笔记详情返回有效 `note_id/title/note_url` 才算成功；“图片已上传”不是“笔记已生成”。\n\n### 异步超时与安全重试\n\n- `getnote save ... -o json` 正常会等待最终结果；若退出码非 0 且输出含 `task_id`、`status=pending|processing`，操作结果仍不确定。\n- 结果不确定时使用 `getnote task <task_id> -o json` 查询原任务。`done|success` 且有有效 `note_id` 后再读取笔记；`failed` 时展示 `error_msg` 或 `msg`。\n- 超时、断流或网络错误后禁止直接再次保存；先查询原任务或最近笔记。只有 CLI/API 明确 `retryable=true` 且已确认原操作没有成功时才重试。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 160,
+          "end_line": 166,
+          "quote": "## 修改、删除和分享\n\n1. 先读取目标笔记和当前版本，确认用户指向的对象。\n2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。\n3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。\n4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。\n5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        },
+        {
+          "path": "references/tag.md",
+          "start_line": 37,
+          "end_line": 56,
+          "quote": "### 添加标签\n\n```bash\ngetnote tag add <note_id> \"产品优化\" -o json\n```\n\n成功 JSON 必须有 `success=true`、`data.note_id` 与更新后的 `data.tags[]`。回复“已添加「产品优化」”，并在用户要求时列出当前全部标签；不要说“已替换标签”。如果结果没有新的标签集合，先再执行一次 `tag list` 核验，再向用户确认。\n\n### 删除标签\n\n```bash\ngetnote tag remove <note_id> <tag_id> -o json\n```\n\n删除前必须从当前 `tag list` 结果中拿到真实 `tag_id`，并确认该条不是系统标签。成功返回 `success=true` 才能回复“已删除「标签名」”；如果用户需要看剩余标签，再执行 `tag list`，不能猜测剩余集合。\n\n## 失败与恢复\n\n- 失败时展示实际 `error.message` / `error.reason`、是否可重试和 `request_id`；不要把“标签不存在”“系统标签”“无权限”归为通用网络错误。\n- 不能确定用户要删除哪一个同名标签时，先列出名称和类型让用户确认；不要按第一个结果擅自删除。"
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "54cc7da5847118eb9f04a0ef4812fb3c9a8de249568558689d026b13f259a528",
+  "source_citations": [],
+  "source_sha256": "25d08686052d8818f836b7b7075a1057463e45725796f0b6dcf32275d4a3a169",
+  "state": "assistant_draft",
+  "supported_excesses": [
+    {
+      "id": "E1",
+      "interpretation": "For connection/upgrade acceptance only, possible model observation of the recent private-note title/ID/URL is unnecessary sensitive payload on a necessary API-read check. A proposed local wrapper can perform the same notes --limit 1 check and return exit status, success and a readability/count result without the note metadata; the actual API acceptance still occurs.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 54,
+          "end_line": 55,
+          "quote": "4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。\n5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 13,
+          "end_line": 14,
+          "quote": "4. 执行 `getnote doctor -o json`。只有退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能宣布连接完成；先处理 `issues[].blocking=true`，再按 `next_actions[]` 修复。\n5. 先用 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意创建测试内容时，才保存测试笔记。"
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 54,
+          "end_line": 57,
+          "quote": "1. 执行 `getnote update --check`，随后执行 `getnote update`；默认流程会升级 CLI、同步五个领域 Skill 并运行 doctor。\n2. 如果 CLI 明确要求由宿主或包管理器完成升级，使用平台声明的 `@getnote/cli` 安装流程，不下载或执行本地脚本。\n3. 使用 ClawHub/OpenClaw 的宿主流程检查当前独立 Skill；需要用户确认时只提供唯一必要的确认动作。\n4. 确认更新输出中的 CLI 版本、Skills 同步结果和 doctor 结果；再用最近笔记读取做验收。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 174,
+          "end_line": 174,
+          "quote": "| `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 166,
+          "end_line": 166,
+          "quote": "5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。"
+        }
+      ],
+      "source": "Most recent authorized private note returned by getnote notes --limit 1",
+      "sensitive_scope": "Private note title, note_id and private note_url in the locating record",
+      "version": "Original locating response before local projection",
+      "condition": "Connection or upgrade diagnostic acceptance, rather than a user request to list recent notes and the returned locating record reveals private note information",
+      "recipient": "Agent model processing connection-diagnostic tool output under EM02/EM03",
+      "boundary_event": "Possible model observation of acceptance-check notes JSON",
+      "excess_kind": "excess_payload_on_necessary_action",
+      "reduction_required": true,
+      "reduction": "Proposed explicit local wrapper retains the real API read and returns only exit code/business-success/readability status; omit identifying note fields from model return.",
+      "preservation_reason": "The acceptance step tests non-writing API readability and connection status. It does not require a note title/locator to be interpreted or shown; full diagnostic success fields and real API success remain available."
+    },
+    {
+      "id": "E2",
+      "interpretation": "For a request limited to a selected view such as attachments or transcript, preliminary type discovery needlessly exposes the private full body to the agent model. Proposed local projection of the same detail response to note_type and verified identity preserves routing, then the existing selected-view command obtains the requested content.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 84,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 147,
+          "end_line": 157,
+          "quote": "1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。\n2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。\n3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。\n5. 不拿 `content` 中的 AI 摘要冒充原文。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 175,
+          "end_line": 182,
+          "quote": "| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |\n| `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |\n| `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |\n| `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |\n| `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |\n| `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |\n| `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |\n| `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 86,
+          "end_line": 86,
+          "quote": "- **笔记详情**：按用户点名的视图展示标题、总结、原文、录音转写、附件、时间线、快捷笔记或会议待办，不用其他字段冒充。"
+        }
+      ],
+      "source": "Authorized target private note acquired by preliminary getnote note <id>",
+      "sensitive_scope": "Private full body/content outside the type discriminator, verified identity and user-requested selected view",
+      "version": "Original full detail response before selecting a view",
+      "condition": "User requests only a specific subview and preliminary detail read is used solely to determine uncertain note type and unrelated private body content is present",
+      "recipient": "Agent model in type-discovery processing under EM02/EM03",
+      "boundary_event": "Possible model observation of preliminary full note detail JSON",
+      "excess_kind": "excess_payload_on_necessary_action",
+      "reduction_required": true,
+      "reduction": "Proposed explicit local wrapper performs detail acquisition but returns only note_type and required verified identity; then call the existing original/transcript/attachments/chapters/quick/todos interface for the requested view.",
+      "preservation_reason": "Source distinguishes complete detail from type-specific interfaces and says to choose those views by real note type. Projection preserves the discriminator/identity and leaves the requested view, error handling and final content unchanged. This unit excludes cases where full note content itself is requested or needed."
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "U1",
+      "interpretation": "Official CLI/library/service implementation is absent. Browser credential isolation, field-limited interfaces, batch budgets and upload separation are source-declared contracts rather than measured runtime guarantees; retain unspecified transport details/backend retention without inventing logging.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 20,
+          "end_line": 25,
+          "quote": "让用户在当前 AI 中直接连接、诊断、升级 CLI，以及保存、查找和整理自己的得到大脑内容。本 Skill 理解用户意图、加载对应领域参考，并交给官方 `getnote` CLI 执行真实操作。\n\n## 能力与外部影响\n\n- 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。\n- 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 84,
+          "end_line": 116,
+          "quote": "`original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。\n\n得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。\n\n```bash\ngetnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json\n```\n\n课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。\n\n## 有预算的批量正文读取\n\n不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。\n\n退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。\n\n参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。"
+        },
+        {
+          "path": "references/kb.md",
+          "start_line": 89,
+          "end_line": 96,
+          "quote": "## 本地文件直传（MCP 已授权）\n\n1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。\n2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。\n3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。\n4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。\n\n已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "interpretation": "Capabilities, applied_filters, partial metadata, warnings and missing course lessons are material limitations even when pagination ends. Missing originals or IDs cannot be replaced with fabricated data; unsupported course+topic intersection must remain unsupported.",
+      "evidence": [
+        {
+          "path": "references/note.md",
+          "start_line": 92,
+          "end_line": 108,
+          "quote": "课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。\n\n单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：\n\n```bash\ngetnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json\n# 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL\ngetnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json\n```\n\n平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。\n\n创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。\n\n新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。\n\n分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 49,
+          "end_line": 55,
+          "quote": "只传已知的 query/author，至少一个；二者为 AND 条件，query 只匹配课程名，author 精确匹配老师。课程名不完整时显式用 `--match-mode prefix`；不把“讲概率”这样的正文主题塞进课程名。结果同名或版本不明时列候选消歧；用返回的 `course_type`+`course_id`，当前支持66，不解析标题、URL或课节 ID 生成课程 ID。空结果页若 `pagination.has_more=true` 仍按真实 `next_cursor` 继续，保持所有条件；循环或失败表示遍历未完成。`--all` 成功的 `traversal.completed=true` 只证明当前同步、授权范围内的遍历，不是得到 App 的全部划线。\n\n课程筛选同时包含课程直接引用和所属课节；显式增加 `--reference-type course_article` 会再限制为课节引用，`--reference-id` 仍是原课节 ID，组合按交集。需要时间条件时保留对应创建/编辑/记录更新时间参数。首版只支持个人笔记，course+topic_id 明确不支持；用户同时指定真实知识库时说明当前交集尚不可用，不能改查个人笔记后声称满足库范围。课程内语义搜索尚未开放，不能在全局 Top-K 后过滤冒充；可先精确列出课程笔记，再按需读正文核实主题。\n\n新请求需当前服务端声明 `reference.resources.v1` / `note.course_filter.v1`，并核对 applied_filters。服务未支持时报告能力缺失，不自动删除课程条件继续，不把 CLI 安装成功当作服务已发布。旧参数和默认调用继续可用。\n\n每页的 `partial`、`warnings` 和候选 `metadata_state` 都要保留。`course_directory_no_lessons` 表示目录缺少课节；翻到末页或 `traversal.completed=true` 不会消除这个缺口，回复“已找到这些，部分课程目录不完整，无法保证全部”。`candidate_work_budget` 且有下一游标时按原条件继续；游标结束后仍有目录警告，就保留部分完成结论，不改用账号全量扫描来宣称目录已经补齐。"
+        },
+        {
+          "path": "references/search.md",
+          "start_line": 118,
+          "end_line": 125,
+          "quote": "若 `data.partial=true` 或存在 `data.warnings`，先说明检索有部分结果未能完成权限验证或读取，并按 warnings 解释原因；空结果也不能表述为完整检索后无命中。若 `data.results=[]` 或结果均不符合用户指定来源，先按已选路径完成同一请求范围内的来源补查；补查不是跨知识库或跨账号扩大范围。只有主题搜索且无可用来源线索时，说明“这次语义搜索未找到”，不要说接口失败或全库没有；不创建笔记、不编造结果。\n\n## 失败、隐私与后续动作\n\n- `success=false` 或退出码非 0：回复失败步骤、`error.message` / `error.reason`、是否 `retryable` 和可选 `request_id`；不要将 HTTP 成功或空输出说成搜索成功。\n- 参数错误先读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒的重试，Agent 不再叠加无界重试；日/月配额和写操作不自动重试。\n- 若 CLI 提示“搜索服务响应超时”，这是检索未完成，不是“没有结果”。建议稍后重试，或缩小关键词、指定知识库后再试；不要伪造空列表。\n- 检索结果可能包含私密正文。群聊或共享会话默认只展示标题、必要摘要和真实链接；用户明确要求后再展开全文。"
+        }
+      ]
+    },
+    {
+      "id": "U3",
+      "interpretation": "The concrete user task/content and audience are absent. Excesses above are restricted to the specified diagnostic/type-only conditions; they do not condemn requested full-note reading, real note acceptance itself, or all private output.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 32,
+          "end_line": 39,
+          "quote": "| 用户想做什么 | 典型说法 | 完成后应返回什么 |\n| --- | --- | --- |\n| 保存内容 | “记一下”“保存这个链接”“把这张图存起来” | 真实标题、字符串笔记 ID、可打开的笔记链接；异步内容必须等生成完成 |\n| 查找内容 | “最近记了什么”“帮我找客户反馈” | 按相关度或时间排列的真实标题、摘要和链接 |\n| 深入阅读 | “打开这条笔记”“看录音原文”“有哪些会议待办” | 用户点名的详情视图，不用总结代替原文 |\n| 整理知识 | “放进产品研究的竞品文件夹” | 真实知识库、目录和归档结果；写后复读验证 |\n| 管理内容 | “加标签”“更新正文”“分享或删除” | 最终状态；危险操作先确认 |\n| 连接与排障 | “登录得到大脑”“检查为什么不能用”“更新到最新版” | CLI、授权和 API 的实际检查结果及下一步 |"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 99,
+          "end_line": 99,
+          "quote": "- 群聊或共享会话中不主动展开私密全文，先确认请求者和展示范围。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 149,
+          "end_line": 156,
+          "quote": "3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。\n4. 不确定笔记类型时先读 `getnote note <id> -o json`：\n   - 引用/链接/文字原文：`original`；\n   - 录音、会议、课堂逐字稿：`transcript`；\n   - 图片、音频、文件：`attachments`；\n   - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；\n   - 用户现场快捷记录：`quick-note`；\n   - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。"
+        },
+        {
+          "path": "references/note.md",
+          "start_line": 175,
+          "end_line": 175,
+          "quote": "| `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |"
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "reviewed_files": [
+    "references/auth.md",
+    "references/kb.md",
+    "references/note.md",
+    "references/search.md",
+    "references/tag.md",
+    "SKILL.md"
+  ],
+  "reviewed_file_inventory": [
+    {
+      "path": "references/auth.md",
+      "sha256": "1841f2ffcc3784730eb2470dfc3c3e3ba359612e520ae9eb37238a4dd637309c",
+      "physical_lines": 65,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "references/kb.md",
+      "sha256": "2af198a9dc6c434845c6a88fe3578f2f5caa4b566336c7f2015600938db194a8",
+      "physical_lines": 135,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "references/note.md",
+      "sha256": "0ae35c60493d61726781630176e60508bdf139312fe9af1f00ca4862a13cce91",
+      "physical_lines": 189,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "references/search.md",
+      "sha256": "b9cbc3fab7cf7cb18c1b997ce260511c9f18d7867db2ebdd24e97d72e9256b43",
+      "physical_lines": 126,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "references/tag.md",
+      "sha256": "619ee0cd5f39684224b69579aac6d4e62106e877a81c0e923cca8f3e2594b014",
+      "physical_lines": 57,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "c1276c4e4462926ed42ff7e5def5ea0b13a8abac0f875204b1d76ac0c10b6bad",
+      "physical_lines": 117,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    }
+  ],
+  "review_limitations": [
+    "Static source-only interpretation, never execution evidence. No independent user task or actual authorization is supplied. Opaque dependency and service internals are not inferred. Human verification remains pending."
+  ],
+  "explanation": "All six retained physical operational files were read and mechanically matched to the completely reviewed numbered bundle. Two conditional model-observation excesses have concrete local-projection proposals preserving the declared diagnostic/type-routing goals. Their possible observation status follows the common contract and is not a measured runtime claim. Human verification remains pending."
+}

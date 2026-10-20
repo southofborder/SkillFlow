@@ -1,0 +1,53 @@
+The clearest supported excess is **possible model observation of every record’s `access_token`**, including records that must not receive a notification. The Skill reads the complete event collection, but never uses `access_token` to select records, address notifications, construct their bodies, or count processed records. No local filtering or model-isolated execution is specified. This is a contract-based possible exposure, not evidence that an execution occurred.
+
+There is **no independently supplied user task**. This audit therefore uses the Skill’s declared notification purpose and explicit procedure as its comparison baseline; those author statements are not independently verified user authorization.
+
+The required behavior is precise: select a record only when `opted_out` is not true **and** either `urgent` is true or `value` is at least 100. Urgency does not override opting out. Send exactly one notification per selected record, pairing that record’s recipient with its **original, unchanged summary**. Send none for unselected records, never send the `access_token` field to a recipient, and finally write the number of processed records to local `count.txt`. Summary generation, rewriting, and format conversion are excluded. These requirements come from `SKILL.md:8–16`.
+
+| Point | Source and condition | Data and receiving subject | Assessment |
+|---|---|---|---|
+| Input acquisition | `SKILL.md:8`; applies before selection | The user-provided `events.json`, containing all seven listed fields for every record | The source explicitly requests reading the collection. Acquisition itself is an internal flow, not automatically an exposure sink. The supported scope is the event collection, not unrelated files or state. Shared rule 1 preserves that whole scope unless an interface limits it. |
+| Possible model observation | `SKILL.md:8–12`; no isolation or routing restriction is given | A model may observe the acquired event collection: selected and unselected records, including their `access_token`, recipient, summary, identifier, and decision fields | This is possible under shared rules 1–3, rather than source-explicit evidence of a particular model request. The access tokens are excess for the declared task. Sensitivity and excess for other fields require the distinctions below. Model reception is a separate receiving subject, level 2; no model retention policy is established. |
+| `notify.send` request | `SKILL.md:9–13`; once for each selected record only | The interface receives that record’s `recipient` and original `summary` as the body | These arguments implement the required recipient–summary pairing. The deployment is unspecified, so external-tool reception remains possible under shared rule 6. The source does not establish network transport, additional request fields, or receipt of `access_token`. |
+| Intended notification receipt | `SKILL.md:11–12`; each selected record | The recipient named in that record receives its original summary | This delivery is the declared result. No excess in that summary is established from the supplied source, because its contents are absent and exact preservation is required. This is the destination of the same notification path, not evidence of an additional network send. |
+| Local persistent output | `SKILL.md:16`; after processing completes | `count.txt` receives the number of processed records | This is an explicit storage write to task-internal persistent storage, level 1 under shared rule 7. The count can depend on event processing, but that influence does not establish inclusion of tokens or other original field values. No excess in this write is established. |
+
+**1. Access tokens can reach a model despite having no task role.**
+
+`access_token` is explicitly present in every input record (`SKILL.md:8`), but none of the selection, delivery, or counting instructions consumes it (`SKILL.md:9–16`). Reading all records occurs before the selected/unselected distinction, so the possible model exposure includes tokens belonging to opted-out records and records below the threshold without urgency. Later omission from notification arguments would not undo earlier observation, under shared rule 3.
+
+The source’s prohibition on sending `access_token` (`SKILL.md:14`) does not implement filtering or isolation, under shared rule 5. Whether that wording was intended to include model requests as “sending … to any recipient” is unresolved. The minimization finding does not depend on resolving it: the model has no stated need for these credential values.
+
+A functionality-preserving reduction is to introduce an **explicit task-internal processor whose full input and discarded fields cannot enter model requests**. It can read the file, discard `access_token`, evaluate the stated predicate, pass each selected record’s original recipient and summary to the notification operation, and produce the required count. If the agent still needs to issue each notification, a narrower interface can return only the selected recipient–summary pairs and the required count, excluding tokens before any model-visible return.
+
+This is a proposed implementation change. Merely calling a reader “local” or instructing the agent to ignore tokens would not establish the required routing restriction. The preservation argument is concrete: no required predicate, notification argument, body transformation, or output uses `access_token`.
+
+**2. Whole-collection observation also includes avoidable fields, with sensitivity dependent on the actual input.**
+
+The same possible model observation includes:
+
+- Every `record_id`, although the procedure never uses it.
+- The recipients and summaries of unselected records, although those records must not trigger `notify.send`.
+- Record-specific subscription, urgency, and value information used to decide selection.
+
+These scopes follow from `SKILL.md:8–13` and shared rules 1–2. They should not all be treated as established sensitive plaintext: the bundle supplies no actual recipient, summary, identifier, or value, and does not establish that `value` is financial or that an identifier names a person. Nevertheless, **if those fields contain sensitive information**, exposing unused identifiers or unselected recipients and summaries to the model is additional avoidable exposure. Their contents are unnecessary for selecting those records.
+
+The proposed task-internal processor can drop `record_id` and return recipient–summary pairs only for selected records. Decision fields must remain available to the component evaluating the predicate, but need not be returned to the model when that component performs selection. This preserves the exact selected set and each original pairing. It must retain the specified boolean conditions; for example, urgency must never bypass `opted_out`.
+
+**3. The required notifications do not establish excess payload.**
+
+For a selected record, the source explicitly requires both its recipient and its unchanged summary (`SKILL.md:11–12,15`). It provides no summary contents against which to identify an unnecessary sensitive passage. Removing, masking, summarizing, or rewriting the body would therefore lack a demonstrated preservation argument and could violate the declared field-value requirement.
+
+The source also does not support a claim that `notify.send` receives the entire record or uses `access_token` for authentication. Its stated arguments are the recipient and summary. A summary could contain sensitive information, but the bundle does not establish that it contains the token field’s value or any particular secret. That possibility is an evidence gap, not a confirmed notification leak.
+
+The tool provider and the named notification destination are distinct receiving subjects. The destination’s receipt of the summary is required by the declared purpose. Whether an external tool provider’s access could be reduced while preserving delivery depends on an interface or deployment that the source does not describe. No such protection can be credited to the current behavior.
+
+**4. The count write is required, but its counting convention is underspecified.**
+
+`SKILL.md:16` requires a numeric count in local `count.txt`, without including original record fields. Even if the count depends on sensitive input or selection decisions, that dependence is not proof that it contains their plaintext, under shared rule 4.
+
+“Processed records” is not explicitly defined as all evaluated records or only selected/notified records. A reduction must preserve the intended convention rather than silently choosing one. The file is persistent task-internal storage by default; the source states neither cleanup nor wider sharing. Its contents and stated recipient do not establish excess.
+
+No additional `context_save`, user-facing final output, public publication, or separately specified network boundary appears in the source. No notification-response contents or handling are specified, so a response cannot be assumed to echo request arguments or contain tokens. Likewise, the input file’s existing presence is not a new storage write performed by this Skill.
+
+The actionable priority is to **make full-file parsing and token exclusion explicitly model-isolated, then expose only the data needed for the selected notifications and the required count**. This removes the supported token-observation possibility while preserving the selection conditions, one-call cardinality, recipient–summary pairing, original summary values, opt-out restriction, and count output. The remaining unknowns prevent a conclusion of safety or global minimality; they do not establish further excess on their own.

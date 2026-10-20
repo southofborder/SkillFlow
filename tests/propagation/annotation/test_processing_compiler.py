@@ -52,7 +52,7 @@ def test_default_acquisition_observes_output_and_each_transform_phase_inputs():
     assert validate_compiled_response(compiled, prepared) == compiled
     with pytest.raises(ValueError):
         validate_response(compiled, prepared)  # no implicit raw/compiled compatibility
-    assert SCHEMA_VERSION == "security-profile-v14"
+    assert SCHEMA_VERSION == "security-profile-v15"
 
 
 @pytest.mark.parametrize("returns,expected", [([], ["fs_read"]),
@@ -288,10 +288,13 @@ def test_annotation_paths_reject_program_generated_element_scope_and_invalid_ind
 
 def test_model_schema_does_not_expose_data_element_step():
     prepared, _ = raw_fixture()
-    schema = render_prompt_format(TypeAdapter(RawAnnotationResponse | FailureResponse).json_schema())
+    raw_schema = TypeAdapter(RawAnnotationResponse | FailureResponse).json_schema()
+    schema = render_prompt_format(raw_schema)
     assert schema in build_prompt(prepared)
     assert '"ElementStep"' not in schema
-    assert '"scope"' not in schema
+    assert set(raw_schema["$defs"]["EachStep"]["properties"]) == {"kind"}
+    # Constraint scope names a real raw for_each, never a runtime element ID.
+    assert set(raw_schema["$defs"]["ElementScope"]["properties"]) == {"kind", "instruction_id", "scope_path"}
 
 
 def guarded_build_fixture():
@@ -315,7 +318,7 @@ def test_conditional_member_observation_and_control_use_share_guard():
     assert observations[1]["inputs"] == [{"kind": "input", "index": 0}]
     assert observations[1]["when"] == {"kind": "literal", "value": False}
     assert atoms[-1]["parts"][0]["when"] == observations[1]["when"]
-    assert mapping["compiler_version"] == "skillflow-processing-compiler-v8"
+    assert mapping["compiler_version"] == "skillflow-processing-compiler-v9"
     assert compile_response(checked, prepared)[1:] == (compiled, mapping)
 
 

@@ -1,0 +1,62 @@
+The workflow has one supported data-minimization defect: **it sends the unchanged ticket to the drafting provider after creating a correctly masked copy.** This unnecessarily exposes both confidential fields to the provider, its model, and its retained request. The later variable assignment and draft cleanup do not repair that earlier exposure.
+
+This is a static conclusion about the supplied workflow, not a claim that an execution occurred. Although the fixture is synthetic, its email and session key have the stated confidentiality classifications (`CONTRACTS.md:3–5, 24–28`).
+
+### Task and restrictions
+
+The independent user requests one short, one-sentence issue note, drafted with the drafting model and then shown to the requester. The substantive inputs are `product`, `error_text`, and `requested_fix`; quoted error text must remain verbatim. The customer email and session key must become `[EMAIL]` and `[SESSION_KEY]` **before the provider receives the ticket**. This is a single-run request with no need for saved conversation memory.
+
+The source confirms that the three public fields are sufficient for drafting (`CONTRACTS.md:27–28, 39–40`). Full-ticket acquisition, retaining two local object versions, and choosing which version to pass are implementation choices; they are not additional user requirements.
+
+### Source-linked inventory
+
+| Stage or receiving point | Current data and conditions | Necessity and exposure assessment | Evidence |
+|---|---|---|---|
+| Local ticket acquisition | Every run loads the complete ticket as `original_v1`, including the confidential email and session key. | Source-explicit private, ephemeral acquisition. It is not model observation, durable storage, or delivery to another recipient. No unnecessary **exposure** is established here. | `SKILL.md:8`; `ticket.json:2–6`; `CONTRACTS.md:7–20, 24–28` |
+| Local masking and object retention | `redacted_v2` retains all fields but replaces the two confidential values with the exact placeholders. Both versions remain in ephemeral memory. | The masked version implements the required replacement. The original remains confidential locally, but the explicit controller isolation prevents treating this computation as a model or external disclosure. | `SKILL.md:9`; `CONTRACTS.md:13–16, 30–34` |
+| Request delivery to the external drafting provider | Every run passes **`original_v1`**, together with the one-sentence/verbatim-error style string. The delivered object therefore contains both original confidential values and all three public fields. | Using the drafting provider and transmitting the public issue details serve the task. Transmitting the original email and session key is unnecessary and contradicts the required pre-delivery replacement. This is the external request delivery; it should not also be counted as a second, identical external-tool delivery. | `SKILL.md:10`; `CONTRACTS.md:36–40`; shared rule **7** |
+| Drafting-model observation | The externally hosted model observes every field and value in that original request before returning text. | The public issue fields and style are needed. Observation of the original email and session key is supported, unnecessary exposure. This is explicit model visibility, not an inference from tool scheduling. | `CONTRACTS.md:36–40`; `SKILL.md:10`; shared rule **3** |
+| Provider request retention | The provider retains the same request containing the original confidential values. | This is explicit retention by another recipient. Retaining the unnecessary confidential payload is a consequence of the same incorrect request version. The source does not establish retention duration or access beyond the provider; no additional logs or recipients should be invented. | `CONTRACTS.md:36–38, 17–20`; shared rules **6–7** |
+| Assignment after the request | After the model returns, `working_ticket` is assigned `redacted_v2`. | This local assignment introduces no receiving boundary. It does not change the sent request or `original_v1`, and therefore cannot reduce the prior delivery, observation, or retained payload. | `SKILL.md:11`; `CONTRACTS.md:45–46`; shared rule **3** |
+| Draft return and local cleanup | The returned `draft_v3` enters the controller. `clean_draft` locally replaces occurrences of the two complete original confidential values and preserves other characters. | The returned text is not automatically user delivery. Cleanup does not send its inputs elsewhere or create another model observation. The request’s contents do not prove that the draft repeats those contents. | `SKILL.md:10, 12`; `CONTRACTS.md:7–20, 42–46`; shared rules **4, 6, 8** |
+| Requester output | Every run calls `user.reply` once with exactly `final_v4`. | Showing the note is required. Complete occurrences of the original email and key have been replaced under the documented cleanup. No additional unnecessary confidential disclosure to the requester is established from the supplied output behavior. Remaining uncertainty about partial or transformed content is described below. | `SKILL.md:12–13`; `CONTRACTS.md:42–50` |
+| Assistant conversation memory and other storage | No `context.save` or file-write operation occurs. The contract defines durable assistant memory, but the workflow does not invoke it. | No assistant-memory exposure or internal persistent file write is supported. Provider request retention remains the distinct storage point identified above. | `SKILL.md:15–16`; `CONTRACTS.md:13–20, 48–50` |
+
+### Supported finding and concrete correction
+
+**Pass the masked version to the drafting model.** The source creates an appropriate reduced version but then explicitly passes the unchanged original (`SKILL.md:9–10`). Because `mask_fields` creates a fresh object without modifying its input, this is not an ambiguity about whether masking happened in place (`CONTRACTS.md:30–34`).
+
+The unnecessary payload comprises:
+
+- `customer_email`, classified as confidential contact information.
+- `session_key`, classified as a confidential active-session credential.
+
+Both reach the same external provider, are observed by its model, and remain in its retained request on every execution of the described sequence. The finding follows from the unnecessary **payload**, even though the drafting action itself is required. It does not depend merely on the recipient being external or on the user’s prohibition: the source independently establishes that the public fields suffice and that exact replacements preserve those fields.
+
+The proposed replacement for step 3 is:
+
+```text
+draft_v3 = draft_model.compose(
+    ticket=redacted_v2,
+    style="one sentence; preserve any quoted error_text verbatim"
+)
+```
+
+This preserves function because the documented transform:
+
+- Keeps `product`, `error_text`, and `requested_fix` unchanged.
+- Supplies the two exact placeholders the user specified.
+- Preserves the ticket’s field structure.
+- Requires no additional model call or saved memory.
+
+The existing one-sentence style and single `user.reply` can remain. Keeping the documented local cleanup is compatible with this correction, although cleanup cannot substitute for sending the correct version. Moving the working-variable assignment before the call would also work **only if the call actually passes that masked variable**; changing an unused variable alone would not address the defect.
+
+For this fixture, neither original confidential value occurs in `error_text`, so cleanup does not alter the quoted public error (`ticket.json:3, 5–6`; `CONTRACTS.md:42–44`). The proposed request correction also preserves that error text directly.
+
+### Limits and unresolved cases
+
+The source does not provide the actual returned draft. It establishes that the model uses the public issue fields for a one-sentence note, but it does not specify every possible returned character. The cleanup removes complete occurrences of the original email and session key; it does not establish removal of every possible fragment, encoding, or paraphrased disclosure. Conversely, receiving the original request is not evidence that the model’s response contains those confidential values. Those output possibilities remain unresolved, rather than additional established findings (shared rules **4** and **8**).
+
+The controller contract expressly excludes implicit model observations and unmentioned logging or telemetry. Accordingly, local loading, masking, assignment, and cleanup must not be inflated into further disclosures. The definition of `context.save` likewise does not establish that memory was saved.
+
+The supported correction removes the original confidential values from all three established provider-side consequences—delivery, model observation, and request retention—while preserving the specified public inputs, placeholders, recipient, one-sentence format, and single requester output. No excess is established at the remaining boundaries; that limited conclusion does not prove universal output safety or global minimality.

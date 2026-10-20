@@ -20,7 +20,7 @@ from skillflow.propagation.contracts.paths import semantics_path
 
 from skillflow.propagation.review.models import SCHEMA_VERSION
 
-REVIEW_FIELDS = {"schema_version", "raw_annotation", "observations", "target_index", "goal_index", "source_line_universe"}
+REVIEW_FIELDS = {"schema_version", "raw_annotation", "observations", "target_index", "declaration_index", "source_line_universe"}
 
 
 def _target_index(raw: dict, instruction_ids: set[str]) -> list[dict]:
@@ -137,12 +137,12 @@ def prepare_review_material(material: dict[str, Any], raw_annotation: dict[str, 
                 for file, line in sorted(nonempty_source_lines(joint_source_files(annotation_material)))]
     return {"schema_version": SCHEMA_VERSION, **deepcopy(annotation_material),
             "raw_annotation": raw, "observations": observations, "target_index": targets,
-            "goal_index": _goal_index(annotation_material["cfg"], raw, compiled, mapping),
+            "declaration_index": _declaration_index(annotation_material["cfg"], raw, compiled, mapping),
             "source_line_universe": universe}
 
 
-def _goal_index(cfg, raw, compiled, mapping):
-    """Resolve every original seed with existing compiler coordinates, without Data."""
+def _declaration_index(cfg, raw, compiled, mapping):
+    """Account for every demand and restriction without deriving execution facts."""
     from skillflow.propagation.contracts.demand_index import build_demand_target_index
     from skillflow.propagation.contracts.references import target_key
     targets = build_demand_target_index(cfg, raw)
@@ -170,9 +170,29 @@ def _goal_index(cfg, raw, compiled, mapping):
             resolved["declared_refs"] = deepcopy(target.get("declared_refs", []))
             if "output" in target["value"]:
                 resolved["output"] = target["value"]["output"]
-        result.append({**deepcopy(item), "goal": deepcopy(goal), "resolved_target": resolved})
+        result.append({"kind": "demand", **deepcopy(item), "goal": deepcopy(goal), "resolved_target": resolved})
     if {item["goal_id"] for item in result} != set(goals) or len(result) != len(goals):
         raise ValueError("compiler goal mapping is incomplete")
+    expected = {
+        json_pointer("realizations", row_index, "constraints", constraint_index): row["requirement_id"]
+        for row_index, row in enumerate(raw["realizations"])
+        for constraint_index, _ in enumerate(row.get("constraints", []))
+    }
+    constraint_ids = set()
+    constraint_pointers = set()
+    for item in mapping["constraints"]:
+        pointer = item["raw_pointer"]
+        if pointer not in expected or pointer in constraint_pointers or item["constraint_id"] in constraint_ids:
+            raise ValueError("compiler constraint mapping has duplicate or unknown declaration")
+        if item["requirement_id"] != expected[pointer]:
+            raise ValueError("compiler constraint mapping requirement differs")
+        constraint_ids.add(item["constraint_id"])
+        constraint_pointers.add(pointer)
+        # The declaration is already present once in raw_annotation; only its
+        # checked coordinate/identity belongs in this accounting index.
+        result.append({"kind": "constraint", **deepcopy(item)})
+    if constraint_pointers != set(expected):
+        raise ValueError("compiler constraint mapping is incomplete")
     return result
 
 

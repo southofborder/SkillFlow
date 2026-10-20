@@ -12,8 +12,8 @@ from skillflow.common.source_evidence import Text, _require_json
 from skillflow.propagation.contracts.boundaries import SinkBoundary
 from skillflow.propagation.contracts.demand import DemandGoal, DemandPath, DemandProperty
 from skillflow.propagation.contracts.specs import ValueRef
-from skillflow.propagation.contracts.task import TaskReference
-from skillflow.propagation.contracts.realizations import TaskRealization
+from skillflow.propagation.contracts.task import TaskReference, TaskBinding
+from skillflow.propagation.contracts.realizations import RealizationGap
 from skillflow.propagation.data.models import _check_json_value
 from .models import Position
 
@@ -183,8 +183,13 @@ class Diagnostic(Strict):
     blocking: bool
 
 
-class RequirementCoverage(TaskRealization):
+class RequirementCoverage(Strict):
+    requirement_id: Text
+    status: Literal["expressed", "partial", "retained_only", "unmapped"]
+    bindings: list[TaskBinding]
+    gaps: list[RealizationGap]
     goal_ids: list[Text]
+    constraint_ids: list[Text]
     has_applicable_goal: bool
 
 
@@ -213,7 +218,7 @@ class Coverage(Strict):
 
 
 class DemandResult(Strict):
-    schema_version: Literal["skillflow-demand-v3"]
+    schema_version: Literal["skillflow-demand-v4"]
     status: Literal["complete", "partial"]
     goals: list[DemandGoal]
     traceability: Traceability
@@ -324,8 +329,13 @@ def validate_result_references(value, facts, targets):
         if trace["source_accounting_indices"] != expected_indices:
             raise ValueError("Demand source accounting projection differs")
         coverage = checked["coverage"]["requirements"][req]
-        if {k: coverage[k] for k in realizations[req]} != realizations[req]:
+        original = {k: v for k, v in realizations[req].items() if k != "constraints"}
+        if {k: coverage[k] for k in original} != original:
             raise ValueError("Demand realization differs from immutable annotation")
+        expected_constraints = [r["constraint_id"] for r in annotation["mapping"]["constraints"]
+                                if r["requirement_id"] == req]
+        if coverage["constraint_ids"] != expected_constraints:
+            raise ValueError("Demand constraint references differ from annotation")
         for seed in trace["seeds"]:
             identity = seed["goal_id"]
             expected_pointer = mappings[identity]["raw_pointer"] if canonical_goals.get(identity) == goals[identity] else None

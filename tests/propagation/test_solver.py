@@ -20,6 +20,7 @@ from skillflow.propagation import FlowState
 from skillflow.propagation import PropagationRecords
 from skillflow.propagation import propagate
 from skillflow.propagation.annotation.services import to_payload
+from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
 
 
 DEMO = runpy.run_path(str(project_root() / "examples" / "propagation" / "propagation_demo.py"))
@@ -87,7 +88,7 @@ def test_solver_and_records_require_explicit_business_projection(as_model):
     with pytest.raises(ValueError, match="location_evidences"):
         propagate(cfg, response, initial_registry=registry, initial_state=state)
     with pytest.raises(ValueError, match="location_evidences"):
-        PropagationRecords(cfg, response, registry, profile_schema_version="security-profile-v14", annotation_cfg_sha256=cfg_sha256(cfg))
+        PropagationRecords(cfg, response, registry, profile_schema_version=SCHEMA_VERSION, annotation_cfg_sha256=cfg_sha256(cfg))
     payload = to_payload(response)
     assert set(payload) == {"ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions"}
     assert propagate(cfg, payload, initial_registry=registry, initial_state=state).status == "complete"

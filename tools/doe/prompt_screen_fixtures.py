@@ -192,7 +192,7 @@ def _review_case(*, adverse):
         "Do not require changes to the correct original-field selections or infer networking from interface names."] if adverse else
         ["Do not flag the explicit whole-card delivery demand as excessive solely because it is whole-value.",
          "Do not flag the supported caption write payload as missing; the actual write has both action and content demands.",
-         "Use exactly the supplied goal_index entries; do not invent an additional goal check."])
+         "Use exactly the supplied declaration_index entries; do not invent an additional goal check."])
     ex["expected_findings"] = 2 if adverse else 0
     return ex
 
@@ -206,7 +206,7 @@ def review_reference(material, *, adverse=False):
     check={"status":"accepted","reason":"The supplied relation agrees with this synthetic source.","finding_indexes":[]}
     response={"outcome":"completed","source_checks":[{"file":r["file"],"start_line":r["line"],"end_line":r["line"],**deepcopy(check)} for r in material["source_line_universe"]],
         "requirement_checks":[{"requirement_id":r["id"],**deepcopy(check)} for r in material["task"]["requirements"]],
-        "goal_checks":[{"raw_pointer":r["raw_pointer"],**deepcopy(check)} for r in material["goal_index"]],
+        "declaration_checks":[{"raw_pointer":r["raw_pointer"],**deepcopy(check)} for r in material["declaration_index"]],
         "reviewed_ir_ids":[i["id"] for b in material["cfg"]["blocks"].values() for i in b["instructions"]],"findings":[]}
     if adverse:
         pointers=["/ir_semantics/ir_entry_read/events/0/events/0/atomic_ops/0/demands/0", "/ir_semantics/ir_entry_save/events/1/events/0/atomic_ops/0"]
@@ -216,5 +216,5 @@ def review_reference(material, *, adverse=False):
                 "The complete entry demand exceeds the specified tracking-code requirement." if i==0 else "The write has an action demand but omits its required slot-count payload demand.",
                 "evidences":[ev()],"suggestion":"Retain only the task-supported information demand at the relevant value position."})
             response["requirement_checks"][i].update(status="issue",finding_indexes=[i])
-        next(x for x in response["goal_checks"] if x["raw_pointer"]==pointers[0]).update(status="issue",finding_indexes=[0])
+        next(x for x in response["declaration_checks"] if x["raw_pointer"]==pointers[0]).update(status="issue",finding_indexes=[0])
     return response

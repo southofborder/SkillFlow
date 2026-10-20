@@ -67,6 +67,8 @@ def build_view(review, *, metadata=None):
                 "derivation_anchor": _anchor("sensitivity", item["derivation_id"]),
                 "demands": [{"id": identity, "anchor": _anchor("demand", identity)}
                             for identity in item["demand_refs"]],
+                "constraints": [{"id": identity, "anchor": _anchor("preservation", identity)}
+                                for identity in item["constraint_refs"]],
                 "limitations": [diagnostics[identity] for identity in item["limitations"]]})
         sinks.append({"id": sink["id"], "anchor": _anchor("sink", sink["id"]), "value": sink,
             "rows": rows, "requirements": [requirements.get(identity, {"id": identity, "text": ""})
@@ -99,6 +101,9 @@ def build_view(review, *, metadata=None):
     derivations = [{"kind": kind, "id": identity, "anchor": _anchor(kind, identity), "value": value}
                    for kind in ("sensitivity", "demand")
                    for identity, value in all_derivations[kind].items()]
+    derivations += [{"kind": kind, "id": identity, "anchor": _anchor(kind, identity), "value": row}
+                    for kind in ("preservation", "influence")
+                    for identity, row in result["constraints"][kind].items()]
     return {"schema_version": result["schema_version"], "status": result["status"], "notice": NOTICE,
         "business_filename": metadata.get("business_filename", "sensitivity-review.json"),
         "task": task, "task_evidences": task_evidences, "traceability": traceability,
@@ -108,6 +113,7 @@ def build_view(review, *, metadata=None):
         "candidate_origin": metadata.get("candidate_origin", "Offline candidate"),
         "declaration_source": metadata.get("declaration_source", "offline_candidate"),
         "coverage": result["coverage"], "counts": counts, "declarations": declarations,
+        "constraint_checks": result["constraints"]["checks"],
         "sinks": sinks, "derivations": derivations, "diagnostics": result["diagnostics"],
         "index": index}
 
@@ -144,6 +150,10 @@ def render_html(review, *, metadata=None):
         + '">Business JSON</a></nav>',
         '<section class="card"><h2>Coverage</h2>' + _pre(view["coverage"]) + '<h3>Range comparisons</h3>'
         + _pre(view["counts"]) + '<p>These counts concern declared ranges, not unique leaks or measured events.</p></section>',
+        '<section class="card" id="constraints"><h2>Forward constraint checks</h2>'
+        '<p>Constraints do not prune actual propagation or create positive demands. Baseline violations remain visible '
+        'even when an independent local reduction is supported. Satisfied means only the supported static model.</p>'
+        + _pre(view["constraint_checks"]) + '</section>',
         '<section class="card" id="task"><h2>Task and demand basis</h2>'
         '<p>These front-end requirements drive preservation demands. Reference checks do not prove '
         'semantic support or completeness; current payload use is not a necessity argument.</p>'
@@ -184,6 +194,8 @@ def render_html(review, *, metadata=None):
                     + '">Declaration</a> · <a href="#' + row["derivation_anchor"] + '">Sensitivity derivation</a>')
                 out.extend('<br><a href="#' + demand["anchor"] + '">' + escape(demand["id"]) + '</a>'
                            for demand in row["demands"])
+                out.extend('<br><a href="#' + proof["anchor"] + '">Constraint preservation</a>'
+                           for proof in row["constraints"])
                 if row["limitations"]:
                     out.append('<details><summary>Limits</summary>' + _pre(row["limitations"]) + '</details>')
                 if item.get("reduction") is not None:
@@ -227,6 +239,9 @@ def render_markdown(review, *, metadata=None):
         '**Declaration source:** ' + _md(view["declaration_source"]),
         '## Coverage', _pre(view["coverage"]), '## Range comparisons', _pre(view["counts"]),
         'These counts concern declared ranges, not unique leaks or measured events.',
+        '## Forward constraint checks',
+        'Constraints do not change actual propagation or create positive demands. Baseline findings remain visible independently of any local reduction. Satisfaction is limited to the supported static model.',
+        _pre(view["constraint_checks"]),
         '## Task and demand basis',
         'These front-end requirements drive preservation demands. Reference checks do not prove '
         'semantic support or completeness; current payload use is not a necessity argument.',
@@ -260,6 +275,7 @@ def render_markdown(review, *, metadata=None):
                 '[Declaration](#' + row["declaration_anchor"] + ') · [Sensitivity derivation](#'
                 + row["derivation_anchor"] + ')',
                 '\n'.join('- [' + _md(demand["id"]) + '](#' + demand["anchor"] + ')' for demand in row["demands"])]
+            out += ['\n'.join('- [Constraint preservation](#' + proof["anchor"] + ')' for proof in row["constraints"])]
             if row["limitations"]:
                 out += ['**Limits:**', _pre(row["limitations"])]
             if item.get("reduction") is not None:

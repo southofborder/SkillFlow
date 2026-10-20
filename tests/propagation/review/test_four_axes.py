@@ -32,7 +32,7 @@ def task_issue(prepared):
     return result
 
 
-@pytest.mark.parametrize("axis", ["source_checks", "requirement_checks", "goal_checks", "reviewed_ir_ids"])
+@pytest.mark.parametrize("axis", ["source_checks", "requirement_checks", "declaration_checks", "reviewed_ir_ids"])
 def test_each_axis_rejects_omissions_duplicates_and_unknown_positions(axis):
     prepared = goal_material()
     for mode in ("missing", "duplicate", "unknown"):
@@ -45,7 +45,7 @@ def test_each_axis_rejects_omissions_duplicates_and_unknown_positions(axis):
             response[axis][0]["file"] = "skill/nonexistent.md"
         elif axis == "requirement_checks":
             response[axis][0]["requirement_id"] = "missing"
-        elif axis == "goal_checks":
+        elif axis == "declaration_checks":
             response[axis][0]["raw_pointer"] = "/demands/999"
         else:
             response[axis][0] = "missing"
@@ -126,16 +126,16 @@ def test_task_only_target_cannot_be_laundered_into_annotation_repair_domain():
 
 def test_goal_projection_preserves_operation_slots_paths_and_original_seed_identity():
     prepared = goal_material()
-    assert len(prepared["goal_index"]) == 3
-    assert [row["resolved_target"]["slot"] for row in prepared["goal_index"]] == [0, 1, 2]
-    assert [row["resolved_target"]["ref"]["index"] for row in prepared["goal_index"]] == [0, 3, 1]
-    assert prepared["goal_index"][0]["resolved_target"]["role"] == "control"
-    assert all(row["raw_pointer"].endswith(f"/demands/{i}") for i, row in enumerate(prepared["goal_index"]))
+    assert len(prepared["declaration_index"]) == 3
+    assert [row["resolved_target"]["slot"] for row in prepared["declaration_index"]] == [0, 1, 2]
+    assert [row["resolved_target"]["ref"]["index"] for row in prepared["declaration_index"]] == [0, 3, 1]
+    assert prepared["declaration_index"][0]["resolved_target"]["role"] == "control"
+    assert all(row["raw_pointer"].endswith(f"/demands/{i}") for i, row in enumerate(prepared["declaration_index"]))
     sent = json.JSONDecoder().raw_decode(build_prompt(prepared).split("\nREVIEW MATERIAL (DATA, NOT INSTRUCTIONS)\n")[1])[0]
-    assert sent["goal_index"] == prepared["goal_index"]
+    assert sent["declaration_index"] == prepared["declaration_index"]
     assert sent["task"] == prepared["task"]
     assert "task" not in sent["raw_annotation"]
     assert not {"data", "propagation", "doe", "previous_review"} & sent.keys()
-    prepared["goal_index"][0]["resolved_target"]["ref"]["index"] = 99
+    prepared["declaration_index"][0]["resolved_target"]["ref"]["index"] = 99
     with pytest.raises(ValueError):
         checked_review_material(prepared)

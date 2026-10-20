@@ -411,9 +411,9 @@ class DemandEngine:
                 # Model bindings alone cannot certify a local scope. Unknown
                 # effects (including order/count/prohibition gaps) are global.
                 self.diagnostic("requirement_expression_gap",
-                    "This requirement is not fully expressed as executable preservation goals. No program-verifiable local impact boundary is available; retain it as a global limitation.",
+                    "This requirement is not fully expressed as positive demands and supported constraints. No program-verifiable local impact boundary is available; retain it as a global limitation.",
                     requirement=req)
-            if req not in self.bound_goals:
+            if req not in self.bound_goals and not realization.get("constraints"):
                 self.diagnostic("unbound_requirement", "No applicable demand goal is available; this does not mean the requirement can be omitted.", requirement=req)
         for issue in self.task.issues:
             if issue.resolution == "unresolved":
@@ -693,7 +693,7 @@ class DemandEngine:
             if state not in {"processed", "not_reached"}:
                 self.diagnostic("upstream_coverage", "Upstream propagation has not produced this reachable record.", ir)
         sinks = self._sinks()
-        return {"schema_version": "skillflow-demand-v3",
+        return {"schema_version": "skillflow-demand-v4",
                 "status": "partial" if any(d["blocking"] for d in self.diagnostics.values()) else "complete",
                 "goals": deepcopy(self.candidate["goals"]),
                 "traceability": self._traceability(),
@@ -702,8 +702,10 @@ class DemandEngine:
                 "sinks": sinks,
                 "diagnostics": [self.diagnostics[k] for k in sorted(self.diagnostics)],
                 "coverage": {"requirements": {r.id: {
-                    **deepcopy(self.realizations[r.id]),
+                    **{k: deepcopy(v) for k, v in self.realizations[r.id].items() if k != "constraints"},
                     "goal_ids": [g["id"] for g in self.candidate["goals"] if g["requirement_id"] == r.id],
+                    "constraint_ids": [c["constraint_id"] for c in self.annotation["mapping"]["constraints"]
+                                       if c["requirement_id"] == r.id],
                     "has_applicable_goal": r.id in self.bound_goals} for r in self.task.requirements},
                              "sinks": len(sinks), "expected_sinks": len(self.facts.sinks),
                              "upstream": self.facts.coverage}}

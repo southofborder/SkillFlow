@@ -14,7 +14,7 @@ from pathlib import Path
 from skillflow.common.artifacts import ArtifactWriter
 
 SUMMARY_LABELS = {"issues_found": "Material issues found", "no_material_issue": "No material issue reported"}
-NOTICE = ("This semantic review does not rewrite the sealed Task, annotation or propagation facts. Accounting coverage of source, Task, demands and IR does not prove semantic completeness; "
+NOTICE = ("This semantic review does not rewrite the sealed Task, annotation or propagation facts. Accounting coverage of source, Task, demand/constraint declarations and IR does not prove semantic completeness; "
           "no reported issue does not prove correct interpretation, minimal demands or absence of DOE.")
 
 
@@ -39,13 +39,13 @@ def display_model(result, material):
     crosswalk = [{"requirement_id": row["id"], "text": row["text"],
                   "source_evidence": [_evidence_display(evidence, material) for evidence in row["evidences"]],
                   "realization": deepcopy(realizations.get(row["id"])),
-                  "seeds": deepcopy([seed for seed in material.get("goal_index", []) if seed["requirement_id"] == row["id"]]),
+                  "declarations": deepcopy([item for item in material.get("declaration_index", []) if item["requirement_id"] == row["id"]]),
                   "review_check": deepcopy(checks.get(row["id"]))} for row in requirements]
     return {"status": result["status"], "summary": SUMMARY_LABELS.get(result.get("summary"), "Review incomplete"),
             "failure": failure, "reason": result["reason"], "reviewed_ir_ids": review.get("reviewed_ir_ids", []),
             "findings": findings, "resolved": result.get("resolved_findings", []),
-            "checks": {key: deepcopy(review.get(key, [])) for key in ("source_checks", "requirement_checks", "goal_checks")},
-            "goals": material.get("goal_index", []), "task": material.get("task"),
+            "checks": {key: deepcopy(review.get(key, [])) for key in ("source_checks", "requirement_checks", "declaration_checks")},
+            "declarations": material.get("declaration_index", []), "task": material.get("task"),
             "crosswalk": crosswalk,
             "targets": material.get("target_index", {}), "observations": material.get("observations", []),
             "response_chain": result.get("response_chain"),
@@ -62,11 +62,11 @@ def _md(value):
 
 
 def render_markdown(model):
-    lines = ["# Source → Task → demands whole-chain review", "", f"**{model['summary']}** · Execution status: `{model['status']}`", "",
+    lines = ["# Source → Task → declarations whole-chain review", "", f"**{model['summary']}** · Execution status: `{model['status']}`", "",
              _md(model["reason"]), "", NOTICE, ""]
     if model["crosswalk"]:
-        lines += ["## Per-requirement semantic correspondence", "", "Expression status and review acceptance do not prove requirement satisfaction. Full source excerpts, remaining gaps and resolved seeds appear in the audit records below.", "",
-                  "| Source span | Task requirement | Expression status | Raw demand → goal | Review record |",
+        lines += ["## Per-requirement semantic correspondence", "", "Expression status and review acceptance do not prove requirement satisfaction. Full source excerpts, remaining gaps and resolved declarations appear in the audit records below.", "",
+                  "| Source span | Task requirement | Expression status | Raw demand / constraint | Review record |",
                   "| --- | --- | --- | --- | --- |"]
         def cell(value):
             return _md(value).replace("\r\n", " ").replace("\n", " ")
@@ -75,7 +75,7 @@ def render_markdown(model):
             lines.append("| " + " | ".join([
                 cell("; ".join(item["reference"] for item in row["source_evidence"])),
                 cell(row["requirement_id"] + ": " + row["text"]), cell(realization.get("status", "Not recorded")),
-                cell("; ".join(seed["raw_pointer"] + " → " + seed["goal_id"] for seed in row["seeds"]) or "No positive seed"),
+                cell("; ".join(seed["raw_pointer"] + " → " + seed.get("goal_id", seed.get("constraint_id")) for seed in row["declarations"]) or "No executable declaration"),
                 cell(check.get("status", "No valid record"))]) + " |")
         lines.append("")
     for finding in model["findings"]:
@@ -97,7 +97,7 @@ def render_markdown(model):
             lines += [f"- {_md(evidence['reference'])}: {_md(evidence['excerpt'])}"]
             if evidence["reason"]:
                 lines += ["  Evidence rationale: " + _md(evidence["reason"])]
-    resolved = _json({"Source_Task_demands_correspondence": model["crosswalk"], "Per-item review records": model["checks"], "Raw seeds and resolved positions": model["goals"],
+    resolved = _json({"Source_Task_declarations_correspondence": model["crosswalk"], "Per-item review records": model["checks"], "Raw declarations and resolved positions": model["declarations"],
                       "Finding targets": model["resolved"]})
     fence = "`" * max(3, max((len(m.group()) + 1 for m in re.finditer(r"`+", resolved)), default=3))
     lines += ["## Audit materials", "", "IR declared reviewed: " + ", ".join(map(_md, model["reviewed_ir_ids"])), "",
@@ -123,14 +123,14 @@ def render_html(model):
             realization, check = row["realization"] or {}, row["review_check"] or {}
             sources = "".join("<details><summary>" + e(item["reference"]) + "</summary><blockquote>" +
                               e(item["excerpt"]) + "</blockquote></details>" for item in row["source_evidence"])
-            seeds = "<br>".join(e(seed["raw_pointer"]) + " → <code>" + e(seed["goal_id"]) + "</code>" for seed in row["seeds"])
+            seeds = "<br>".join(e(seed["raw_pointer"]) + " → <code>" + e(seed.get("goal_id", seed.get("constraint_id"))) + "</code>" for seed in row["declarations"])
             gaps = "; ".join(gap["reason"] for gap in realization.get("gaps", []))
             rows.append("<tr><td>" + sources + "</td><td>" + e(row["requirement_id"] + ": " + row["text"]) +
                         "</td><td>" + e(realization.get("status", "Not recorded")) + ("<p>" + e(gaps) + "</p>" if gaps else "") +
-                        "</td><td>" + (seeds or "No positive seed") + "</td><td>" + e(check.get("status", "No valid record")) + "</td></tr>")
+                        "</td><td>" + (seeds or "No executable declaration") + "</td><td>" + e(check.get("status", "No valid record")) + "</td></tr>")
         correspondence = ("<section><h2>Per-requirement semantic correspondence</h2><p>Expression status and review acceptance do not prove requirement satisfaction. Expand a source span to see the complete excerpt.</p>"
                           "<table><thead><tr><th>Source evidence</th><th>Task requirement</th><th>Expression status and remaining limitations</th>"
-                          "<th>Raw demand → goal</th><th>Review record</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table></section>")
+                          "<th>Raw demand / constraint</th><th>Review record</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table></section>")
     for f in model["findings"]:
         evidence = "".join(f"<li><code>{e(v['reference'])}</code><blockquote>{e(v['excerpt'])}</blockquote><p>{e(v['reason'] or '')}</p></li>"
                            for v in f["evidence_display"])
@@ -142,17 +142,17 @@ def render_html(model):
     if not cards:
         cards.append("<p>No material issue was reported; this does not prove semantic correctness.</p>" if model["status"] == "complete"
                      else "<p>Review failed; no valid finding list was produced.</p>")
-    return ("<!doctype html><html lang='en'><meta charset='utf-8'><title>Source → Task → demands whole-chain review</title>"
+    return ("<!doctype html><html lang='en'><meta charset='utf-8'><title>Source → Task → declarations whole-chain review</title>"
             "<style>body{max-width:1080px;margin:36px auto;padding:0 24px;font:16px/1.75 system-ui;background:#f7f9fc;color:#1b293a}"
             "article{background:white;border:1px solid #cfd9e5;padding:20px;margin:18px 0;border-radius:10px}"
             "pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}p,blockquote{white-space:pre-wrap;overflow-wrap:anywhere}"
             "table{width:100%;border-collapse:collapse;font-size:13px}td,th{border:1px solid #cfd9e5;padding:10px;text-align:left;vertical-align:top;overflow-wrap:anywhere}"
             "details{margin:18px 0}summary{cursor:pointer}code{color:#254e87}a{color:#155d9c}</style><body>"
-            f"<h1>Source → Task → demands whole-chain review</h1><p><b>{e(model['summary'])}</b> · {e(model['status'])}</p>"
+            f"<h1>Source → Task → declarations whole-chain review</h1><p><b>{e(model['summary'])}</b> · {e(model['status'])}</p>"
             f"<p>{e(model['reason'])}</p><p>{e(NOTICE)}</p>" + correspondence + "".join(cards)
             + f"<details><summary>Four-axis coverage and call counts</summary><pre>{e(_json({**model['checks'], 'reviewed_ir_ids': model['reviewed_ir_ids'], 'counts': model['counts']}))}</pre></details>"
             + f"<details><summary>Program-resolved finding targets</summary><pre>{e(_json(model['resolved']))}</pre></details>"
-            + f"<details><summary>Raw seeds, goals and resolved positions</summary><pre>{e(_json(model['goals']))}</pre></details>"
+            + f"<details><summary>Raw declarations and resolved positions</summary><pre>{e(_json(model['declarations']))}</pre></details>"
             + f"<details><summary>Compiler-generated observations</summary><pre>{e(_json(model['observations']))}</pre></details>"
             + f"<details><summary>Structural correction chain</summary><pre>{e(_json(model['response_chain']))}</pre></details>"
             + "<p><a href='result.json'>Review result</a> · <a href='inputs/targets.json'>Review targets</a> · <a href='inputs/observations.json'>Generated observations</a>"

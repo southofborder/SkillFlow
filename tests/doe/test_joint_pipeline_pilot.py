@@ -80,8 +80,8 @@ def test_preparation_delegates_only_new_production_inputs(prepared):
         assert Path(_analysis).is_relative_to(directory / "audit/english-inputs")
     assert "test-secret" not in (directory / "manifest.json").read_text(encoding="utf8")
     manifest = pilot._load(directory)
-    assert manifest["identity"] == "skillflow-joint-pipeline-pilot-v7"
-    assert manifest["schema_version"] == 7
+    assert manifest["identity"] == "skillflow-joint-pipeline-pilot-v8"
+    assert manifest["schema_version"] == 8
     assert manifest["english_inputs"]["identity"] == "explicit_english_fixture"
     assert manifest["cases"]["001"]["input"] == str(original.parent)
     assert manifest["policy"]["task_source"] == "new_source_only_extraction_per_case"

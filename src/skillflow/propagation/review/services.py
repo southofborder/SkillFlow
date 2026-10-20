@@ -136,7 +136,7 @@ def validate_response(raw: Any, material: dict[str, Any], *, normalized=False) -
     payload = response.model_dump(mode="json")
     payload["findings"] = [{**finding, "id": f"F{index + 1:03d}"}
                            for index, finding in enumerate(payload["findings"])]
-    for axis in ("source_checks", "requirement_checks", "goal_checks"):
+    for axis in ("source_checks", "requirement_checks", "declaration_checks"):
         for check in payload[axis]:
             check["finding_ids"] = [f"F{index + 1:03d}" for index in check.pop("finding_indexes")]
     return ReviewResponse.model_validate(payload)
@@ -165,7 +165,7 @@ def _check_axes(response, material, diagnostics, *, normalized):
                             "message": f"unreviewed nonempty source lines: {sorted(expected - seen)}"})
     for axis, key, required in (
             ("requirement_checks", "requirement_id", {item["id"] for item in material["task"]["requirements"]}),
-            ("goal_checks", "raw_pointer", {item["raw_pointer"] for item in material["goal_index"]})):
+            ("declaration_checks", "raw_pointer", {item["raw_pointer"] for item in material["declaration_index"]})):
         try:
             _exact([getattr(row, key) for row in getattr(response, axis)], required, axis)
         except ValueError as error:
@@ -173,7 +173,7 @@ def _check_axes(response, material, diagnostics, *, normalized):
                                 "context": {"required": sorted(required)}})
     allowed = {finding.id for finding in response.findings} if normalized else set(range(len(response.findings)))
     referenced = set()
-    for axis in ("source_checks", "requirement_checks", "goal_checks"):
+    for axis in ("source_checks", "requirement_checks", "declaration_checks"):
         for index, check in enumerate(getattr(response, axis)):
             links = check.finding_ids if normalized else check.finding_indexes
             referenced.update(links)

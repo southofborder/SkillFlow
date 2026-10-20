@@ -86,7 +86,7 @@ def test_span_display_shares_exact_excerpt_and_does_not_upgrade_wrong_interpreta
 
 
 def test_prompt_reviews_joint_semantics_without_final_doe_or_minimality_verdict():
-    for boundary in ("Source checks", "Requirement checks", "Goal checks", "IR checks",
+    for boundary in ("Source checks", "Requirement checks", "Declaration checks", "IR checks",
                      "Current payload", "indispensability", "start_line", "task/", "English"):
         assert boundary in INSTRUCTIONS
     assert "Do not generate replacement annotations" in INSTRUCTIONS

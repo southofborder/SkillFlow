@@ -1,4 +1,11 @@
-# 敏感范围与接收边界对照 v3
+# Sensitive ranges and recipient-boundary comparison v4
+
+Current amendment (2026-10-19): an otherwise eligible `exclude_field` candidate
+must also pass the shared [constraint-preservation gate](constraint-implementation.md).
+Baseline checks are retained separately, including violations and unsupported
+checks. A pure prohibition supplies neither a positive demand nor a sensitivity
+label, and does not broaden candidate eligibility. Neutral original-content
+tracking for explicit prohibitions is separate from sensitivity classification.
 
 当前协议（2026-10-15）由独立 Task 提取确定任务基准；后续标注在固定 Task 下声明保持目标、处理事实、可见性和敏感范围。确定性分析联合前向暴露、逐 seed 反向需求和敏感关系，在每个实际形成记录的 sink 比较具体接收方取得的信息。不增加敏感性分类或最终 DOE 裁决模型调用。
 
@@ -18,7 +25,7 @@
 
 | 结果 | 限定含义 |
 |---|---|
-| `excess_supported` | 直接存在的敏感字段值与全部适用保持需求不重叠，且没有相关限制；当前规则支持所记录的字段排除建议。 |
+| `excess_supported` | A directly present sensitive field value is disjoint from applicable positive demands, meets existing field-exclusion eligibility, has no blocking gap, and has a supported preservation result for every declared constraint. Baseline violations remain visible. |
 | `possible_excess` | 仅建立派生或可能影响关系，不能据此断言原始敏感明文存在。 |
 | `no_excess_established` | 当前未建立支持的缩减结论；不证明必要性或不存在 DOE。 |
 
@@ -28,11 +35,25 @@
 
 ## 结果、审计和恢复
 
-`skillflow-sensitivity-review-v3` 保存接收边界对照及必要推导闭包。需求推导保留 `seed_goal_id`；完整需求和来源映射在同一个正式 DOE run 的审计支持文件保存。Task 与敏感声明由接受的上游拥有；DOE 不回写冻结输入、处理事实和历史结果。
+`skillflow-sensitivity-review-v4` stores recipient comparisons and the required
+derivation closures, plus shared `constraints.checks`, `constraints.preservation`
+and `constraints.influence`. Each candidate review has `constraint_refs` to its
+preservation rows. Change steps reuse auditable `DemandNode` coordinates and
+Data references without creating positive seeds or a second Data table.
+Positive demand derivations retain `seed_goal_id`. Task, sensitivity and original
+facts remain upstream-owned; DOE does not rewrite them or historical results.
 
 传播的 `provenance.kind=model_annotation` 只说明处理标注来自接受的响应，不能代替 Task 来源。`task_provenance` 单独记录 `independent_task_run / authored_fixture / unknown` 和精确 `task_sha256`；独立来源须来自完整核验的 Task run 引用，仅有描述性来源标签不能成立。正式 DOE metadata 与报告保留这项区别，并在加载时从受验证上游重新核对，不能通过重新封存 metadata 把人工 Task 改写成独立提取记录。模拟客户端即使拥有完整记录也不提供真实模型效果证据。
 
-正式 DOE run 为 `skillflow-doe-run-v4`，保存单份 `doe-result.json`、索引、需求支持文件和报告。统一加载器检查完整依赖链、Task seal、编译映射、源行投影、推导引用和 artifact 摘要；加载不重新求解，replay 才按冻结输入重算。旧格式拒绝，不自动补造新版覆盖审查。 早期当前 v4 运行若没有新增的 `task_provenance` metadata，仍按原字段只读校验，来源只在加载返回视图中重新派生，缺字段不解释为独立来源，也不回写历史文件。
+The current formal DOE identity is `skillflow-doe-run-v5`. It saves one result,
+an audit index, demand support and reports. Loading verifies the upstream chain,
+Task seal, compilation mapping, source projection, references and artifact
+digests. The same deterministic constraint evaluator verifies baseline checks
+and candidate preservation against those facts; altered verdicts or dangling
+influence references are rejected. Replay reruns analysis from the frozen inputs.
+Old formats are not upgraded by inventing constraint coverage. Earlier v4
+provenance behavior remains a historical description, not permission to relabel
+a v4 run as current or rewrite its files.
 
 示例 `python -m examples.doe.joint_analysis_demo --show result` 使用独立校准记录，人工声明敏感 serial 和 label 结果需求，不联系模型，也不是实际 Skill 的语义评测。
 

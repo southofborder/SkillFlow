@@ -70,7 +70,7 @@ def svg():
 
 
 def export(tmp_path, cases=None):
-    material = {"schema_version": 8, "identity": "skill-ir-full-pipeline-delivery-v8", "profile_schema_version": "security-profile-v14", "run_id": "offline-fixture", "cases": cases if cases is not None else [case()]}
+    material = {"schema_version": 8, "identity": "skill-ir-full-pipeline-delivery-v8", "profile_schema_version": "security-profile-v15", "run_id": "offline-fixture", "cases": cases if cases is not None else [case()]}
     # Failed authored fixtures carry no successful semantic payload.
     for entry in material["cases"]:
         if entry["annotation_status"] != "complete":

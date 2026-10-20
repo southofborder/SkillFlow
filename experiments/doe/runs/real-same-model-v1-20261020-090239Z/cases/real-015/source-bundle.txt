@@ -1,0 +1,426 @@
+FILE SKILL.md
+1: ---
+2: name: cold-email
+3: description: Build cold email campaigns and generate hyper-personalized email sequences with MachFive. Build a campaign end-to-end, preview output, then generate sequences from lead data.
+4: metadata:
+5:   clawdbot:
+6:     requires:
+7:       env:
+8:         - MACHFIVE_API_KEY
+9: ---
+10: 
+11: # MachFive - AI Cold Email Generator
+12: 
+13: Generate personalized cold email sequences from lead data. MachFive uses AI to research prospects and craft unique, relevant outreach - not templates.
+14: 
+15: There are two things you can do with this skill:
+16: 
+17: - **Build a campaign** (the messaging foundation: target audience, social proof, lead magnets, risk reversal, value propositions). Done once per campaign; no credits.
+18: - **Generate emails** against a campaign - preview, single lead, or batch. This is what costs credits.
+19: 
+20: Run the build flow whenever the user asks to build/create a new campaign, or when they want to generate but have no usable campaign yet. If they already have a ready campaign and just want emails, skip straight to generating against it.
+21: 
+22: ## Setup
+23: 
+24: 1. Get your API key at https://app.machfive.io/settings (Integrations -> API Keys)
+25: 2. Set `MACHFIVE_API_KEY` in your environment
+26: 
+27: All requests use `Authorization: Bearer {MACHFIVE_API_KEY}` (or the `X-API-Key: {MACHFIVE_API_KEY}` header). Base URL: `https://app.machfive.io`.
+28: 
+29: ## Chat-agent playbook
+30: 
+31: Follow this when a user asks for emails in a chat UI:
+32: 
+33: 1. **Find the campaign first.** Call `GET /api/v1/campaigns`. If the user named one, match it; otherwise ask which to use. If they have none (or none ready), offer to build one (see "Build a campaign"). Every generate/preview call needs a campaign ID in the URL.
+34: 2. **Gather the required config conversationally before spending any credits:**
+35:    - **Signature (required).** Call `GET /api/v1/signatures` and offer a saved one. If none fits, ask for the details and build a multi-line signature (Name / Company | Position / Company Address). Optionally save it with `POST /api/v1/signatures` for reuse. Pass it as `email_signature` (inline) or `signature_id` (saved) - exactly one.
+36:    - **Emails per lead (required).** Ask for `email_count`, an integer **1-4**.
+37:    - **Optional:** `approved_ctas` (offer the list below), `additional_details` (any angle/constraints for the writer), `list_name`, and the **enrichment** toggle.
+38: 3. **CTAs (`approved_ctas`).** Valid values: `Question CTA`, `Lead Magnet CTA`, `Direct Meeting CTA`, `Loom Video CTA`, `Consultation CTA`, `Educational CTA`, `Demo CTA`, `Trial CTA`. Offer them; if the user doesn't choose, omit the field and the API uses the three standard ones (`Question CTA`, `Lead Magnet CTA`, `Direct Meeting CTA`).
+39: 4. **Confirm cost before spending.** Preview = 5 credits; generate = 1 credit/lead (2/lead with enrichment). State the cost and get a go-ahead.
+40: 5. **Offer a preview before a batch.** Ask if they want to see sample output first (costs 5 credits). Only run it if they agree.
+41: 6. **Run, then handle async (read "Async jobs & polling" below).** Single generate returns the sequence directly (slow - see timeouts). Batch returns immediately; drive it to completion using one of the strategies in that section (poll in-turn, schedule a background follow-up, and/or set `notification_email`), then export and present results readably (subject + body per step). Don't check once and go silent.
+42: 7. **After a build, proactively offer to generate.** Once value propositions are selected (build kicked off), don't stop - offer to generate emails next (you can generate as soon as VPs are selected, even while `overall` is still `building`).
+43: 
+44: ```mermaid
+45: flowchart TD
+46:   start[User asks for emails] --> hasCampaign{Campaign ready?}
+47:   hasCampaign -->|No| build["Build flow: create to build-status ready"]
+48:   hasCampaign -->|Yes| config[Gather signature + email_count + options]
+49:   build --> config
+50:   config --> offerPreview{Offer preview?}
+51:   offerPreview -->|Yes, 5 credits| preview[POST preview]
+52:   offerPreview -->|No| route{One lead or many?}
+53:   preview --> route
+54:   route -->|One| single[POST generate sync]
+55:   route -->|Many| batch["POST generate-batch, poll lists, export"]
+56:   single --> present[Present sequences in chat]
+57:   batch --> present
+58: ```
+59: 
+60: ## Async jobs & polling (important for chat agents)
+61: 
+62: Several steps are asynchronous and return `202` with an id whose status changes over time: target-audience research, value-proposition generation, the campaign build, and **generate-batch**. Chat agents (Slack, etc.) consistently mishandle these, so follow these rules exactly:
+63: 
+64: **Default approach: run ONE self-terminating poll loop, not repeated manual checks.** The reliable pattern is a single shell command that loops until the status is terminal and then exits - so you physically can't "check once and forget to continue." Issuing separate one-off status calls across steps is what makes agents go silent; don't do that.
+65: 
+66: **Do not depend on `jq` (or any optional tool) to detect completion.** `jq` is often absent in agent environments (OpenClaw's default sandbox image ships without it, and sandboxes usually have no network to `apt-get` it). Detect the terminal state by `grep`-ing the **raw** response for the stable status field - that needs only `curl` + `grep`. If a tool the loop relies on is missing, the loop can run forever and print nothing, which is exactly the "it went silent" failure. The loops below are jq-free on purpose.
+67: 
+68: ```bash
+69: # Poll a batch list until it finishes, then stop. curl + grep only (no jq needed).
+70: # MF_BASE=https://app.machfive.io, MF_KEY=API key.
+71: LIST_ID="<list_id>"; while true; do
+72:   S=$(curl -s "$MF_BASE/api/v1/lists/$LIST_ID" -H "Authorization: Bearer $MF_KEY")
+73:   echo "$S" | grep -oE '"processing_status":"[a-z_]+"' || echo "$S"   # show status; dump raw if unexpected
+74:   echo "$S" | grep -qE '"processing_status":"(completed|failed)"' && break
+75:   sleep 20
+76: done
+77: ```
+78: 
+79: The same loop works for build steps - just swap the endpoint and the terminal value (and always include the failure value so it can't spin forever). For a build:
+80: 
+81: ```bash
+82: # Poll campaign build until ready (or failed), then stop. curl + grep only (no jq needed).
+83: CID="<campaign_id>"; while true; do
+84:   S=$(curl -s "$MF_BASE/api/v1/campaigns/$CID/build-status" -H "Authorization: Bearer $MF_KEY")
+85:   echo "$S" | grep -oE '"overall":"[a-z]+"' || echo "$S"   # show status; dump raw if unexpected
+86:   echo "$S" | grep -qE '"overall":"(ready|failed)"' && break
+87:   sleep 15
+88: done
+89: ```
+90: 
+91: For a single job (target-audience or value-proposition generation), poll `GET /api/v1/jobs/<id>` and break on `"status":"(completed|failed)"` (same `grep` approach, no jq). Note: build polling has no email fallback - `notification_email` (option C below) only applies to **generate-batch**, not to building a campaign.
+92: 
+93: If you genuinely need parsed fields, `jq` is optional and must be guarded so its absence can't break the loop - e.g. `command -v jq >/dev/null && echo "$S" | jq -c '{processing_status,leads_count}'`, or use the always-present `python3` (`echo "$S" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("processing_status"))'`). But never make the terminal-state check depend on it - keep that on `grep` of the raw body.
+94: 
+95: Pick where to run that loop based on how long it'll take:
+96: 
+97: - **(A) Foreground - short waits** (VP generation ~2-3 min, build a few min, tiny batches). Run the loop in the foreground; the turn blocks until it exits, then export and present results in that same reply. Note your shell tool's own timeout (on OpenClaw, `tools.exec.timeoutSec`, default 30 min, and it may auto-background after ~10s) - if the wait could exceed it, use (B).
+98: - **(B) Background + notify-on-exit - long waits** (larger batches, enrichment on). Run the **same loop as a background process** so the runtime wakes you when it exits, then export and post to the channel. On **OpenClaw**, background `exec` does this automatically (`tools.exec.notifyOnExit` is on by default: it emits a system event + heartbeat when the command exits). `sessions_spawn` (announce-on-completion) or a cron re-check also work. Tell the user you've started it and will message them when it's done - because here you actually will.
+99: - **(C) `notification_email` on the batch - channel-independent fallback.** Good default even alongside (A)/(B): MachFive emails the user (or the workspace owner) when the batch finishes, regardless of what the conversation is doing. Ask for an address or note it defaults to the workspace owner.
+100: 
+101: Invariants, whichever you pick:
+102: 
+103: - **Never report status from memory - always do a fresh `GET` first.** A job you last saw as `processing` may already be `completed`. Whenever you state a status (especially when the user asks "is it done?"), make a new status call immediately before answering, and report exactly what that call returns.
+104: - **Only promise a notification you actually set up.** You can't passively "wait" between messages. Say "I'll message you when it's done" only if a loop is running now (A), you backgrounded it with notify-on-exit / scheduled a follow-up (B), or `notification_email` is set (C). Otherwise say so plainly and tell the user to ask for an update.
+105: - **Never trust a silent loop - confirm it's actually working.** A background loop that prints nothing is usually broken (a missing tool like `jq`, a bad var, or no network), not "still processing." After starting one, verify it emitted at least one status line; if it's silent, run a one-off `curl ... | grep` status check by hand. Don't wait indefinitely on a loop you haven't confirmed is alive.
+106: - **If a tool the loop needs is missing and can't be installed** (sandboxes often have no network), don't get stuck: fall back to the jq-free `grep` loop, read the raw `curl` JSON yourself (you're an LLM - you don't need `jq` to see the status), or set `notification_email` (C) and tell the user.
+107: - **One loop per job - don't spawn overlapping loops or pile on manual checks.** Start a single poll loop for a given id and let it run to its terminal state; don't launch a second background loop or repeatedly fire one-off `curl`s for the same job while one is already running (it's wasteful and noisy). Also avoid leading-`sleep` one-offs like `sleep 20 && curl ...` - some runtimes block those as rate-limit workarounds; keep the `sleep` inside the loop body.
+108: - **You can keep working while async runs.** Generation can start as soon as value propositions are selected, so you don't have to block on `overall: "ready"` before offering the next step.
+109: 
+110: ## Build a campaign (only if needed)
+111: 
+112: Build a campaign the same way the in-app wizard does: create a shell, submit a target audience, choose assets, generate value propositions, then kick the build. Each step is its own call so you can keep a human in the loop. **No credits are charged for building** (builds are limited by your plan's campaign-build limit). The expensive AI stages run asynchronously - poll a job or the derived build status.
+113: 
+114: Order: `create -> target-audience -> (social_proof, lead_magnet, risk_reversal) -> value_proposition/generate -> value_proposition/selection -> poll build-status`.
+115: 
+116: ### 1. Create the campaign shell
+117: 
+118: ```
+119: POST https://app.machfive.io/api/v1/campaigns
+120: Content-Type: application/json
+121: 
+122: { "name": "Q3 Outbound - Fintech CFOs" }
+123: ```
+124: 
+125: **Response (201):** `{ "id": "b3f...", "name": "...", "status": "draft" }`
+126: 
+127: Fails fast with **409 NOT_READY** if the workspace isn't ready to build - `detail.missing` lists which of `company_summary`, `company_documents`, `target_audiences` are missing. Those come from onboarding / market research, which is done in the app UI; point the user there if they're not ready. **403** if the plan's campaign-build limit is reached.
+128: 
+129: ### 2. Submit the target audience
+130: 
+131: List the workspace's saved segments, then submit the user's pick (or define a custom one).
+132: 
+133: ```
+134: GET  https://app.machfive.io/api/v1/target-audiences
+135: ```
+136: **Response (200):** `{ "data": [ { "id", "segment_name", "industry_vertical", ... } ], "has_more": false, "total": N }`. Supports `?q=`, `?limit=`, `?offset=`.
+137: 
+138: ```
+139: POST https://app.machfive.io/api/v1/campaigns/{campaign_id}/target-audience
+140: Content-Type: application/json
+141: 
+142: { "target_audience": { "id": "ta_123", "segment_name": "Fintech CFOs" } }
+143: ```
+144: 
+145: Or define a custom segment:
+146: ```json
+147: {
+148:   "is_custom_target_audience": true,
+149:   "target_audience": {
+150:     "segment_name": "Fintech CFOs",
+151:     "industry_vertical": "Financial Services",
+152:     "company_size": "200-1000",
+153:     "annual_revenue": "$50M-$250M",
+154:     "geographic_location": "North America",
+155:     "decision_makers": ["CFO", "VP Finance"],
+156:     "additional_details": "Series B+, scaling finance ops"
+157:   }
+158: }
+159: ```
+160: `target_audience.id` is required unless `is_custom_target_audience` is `true`.
+161: 
+162: **Response (202):** `{ "id": "job_...", "type": "campaign.target_audience", "status": "processing", "target_audience_id": "ta_123" }`. This kicks background research; poll `GET /api/v1/jobs/{id}` or watch build-status. The next steps (social proof, lead magnet, risk reversal) don't depend on it and can be submitted right away.
+163: 
+164: ### 3. Social proof, lead magnet, risk reversal
+165: 
+166: Each of these three steps uses the same list-then-submit pattern. Read options, then submit the selection.
+167: 
+168: ```
+169: GET https://app.machfive.io/api/v1/campaigns/{campaign_id}/assets/{type}/options
+170: ```
+171: `{type}` is one of `social_proof`, `lead_magnet`, `risk_reversal`. **Response:** `{ "asset_type": "social_proof", "ready": true, "options": [ { "id": "sp_001", "name": "...", "description": "...", "type": "..." } ] }`. If `ready` is `false`, poll again. Options can be an **empty array** (common for `risk_reversal`).
+172: 
+173: ```
+174: PUT https://app.machfive.io/api/v1/campaigns/{campaign_id}/assets/{type}/selection
+175: Content-Type: application/json
+176: 
+177: {
+178:   "selected_ids": ["sp_001", "sp_004"],
+179:   "edited_names": { "sp_001": "200+ fintechs onboarded in 18 months" },
+180:   "edited_descriptions": {},
+181:   "additional_details": "Lead with the onboarding-speed angle"
+182: }
+183: ```
+184: 
+185: **Response (200):** `{ "asset_type": "social_proof", "items_stored": 2 }`.
+186: 
+187: The selection body is the same for **every** asset type (including `value_proposition`):
+188: - `selected_ids` accepts an **empty array** `[]` - so any step can be submitted free-text-only or effectively skipped.
+189: - `additional_details` (free-text guidance) is accepted on **all** types, not just risk reversal.
+190: - `edited_names` / `edited_descriptions` are accepted on all types.
+191: 
+192: Example free-text-only risk reversal: `{ "selected_ids": [], "additional_details": "30-day sell-through guarantee: ..." }`.
+193: 
+194: ### 4. Value propositions (generate, then select - kicks the build)
+195: 
+196: VPs are the only asset generated on demand, and they require social proof, lead magnet, and risk reversal to be submitted first.
+197: 
+198: ```
+199: POST https://app.machfive.io/api/v1/campaigns/{campaign_id}/assets/value_proposition/generate
+200: ```
+201: **Response (202):** `{ "id": "job_...", "type": "campaign.value_propositions", "status": "processing" }`. **409 NOT_READY** (with `detail.missing`) if SP/LM/RR aren't all submitted. Poll `GET /api/v1/jobs/{id}` in a loop until `completed` (see "Async jobs & polling" - keep polling within the turn; always re-fetch before reporting), then read options:
+202: 
+203: ```
+204: GET https://app.machfive.io/api/v1/campaigns/{campaign_id}/assets/value_proposition/options
+205: ```
+206: Poll until `ready: true`, then submit your picks:
+207: 
+208: ```
+209: PUT https://app.machfive.io/api/v1/campaigns/{campaign_id}/assets/value_proposition/selection
+210: Content-Type: application/json
+211: 
+212: { "selected_ids": ["vp_001", "vp_002"] }
+213: ```
+214: **Response (202):** `{ "asset_type": "value_proposition", "items_stored": 2, "job": { "id": "job_...", "type": "campaign.build", "status": "processing" } }`. Submitting VPs kicks the post-wizard build (all background, no further input). Submitting `[]` still kicks the build, but normally pick at least one.
+215: 
+216: ### 5. Poll build status
+217: 
+218: ```
+219: GET https://app.machfive.io/api/v1/campaigns/{campaign_id}/build-status
+220: ```
+221: **Response:** `{ "campaign_id", "overall": "draft|building|ready|failed", "stages": { "target_audience", "social_proof", "lead_magnet", "risk_reversal", "value_proposition" } }`. Poll in a loop every 15-30s until `overall` is `ready` (see "Async jobs & polling" - poll within the turn and always re-fetch before reporting). The campaign is ready for email generation at that point. You don't have to wait for `ready` to offer generation - it's available as soon as VPs are selected.
+222: 
+223: You can review everything with `GET /api/v1/campaigns/{campaign_id}/selections` (returns the target audience plus each asset's selected items + additional_details).
+224: 
+225: > **Generation can start as soon as value propositions are selected** - you don't have to wait for `overall: "ready"`. Batches submitted while the build is still `building` are accepted and queue until it finishes.
+226: 
+227: ## Configuration (options)
+228: 
+229: These `options` apply to **preview**, **generate** (single), and **generate-batch**.
+230: 
+231: | Option | Type | Required | Description |
+232: |--------|------|----------|-------------|
+233: | `email_count` | number | **Yes** | Emails per lead. Integer **1-4**. |
+234: | `email_signature` | string | Yes* | Sender signature, inline. Multi-line via `\n`. Required unless `signature_id` is given. |
+235: | `signature_id` | string (UUID) | Yes* | A saved signature (from `GET /api/v1/signatures`) to use instead of `email_signature`. |
+236: | `additional_details` | string | No | Free-text campaign context for the writer (angle, constraints, instructions). |
+237: | `list_name` | string | No | Display name for the list in the MachFive UI. |
+238: | `approved_ctas` | string[] or string | No | CTAs to use. Defaults to `Question CTA, Lead Magnet CTA, Direct Meeting CTA`. Valid values: Question, Lead Magnet, Direct Meeting, Loom Video, Consultation, Educational, Demo, Trial (each suffixed with " CTA"). |
+239: | `enrichment_enabled` | boolean | No | Run web research per lead before writing. Costs 2 credits/lead instead of 1. See enrichment note below. |
+240: | `notification_email` | string | No | **(batch only)** Where to email the "processing complete" notification. Defaults to the workspace owner. |
+241: 
+242: \* A signature is **required**: provide exactly one of `email_signature` or `signature_id` (both is a 400; neither is a 400). `campaign_angle` is a deprecated alias of `additional_details`; `sequence_name` is a deprecated alias of `list_name`.
+243: 
+244: ### Signature format
+245: 
+246: The signature is required so the writer never fabricates sender details. Send it as one string with `\n` line breaks; each line renders on its own line. Best-practice structure:
+247: 
+248: ```
+249: Name
+250: Company Name | Position
+251: Company Address
+252: ```
+253: 
+254: As JSON: `"email_signature": "Jane Doe\nAcme Inc | VP Marketing\n123 Main St, Springfield, IL 62701"`.
+255: 
+256: ### Enrichment
+257: 
+258: - On **real runs** (`generate` and `generate-batch`), enrichment does live web research, so **every lead must include at least one of** `company`, `linkedin_url`, or `company_website`. A `company` also lets the system extract the email domain and cross-reference it. A lead with none of these returns a 400.
+259: - In **preview**, enrichment is **simulated** on synthetic leads, so the `enrichment_enabled` toggle alone changes the output (no per-lead data needed). Run a preview with it `true` and `false` to compare.
+260: 
+261: ## Signatures
+262: 
+263: Reusable, workspace-scoped. Use these to offer a saved signature or to save one the user dictates.
+264: 
+265: ```
+266: GET  https://app.machfive.io/api/v1/signatures            (scope signatures:read)
+267: POST https://app.machfive.io/api/v1/signatures            (scope signatures:write)
+268: ```
+269: List response: `{ "data": [ { "id", "signature_text", "signature_name", "created_at", ... } ], "has_more", "total" }`. `signature_name` is auto-derived from the first line.
+270: 
+271: Create body: `{ "signature_text": "Jane Doe\nAcme Inc | VP Marketing\njane@acme.com" }` -> **201** with the created signature (use its `id` as `signature_id`).
+272: 
+273: ## Preview (optional, 5 credits)
+274: 
+275: Preview a campaign against 5 synthetic leads that match its ICP, using the same engine as a real run - a faithful pre-flight before spending credits on a full batch. **Costs 5 credits** (refunded for any synthetic leads that fail; fully refunded if all fail).
+276: 
+277: ```
+278: POST https://app.machfive.io/api/v1/campaigns/{campaign_id}/preview
+279: Content-Type: application/json
+280: 
+281: {
+282:   "sample": {
+283:     "headers": ["First Name", "Company Name", "Title", "Email"],
+284:     "rows": [["Jane", "Acme Inc", "VP Marketing", "jane@acme.com"]],
+285:     "field_mapping": { "email": "Email", "firstName": "First Name", "companyName": "Company Name" }
+286:   },
+287:   "options": {
+288:     "email_count": 3,
+289:     "email_signature": "Jane Doe\nAcme Inc | VP Marketing\n123 Main St, Springfield, IL 62701"
+290:   }
+291: }
+292: ```
+293: 
+294: Same required config as a real run (`email_count` 1-4 + a signature). Set `enrichment_enabled` to preview enriched vs. non-enriched output (simulated; no per-lead data required). **Response (200):** `{ "preview_id", "status": "success|partial", "credits_charged", "success_count", "fail_count", "headers", "rows", "synthetic_leads", "generated_emails" }`. Returns **409 NOT_READY** if email instructions aren't built yet (retry shortly; no charge).
+295: 
+296: ## Single lead (sync)
+297: 
+298: Generate a sequence for one lead. Waits for completion and returns the sequence directly. **Can take 3-10 minutes** (AI research + generation) - use a client timeout of at least **300s**, preferably **600s**. Do not use a 120s timeout.
+299: 
+300: ```
+301: POST https://app.machfive.io/api/v1/campaigns/{campaign_id}/generate
+302: Content-Type: application/json
+303: 
+304: {
+305:   "lead": {
+306:     "name": "John Smith",
+307:     "title": "VP of Marketing",
+308:     "company": "Acme Corp",
+309:     "email": "john@acme.com",
+310:     "company_website": "https://acme.com",
+311:     "linkedin_url": "https://linkedin.com/in/johnsmith"
+312:   },
+313:   "options": {
+314:     "email_count": 3,
+315:     "email_signature": "Your Name\nYour Co | Founder\n123 Main St, City, ST",
+316:     "approved_ctas": ["Direct Meeting CTA", "Lead Magnet CTA"]
+317:   }
+318: }
+319: ```
+320: 
+321: **Response (200):** `{ "lead_id", "list_id", "sequence": [ { "step": 1, "subject": "...", "body": "..." } ], "credits_remaining" }`.
+322: 
+323: **Recovery:** if the request times out, you can still get the result via `list_id`: `GET /api/v1/lists/{list_id}` to confirm status, then `GET /api/v1/lists/{list_id}/export?format=json`.
+324: 
+325: ## Batch (async)
+326: 
+327: Generate sequences for multiple leads (one list). **Returns immediately (202)**; processing runs in the background.
+328: 
+329: ```
+330: POST https://app.machfive.io/api/v1/campaigns/{campaign_id}/generate-batch
+331: Content-Type: application/json
+332: 
+333: {
+334:   "leads": [
+335:     { "name": "John Smith", "email": "john@acme.com", "company": "Acme Corp", "title": "VP Marketing" },
+336:     { "name": "Jane Doe", "email": "jane@beta.com", "company": "Beta Inc", "title": "Director Sales" }
+337:   ],
+338:   "options": {
+339:     "email_count": 3,
+340:     "email_signature": "Your Name\nYour Co | Founder\n123 Main St, City, ST",
+341:     "list_name": "Q1 Outreach Batch",
+342:     "notification_email": "ops@yourcompany.com"
+343:   }
+344: }
+345: ```
+346: 
+347: Each lead must include a valid `email`. **Response (202):** `{ "list_id", "status": "processing", "leads_count": 2, "message": "..." }`.
+348: 
+349: **Flow:** POST generate-batch -> 202 + `list_id` -> poll `GET /api/v1/lists/{list_id}` in a loop until `processing_status` is `completed` (or `failed`) -> `GET /api/v1/lists/{list_id}/export?format=csv|json` -> present to the user.
+350: 
+351: Follow the "Async jobs & polling" rules: drive it to completion (poll in-turn, schedule a background follow-up via your runtime, and/or set `notification_email`) rather than checking once and going quiet; always do a fresh `GET` before telling the user whether it's done (a `processing` you saw earlier may now be `completed`); and only promise to notify later if you actually scheduled it. Setting `notification_email` is a reliable fallback - MachFive emails the user on completion regardless of what the conversation is doing.
+352: 
+353: ## Lists & export
+354: 
+355: ```
+356: GET https://app.machfive.io/api/v1/lists
+357: GET https://app.machfive.io/api/v1/lists?campaign_id={id}&status=completed&limit=20
+358: ```
+359: **Response:** `{ "lists": [ { "id", "campaign_id", "custom_name", "processing_status", "created_at", "completed_at" } ] }` (newest first). `status` filter: `pending|processing|completed|failed`. `limit` default 50, max 100; `offset` for paging.
+360: 
+361: ```
+362: GET https://app.machfive.io/api/v1/lists/{list_id}
+363: ```
+364: **Response:** `id`, `campaign_id`, `custom_name`, `processing_status` (`pending|processing|completed|failed`), `created_at`, `updated_at`; when `completed` also `leads_count`, `emails_created`, `completed_at`; when `failed`, `failed_at`. Poll every 10-30s. If `failed`, the list can't be exported - submit a new batch.
+365: 
+366: ```
+367: GET https://app.machfive.io/api/v1/lists/{list_id}/export?format=csv
+368: GET https://app.machfive.io/api/v1/lists/{list_id}/export?format=json
+369: ```
+370: - **csv** (default): the processed CSV (same as the UI download).
+371: - **json**: `{ "leads": [ { "email", "name?", "company?", "title?", "sequence": [ { "step", "subject", "body" } ] } ] }`.
+372: - **409** if the list isn't completed yet (poll first). **404** if not found.
+373: 
+374: ## Lead fields
+375: 
+376: Each lead must include a valid **`email`** (used to map the lead through processing and back to its sequence in exports). All other fields are optional but improve personalization - and at least one of `company`, `linkedin_url`, or `company_website` is **required per lead when `enrichment_enabled` is true**.
+377: 
+378: | Field | Required | Description |
+379: |-------|----------|-------------|
+380: | `email` | **Yes** | Lead's email; maps the lead through processing and in exports |
+381: | `name` | No | Full or first name (improves personalization) |
+382: | `company` | No | Company name (improves personalization; enables enrichment domain cross-reference) |
+383: | `title` | No | Job title |
+384: | `company_website` | No | Company URL for research / enrichment |
+385: | `linkedin_url` | No | LinkedIn profile for deeper personalization / enrichment |
+386: 
+387: ## Credits & limits
+388: 
+389: - **Building a campaign:** free (limited by your plan's campaign-build limit).
+390: - **Preview:** flat **5 credits** per call (with refunds for failed synthetic leads). Enrichment does not add credits in preview.
+391: - **Generate (single/batch):** **1 credit per lead**, or **2 per lead** with `enrichment_enabled`.
+392: - **Single (sync):** can take 3-10 min; use a 300-600s client timeout.
+393: - **Batch (async):** returns 202; poll the list. Workspaces have a concurrent-batch limit; on **429** retry later.
+394: 
+395: ## Errors
+396: 
+397: | Code | Error | Description |
+398: |------|-------|-------------|
+399: | 400 | BAD_REQUEST | Invalid JSON; missing `lead`/`leads` or invalid `email`; `email_count` missing or not 1-4; no signature (neither `email_signature` nor `signature_id`) or both; an invalid `notification_email`; `enrichment_enabled` with a lead missing all of company/linkedin_url/company_website; or campaign setup incomplete (build not finished). |
+400: | 401 | UNAUTHORIZED | Invalid or missing API key. |
+401: | 402 | INSUFFICIENT_CREDITS | Not enough credits (`detail` includes required/available/payg_enabled/pct_of_cap). |
+402: | 403 | FORBIDDEN | Campaign not in your workspace, missing scope, or campaign-build limit reached. |
+403: | 404 | NOT_FOUND | Campaign or list doesn't exist, or `signature_id` not found in this workspace. |
+404: | 409 | NOT_READY | Build step precondition not met (e.g. VP generate before SP/LM/RR), preview before email instructions are built, or export before the list is completed - poll/retry. |
+405: | 429 | RATE_LIMITED / WORKSPACE_LIMIT | Rate limit, or too many concurrent batch jobs; retry later (honor `Retry-After`). |
+406: 
+407: Error body: `{ "error": "CODE", "message": "...", "detail"?: ..., "request_id": "..." }`.
+408: 
+409: ## Usage examples
+410: 
+411: - "Build me a campaign for fintech CFOs" -> run the build flow (target audience -> assets -> value propositions -> poll build-status).
+412: - "Generate a cold email for the VP of Sales at Stripe" -> gather signature + email_count, then single generate.
+413: - "Create outreach sequences for these 25 leads" -> gather config, offer a preview, then batch -> poll -> export.
+414: - "Show me what it'll look like with and without enrichment" -> run preview twice (`enrichment_enabled` true/false).
+415: 
+416: ## Pricing
+417: 
+418: - Free: 100 credits/month
+419: - Solo: 300 credits/month
+420: - Starter: 2,000 credits/month
+421: - Growth: 5,000 credits/month
+422: - Enterprise: Custom credits/month
+423: - 1 credit = 1 lead with a full personalized email sequence
+424: 
+425: Get started: https://machfive.io

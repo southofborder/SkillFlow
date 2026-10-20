@@ -117,8 +117,8 @@ def test_target_effect_and_expression_guidance_is_explicit_without_new_business_
         assert "or encode a Boolean when" in prompt
         assert "Open encoding alone creates no gap" in prompt
     assert "even when atomic operations exist" in INSTRUCTIONS
-    assert "accepted requires []" in REVIEW_INSTRUCTIONS
-    assert "Do not invent or infer a pointer for a missing seed" in REVIEW_INSTRUCTIONS
+    assert "accepted requires finding_indexes: []" in REVIEW_INSTRUCTIONS
+    assert "Do not invent or infer a pointer for a missing demand" in REVIEW_INSTRUCTIONS
 
 
 @pytest.mark.parametrize("operation", ["filter_items", "compute"])

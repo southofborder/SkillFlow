@@ -8,7 +8,7 @@ from skillflow.doe.demand_results import validate_result_shape
 
 def result():
     return {
-        "schema_version": "skillflow-demand-v3", "status": "complete",
+        "schema_version": "skillflow-demand-v4", "status": "complete",
         "goals": [{"id": "G1", "requirement_id": "R1", "target": {"instruction_id": "send", "side": "input", "index": 0},
                    "preserve": "value", "path": [], "expected": None, "expected_path": [],
                    "reason": "Preserve the specified original payload."}],
@@ -35,7 +35,7 @@ def result():
         "diagnostics": [],
         "coverage": {"requirements": {"R1": {
             "requirement_id": "R1", "status": "expressed", "bindings": [], "gaps": [],
-            "goal_ids": ["G1"], "has_applicable_goal": True}}, "sinks": 1, "expected_sinks": 1,
+            "goal_ids": ["G1"], "constraint_ids": [], "has_applicable_goal": True}}, "sinks": 1, "expected_sinks": 1,
                      "upstream": {"send": "processed"}},
     }
 

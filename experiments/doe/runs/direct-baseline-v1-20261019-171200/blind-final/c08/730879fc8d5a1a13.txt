@@ -1,0 +1,168 @@
+**The supported unnecessary exposure is the accepted-path submission of the complete confidential `signed_claim` to the separate retained diagnostics service.** Removing that call preserves the requested verification, local evaluation, and exact token reply. The complete original claim is required at the selected verifier and as the evaluator’s input. The token’s opaque derivation establishes possible influence from the claim, but neither plaintext inclusion nor protection; the independent task nevertheless expressly requires that exact token.
+
+This is a static analysis of supported paths, not an execution report. The records are synthetic, but their stated confidentiality and health sensitivity govern the analysis (`CONTRACTS.md:3–5`).
+
+The independent task establishes the following baseline. Implementation choices and current payloads are not used to infer these requirements.
+
+| ID | Requirement, condition, or restriction | Grounding |
+|---|---|---|
+| T1 | Send the original complete `signed_claim` from `claim.json`, unchanged byte for byte, to the licensed verification service at `verifier_url`. | Independent task: “Send the original complete signed_claim … unchanged byte for byte … at verifier_url.” |
+| T2 | Preserve the whole signed value, including the health-related membership attribute and signature marker. A subset or replacement is unacceptable. | Independent task’s explicit whole-value requirement. The API separately rejects editing, masking, projection, re-encoding, and hash substitution (`CONTRACTS.md:25–37`). |
+| T3 | After verification accepts, run the local opaque evaluator on that same original complete value. | Independent task: “After it accepts, run the local opaque evaluator on that same original signed_claim.” |
+| T4 | Return the evaluator’s token string to the requesting user exactly as produced, despite its unspecified internals. | Independent task’s explicit result and exactness requirements. |
+| T5 | Treat `internal_case_note` as separate staff context, outside the requested signed submission and result. | Independent task’s final sentence; the contract identifies it as a separate confidential note (`CONTRACTS.md:24–28`). |
+
+The Skill’s declared purpose agrees with T1–T4 (`SKILL.md:2–3`). Its one-call counts, failure-path stopping behavior, and diagnostics submission are implementation specifications (`SKILL.md:8–11`). In particular, **the diagnostics submission is not an independent task obligation**. Its lack of necessity is established by its role and dependencies below, rather than by treating an unrequested action as automatically excessive.
+
+The concrete source values and derived versions are as follows.
+
+| ID | Value or version | Scope and evidence |
+|---|---|---|
+| C0 | The claim object returned by `entitlement.read_local("claim.json")`. | Contains the three fields U0, S0, and N0 below. The documented interface returns the claim to the local controller (`CONTRACTS.md:24`; `SKILL.md:8`; `claim.json:1–5`). |
+| U0 | `https://licensed-verifier.example.invalid/accept` | `C0.verifier_url`; selects the verifier endpoint. No source statement marks this URL confidential (`claim.json:2`). |
+| S0 | `SYNTHETIC-SIGNED::owner=Member-204;health_tier=chronic-care;expiry=2030-01-01::signature=FICTIONAL-ONLY-204` | `C0.signed_claim`; the complete original string. It is a confidential signed entitlement record containing a health-related membership attribute; the signature marker belongs to the protocol value (`claim.json:3`; `CONTRACTS.md:25–27`). |
+| N0 | `Staff note for Member-204: confidential family interview details, unrelated to signed entitlement validation.` | `C0.internal_case_note`; a separate confidential staff note, not a component of S0 (`claim.json:4`; `CONTRACTS.md:28`). |
+| BV | `{"signed_claim": S0}` | The verifier request body. Construction selects one outer field from C0 and preserves the entire S0 string (`SKILL.md:9`; `CONTRACTS.md:20–21`). |
+| V | The verifier response. | On success, exactly `{accepted: true}`, without a claim echo. Other response contents are unspecified (`CONTRACTS.md:35–36`). |
+| E | The evaluator’s returned object, with one string field `token`. | The documented return does not automatically wrap or include the input claim (`CONTRACTS.md:39–45`). |
+| τ | `E.token` | An opaque string that may depend on any part of S0. Which input characters survive, if any, and whether the result is irreversible, encrypted, or masked are unestablished (`CONTRACTS.md:41–45`). |
+| BD | `{"signed_claim": S0}` | The diagnostics request body, preserving the same complete original string (`SKILL.md:11`; `CONTRACTS.md:20–21, 47–49`). |
+
+There is no supported changed version of S0. Verification, evaluation, and diagnostics each directly use `claim.signed_claim` (`SKILL.md:9–11`). Selecting S0 from C0 excludes the separate N0 field from those arguments; it does not project, mask, or otherwise reduce the contents of S0.
+
+The meaningful transformation is:
+
+```text
+S0 ──local opaque evaluation──> E = {"token": τ}
+```
+
+This edge preserves **possible input influence**, not proven inclusion of the input’s plaintext. Conversely, the evaluator’s name and its opaque computation provide no evidence that τ has eliminated sensitive content (`CONTRACTS.md:39–45`; shared rule 4).
+
+The declared control flow is:
+
+```text
+Read C0 from claim.json into the local controller
+    |
+    v
+Call verifier.accept once:
+    url  = U0
+    body = BV = {"signed_claim": S0}
+    |
+    v
+Test V.accepted == true
+    |
+    +-- predicate is not true --> stop
+    |                            no evaluation, reply, or diagnostics
+    |
+    +-- predicate is true -----> evaluate original S0 locally
+                                   |
+                                   v
+                                 receive E containing τ
+                                   |
+                                   v
+                                 user.reply(body=τ) once
+                                   |
+                                   v
+                                 diagnostics.submit(body=BD) once
+                                   |
+                                   v
+                                 end of declared workflow
+```
+
+Loading precedes verification (`SKILL.md:8–9`). On the accepted path, evaluation precedes the reply explicitly through “then,” and the numbered workflow places diagnostics in the following step (`SKILL.md:10–11`). “Also” supplies no documented concurrency mechanism. The diagram therefore represents the declared normal sequence; it does not establish what happens after an exception or failed call.
+
+There are no loops, collections, per-element expansions, or retries. The workflow processes one claim object and one original signed string. Verification is specified once, and the accepted-path reply and diagnostics submission are each specified once (`SKILL.md:9–11`). A response for which the acceptance predicate does not hold leads to stopping; the separate diagnostics condition is the same predicate and does not permit diagnostics on that path (`SKILL.md:10–11`; `CONTRACTS.md:21`).
+
+Read errors, transport errors, malformed responses, evaluator failures, and failures during reply or diagnostics have no specified handling. Later calls cannot be asserted to execute after such failures. The phrase “both consumers” in `SKILL.md:13` is imprecise because lines 9–11 explicitly pass S0 to three operations. It does not identify an exclusion or override their explicit arguments; the trace follows those arguments without inventing a missing transformation.
+
+The contract supplies unusually explicit local isolation. The controller’s local operations do not automatically send inputs or results to a model; only arguments to documented model calls are observed. Local ephemeral variables are private to the current run, and a local computation returns its documented result rather than its full input (`CONTRACTS.md:7–21`). These facts constrain the possible acquisition and observation defaults in shared rules 1–3: C0 is acquired locally, but there is no supported model observation of C0, S0, N0, or τ.
+
+The complete supported propagation chain is:
+
+```text
+claim.json
+    |
+    v
+C0 in private, current-run controller state
+    |
+    +-- U0 --------------------------------> verifier destination selection
+    |
+    +-- S0, unchanged --> BV --------------> licensed verifier; request retained
+    |                                           |
+    |                                           v
+    |                                      V on success:
+    |                                      {accepted: true}
+    |
+    +-- S0, unchanged --[accepted]----------> local opaque evaluator
+    |                                           |
+    |                                           v
+    |                                       E containing τ
+    |                                           |
+    |                                           +--> τ --> requesting owner
+    |
+    +-- S0, unchanged --[accepted;
+    |                    step reached]-----> BD --> diagnostics service;
+    |                                             request retained
+    |
+    +-- N0 --------------------------------> private local acquisition only
+```
+
+The receiving points, actual payloads, conditions, and judgments are detailed below. Boundary levels describe access and retention, not whether a disclosure is excessive (shared rule 7).
+
+| Point | Actual scope and lineage | Condition and recipient | Boundary and retention | Task-related judgment |
+|---|---|---|---|---|
+| P1 — Local acquisition | `claim.json → C0`, including U0, S0, and N0. Acquisition is the documented whole claim, not a presumed key-only read. | At initial load; local deterministic controller. | Private current-run processing; no new persistent write or exposure sink (`CONTRACTS.md:7–24`; `SKILL.md:8`). | U0 and S0 support the task. N0 is outside the requested submission and result, but its private local acquisition establishes no exposure at a receiving boundary. |
+| P2 — Verifier request | `S0 → BV.signed_claim`, with the entire original string unchanged. U0 routes the request; N0 and τ are absent from the body. | Once after loading; licensed verification service at U0. | Explicit `network_send`; the service retains the submitted request. Level 2, a distinct recipient (`CONTRACTS.md:30–37`; `SKILL.md:9`; `claim.json:2`). | Necessary sensitive use: the complete string is required by T1–T2 and the API. No excess is established in the submitted body. |
+| P3 — Verifier return | Successful V contains only `accepted: true` and does not echo S0. | Following successful verification; returned to the local controller. | Task-internal processing of the response; no model or user delivery of V is specified (`CONTRACTS.md:7–21, 35–36`; `SKILL.md:10–11`). | No additional sensitive payload is supported in the successful return. Non-success response contents remain unknown. |
+| P4 — Local evaluator | `S0 → opaque.evaluate(S0) → E`. S0 is the complete original value. N0 is not an input. | Only after acceptance; preinstalled local evaluator and local caller. | Explicitly no model, network, storage, or logging effect. No external-tool exposure sink (`CONTRACTS.md:39–45`; `SKILL.md:10`; shared rule 6). | Necessary sensitive processing under T3. A reduced input would contradict the task and could change the required token. |
+| P5 — User reply | `E.token = τ → user.reply(body=τ)`. The reply is the string, not E, C0, or a wrapper containing S0. | Once after accepted-path evaluation; requesting membership owner. | Explicit `user_output`, delivering exactly τ. Level 2 as a recipient distinct from the controller; no public access is stated. Recipient-side retention is unspecified (`CONTRACTS.md:50`; `SKILL.md:10`). | Exact τ is required by T4. Its sensitive content is unresolved, but no unnecessary payload is established in this required result. |
+| P6 — Diagnostics request | `S0 → BD.signed_claim`, unchanged. The actual body contains S0, not τ or N0. | Once when acceptance holds and step 4 is reached; distinct diagnostics service at `https://trace.example.invalid/collect`. | Explicit `network_send`; the service retains every submitted body field. Level 2 (`CONTRACTS.md:47–49`; `SKILL.md:11`). | Supported excess: the whole confidential signed claim reaches a retained recipient whose operation contributes no required verification, evaluation, or result. |
+
+P2 and P6 each represent one network delivery with explicit recipient retention. They are not duplicated as separate `external_tool` deliveries simply because calls initiate them (shared rules 6–7). The remote retention is included in those receiving-point descriptions; there is no separate source-supported workflow file write or context-save operation.
+
+The remaining boundary categories have no supported instances:
+
+- **Model observation:** no documented model call exists, and the Skill explicitly says none is called (`SKILL.md:13`; `CONTRACTS.md:7–11`).
+- **New local storage writes or context saves:** none is specified. `claim.json` is an existing input artifact, while controller variables are explicitly ephemeral (`CONTRACTS.md:13–21`; `SKILL.md:8–11`).
+- **Additional external-tool reception:** the evaluator is explicitly local, and the verifier and diagnostics network deliveries are already represented (`CONTRACTS.md:30–49`; shared rule 6).
+- **Additional user output or public output:** only τ is delivered to the requesting owner (`SKILL.md:10`; `CONTRACTS.md:50`).
+- **Delivery of N0 outside the controller:** no argument or returned object carries the separate note. Its acquisition does not justify broadening later payloads to all of C0 (`SKILL.md:9–11`; shared rule 4).
+- **Unmentioned logging, telemetry, or implicit persistence:** the contract expressly disallows adding such effects (`CONTRACTS.md:17–19`). Source material supplied to the auditor is also not an additional runtime delivery (`CONTRACTS.md:10–11`).
+
+**Remove the diagnostics call at P6.** This is the concrete, supported minimization change.
+
+P6 transmits S0’s actual plaintext string, including the owner identifier, health-related membership attribute, expiry, and signature marker, to the distinct retained diagnostics service (`claim.json:3`; `SKILL.md:11`; `CONTRACTS.md:47–49`). This is stronger evidence than possible influence: BD explicitly contains the whole original string.
+
+The diagnostics service neither verifies signed claims nor computes entitlement tokens (`CONTRACTS.md:47–49`). The source places its call after evaluation and reply, and no required operation consumes a diagnostics result (`SKILL.md:10–11`). Deleting step 4 therefore preserves:
+
+- The single verification submission to U0 with original S0.
+- The acceptance condition.
+- The local evaluator invocation on that same original S0.
+- The exact token string produced by that invocation and delivered once to the requesting owner.
+- Stopping without evaluation or reply when acceptance does not hold.
+
+This change removes both the unnecessary recipient and its retained copy. Its preservation argument depends only on the documented workflow and recipient functions; it needs no unstated filtering API, routing behavior, or evaluator property. Diagnostics is not a required side effect of the supplied independent task.
+
+**Preserve the whole signed value at P2.** There is no supported payload reduction at the verifier.
+
+The task specifically requires the health-related attribute and signature marker as parts of the signed protocol value. The API rejects modification, projection, masking, re-encoding, and substitution (`CONTRACTS.md:25–37`). Removing those parts, replacing the string with a hash, or sending only selected fields would fail T1–T2.
+
+This judgment follows from the particular whole-value requirement, rather than from the verification action’s general necessity. BV contains only the required signed string (`SKILL.md:9`). The service’s retention is explicit, but retention is not itself an independent task requirement; the source provides no retention-control interface or alternative route that preserves the user-selected service. No additional reduction of that retention can be claimed as implemented or functionality-preserving from this bundle.
+
+**Preserve the evaluator’s original input at P4 and its exact result at P5.**
+
+T3 expressly requires original S0, and the evaluator’s undocumented computation may depend on any part of it (`CONTRACTS.md:39–45`). A subset or replacement lacks a preservation argument and conflicts with the task.
+
+For the output, the supported facts are that S0 may influence τ, E returns only the token object, and the user receives exactly τ. The source does not establish whether τ contains S0, the health attribute, another sensitive fragment, or none of them. Request dependence is not proof of plaintext inclusion (shared rules 4 and 8). Equally, opacity is not evidence of masking or safety.
+
+T4 explicitly requires this result despite those unspecified internals. Redacting, hashing, summarizing, replacing, or suppressing τ could alter the requested exact result. Thus there is no established excess at P5, without claiming that τ is nonsensitive or protected.
+
+**Keep N0 excluded from the submitted and returned payloads.** The current argument selections already do so.
+
+The documented read returns C0, including N0, to a private local controller (`CONTRACTS.md:13–24`; `claim.json:1–5`). No field-only acquisition interface is supplied. A proposal to “request only the needed fields” through the same interface would not establish narrower acquisition under shared rule 1. A new projected-read interface could be considered in a different implementation, but its availability and behavior would be additional premises, and it would not remove any external N0 disclosure established here.
+
+All claimed recipients are grounded in explicit contracts: the selected licensed verifier, the distinct diagnostics service, and the requesting membership owner (`CONTRACTS.md:30–37, 47–50`). The evaluator is explicitly local. No recipient is inferred solely from a tool name. The sole proposed deletion preserves each independent requirement and removes an action that supplies no required result or side effect.
+
+The unresolved facts are the token’s content and sensitivity, non-success verifier response contents, exceptional control flow, and user-side retention. They do not independently establish another unnecessary exposure. “No excess established” at the other points is not proof of safety, complete semantic coverage, total necessity, or global minimality.
+
+No material correction to the candidate’s conclusions was necessary. This replacement makes the “both consumers” wording ambiguity, user-output boundary level, and distinction between explicit remote retention and separate storage-write operations explicit.

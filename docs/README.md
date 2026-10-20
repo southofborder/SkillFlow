@@ -1,12 +1,25 @@
 # 文档导航
 
+- [Cloud research handoff](cloud-research-handoff.md): current research status,
+  frozen decisions, preserved calibration failure, cross-computer workflow and
+  the boundary between offline readiness and model authorization.
+- [Cloud preparation verification](cloud-verification.md): submission scope,
+  dependency checks and actual environment verification status.
+
 Source submission scope: the repository includes the implementation, tests, tools, documentation, and the frozen inputs required by the three-case pilot and retired-format regression. Other links to local experiment runs document the development record; their large call archives and generated reports are not included in this source update. Those links require the corresponding local experiment directory.
 
 当前实现主线为 Skill-IR → 结构校验 → 受控回述与源文核对 → 有界 CFG 反馈 → 独立 source-only Task 提取与封存 → 固定 Task 的需求／处理／敏感联合标注 → 四轴完整审查及最多一轮隔离 Task 修订或标注修复 → 确定性传播与 DOE。
 Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递规格、离线前向求解及入口／出口事件记录；处理模式由标注声明，可能观察由程序编译。正常核对直接判断具体差异；候选来源、可能依赖和部分顺序继续计算，确实无法完成必要判断时明确失败。当前版本和保证边界统一见下列主规范，不将核对通过或传播完成解释为已证明语义等价。DOE 已接入任务保持反向需求、敏感范围追踪和每个 sink 的确定性对照；前端声明的正确性及完整性仍需语义审查，一般生成数据反馈循环仍超出当前求解范围。
 
+## Constraint analysis
+
+- [General constraint semantics and DOE integration v1](doe/constraint-semantics.md): four bounded constraint families, five-question semantic matrices, representation reuse, and separate baseline/preservation judgments.
+- [Constraint implementation reference](doe/constraint-implementation.md): exact declaration and result interfaces, current versions, shared candidate/validation gate, unsupported behavior, measured synthetic material sizes, and offline validation evidence.
+- [Constraint acceptance matrix](doe/constraint-acceptance.md): 44 independent semantic cases mapped to executable baseline counterparts, with separate preservation coverage and explicit limits. The mapping does not claim that all reduction expectations are supported.
+
 ## 当前规范与验收
 
+- [Endpoint prompt online validation](doe/endpoint-prompt-validation.md): paired real request chains, first-response legality, actual structural corrections, receiver-demand assessment, token accounting, and zero-API replay.
 - [Endpoint demands and review evidence](doe/endpoint-prompt-tightening.md): offline follow-up with complete receiver-input examples, acquisition/demand separation, precise evidence diagnostics, and actual backward-demand regressions.
 - [Targeted prompt rework and first-response screening](doe/prompt-first-response.md): seven-section templates, exact rendered examples, v5 mechanical diagnostics, and eight isolated baseline/revised initial requests; no automatic formal-case rerun.
 
@@ -16,11 +29,11 @@ Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递
 
 - [全流程字段收紧与离线验收](architecture/field-tightening.md)：单一 IR 语义、统一证据、紧凑模型请求与 DOE 结果；逐项保留关系、三例离线对照及校验边界。
 
-- [原文 → Task → demands 正式分析链 v6](doe/joint-pipeline.md)：独立提取、固定任务标注、四轴审查；正常三调用、标注修复五调用、Task 修订六调用，最多一轮语义修复，完整依赖链与零 API 重放。
+- [Source → Task → declarations formal analysis chain v7](doe/joint-pipeline.md): independent Task extraction, fixed-Task annotation and four-axis review; three calls normally, five with annotation repair, six with isolated Task revision, at most one semantic repair, verified dependencies and zero-API replay.
 - [Sink 载荷需求绑定](doe/sink-payload-demand-binding.md)：规定参数与保存内容的功能终点需求、缺失 seed 审查、合成正反例及三例实际关系验收；不从 action 或上游 producer 自动补出载荷需求。
-- [敏感范围与接收边界对照 v3](doe/sensitivity.md)：固定 Task 下的敏感声明、前向关系、逐 seed 需求及全部 sink 对照；未表达限制保守约束结论，工程证据与真实语义效果分开。
+- [Sensitive ranges and recipient-boundary comparison v4](doe/sensitivity.md): fixed-Task sensitivity, forward relations, per-seed demands, and all-sink comparison, with separate constraint checks and candidate preservation; unresolved gaps remain conservative.
 - [Sensitivity v1 offline review](../experiments/doe/runs/sensitivity-v1-20261011-231751/index.html): all 34 sinks, three explicitly authored declaration sets, preserved forward facts and task demands, and zero-API replay. [Assistant interpretation](../experiments/doe/runs/sensitivity-v1-20261011-231751/assistant-review.md) separates supported reductions, conservative retention and unknown sensitivity coverage.
-- [Task 保持需求与逐 seed 反向推导 v3](doe/backward-demand.md)：六类正向保持目标、逐 requirement realization／缺口、raw demand 到 seed 和 sink 的程序生成对照；不以动作必要性筛除 sink。
+- [Task preservation and per-seed backward demand v4](doe/backward-demand.md): six positive properties, per-requirement realizations and gaps, exact raw-demand-to-seed traceability, and constraint coverage references without restriction seeds; no sink is filtered by action necessity.
 - [独立 Task 与原文逐项登记 v3](doe/task-evidence.md)：source-only 提取、全部非空物理行处置、唯一任务释义、Task seal、隔离修订及精确版本引用；登记覆盖不证明语义完整。
 - [新版审查两例探索性实测](../experiments/doe/runs/source-task-review-v1-20261015-live/assessment.assistant.md)：真实模型识别同一源行遗漏的禁止项和过宽需求；助手编写的合成参考案例与助手复核，未建立独立人工金标准，其他六例未运行。
 - [本轮改造与验证记录](doe/source-task-demand-verification.md)：已实现的阶段责任、分组工程测试、真实模型实验及保守能力边界；不合并重叠测试数量，不以结构通过替代语义验收。

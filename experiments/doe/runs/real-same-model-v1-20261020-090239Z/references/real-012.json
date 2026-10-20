@@ -1,0 +1,857 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "broedkrummen/brave-api-search",
+  "case_id": "real-012",
+  "declared_purpose": [
+    {
+      "id": "P1",
+      "interpretation": "Provide official Brave web search, optional search summaries, query suggestions/spelling corrections and grounded answers with citations/entities/research modes. The source limits use to tasks needing external information; it does not establish user authorization for arbitrary data.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 1,
+          "end_line": 21,
+          "quote": "---\nname: brave-api-search\ndescription: Real-time web search, autosuggest, and AI-powered answers using the official Brave Search API. Use for searching documentation, facts, current events, or any web content. Supports AI grounded answers with citations and query autosuggest. Requires BRAVE_SEARCH_API_KEY and BRAVE_ANSWERS_API_KEY.\nlicense: MIT\nmetadata:\n  author: Broedkrummen\n  version: 4.2.1\n---\n\n# Brave API Search v4.2.0 — Significant Update\n\n## Native OpenClaw plugin\n\nThe same four tools are now available as a native plugin: [Brave API Search plugin](https://clawhub.ai/plugins/brave-api-search-plugin). Install it with `openclaw plugins install clawhub:brave-api-search-plugin`. This skill remains available for existing users.\n\n\nReal-time web search, autosuggest, spellcheck, and AI-powered answers using the official Brave Search API. Four tools:\n- `brave_search` — web results with titles, URLs, descriptions, optional AI summary\n- `brave_suggest` — query autosuggestions as users type with optional rich metadata\n- `brave_spellcheck` — spell correction and \"Did you mean?\" suggestions\n- `brave_answers` — AI-grounded answers with inline citations powered by live web search"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 46,
+          "end_line": 68,
+          "quote": "## When to Use This Skill\n\n**Use `brave_search` when:**\n- Searching for current information, news, or recent events\n- Looking up documentation or technical references\n- Need ranked results with URLs to follow up on\n- Want an AI summary of search results\n\n**Use `brave_suggest` when:**\n- Power autocomplete in search interfaces\n- Help users formulate better queries faster\n- Need query completions as users type\n- Want rich metadata (titles, descriptions, images) for suggestions\n\n**Use `brave_answers` when:**\n- Need a synthesized answer with cited sources\n- Researching topics that benefit from multiple sources\n- Want AI-grounded responses with inline citations\n- Deep research mode needed (multi-search)\n\n**Don't use this skill for:**\n- Questions already answered from context or memory\n- Tasks that don't require external information"
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "I1",
+      "interpretation": "Geo headers are built only from present CLI arguments, and search output is explicitly projected by local formatters. Retries resend the actual URL/options; they do not create new recipients or data versions.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 77,
+          "end_line": 112,
+          "quote": "function formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo) {\n  const results = data.web?.results || [];\n  const q = data.query || {};\n  const lines = [];\n\n  if (showSpellcheckInfo && q.altered && q.altered !== q.original) {\n    lines.push(`🔍 Query corrected: \"${q.original}\" → \"${q.altered}\"\\n`);\n  }\n\n  if (results.length === 0) {\n    lines.push('No web results found.');\n    return lines.join('\\n');\n  }\n\n  lines.push(`Found ${results.length} web result(s) for: ${q.original || ''}`);\n  if (q.more_results_available) lines.push(` *(More results — use --offset)*`);\n  lines.push('');\n\n  for (let i = 0; i < results.length; i++) {\n    const r = results[i];\n    const title = showDecorations ? (r.title || '') : stripHtml(r.title);\n    const desc  = showDecorations ? (r.description || '') : stripHtml(r.description);\n\n    lines.push(`${i + 1}. **${title}**`);\n    lines.push(`   URL: ${r.url}`);\n    if (desc) lines.push(`   ${desc}`);\n    if (extraSnippets && r.extra_snippets?.length) {\n      lines.push('   Additional context:');\n      for (const s of r.extra_snippets) {\n        lines.push(`   - ${showDecorations ? s : stripHtml(s)}`);\n      }\n    }\n    lines.push('');\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "utils.js",
+          "start_line": 32,
+          "end_line": 62,
+          "quote": "async function fetchWithRetry(url, options, maxRetries = 3) {\n  let lastError;\n\n  for (let attempt = 0; attempt <= maxRetries; attempt++) {\n    try {\n      const res = await fetch(url, options);\n\n      if (res.status === 429) {\n        const retryAfter = parseInt(res.headers.get('Retry-After') || '5', 10);\n        const delay = retryAfter * 1000;\n        if (attempt < maxRetries) {\n          await sleep(delay);\n          continue;\n        }\n      }\n\n      if (res.status >= 500 && attempt < maxRetries) {\n        await sleep(500 * Math.pow(2, attempt));\n        continue;\n      }\n\n      return res;\n    } catch (err) {\n      lastError = err;\n      if (attempt < maxRetries) {\n        await sleep(500 * Math.pow(2, attempt));\n      }\n    }\n  }\n\n  throw lastError;"
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "M1",
+      "interpretation": "Cover web search, optional keyed summary, answer model processing, suggestion/cache, spellcheck, model-visible selected/error outputs and local .env persistence; keep distinct key fallback orders and optional input conditions.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 44,
+          "quote": "## Setup\n\nSet your Brave API keys in a local `.env` file (recommended):\n\n```bash\n# .env (do not commit)\nBRAVE_SEARCH_API_KEY=your_key_here\nBRAVE_ANSWERS_API_KEY=your_key_here\nAUTOSUGGEST_API_KEY=your_key_here   # optional, for autosuggest only\nBRAVE_SPELLCHECK_API_KEY=your_key_here   # optional, for spellcheck only\n```\n\nGet your keys at: https://api-dashboard.search.brave.com\n\n**Key routing:**\n- `brave_search` → `BRAVE_SEARCH_API_KEY`\n- `brave_answers` → `BRAVE_ANSWERS_API_KEY`\n- `brave_suggest` → `AUTOSUGGEST_API_KEY` → `BRAVE_AUTOSUGGEST_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n- `brave_spellcheck` → `BRAVE_SPELLCHECK_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n\n> Note: `brave_answers` uses streaming by default. Streaming is required for citations, entities, and research mode."
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 292,
+          "end_line": 345,
+          "quote": "  const searchParams = {\n    q: query,\n    count,\n    country,\n    safesearch,\n    spellcheck,\n    extra_snippets: extraSnippets ? '1' : undefined,\n    result_filter: resultFilter,\n    freshness,\n    units,\n    offset: args.offset ? String(Math.min(9, Math.max(0, parseInt(args.offset)))) : undefined,\n  };\n\n  if (args['search-lang'])    searchParams.search_lang = args['search-lang'];\n  if (args['ui-lang'])        searchParams.ui_lang = args['ui-lang'];\n  if (!showDecorations)      searchParams.text_decorations = 'false';\n  if (wantSummary)           searchParams.summary = '1';\n\n  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);\n\n  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);\n    }\n\n    const discussions = formatDiscussions(data);\n    if (discussions) console.log('\\n' + discussions);\n\n    const faq = formatFAQ(data);\n    if (faq) console.log('\\n' + faq);\n\n    const infobox = formatInfobox(data);\n    if (infobox) console.log('\\n' + infobox);\n\n    const news = formatNews(data);\n    if (news) console.log('\\n' + news);\n\n    const videos = formatVideos(data);\n    if (videos) console.log('\\n' + videos);\n  }\n\n  if (data.query?.spellcheck_off) {\n    console.log('\\n*(Spellcheck was disabled for this query)*');\n  }"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const count = Math.min(10, Math.max(1, parseInt(args.count) || 5));\n  const country = (args.country || 'US').toUpperCase();\n  const rich = args.rich === 'true';\n\n  const cacheKey = `${query}|${count}|${country}|${rich}`;\n  const cached = cache.get(cacheKey);\n  if (cached) {\n    console.log('(cached) ' + formatSuggestions(cached, rich));\n    return;\n  }\n\n  const apiKey = getApiKey();\n  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        },
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 8,
+          "end_line": 34,
+          "quote": "function getSpellcheckKey() {\n  return (\n    process.env.BRAVE_SPELLCHECK_API_KEY ||\n    process.env.BRAVE_SEARCH_API_KEY ||\n    null\n  );\n}\n\nasync function braveSpellcheck(query, country) {\n  const apiKey = getSpellcheckKey();\n  if (!apiKey) {\n    console.error('Error: BRAVE_SPELLCHECK_API_KEY or BRAVE_SEARCH_API_KEY environment variable not set.');\n    console.error('Get your key at: https://api-dashboard.search.brave.com');\n    process.exit(1);\n  }\n\n  const url = new URL(`${BASE_URL}/spellcheck/search`);\n  url.searchParams.set('q', query);\n  url.searchParams.set('country', country);\n\n  const res = await fetchWithRetry(url.toString(), {\n    headers: {\n      'Accept': 'application/json',\n      'Accept-Encoding': 'gzip',\n      'X-Subscription-Token': apiKey,\n    },\n  });"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "M2",
+      "interpretation": "Do not conflate local raw parsing with whole-response observation, query influence with output plaintext, API credential with model-message content, or process-local TTL cache with persistent storage. Retain summarizer geo-header necessity as an explicit unresolved interface issue.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 43,
+          "end_line": 56,
+          "quote": "  const headers = {\n    'Accept': 'application/json',\n    'Accept-Encoding': 'gzip',\n    'X-Subscription-Token': apiKey,\n    ...extraHeaders,\n  };\n\n  const res = await fetchWithRetry(url.toString(), { headers });\n  if (!res.ok) {\n    const body = await res.text();\n    console.error(`Brave API error ${res.status}: ${body}`);\n    process.exit(1);\n  }\n  return res.json();"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 310,
+          "end_line": 324,
+          "quote": "  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);\n\n  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        },
+        {
+          "path": "utils.js",
+          "start_line": 73,
+          "end_line": 91,
+          "quote": "function createCache() {\n  const store = new Map();\n  return {\n    get(key) {\n      const entry = store.get(key);\n      if (!entry) return null;\n      if (Date.now() > entry.expires) {\n        store.delete(key);\n        return null;\n      }\n      return entry.value;\n    },\n    set(key, value, ttlMs = 60_000) {\n      store.set(key, { value, expires: Date.now() + ttlMs });\n    },\n    clear() {\n      store.clear();\n    },\n  };"
+        }
+      ],
+      "stratum": "other"
+    },
+    {
+      "id": "MNN1",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: Named subscription tokens authenticate their respective Brave service calls. Sensitive search text or partial queries are consumed for the declared search/correction/answer function; no extra secret source may be invented from a generic environment getter.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 38,
+          "end_line": 42,
+          "quote": "**Key routing:**\n- `brave_search` → `BRAVE_SEARCH_API_KEY`\n- `brave_answers` → `BRAVE_ANSWERS_API_KEY`\n- `brave_suggest` → `AUTOSUGGEST_API_KEY` → `BRAVE_AUTOSUGGEST_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n- `brave_spellcheck` → `BRAVE_SPELLCHECK_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 43,
+          "end_line": 50,
+          "quote": "  const headers = {\n    'Accept': 'application/json',\n    'Accept-Encoding': 'gzip',\n    'X-Subscription-Token': apiKey,\n    ...extraHeaders,\n  };\n\n  const res = await fetchWithRetry(url.toString(), { headers });"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 108,
+          "end_line": 117,
+          "quote": "  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        },
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 24,
+          "end_line": 34,
+          "quote": "  const url = new URL(`${BASE_URL}/spellcheck/search`);\n  url.searchParams.set('q', query);\n  url.searchParams.set('country', country);\n\n  const res = await fetchWithRetry(url.toString(), {\n    headers: {\n      'Accept': 'application/json',\n      'Accept-Encoding': 'gzip',\n      'X-Subscription-Token': apiKey,\n    },\n  });"
+        }
+      ]
+    },
+    {
+      "id": "MNN2",
+      "stratum": "necessary_sensitive_use",
+      "interpretation": "Assess the necessary-use scope and its stated limits: Supplied geographic settings support explicitly local search results; their presence can be sensitive. Optionality is not proof that removing them preserves requested localization quality, and country/lat/long are not automatically acquired from unrelated runtime state.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 258,
+          "end_line": 259,
+          "quote": "      'Geo (for local results):\\n' +\n      '  --lat NUM --long NUM --city NAME --state CODE --country CODE\\n'"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 292,
+          "end_line": 311,
+          "quote": "  const searchParams = {\n    q: query,\n    count,\n    country,\n    safesearch,\n    spellcheck,\n    extra_snippets: extraSnippets ? '1' : undefined,\n    result_filter: resultFilter,\n    freshness,\n    units,\n    offset: args.offset ? String(Math.min(9, Math.max(0, parseInt(args.offset)))) : undefined,\n  };\n\n  if (args['search-lang'])    searchParams.search_lang = args['search-lang'];\n  if (args['ui-lang'])        searchParams.ui_lang = args['ui-lang'];\n  if (!showDecorations)      searchParams.text_decorations = 'false';\n  if (wantSummary)           searchParams.summary = '1';\n\n  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);"
+        }
+      ]
+    },
+    {
+      "id": "MUU1",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: Brave backend model/context, result sensitivity, retention and error echo behavior are not retained. Summarization/grounding dependency does not prove original query secrets survive as plaintext in returned answers.",
+      "evidence": [
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 121,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });\n\n  if (!res.ok) {\n    const errBody = await res.text();\n    console.error(`Brave Answers API error ${res.status}: ${errBody}`);"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 298,
+          "end_line": 334,
+          "quote": "function formatAnswer(data, query) {\n  const content = data.choices?.[0]?.message?.content || '';\n  if (!content) return 'No answer returned.';\n\n  const { cleanText, sources } = parseCitations(content);\n  const entities = parseEntities(content);\n  const lines = [];\n\n  lines.push(`**Query:** ${query}\\n`);\n  lines.push(cleanText);\n\n  if (entities.length > 0) {\n    lines.push('\\n**Entities mentioned:**');\n    entities.forEach(e => {\n      if (e.href) {\n        lines.push(`- [${e.name}](${e.href})`);\n      } else {\n        lines.push(`- ${e.name}`);\n      }\n    });\n  }\n\n  if (sources.length > 0) {\n    lines.push('\\n**Sources:**');\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    sources.forEach(s => {\n      lines.push(`${s.number || '?'}. [${s.title}](${s.url})`);\n      if (s.snippet) lines.push(`   > ${s.snippet}`);\n    });\n  }\n\n  const usage = data.usage;\n  if (usage) {\n    lines.push(`\\n*Tokens: ${usage.total_tokens} (prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens})*`);\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 318,
+          "end_line": 324,
+          "quote": "    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);"
+        }
+      ]
+    },
+    {
+      "id": "MUU2",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: The same geo headers are forwarded to the summary-key endpoint. The source establishes that transmission but does not specify whether the summarizer ignores or uses them for localized output; a proposed omission requires interface/quality evidence before being a supported DOE reduction.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 310,
+          "end_line": 324,
+          "quote": "  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);\n\n  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);"
+        }
+      ]
+    },
+    {
+      "id": "MUU3",
+      "stratum": "source_uncertainty",
+      "interpretation": "Retain and calibrate this material source uncertainty: SKILL prose both says non-streaming loses citations/entities and later describes full batch parsing. The code parses citation/entity tags in batch output, but external response support is not guaranteed by those parsers. Documented .env setup also relies on unretained environment injection rather than a bundled loader.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 149,
+          "end_line": 153,
+          "quote": "- `stream` — Enable streaming output (default: true — required for citations/entities/research)\n\n**Returns:** AI answer with cited sources extracted from the response, plus token usage and cost breakdown.\n\n> ⚠️ **Citations, entities, and research mode require streaming (`--stream true`, which is the default).** If you disable streaming with `--stream false`, citations and entity data will not be available."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 195,
+          "end_line": 204,
+          "quote": "### brave_answers.js v4.2.0\n\nThe AI answers script supports two modes:\n- **Streaming (default):** Progressive output with real-time entity extraction, deduplicated citations, token usage, and cost breakdown\n- **Non-streaming:** Full citation and entity extraction from batch response via `parseCitations()` and `parseEntities()`\n\nKey changes in v4.2.0:\n- **Entity extraction:** Streaming mode parses `<enum_item>` tags incrementally — entity names are streamed inline as they are parsed, and a consolidated **Entities mentioned** section is printed at the end with URL and citation count per entity\n- **Citation deduplication:** Duplicate source URLs are deduplicated so each source is cited only once (sorted by citation number)\n- **Non-streaming mode (v4.2.0):** Full `parseCitations()` and `parseEntities()` applied to the batch response content, so citations and entities are extracted even without streaming"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 298,
+          "end_line": 334,
+          "quote": "function formatAnswer(data, query) {\n  const content = data.choices?.[0]?.message?.content || '';\n  if (!content) return 'No answer returned.';\n\n  const { cleanText, sources } = parseCitations(content);\n  const entities = parseEntities(content);\n  const lines = [];\n\n  lines.push(`**Query:** ${query}\\n`);\n  lines.push(cleanText);\n\n  if (entities.length > 0) {\n    lines.push('\\n**Entities mentioned:**');\n    entities.forEach(e => {\n      if (e.href) {\n        lines.push(`- [${e.name}](${e.href})`);\n      } else {\n        lines.push(`- ${e.name}`);\n      }\n    });\n  }\n\n  if (sources.length > 0) {\n    lines.push('\\n**Sources:**');\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    sources.forEach(s => {\n      lines.push(`${s.number || '?'}. [${s.title}](${s.url})`);\n      if (s.snippet) lines.push(`   > ${s.snippet}`);\n    });\n  }\n\n  const usage = data.usage;\n  if (usage) {\n    lines.push(`\\n*Tokens: ${usage.total_tokens} (prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens})*`);\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 11,
+          "end_line": 12,
+          "quote": "function getApiKey() {\n  return process.env.BRAVE_ANSWERS_API_KEY || null;"
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "N1",
+      "interpretation": "Named subscription tokens authenticate their respective Brave service calls. Sensitive search text or partial queries are consumed for the declared search/correction/answer function; no extra secret source may be invented from a generic environment getter.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 38,
+          "end_line": 42,
+          "quote": "**Key routing:**\n- `brave_search` → `BRAVE_SEARCH_API_KEY`\n- `brave_answers` → `BRAVE_ANSWERS_API_KEY`\n- `brave_suggest` → `AUTOSUGGEST_API_KEY` → `BRAVE_AUTOSUGGEST_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n- `brave_spellcheck` → `BRAVE_SPELLCHECK_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 43,
+          "end_line": 50,
+          "quote": "  const headers = {\n    'Accept': 'application/json',\n    'Accept-Encoding': 'gzip',\n    'X-Subscription-Token': apiKey,\n    ...extraHeaders,\n  };\n\n  const res = await fetchWithRetry(url.toString(), { headers });"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 108,
+          "end_line": 117,
+          "quote": "  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        },
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 24,
+          "end_line": 34,
+          "quote": "  const url = new URL(`${BASE_URL}/spellcheck/search`);\n  url.searchParams.set('q', query);\n  url.searchParams.set('country', country);\n\n  const res = await fetchWithRetry(url.toString(), {\n    headers: {\n      'Accept': 'application/json',\n      'Accept-Encoding': 'gzip',\n      'X-Subscription-Token': apiKey,\n    },\n  });"
+        }
+      ]
+    },
+    {
+      "id": "N2",
+      "interpretation": "Supplied geographic settings support explicitly local search results; their presence can be sensitive. Optionality is not proof that removing them preserves requested localization quality, and country/lat/long are not automatically acquired from unrelated runtime state.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 258,
+          "end_line": 259,
+          "quote": "      'Geo (for local results):\\n' +\n      '  --lat NUM --long NUM --city NAME --state CODE --country CODE\\n'"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 292,
+          "end_line": 311,
+          "quote": "  const searchParams = {\n    q: query,\n    count,\n    country,\n    safesearch,\n    spellcheck,\n    extra_snippets: extraSnippets ? '1' : undefined,\n    result_filter: resultFilter,\n    freshness,\n    units,\n    offset: args.offset ? String(Math.min(9, Math.max(0, parseInt(args.offset)))) : undefined,\n  };\n\n  if (args['search-lang'])    searchParams.search_lang = args['search-lang'];\n  if (args['ui-lang'])        searchParams.ui_lang = args['ui-lang'];\n  if (!showDecorations)      searchParams.text_decorations = 'false';\n  if (wantSummary)           searchParams.summary = '1';\n\n  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);"
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "PC1",
+      "interpretation": "Keep original query, localization/filter/date parameters, selected key, bounded count/offset and conditional geo headers. Do not remove user-selected location or context solely because it may be sensitive; a minimization must retain requested local-search quality.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 271,
+          "end_line": 311,
+          "quote": "  const count          = Math.min(20, Math.max(1, parseInt(args.count) || 10));\n  const country        = args.country || 'us';\n  const freshness      = args.freshness || undefined;\n  const extraSnippets  = args['extra-snippets'] === 'true';\n  const wantSummary   = args.summary === 'true';\n  const showDecorations = args['text-decorations'] !== 'false';\n  const showSpellcheckInfo = args['spellcheck-info'] === 'true';\n  const units          = VALID_UNITS.has(args.units) ? args.units : undefined;\n  const safesearch     = VALID_SAFESEARCH.has(args.safesearch) ? args.safesearch : 'moderate';\n  const spellcheck     = args.spellcheck === 'false' ? 'false' : undefined;\n\n  // Parse result_filter\n  let resultFilter;\n  if (args['result-filter']) {\n    const filters = args['result-filter']\n      .split(',')\n      .map(f => f.trim())\n      .filter(f => VALID_RESULT_FILTERS.has(f));\n    resultFilter = filters.length > 0 ? filters.join(',') : undefined;\n  }\n\n  const searchParams = {\n    q: query,\n    count,\n    country,\n    safesearch,\n    spellcheck,\n    extra_snippets: extraSnippets ? '1' : undefined,\n    result_filter: resultFilter,\n    freshness,\n    units,\n    offset: args.offset ? String(Math.min(9, Math.max(0, parseInt(args.offset)))) : undefined,\n  };\n\n  if (args['search-lang'])    searchParams.search_lang = args['search-lang'];\n  if (args['ui-lang'])        searchParams.ui_lang = args['ui-lang'];\n  if (!showDecorations)      searchParams.text_decorations = 'false';\n  if (wantSummary)           searchParams.summary = '1';\n\n  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);"
+        }
+      ]
+    },
+    {
+      "id": "PC2",
+      "interpretation": "Preserve stream/entity/citation semantics, result identity/source URLs, actual four-attempt retry bound and TTL cache hit conditions. A cache name is not evidence of disk persistence; output formatting is not proof of semantic redaction.",
+      "evidence": [
+        {
+          "path": "brave_answers.js",
+          "start_line": 33,
+          "end_line": 83,
+          "quote": "function parseCitations(text) {\n  const sources = [];\n  const seen = new Set();\n\n  const citationRegex = /<citation>([\\s\\S]*?)<\\/citation>/g;\n  let match;\n  while ((match = citationRegex.exec(text)) !== null) {\n    try {\n      const citation = JSON.parse(match[1]);\n      if (citation.url && !seen.has(citation.url)) {\n        seen.add(citation.url);\n        sources.push({\n          url: citation.url,\n          title: citation.title || citation.url,\n          snippet: citation.snippet || '',\n          number: citation.number,\n        });\n      }\n    } catch {\n      // ignore malformed citation\n    }\n  }\n\n  const cleanText = text\n    .replace(/<citation>[\\s\\S]*?<\\/citation>/g, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  return { cleanText, sources };\n}\n\nfunction parseEntities(text) {\n  const entities = [];\n  const entityRegex = /<enum_item>([\\s\\S]*?)<\\/enum_item>/g;\n  let match;\n  while ((match = entityRegex.exec(text)) !== null) {\n    try {\n      const entity = JSON.parse(match[1]);\n      if (entity.name) {\n        entities.push({\n          name: entity.name,\n          href: entity.href || '',\n          originalTokens: entity.original_tokens || '',\n          citations: entity.citations || [],\n        });\n      }\n    } catch {\n      // ignore malformed entity\n    }\n  }\n  return entities;"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 206,
+          "end_line": 253,
+          "quote": "  process.stdout.write('\\n');\n\n  // Entities section\n  const entities = parseEntities(fullContent);\n  if (entities.length > 0) {\n    process.stdout.write('\\n**Entities mentioned:**\\n');\n    entities.forEach(e => {\n      const citeNote = e.citations.length > 0\n        ? ` (cited in ${e.citations.length} place${e.citations.length > 1 ? 's' : ''})`\n        : '';\n      if (e.href) {\n        process.stdout.write(`- [${e.name}](${e.href})${citeNote}\\n`);\n      } else {\n        process.stdout.write(`- ${e.name}${citeNote}\\n`);\n      }\n    });\n  }\n\n  // Print sources at the end\n  if (sources.length > 0) {\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    process.stdout.write('\\n**Sources:**\\n');\n    sources.forEach(s => {\n      process.stdout.write(`${s.number || '?'}. [${s.title}](${s.url})\\n`);\n      if (s.snippet) process.stdout.write(`   > ${s.snippet}\\n`);\n    });\n  }\n\n  // Parse and print usage\n  if (usageLine) {\n    try {\n      const usageJson = usageLine\n        .replace('<usage>', '')\n        .replace('</usage>', '');\n      const usage = JSON.parse(usageJson);\n      const totalTokens = (usage['X-Request-Tokens-In'] || 0) + (usage['X-Request-Tokens-Out'] || 0);\n      process.stdout.write(\n        `\\n*Tokens: ${totalTokens} ` +\n        `(in: ${usage['X-Request-Tokens-In'] || 0}, out: ${usage['X-Request-Tokens-Out'] || 0})*\\n`\n      );\n      const totalCost = usage['X-Request-Total-Cost'];\n      if (totalCost !== undefined && totalCost !== null) {\n        process.stdout.write(`*Total cost: $${parseFloat(totalCost).toFixed(5)}*\\n`);\n      }\n    } catch {\n      // ignore malformed usage tag\n    }\n  }"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 352,
+          "end_line": 363,
+          "quote": "  const country = args.country || 'us';\n  const enableCitations = args['enable-citations'] !== 'false';\n  const enableResearch = args['enable-research'] === 'true';\n  const enableEntities = args['enable-entities'] === 'true';\n  const useStream = args.stream !== 'false'; // streaming ON by default\n\n  if (useStream) {\n    await streamAnswer(query, country, enableCitations, enableResearch, enableEntities);\n  } else {\n    const data = await getAnswer(query, country, enableCitations, enableResearch, enableEntities);\n    console.log(formatAnswer(data, query));\n  }"
+        },
+        {
+          "path": "utils.js",
+          "start_line": 32,
+          "end_line": 62,
+          "quote": "async function fetchWithRetry(url, options, maxRetries = 3) {\n  let lastError;\n\n  for (let attempt = 0; attempt <= maxRetries; attempt++) {\n    try {\n      const res = await fetch(url, options);\n\n      if (res.status === 429) {\n        const retryAfter = parseInt(res.headers.get('Retry-After') || '5', 10);\n        const delay = retryAfter * 1000;\n        if (attempt < maxRetries) {\n          await sleep(delay);\n          continue;\n        }\n      }\n\n      if (res.status >= 500 && attempt < maxRetries) {\n        await sleep(500 * Math.pow(2, attempt));\n        continue;\n      }\n\n      return res;\n    } catch (err) {\n      lastError = err;\n      if (attempt < maxRetries) {\n        await sleep(500 * Math.pow(2, attempt));\n      }\n    }\n  }\n\n  throw lastError;"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 100,
+          "end_line": 117,
+          "quote": "  const cacheKey = `${query}|${count}|${country}|${rich}`;\n  const cached = cache.get(cacheKey);\n  if (cached) {\n    console.log('(cached) ' + formatSuggestions(cached, rich));\n    return;\n  }\n\n  const apiKey = getApiKey();\n  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "R1",
+      "interpretation": "Brave web/search receives query and actual included query parameters plus selected subscription token; optional geo headers transmit supplied latitude, longitude, timezone, city, state, country and postal code. No source acquires device location automatically or sends the entire environment.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 56,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;\n}\n\n// ─── API fetch ────────────────────────────────────────────────────────────────\n\nasync function braveGet(path, params, apiKey, extraHeaders) {\n  if (!apiKey) {\n    console.error('Error: BRAVE_SEARCH_API_KEY environment variable not set.');\n    console.error('Get your key at: https://api-dashboard.search.brave.com');\n    process.exit(1);\n  }\n\n  const url = new URL(`${BASE_URL}${path}`);\n  for (const [k, v] of Object.entries(params)) {\n    if (v !== '' && v !== undefined && v !== null) url.searchParams.set(k, v);\n  }\n\n  const headers = {\n    'Accept': 'application/json',\n    'Accept-Encoding': 'gzip',\n    'X-Subscription-Token': apiKey,\n    ...extraHeaders,\n  };\n\n  const res = await fetchWithRetry(url.toString(), { headers });\n  if (!res.ok) {\n    const body = await res.text();\n    console.error(`Brave API error ${res.status}: ${body}`);\n    process.exit(1);\n  }\n  return res.json();"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 292,
+          "end_line": 311,
+          "quote": "  const searchParams = {\n    q: query,\n    count,\n    country,\n    safesearch,\n    spellcheck,\n    extra_snippets: extraSnippets ? '1' : undefined,\n    result_filter: resultFilter,\n    freshness,\n    units,\n    offset: args.offset ? String(Math.min(9, Math.max(0, parseInt(args.offset)))) : undefined,\n  };\n\n  if (args['search-lang'])    searchParams.search_lang = args['search-lang'];\n  if (args['ui-lang'])        searchParams.ui_lang = args['ui-lang'];\n  if (!showDecorations)      searchParams.text_decorations = 'false';\n  if (wantSummary)           searchParams.summary = '1';\n\n  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "https://api.search.brave.com/res/v1/web/search",
+      "condition": "Valid search query/key; each optional header only if its argument is present",
+      "version": "Original selected query/options/geo arguments"
+    },
+    {
+      "id": "R2",
+      "interpretation": "The optional summarizer request sends the returned summarizer key, inline_references=true, Search credential and the same supplied geo headers. Its payload is not the complete raw search response, and the branch is suppressed by a web/query-only filter.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 310,
+          "end_line": 325,
+          "quote": "  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);\n\n  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);\n    }"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Brave /summarizer/search",
+      "condition": "wantSummary and key present within allowed result-filter branch",
+      "version": "Returned summarizer key and unchanged geo-header arguments"
+    },
+    {
+      "id": "R3",
+      "interpretation": "Brave Answers receives the original query as a user message plus country/language and selected citation/research/entity options, authenticated by BRAVE_ANSWERS_API_KEY. Streaming and non-streaming requests have distinct stream values but the same other actual body fields.",
+      "evidence": [
+        {
+          "path": "brave_answers.js",
+          "start_line": 88,
+          "end_line": 117,
+          "quote": "async function streamAnswer(query, country, enableCitations, enableResearch, enableEntities) {\n  const apiKey = getApiKey();\n  if (!apiKey) {\n    console.error('Error: BRAVE_ANSWERS_API_KEY environment variable not set.');\n    console.error('Get your key at: https://api-dashboard.search.brave.com');\n    process.exit(1);\n  }\n\n  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 258,
+          "end_line": 287,
+          "quote": "async function getAnswer(query, country, enableCitations, enableResearch, enableEntities) {\n  const apiKey = getApiKey();\n  if (!apiKey) {\n    console.error('Error: BRAVE_ANSWERS_API_KEY environment variable not set.');\n    console.error('Get your key at: https://api-dashboard.search.brave.com');\n    process.exit(1);\n  }\n\n  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: false,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Brave /chat/completions",
+      "condition": "Answers invoked with query/key; selected stream branch",
+      "version": "Query-bearing chat body and options"
+    },
+    {
+      "id": "R4",
+      "interpretation": "Brave answer processing observes the submitted query message and configured grounding options. Search summary is AI processing of service-held search results identified by a key; the exact backend context is not retained. Subscription-token authentication is not evidence that the key enters the model prompt.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 18,
+          "end_line": 21,
+          "quote": "- `brave_search` — web results with titles, URLs, descriptions, optional AI summary\n- `brave_suggest` — query autosuggestions as users type with optional rich metadata\n- `brave_spellcheck` — spell correction and \"Did you mean?\" suggestions\n- `brave_answers` — AI-grounded answers with inline citations powered by live web search"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 318,
+          "end_line": 324,
+          "quote": "    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Brave answer/summarizer model service",
+      "condition": "Grounded answer or summary processing requested",
+      "version": "Declared query message or service-held keyed summary context"
+    },
+    {
+      "id": "R5",
+      "interpretation": "Autosuggest sends the partial query, bounded count, country and optional rich=true using the first available Autosuggest-specific/fallback key; a live request is skipped on a cache hit. The cache stores only its actual response keyed by selected inputs in task memory.",
+      "evidence": [
+        {
+          "path": "brave_suggest.js",
+          "start_line": 11,
+          "end_line": 46,
+          "quote": "function getApiKey() {\n  return (\n    process.env.AUTOSUGGEST_API_KEY ||\n    process.env.BRAVE_AUTOSUGGEST_API_KEY ||\n    process.env.BRAVE_SEARCH_API_KEY ||\n    null\n  );\n}\n\nasync function braveSuggest(path, params, apiKey) {\n  if (!apiKey) {\n    console.error('Error: AUTOSUGGEST_API_KEY or BRAVE_SEARCH_API_KEY environment variable not set.');\n    console.error('Get your key at: https://api-dashboard.search.brave.com');\n    process.exit(1);\n  }\n\n  const url = new URL(`${BASE_URL}${path}`);\n  for (const [k, v] of Object.entries(params)) {\n    if (v !== '' && v !== undefined && v !== null) url.searchParams.set(k, v);\n  }\n\n  const res = await fetchWithRetry(url.toString(), {\n    headers: {\n      'Accept': 'application/json',\n      'Accept-Encoding': 'gzip',\n      'X-Subscription-Token': apiKey,\n    },\n  });\n\n  if (!res.ok) {\n    const body = await res.text();\n    console.error(`Brave API error ${res.status}: ${body}`);\n    process.exit(1);\n  }\n\n  return res.json();"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const count = Math.min(10, Math.max(1, parseInt(args.count) || 5));\n  const country = (args.country || 'US').toUpperCase();\n  const rich = args.rich === 'true';\n\n  const cacheKey = `${query}|${count}|${country}|${rich}`;\n  const cached = cache.get(cacheKey);\n  if (cached) {\n    console.log('(cached) ' + formatSuggestions(cached, rich));\n    return;\n  }\n\n  const apiKey = getApiKey();\n  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Brave /suggest/search",
+      "condition": "Query provided, cache miss and credential found",
+      "version": "Selected partial query and actual options"
+    },
+    {
+      "id": "R6",
+      "interpretation": "Spellcheck sends the query and uppercased country under the dedicated spellcheck key or Search fallback. Its output locally selects correction strings rather than forwarding every returned field.",
+      "evidence": [
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 8,
+          "end_line": 42,
+          "quote": "function getSpellcheckKey() {\n  return (\n    process.env.BRAVE_SPELLCHECK_API_KEY ||\n    process.env.BRAVE_SEARCH_API_KEY ||\n    null\n  );\n}\n\nasync function braveSpellcheck(query, country) {\n  const apiKey = getSpellcheckKey();\n  if (!apiKey) {\n    console.error('Error: BRAVE_SPELLCHECK_API_KEY or BRAVE_SEARCH_API_KEY environment variable not set.');\n    console.error('Get your key at: https://api-dashboard.search.brave.com');\n    process.exit(1);\n  }\n\n  const url = new URL(`${BASE_URL}/spellcheck/search`);\n  url.searchParams.set('q', query);\n  url.searchParams.set('country', country);\n\n  const res = await fetchWithRetry(url.toString(), {\n    headers: {\n      'Accept': 'application/json',\n      'Accept-Encoding': 'gzip',\n      'X-Subscription-Token': apiKey,\n    },\n  });\n\n  if (!res.ok) {\n    const body = await res.text();\n    console.error(`Brave API error ${res.status}: ${body}`);\n    process.exit(1);\n  }\n\n  return res.json();"
+        },
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 45,
+          "end_line": 77,
+          "quote": "function formatSpellcheck(data) {\n  const original = data.query?.original || '';\n  const results = data.results || [];\n\n  // If no results, or every result is identical to the original — no correction needed\n  const hasCorrection = results.length > 0 && results.some(r => r.query !== original);\n\n  if (!hasCorrection) {\n    return `Spellcheck for \"${original}\": no correction needed. ✓`;\n  }\n\n  const lines = [`Did you mean:`];\n  for (let i = 0; i < results.length; i++) {\n    lines.push(`  ${i + 1}. ${results[i].query}`);\n  }\n  return lines.join('\\n');\n}\n\nasync function main() {\n  const args = parseArgs(process.argv);\n\n  const query = args.query || args.q;\n  if (!query) {\n    console.error(\n      'Usage: brave_spellcheck.js --query \"your search query\" [--country us]\\n' +\n      '  Short form: --q \"your search query\"'\n    );\n    process.exit(1);\n  }\n\n  const country = (args.country || 'US').toUpperCase();\n  const data = await braveSpellcheck(query, country);\n  console.log(formatSpellcheck(data));"
+        }
+      ],
+      "boundary": "network_send",
+      "recipient": "Brave /spellcheck/search",
+      "condition": "Valid spellcheck query and credential",
+      "version": "Selected query and country"
+    },
+    {
+      "id": "R7",
+      "interpretation": "The agent model can observe formatted command stdout/stderr under EM02/EM03: search locally projects fields and applies optional HTML stripping, Answers prints query/text/entities/citations/usage, suggestion/spellcheck print selected results, and API failures print response bodies. Local raw response parsing is not whole-response model observation when only formatted output is returned; HTML stripping is not privacy sanitization.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 77,
+          "end_line": 112,
+          "quote": "function formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo) {\n  const results = data.web?.results || [];\n  const q = data.query || {};\n  const lines = [];\n\n  if (showSpellcheckInfo && q.altered && q.altered !== q.original) {\n    lines.push(`🔍 Query corrected: \"${q.original}\" → \"${q.altered}\"\\n`);\n  }\n\n  if (results.length === 0) {\n    lines.push('No web results found.');\n    return lines.join('\\n');\n  }\n\n  lines.push(`Found ${results.length} web result(s) for: ${q.original || ''}`);\n  if (q.more_results_available) lines.push(` *(More results — use --offset)*`);\n  lines.push('');\n\n  for (let i = 0; i < results.length; i++) {\n    const r = results[i];\n    const title = showDecorations ? (r.title || '') : stripHtml(r.title);\n    const desc  = showDecorations ? (r.description || '') : stripHtml(r.description);\n\n    lines.push(`${i + 1}. **${title}**`);\n    lines.push(`   URL: ${r.url}`);\n    if (desc) lines.push(`   ${desc}`);\n    if (extraSnippets && r.extra_snippets?.length) {\n      lines.push('   Additional context:');\n      for (const s of r.extra_snippets) {\n        lines.push(`   - ${showDecorations ? s : stripHtml(s)}`);\n      }\n    }\n    lines.push('');\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 117,
+          "end_line": 232,
+          "quote": "function formatDiscussions(data) {\n  const threads = data.discussions?.results || [];\n  if (threads.length === 0) return null;\n\n  const lines = ['## Discussions\\n'];\n  for (let i = 0; i < threads.length; i++) {\n    const t = threads[i];\n    lines.push(`${i + 1}. **${stripHtml(t.title || t.question || '')}**`);\n    lines.push(`   URL: ${t.url}`);\n    if (t.description) lines.push(`   ${stripHtml(t.description)}`);\n    if (t.meta_url?.forum_name) lines.push(`   Source: ${t.meta_url.forum_name}`);\n    lines.push('');\n  }\n  return lines.join('\\n');\n}\n\n// ─── FAQ formatter ────────────────────────────────────────────────────────────\n\nfunction formatFAQ(data) {\n  const faqs = data.faq?.results || [];\n  if (faqs.length === 0) return null;\n\n  const lines = ['## FAQ\\n'];\n  for (let i = 0; i < faqs.length; i++) {\n    const f = faqs[i];\n    const title = stripHtml(f.title || f.question || '');\n    lines.push(`${i + 1}. **${title}**`);\n    if (f.url) lines.push(`   URL: ${f.url}`);\n    const body = f.description || f.answer || '';\n    if (body) lines.push(`   ${stripHtml(body)}`);\n    lines.push('');\n  }\n  return lines.join('\\n');\n}\n\n// ─── Infobox formatter ───────────────────────────────────────────────────────\n\nfunction formatInfobox(data) {\n  const entries = data.infobox?.results || [];\n  if (entries.length === 0) return null;\n\n  const lines = [];\n  for (const entry of entries) {\n    lines.push(`## ${stripHtml(entry.title || entry.name || 'Infobox')}\\n`);\n    if (entry.long_desc) {\n      lines.push(`${stripHtml(entry.long_desc).slice(0, 500)}${entry.long_desc.length > 500 ? '…' : ''}\\n`);\n    } else if (entry.description) {\n      lines.push(`${stripHtml(entry.description)}\\n`);\n    }\n    if (entry.profiles?.length) {\n      lines.push('**Profiles:**');\n      for (const p of entry.profiles) lines.push(`- [${p.name}](${p.url})`);\n    }\n    if (entry.attributes?.length) {\n      lines.push('**Attributes:**');\n      for (const [key, val] of entry.attributes) {\n        lines.push(`- **${stripHtml(key)}**: ${stripHtml(val)}`);\n      }\n    }\n    lines.push('');\n  }\n  return lines.join('\\n');\n}\n\n// ─── News formatter ───────────────────────────────────────────────────────────\n\nfunction formatNews(data) {\n  const articles = data.news?.results || [];\n  if (articles.length === 0) return null;\n\n  const lines = ['## News\\n'];\n  for (let i = 0; i < Math.min(articles.length, 5); i++) {\n    const n = articles[i];\n    lines.push(`${i + 1}. **${stripHtml(n.title || '')}**`);\n    lines.push(`   URL: ${n.url}`);\n    if (n.description) lines.push(`   ${stripHtml(n.description)}`);\n    if (n.page_age) lines.push(`   Age: ${n.page_age}`);\n    if (n.profile?.name) lines.push(`   Source: ${n.profile.name}`);\n    lines.push('');\n  }\n  return lines.join('\\n');\n}\n\n// ─── Video formatter ────────────────────────────────────────────────────────────\n\nfunction formatVideos(data) {\n  const videos = data.videos?.results || [];\n  if (videos.length === 0) return null;\n\n  const lines = ['## Videos\\n'];\n  for (let i = 0; i < Math.min(videos.length, 5); i++) {\n    const v = videos[i];\n    lines.push(`${i + 1}. **${stripHtml(v.title || '')}**`);\n    lines.push(`   URL: ${v.url}`);\n    if (v.video?.duration) lines.push(`   Duration: ${v.video.duration}`);\n    if (v.publisher) lines.push(`   Publisher: ${v.publisher}`);\n    if (v.meta_url?.netloc) lines.push(`   Source: ${v.meta_url.netloc}`);\n    lines.push('');\n  }\n  return lines.join('\\n');\n}\n\n// ─── Summary formatter ────────────────────────────────────────────────────────\n\nfunction formatSummary(data) {\n  if (!data || data.status === 'failed') return null;\n  const lines = [];\n  if (data.title) lines.push(`## ${data.title}\\n`);\n  if (data.summary?.length) {\n    lines.push(data.summary.map(s => s.data || '').join(''));\n  }\n  if (data.followups?.length) {\n    lines.push('\\n**Related questions:**');\n    for (const q of data.followups) lines.push(`- ${q}`);\n  }\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 313,
+          "end_line": 345,
+          "quote": "  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);\n    }\n\n    const discussions = formatDiscussions(data);\n    if (discussions) console.log('\\n' + discussions);\n\n    const faq = formatFAQ(data);\n    if (faq) console.log('\\n' + faq);\n\n    const infobox = formatInfobox(data);\n    if (infobox) console.log('\\n' + infobox);\n\n    const news = formatNews(data);\n    if (news) console.log('\\n' + news);\n\n    const videos = formatVideos(data);\n    if (videos) console.log('\\n' + videos);\n  }\n\n  if (data.query?.spellcheck_off) {\n    console.log('\\n*(Spellcheck was disabled for this query)*');\n  }"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 135,
+          "end_line": 135,
+          "quote": "  process.stdout.write('**Query:** ' + query + '\\n\\n');"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 206,
+          "end_line": 253,
+          "quote": "  process.stdout.write('\\n');\n\n  // Entities section\n  const entities = parseEntities(fullContent);\n  if (entities.length > 0) {\n    process.stdout.write('\\n**Entities mentioned:**\\n');\n    entities.forEach(e => {\n      const citeNote = e.citations.length > 0\n        ? ` (cited in ${e.citations.length} place${e.citations.length > 1 ? 's' : ''})`\n        : '';\n      if (e.href) {\n        process.stdout.write(`- [${e.name}](${e.href})${citeNote}\\n`);\n      } else {\n        process.stdout.write(`- ${e.name}${citeNote}\\n`);\n      }\n    });\n  }\n\n  // Print sources at the end\n  if (sources.length > 0) {\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    process.stdout.write('\\n**Sources:**\\n');\n    sources.forEach(s => {\n      process.stdout.write(`${s.number || '?'}. [${s.title}](${s.url})\\n`);\n      if (s.snippet) process.stdout.write(`   > ${s.snippet}\\n`);\n    });\n  }\n\n  // Parse and print usage\n  if (usageLine) {\n    try {\n      const usageJson = usageLine\n        .replace('<usage>', '')\n        .replace('</usage>', '');\n      const usage = JSON.parse(usageJson);\n      const totalTokens = (usage['X-Request-Tokens-In'] || 0) + (usage['X-Request-Tokens-Out'] || 0);\n      process.stdout.write(\n        `\\n*Tokens: ${totalTokens} ` +\n        `(in: ${usage['X-Request-Tokens-In'] || 0}, out: ${usage['X-Request-Tokens-Out'] || 0})*\\n`\n      );\n      const totalCost = usage['X-Request-Total-Cost'];\n      if (totalCost !== undefined && totalCost !== null) {\n        process.stdout.write(`*Total cost: $${parseFloat(totalCost).toFixed(5)}*\\n`);\n      }\n    } catch {\n      // ignore malformed usage tag\n    }\n  }"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 298,
+          "end_line": 334,
+          "quote": "function formatAnswer(data, query) {\n  const content = data.choices?.[0]?.message?.content || '';\n  if (!content) return 'No answer returned.';\n\n  const { cleanText, sources } = parseCitations(content);\n  const entities = parseEntities(content);\n  const lines = [];\n\n  lines.push(`**Query:** ${query}\\n`);\n  lines.push(cleanText);\n\n  if (entities.length > 0) {\n    lines.push('\\n**Entities mentioned:**');\n    entities.forEach(e => {\n      if (e.href) {\n        lines.push(`- [${e.name}](${e.href})`);\n      } else {\n        lines.push(`- ${e.name}`);\n      }\n    });\n  }\n\n  if (sources.length > 0) {\n    lines.push('\\n**Sources:**');\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    sources.forEach(s => {\n      lines.push(`${s.number || '?'}. [${s.title}](${s.url})`);\n      if (s.snippet) lines.push(`   > ${s.snippet}`);\n    });\n  }\n\n  const usage = data.usage;\n  if (usage) {\n    lines.push(`\\n*Tokens: ${usage.total_tokens} (prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens})*`);\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 49,
+          "end_line": 81,
+          "quote": "function formatSuggestions(data, rich) {\n  const results = data.results || [];\n  if (results.length === 0) {\n    return 'No suggestions found.';\n  }\n\n  const lines = [`Got ${results.length} suggestion(s) for: ${data.query?.original || ''}\\n`];\n\n  if (rich) {\n    for (let i = 0; i < results.length; i++) {\n      const r = results[i];\n      lines.push(`${i + 1}. **${r.query}**`);\n      if (r.is_entity) {\n        lines.push(`   [Entity: ${r.title || r.query}]`);\n      }\n      if (r.title) {\n        lines.push(`   Title: ${r.title}`);\n      }\n      if (r.description) {\n        lines.push(`   ${r.description}`);\n      }\n      if (r.img) {\n        lines.push(`   Image: ${r.img}`);\n      }\n      lines.push('');\n    }\n  } else {\n    for (let i = 0; i < results.length; i++) {\n      lines.push(`${i + 1}. ${results[i].query}`);\n    }\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 45,
+          "end_line": 60,
+          "quote": "function formatSpellcheck(data) {\n  const original = data.query?.original || '';\n  const results = data.results || [];\n\n  // If no results, or every result is identical to the original — no correction needed\n  const hasCorrection = results.length > 0 && results.some(r => r.query !== original);\n\n  if (!hasCorrection) {\n    return `Spellcheck for \"${original}\": no correction needed. ✓`;\n  }\n\n  const lines = [`Did you mean:`];\n  for (let i = 0; i < results.length; i++) {\n    lines.push(`  ${i + 1}. ${results[i].query}`);\n  }\n  return lines.join('\\n');"
+        }
+      ],
+      "boundary": "model_observe",
+      "recipient": "Agent model via actual command output",
+      "condition": "Successful formatted/stream output or API error",
+      "version": "Returned selected output, original query echoes, derived answer and conditional error body"
+    },
+    {
+      "id": "R8",
+      "interpretation": "The recommended .env setup persists selected API keys locally; scripts read named environment variables. Source does not implement a dotenv loader or dump the whole file into model context. The process-local suggest cache is task-limited context, not a persistent-file sink.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 42,
+          "quote": "## Setup\n\nSet your Brave API keys in a local `.env` file (recommended):\n\n```bash\n# .env (do not commit)\nBRAVE_SEARCH_API_KEY=your_key_here\nBRAVE_ANSWERS_API_KEY=your_key_here\nAUTOSUGGEST_API_KEY=your_key_here   # optional, for autosuggest only\nBRAVE_SPELLCHECK_API_KEY=your_key_here   # optional, for spellcheck only\n```\n\nGet your keys at: https://api-dashboard.search.brave.com\n\n**Key routing:**\n- `brave_search` → `BRAVE_SEARCH_API_KEY`\n- `brave_answers` → `BRAVE_ANSWERS_API_KEY`\n- `brave_suggest` → `AUTOSUGGEST_API_KEY` → `BRAVE_AUTOSUGGEST_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n- `brave_spellcheck` → `BRAVE_SPELLCHECK_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 220,
+          "end_line": 226,
+          "quote": "## Security & Packaging Notes\n\n- This skill only calls Brave official endpoints under `https://api.search.brave.com/res/v1`.\n- It requires `BRAVE_SEARCH_API_KEY` and `BRAVE_ANSWERS_API_KEY` (keep them in `.env`, not inline in commands/chats).\n- Optionally accepts `AUTOSUGGEST_API_KEY` or `BRAVE_AUTOSUGGEST_API_KEY` for autosuggest.\n- It does not request persistent/system privileges and does not modify system config.\n- All scripts are Node.js 18+ native (no external dependencies)."
+        },
+        {
+          "path": "utils.js",
+          "start_line": 73,
+          "end_line": 91,
+          "quote": "function createCache() {\n  const store = new Map();\n  return {\n    get(key) {\n      const entry = store.get(key);\n      if (!entry) return null;\n      if (Date.now() > entry.expires) {\n        store.delete(key);\n        return null;\n      }\n      return entry.value;\n    },\n    set(key, value, ttlMs = 60_000) {\n      store.set(key, { value, expires: Date.now() + ttlMs });\n    },\n    clear() {\n      store.clear();\n    },\n  };"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 100,
+          "end_line": 117,
+          "quote": "  const cacheKey = `${query}|${count}|${country}|${rich}`;\n  const cached = cache.get(cacheKey);\n  if (cached) {\n    console.log('(cached) ' + formatSuggestions(cached, rich));\n    return;\n  }\n\n  const apiKey = getApiKey();\n  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        }
+      ],
+      "boundary": "storage_write",
+      "recipient": "Recommended local .env credential file",
+      "condition": "Recommended setup followed",
+      "version": "Search/Answers and optional dedicated API keys"
+    }
+  ],
+  "reference_identity": "Source-only assistant reference draft; not human-confirmed gold.",
+  "reference_status": "assistant_draft_pending_two_independent_human_verifiers",
+  "required_behavior": [
+    {
+      "id": "B1",
+      "interpretation": "Preserve query, selected country/language/freshness/safesearch/result filters, bounded result count/offset and optional local-result geo settings. Search summary runs only when requested, a summarizer key exists and the result-filter branch allows it.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 271,
+          "end_line": 325,
+          "quote": "  const count          = Math.min(20, Math.max(1, parseInt(args.count) || 10));\n  const country        = args.country || 'us';\n  const freshness      = args.freshness || undefined;\n  const extraSnippets  = args['extra-snippets'] === 'true';\n  const wantSummary   = args.summary === 'true';\n  const showDecorations = args['text-decorations'] !== 'false';\n  const showSpellcheckInfo = args['spellcheck-info'] === 'true';\n  const units          = VALID_UNITS.has(args.units) ? args.units : undefined;\n  const safesearch     = VALID_SAFESEARCH.has(args.safesearch) ? args.safesearch : 'moderate';\n  const spellcheck     = args.spellcheck === 'false' ? 'false' : undefined;\n\n  // Parse result_filter\n  let resultFilter;\n  if (args['result-filter']) {\n    const filters = args['result-filter']\n      .split(',')\n      .map(f => f.trim())\n      .filter(f => VALID_RESULT_FILTERS.has(f));\n    resultFilter = filters.length > 0 ? filters.join(',') : undefined;\n  }\n\n  const searchParams = {\n    q: query,\n    count,\n    country,\n    safesearch,\n    spellcheck,\n    extra_snippets: extraSnippets ? '1' : undefined,\n    result_filter: resultFilter,\n    freshness,\n    units,\n    offset: args.offset ? String(Math.min(9, Math.max(0, parseInt(args.offset)))) : undefined,\n  };\n\n  if (args['search-lang'])    searchParams.search_lang = args['search-lang'];\n  if (args['ui-lang'])        searchParams.ui_lang = args['ui-lang'];\n  if (!showDecorations)      searchParams.text_decorations = 'false';\n  if (wantSummary)           searchParams.summary = '1';\n\n  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);\n\n  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);\n    }"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "interpretation": "Keep distinct credential routing for Search, Answers, Autosuggest and Spellcheck, including fallback order. Preserve optional rich suggestion metadata, response corrections, streaming/batch answer modes, citations/entities and source ordering.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 38,
+          "end_line": 44,
+          "quote": "**Key routing:**\n- `brave_search` → `BRAVE_SEARCH_API_KEY`\n- `brave_answers` → `BRAVE_ANSWERS_API_KEY`\n- `brave_suggest` → `AUTOSUGGEST_API_KEY` → `BRAVE_AUTOSUGGEST_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n- `brave_spellcheck` → `BRAVE_SPELLCHECK_API_KEY` → `BRAVE_SEARCH_API_KEY` (tries in order)\n\n> Note: `brave_answers` uses streaming by default. Streaming is required for citations, entities, and research mode."
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 11,
+          "end_line": 17,
+          "quote": "function getApiKey() {\n  return (\n    process.env.AUTOSUGGEST_API_KEY ||\n    process.env.BRAVE_AUTOSUGGEST_API_KEY ||\n    process.env.BRAVE_SEARCH_API_KEY ||\n    null\n  );"
+        },
+        {
+          "path": "brave_spellcheck.js",
+          "start_line": 8,
+          "end_line": 13,
+          "quote": "function getSpellcheckKey() {\n  return (\n    process.env.BRAVE_SPELLCHECK_API_KEY ||\n    process.env.BRAVE_SEARCH_API_KEY ||\n    null\n  );"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 33,
+          "end_line": 83,
+          "quote": "function parseCitations(text) {\n  const sources = [];\n  const seen = new Set();\n\n  const citationRegex = /<citation>([\\s\\S]*?)<\\/citation>/g;\n  let match;\n  while ((match = citationRegex.exec(text)) !== null) {\n    try {\n      const citation = JSON.parse(match[1]);\n      if (citation.url && !seen.has(citation.url)) {\n        seen.add(citation.url);\n        sources.push({\n          url: citation.url,\n          title: citation.title || citation.url,\n          snippet: citation.snippet || '',\n          number: citation.number,\n        });\n      }\n    } catch {\n      // ignore malformed citation\n    }\n  }\n\n  const cleanText = text\n    .replace(/<citation>[\\s\\S]*?<\\/citation>/g, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  return { cleanText, sources };\n}\n\nfunction parseEntities(text) {\n  const entities = [];\n  const entityRegex = /<enum_item>([\\s\\S]*?)<\\/enum_item>/g;\n  let match;\n  while ((match = entityRegex.exec(text)) !== null) {\n    try {\n      const entity = JSON.parse(match[1]);\n      if (entity.name) {\n        entities.push({\n          name: entity.name,\n          href: entity.href || '',\n          originalTokens: entity.original_tokens || '',\n          citations: entity.citations || [],\n        });\n      }\n    } catch {\n      // ignore malformed entity\n    }\n  }\n  return entities;"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 352,
+          "end_line": 363,
+          "quote": "  const country = args.country || 'us';\n  const enableCitations = args['enable-citations'] !== 'false';\n  const enableResearch = args['enable-research'] === 'true';\n  const enableEntities = args['enable-entities'] === 'true';\n  const useStream = args.stream !== 'false'; // streaming ON by default\n\n  if (useStream) {\n    await streamAnswer(query, country, enableCitations, enableResearch, enableEntities);\n  } else {\n    const data = await getAnswer(query, country, enableCitations, enableResearch, enableEntities);\n    console.log(formatAnswer(data, query));\n  }"
+        }
+      ]
+    },
+    {
+      "id": "B3",
+      "interpretation": "Retain actual retry conditions and bounds: fetchWithRetry makes at most four attempts by default, retries 429 using Retry-After and 5xx/exception using backoff. Autosuggest cache is a process-local 60-second TTL map keyed by query/count/country/rich, with no disk serialization.",
+      "evidence": [
+        {
+          "path": "utils.js",
+          "start_line": 32,
+          "end_line": 62,
+          "quote": "async function fetchWithRetry(url, options, maxRetries = 3) {\n  let lastError;\n\n  for (let attempt = 0; attempt <= maxRetries; attempt++) {\n    try {\n      const res = await fetch(url, options);\n\n      if (res.status === 429) {\n        const retryAfter = parseInt(res.headers.get('Retry-After') || '5', 10);\n        const delay = retryAfter * 1000;\n        if (attempt < maxRetries) {\n          await sleep(delay);\n          continue;\n        }\n      }\n\n      if (res.status >= 500 && attempt < maxRetries) {\n        await sleep(500 * Math.pow(2, attempt));\n        continue;\n      }\n\n      return res;\n    } catch (err) {\n      lastError = err;\n      if (attempt < maxRetries) {\n        await sleep(500 * Math.pow(2, attempt));\n      }\n    }\n  }\n\n  throw lastError;"
+        },
+        {
+          "path": "utils.js",
+          "start_line": 73,
+          "end_line": 91,
+          "quote": "function createCache() {\n  const store = new Map();\n  return {\n    get(key) {\n      const entry = store.get(key);\n      if (!entry) return null;\n      if (Date.now() > entry.expires) {\n        store.delete(key);\n        return null;\n      }\n      return entry.value;\n    },\n    set(key, value, ttlMs = 60_000) {\n      store.set(key, { value, expires: Date.now() + ttlMs });\n    },\n    clear() {\n      store.clear();\n    },\n  };"
+        },
+        {
+          "path": "brave_suggest.js",
+          "start_line": 96,
+          "end_line": 117,
+          "quote": "  const count = Math.min(10, Math.max(1, parseInt(args.count) || 5));\n  const country = (args.country || 'US').toUpperCase();\n  const rich = args.rich === 'true';\n\n  const cacheKey = `${query}|${count}|${country}|${rich}`;\n  const cached = cache.get(cacheKey);\n  if (cached) {\n    console.log('(cached) ' + formatSuggestions(cached, rich));\n    return;\n  }\n\n  const apiKey = getApiKey();\n  const params = {\n    q: query,\n    count,\n    country,\n  };\n  if (rich) params.rich = 'true';\n\n  const data = await braveSuggest('/suggest/search', params, apiKey);\n  cache.set(cacheKey, data, 60_000);\n  console.log(formatSuggestions(data, rich));"
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "de8d1b234604af1f681ad785b7fb4b9becc1f1d0103bf17e7ff4239acb5d3ed5",
+  "source_citations": [],
+  "source_sha256": "14383117426be5cc9db4818d5245e94bcc8d7136744ca0b04d8b13cb7486b2b9",
+  "state": "assistant_draft",
+  "supported_excesses": [],
+  "unknowns": [
+    {
+      "id": "U1",
+      "interpretation": "Brave backend model/context, result sensitivity, retention and error echo behavior are not retained. Summarization/grounding dependency does not prove original query secrets survive as plaintext in returned answers.",
+      "evidence": [
+        {
+          "path": "brave_answers.js",
+          "start_line": 96,
+          "end_line": 121,
+          "quote": "  const body = {\n    model: 'brave',\n    messages: [{ role: 'user', content: query }],\n    stream: true,\n    extra_body: {\n      country,\n      language: 'en',\n      enable_citations: enableCitations,\n      enable_research: enableResearch,\n      enable_entities: enableEntities,\n    },\n  };\n\n  const res = await fetchWithRetry(`${BASE_URL}/chat/completions`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json',\n      'X-Subscription-Token': apiKey,\n    },\n    body: JSON.stringify(body),\n  });\n\n  if (!res.ok) {\n    const errBody = await res.text();\n    console.error(`Brave Answers API error ${res.status}: ${errBody}`);"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 298,
+          "end_line": 334,
+          "quote": "function formatAnswer(data, query) {\n  const content = data.choices?.[0]?.message?.content || '';\n  if (!content) return 'No answer returned.';\n\n  const { cleanText, sources } = parseCitations(content);\n  const entities = parseEntities(content);\n  const lines = [];\n\n  lines.push(`**Query:** ${query}\\n`);\n  lines.push(cleanText);\n\n  if (entities.length > 0) {\n    lines.push('\\n**Entities mentioned:**');\n    entities.forEach(e => {\n      if (e.href) {\n        lines.push(`- [${e.name}](${e.href})`);\n      } else {\n        lines.push(`- ${e.name}`);\n      }\n    });\n  }\n\n  if (sources.length > 0) {\n    lines.push('\\n**Sources:**');\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    sources.forEach(s => {\n      lines.push(`${s.number || '?'}. [${s.title}](${s.url})`);\n      if (s.snippet) lines.push(`   > ${s.snippet}`);\n    });\n  }\n\n  const usage = data.usage;\n  if (usage) {\n    lines.push(`\\n*Tokens: ${usage.total_tokens} (prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens})*`);\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 318,
+          "end_line": 324,
+          "quote": "    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "interpretation": "The same geo headers are forwarded to the summary-key endpoint. The source establishes that transmission but does not specify whether the summarizer ignores or uses them for localized output; a proposed omission requires interface/quality evidence before being a supported DOE reduction.",
+      "evidence": [
+        {
+          "path": "brave_search.js",
+          "start_line": 17,
+          "end_line": 26,
+          "quote": "function buildGeoHeaders(args) {\n  const headers = {};\n  if (args.lat)          headers['x-loc-lat'] = args.lat;\n  if (args.long)         headers['x-loc-long'] = args.long;\n  if (args.timezone)     headers['x-loc-timezone'] = args.timezone;\n  if (args.city)         headers['x-loc-city'] = args.city;\n  if (args.state)        headers['x-loc-state'] = args.state;\n  if (args.country)      headers['x-loc-country'] = args.country;\n  if (args['postal-code']) headers['x-loc-postal-code'] = args['postal-code'];\n  return headers;"
+        },
+        {
+          "path": "brave_search.js",
+          "start_line": 310,
+          "end_line": 324,
+          "quote": "  const geoHeaders = buildGeoHeaders(args);\n  const data = await braveGet('/web/search', searchParams, apiKey, geoHeaders);\n\n  // ── Web results (always printed) ──\n  console.log(formatResults(data, extraSnippets, showDecorations, showSpellcheckInfo));\n\n  // ── Additional result types (only if not filtered to web-only) ──\n  if (!resultFilter || !resultFilter.split(',').every(f => f === 'web' || f === 'query')) {\n    if (data.summarizer?.key && wantSummary) {\n      const summaryData = await braveGet('/summarizer/search', {\n        key: data.summarizer.key,\n        inline_references: 'true',\n      }, apiKey, geoHeaders);\n      const summary = formatSummary(summaryData);\n      if (summary) console.log('\\n---\\n**AI Summary:**\\n' + summary);"
+        }
+      ]
+    },
+    {
+      "id": "U3",
+      "interpretation": "SKILL prose both says non-streaming loses citations/entities and later describes full batch parsing. The code parses citation/entity tags in batch output, but external response support is not guaranteed by those parsers. Documented .env setup also relies on unretained environment injection rather than a bundled loader.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 149,
+          "end_line": 153,
+          "quote": "- `stream` — Enable streaming output (default: true — required for citations/entities/research)\n\n**Returns:** AI answer with cited sources extracted from the response, plus token usage and cost breakdown.\n\n> ⚠️ **Citations, entities, and research mode require streaming (`--stream true`, which is the default).** If you disable streaming with `--stream false`, citations and entity data will not be available."
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 195,
+          "end_line": 204,
+          "quote": "### brave_answers.js v4.2.0\n\nThe AI answers script supports two modes:\n- **Streaming (default):** Progressive output with real-time entity extraction, deduplicated citations, token usage, and cost breakdown\n- **Non-streaming:** Full citation and entity extraction from batch response via `parseCitations()` and `parseEntities()`\n\nKey changes in v4.2.0:\n- **Entity extraction:** Streaming mode parses `<enum_item>` tags incrementally — entity names are streamed inline as they are parsed, and a consolidated **Entities mentioned** section is printed at the end with URL and citation count per entity\n- **Citation deduplication:** Duplicate source URLs are deduplicated so each source is cited only once (sorted by citation number)\n- **Non-streaming mode (v4.2.0):** Full `parseCitations()` and `parseEntities()` applied to the batch response content, so citations and entities are extracted even without streaming"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 298,
+          "end_line": 334,
+          "quote": "function formatAnswer(data, query) {\n  const content = data.choices?.[0]?.message?.content || '';\n  if (!content) return 'No answer returned.';\n\n  const { cleanText, sources } = parseCitations(content);\n  const entities = parseEntities(content);\n  const lines = [];\n\n  lines.push(`**Query:** ${query}\\n`);\n  lines.push(cleanText);\n\n  if (entities.length > 0) {\n    lines.push('\\n**Entities mentioned:**');\n    entities.forEach(e => {\n      if (e.href) {\n        lines.push(`- [${e.name}](${e.href})`);\n      } else {\n        lines.push(`- ${e.name}`);\n      }\n    });\n  }\n\n  if (sources.length > 0) {\n    lines.push('\\n**Sources:**');\n    sources.sort((a, b) => (a.number || 0) - (b.number || 0));\n    sources.forEach(s => {\n      lines.push(`${s.number || '?'}. [${s.title}](${s.url})`);\n      if (s.snippet) lines.push(`   > ${s.snippet}`);\n    });\n  }\n\n  const usage = data.usage;\n  if (usage) {\n    lines.push(`\\n*Tokens: ${usage.total_tokens} (prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens})*`);\n  }\n\n  return lines.join('\\n');"
+        },
+        {
+          "path": "brave_answers.js",
+          "start_line": 11,
+          "end_line": 12,
+          "quote": "function getApiKey() {\n  return process.env.BRAVE_ANSWERS_API_KEY || null;"
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "reviewed_files": [
+    "brave_answers.js",
+    "brave_search.js",
+    "brave_spellcheck.js",
+    "brave_suggest.js",
+    "skill.json",
+    "SKILL.md",
+    "utils.js"
+  ],
+  "reviewed_file_inventory": [
+    {
+      "path": "brave_answers.js",
+      "sha256": "104441e15ada63caaaf930f55b578d1b636efea9e29bb5e840473e2d243cde70",
+      "physical_lines": 369,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "brave_search.js",
+      "sha256": "e8a18bb27b13377cfe895dcc8d6810ddb217c75bcbed62a32858d824ffca0c3d",
+      "physical_lines": 351,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "brave_spellcheck.js",
+      "sha256": "f00bf29895b9b9e95655a5d08aded9c93f72d1784578377815f713097eef00ae",
+      "physical_lines": 83,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "brave_suggest.js",
+      "sha256": "5937d195c80eba7bc1dade5cc7ba6c1a7ce465c111e1b3094965adc8b57d2fa7",
+      "physical_lines": 123,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "skill.json",
+      "sha256": "5a980617f92ffe8a29350b4a1345e91af580bc49d9e8c454ff6e09436a8e3188",
+      "physical_lines": 123,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "19d01aa2e4414983f0caf6f0dab4693a7cf7399f43cfe70475043a00baf097c4",
+      "physical_lines": 226,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    },
+    {
+      "path": "utils.js",
+      "sha256": "ea6d378ae1bea4fce54db74f92bec7eb41ffbc710658d6cdc90966748c7fd008",
+      "physical_lines": 94,
+      "review_scope": "Entire numbered source bundle and entire physical operational file"
+    }
+  ],
+  "review_limitations": [
+    "Static source-only interpretation, never execution evidence. No independent user task or actual authorization is supplied. Opaque dependency and service internals are not inferred. Human verification remains pending."
+  ],
+  "explanation": "All seven retained physical source files were read and mechanically matched line-for-line to the completely reviewed numbered bundle. No supported excess is asserted from intended search/query/optional-localization use alone. The additional summary geo headers are inventoried as a concrete transmission with unresolved endpoint necessity, not silently called safe."
+}

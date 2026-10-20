@@ -23,7 +23,7 @@ def test_compact_review_restores_exact_range_and_is_an_isolated_view():
     assert result["derivations"] == before["derivations"]
     assert sink["limitations"] == ["limitation_A"]
     assert set(sink["data_reviews"][0]) == {
-        "id", "operation_id", "input_index", "derivation_id", "conclusion", "reason", "demand_refs", "reduction"}
+        "id", "operation_id", "input_index", "derivation_id", "conclusion", "reason", "demand_refs", "constraint_refs", "reduction"}
 
 
 @pytest.mark.parametrize("field,value", [

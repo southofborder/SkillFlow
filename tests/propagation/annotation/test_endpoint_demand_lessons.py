@@ -80,7 +80,7 @@ def test_missing_seed_finding_uses_requirement_axis_and_annotation_parent(index)
     assert accepted.findings[0].domain == "annotation"
     assert accepted.findings[0].task_objection is None
     assert accepted.requirement_checks[0].finding_ids == ["F001"]
-    assert all(item.status == "accepted" for item in accepted.goal_checks)
+    assert all(item.status == "accepted" for item in accepted.declaration_checks)
 
 
 def test_shared_rules_and_compact_lessons_reach_annotation_and_review_once():
@@ -107,4 +107,4 @@ def test_shared_rules_and_compact_lessons_reach_annotation_and_review_once():
     assert "Policies support sensitivity" not in review
     assert "shared endpoint rules" in REPAIR_INSTRUCTIONS
     assert "without redundant expected" in format_instructions()
-    assert "Check missing seeds, not only goal_index" in review
+    assert "Check missing demands, not only declaration_index" in review

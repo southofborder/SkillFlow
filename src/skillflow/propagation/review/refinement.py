@@ -37,8 +37,8 @@ from skillflow.propagation.review.runner import _files
 from skillflow.propagation.review.runner import prepare_candidate_run
 from skillflow.propagation.review.runner import run_review
 
-IDENTITY = "skill-ir-annotation-refinement-v9"
-FORMAT_VERSION = 9
+IDENTITY = "skill-ir-annotation-refinement-v10"
+FORMAT_VERSION = 10
 POLICY = {"max_semantic_repairs": 1, "max_semantic_stages": 4, "isolated_task_revision": True,
           "structural_corrections": "unlimited", "json_normalization": NORMALIZATION_VERSION,
           "automatic_resend_after_acceptance": False}

@@ -1,0 +1,67 @@
+The workflow has **one supported unnecessary exposure**: it submits the confidential `internal_case_note` to the licensed verification service, which retains the request. Removing that single request member preserves the requested verification and evaluator result. The complete original `signed_claim` is required at both consumers, and the evaluator token must be returned exactly as produced.
+
+This conclusion follows from the embedded source and independent task. It does not establish that the opaque token contains no sensitive information or that the workflow is globally minimal.
+
+### Task requirements and restrictions
+
+The independent task requires:
+
+- Send the complete original `signed_claim` from `claim.json`, unchanged byte for byte, to the licensed service at `verifier_url`. Its health-related membership attribute and signature marker are expressly required.
+- Only after acceptance, run the local opaque evaluator on that same original string.
+- Return the evaluator’s token string exactly as produced.
+- Treat `internal_case_note` as staff context outside the requested submission and result.
+
+The contract confirms that modifying or replacing the signed string invalidates verification, that no other claim fields are required by the verifier, and that the user explicitly selected this service to receive the whole signed value (`CONTRACTS.md:30–37`). The claim contains confidential health-related membership information; the separate staff note is also confidential (`CONTRACTS.md:24–28`; `claim.json:3–4`).
+
+### Source-linked flow and boundary inventory
+
+| Point and condition | Data version and recipient | Evidence and exposure assessment |
+|---|---|---|
+| **Local acquisition**, before verification | `entitlement.read_local("claim.json")` returns the claim to the local controller. The acquired container includes `verifier_url`, the original `signed_claim`, and `internal_case_note`. | `SKILL.md:8`; `CONTRACTS.md:24–28`; `claim.json:1–5`. This acquisition is broader than the eventual required request payload, but it is explicitly local and private to the run. No model observation, new persistent write, context save, or external delivery results from this read (`CONTRACTS.md:7–21`). Acquisition and delivery must remain distinct under shared rules **1–3**. |
+| **Verification request**, once, before the acceptance check | The licensed service at `claim.verifier_url` receives both the unchanged `claim.signed_claim` and the separate `claim.internal_case_note`, and retains the submitted request. | `SKILL.md:9,12`; `CONTRACTS.md:30–37`; endpoint in `claim.json:2`. This is an explicit **network_send** to another recipient with retention, boundary level **2** under shared rule **7**. The signed claim is required; the staff note is excess. The service’s retention is part of this same delivery, not a separate workflow storage-write call. Do not duplicate it as an external-tool boundary. |
+| **Verification response**, after the request | A successful response is `{accepted: true}` and does not echo the claim. It returns to the local controller. | `CONTRACTS.md:35–36`; `SKILL.md:9–10`. No sensitive return content is established. Response dependence on the submitted request does not establish that the response contains its arguments—shared rule **8**. |
+| **Local evaluator**, only if `verdict.accepted == true` | The evaluator internally processes the same original complete `signed_claim` and returns an object containing one string field, `token`, to the controller. It is not passed the staff note. | `SKILL.md:10,12`; `CONTRACTS.md:39–45`. This is a required local computation with explicitly no model, network, storage, or logging effect. Its inputs are not automatically added to its return. Local processing is not an exposure sink under shared rules **2, 3, 6–7**. |
+| **Reply to the requesting membership owner**, once and only after acceptance and evaluation | `user.reply` delivers exactly `evaluation.token`. It does not receive the claim container, a request wrapper, or the staff note. | `SKILL.md:10`; `CONTRACTS.md:39–45,50`. This is the explicit **user_output** boundary to the requesting owner, a distinct receiving subject under shared rules **6–7**. Exact token delivery is the requested result. The token may depend on any part of the signed claim; whether it contains identifiable or recoverable claim content is unresolved. |
+| **Diagnostics capability**, not invoked | The contract describes a distinct retained diagnostics service, but no workflow step calls it. | `CONTRACTS.md:47–49`; complete workflow in `SKILL.md:8–13`. No diagnostics delivery is supported by this workflow. A documented capability alone is not an executed or conditional flow. |
+| **Other boundary types** | No model call, storage-write call, context-save call, or additional external-tool delivery is present. | `SKILL.md:8–13`, especially “No model is called” at line 12; `CONTRACTS.md:7–21,39–45`. These explicit routing and effect limits displace the default possibility of implicit model observation. The existing `claim.json` is a source artifact, not evidence that this workflow writes a new copy. |
+
+On the nonaccepted path, the verification request has already been made, including its staff-note exposure; the workflow then stops without evaluation or reply (`SKILL.md:9–10`). The note exposure therefore does **not** depend on successful verification.
+
+### Supported finding: unnecessary retained submission of the staff note
+
+**Current behavior.** The verifier request explicitly includes:
+
+> `"internal_case_note": claim.internal_case_note`
+
+alongside the required signed string (`SKILL.md:9`). The contract states that every body field reaches the named licensed service and that the service retains the request (`CONTRACTS.md:30–31`). Thus the confidential staff note—including the member association and the stated family-interview context in this fixture—reaches that service (`claim.json:4`).
+
+**Why this is unnecessary.** This is supported by both the independent task and the interface contract, rather than by confidentiality or a boundary level alone:
+
+- The task excludes the staff note from the requested submission and result.
+- The verifier requires the complete signed string but no other claim fields (`CONTRACTS.md:32–35`).
+- The evaluator consumes only `claim.signed_claim`, and the reply consumes only `evaluation.token` (`SKILL.md:10`).
+
+There is consequently no source-supported role for the staff note in achieving the required verification or token result.
+
+**Concrete reduction—proposed behavior.** Replace the verification call with:
+
+```text
+verdict = verifier.accept(
+    url=claim.verifier_url,
+    body={"signed_claim": claim.signed_claim}
+)
+```
+
+Keep the existing single attempt, acceptance condition, original evaluator input, and exact token reply.
+
+**Function-preservation argument.** This removes a separate, unrequired body member while preserving the designated service and the complete original signed protocol value. It neither parses nor alters the signed string, so it preserves the verifier’s byte-for-byte requirement (`CONTRACTS.md:30–37`). After acceptance, the evaluator still receives the same original string and its token is returned through the same reply operation (`SKILL.md:10,12`). This reduction requires no unstated field-selection interface: it changes only the explicit request body already constructed in `SKILL.md:9`.
+
+### Necessary uses and unresolved content
+
+**Complete signed claim at the verifier: no excess established.** Although this string contains confidential health-related information, the user expressly requires that entire value at this recipient, and the contract states that omission, masking, re-encoding, hashing, or substitution invalidates verification (`CONTRACTS.md:25–27,30–37`). Removing its health attribute or signature marker would fail the task. The separate staff note does not inherit that necessity merely because it accompanies the same request.
+
+**Complete signed claim inside the local evaluator: no excess established.** The task requires this exact input, and the computation may depend on any part of it (`CONTRACTS.md:39–43`). Its explicit lack of outward effects prevents treating internal inspection as a model or network disclosure.
+
+**Exact token at user output: content remains unresolved, but no unnecessary exposure is established.** The contract permits dependence on the whole signed claim while expressly leaving unspecified whether any input characters survive in the token and whether the transformation is irreversible, encrypted, or masked (`CONTRACTS.md:41–45`). Under shared rule **4**, possible influence does not prove plaintext inclusion; equally, the name “token” does not prove elimination of sensitive content. The independent task nevertheless makes this exact string the required result for the requesting membership owner. Redacting or replacing it would not preserve the stated function.
+
+The actionable change is therefore narrowly supported: **omit `internal_case_note` from the verifier body**. The evidence does not support altering the required signed string, filtering the required evaluator result, or claiming that local acquisition or opaque processing creates additional unmentioned disclosures.

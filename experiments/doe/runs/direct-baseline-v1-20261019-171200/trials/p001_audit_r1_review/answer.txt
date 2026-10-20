@@ -1,0 +1,58 @@
+The source supports a **possible unnecessary exposure of credentials to the processing model during initial record handling**. It also supports possible unnecessary model observation of other record data, if those values are sensitive. It does **not** establish that the `access_token` field is delivered in a notification.
+
+No independent user task was supplied. This audit therefore uses the Skill’s declared notification purpose and explicit requirements as its baseline; those author statements are not independently verified user authorization.
+
+**Task and restrictions.** The declared purpose is conditional notification (`SKILL.md:2–3`). For each record, eligibility is:
+
+```text
+opted_out is not true AND (urgent is true OR value >= 100)
+```
+
+Each selected record requires exactly one `notify.send` call addressed to that record’s own original `recipient`, with its original `summary` value assigned directly to `body`. Urgency waives only the numeric threshold. Unselected records must produce no notification. Sending the `access_token` field to any recipient is prohibited; summary generation, rewriting and additional format conversion are outside the field-value requirements. After processing, the workflow must write the number of processed records to local `count.txt` (`SKILL.md:8–16`).
+
+These requirements preserve eligibility, cardinality, record-to-recipient pairing and exact body values. They do not require model interpretation of event contents.
+
+The named `access_token` field is a supported credential source, although no actual values are supplied. Recipients and record identifiers may identify people or accounts; summaries, values, urgency and opt-out status may also be sensitive in context. Their actual contents and sensitivity remain unresolved.
+
+| Receiving, observation or storage point | Condition and supported data version | Source and exposure assessment | Task necessity and reduction |
+|---|---|---|---|
+| Initial file acquisition and internal selection | Before selection, the user-provided `events.json`, whose records contain all seven named fields | Reading the file is explicit (`SKILL.md:8`). No source-side projection or isolated reader is specified. Preserve the related whole as possible acquisition scope under shared rule **1**. Pure internal processing is tracing, not itself an exposure sink under rule **7**. | Eligibility needs `opted_out`, `urgent` and `value`; delivery needs selected records’ `recipient` and `summary`. Neither `access_token` nor `record_id` has a specified computational role. This establishes an opportunity to reduce handling, but acquisition alone does not establish exposure. |
+| Processing model | Possibly the acquired original records, including credentials and records later rejected | Acquired content used for agent processing can enter a model request when no isolation or routing limit is specified: shared rule **2**, applied to `SKILL.md:8–13`. This is possible `model_observe`, involving a distinct receiving subject, level **2**. The source does not establish an actual model call or a call per processing step. | Credential observation has no specified role in selection, delivery or counting. Other sensitive record values can also be kept out of the model by performing this deterministic workflow in an explicitly isolated process. Later selection cannot undo an earlier observation: rule **3**. |
+| `notify.send` request handler | Once per selected record; the specified parameters are that record’s original `recipient` and `body = original summary`. No call for rejected records | Parameter values and pairing are explicit (`SKILL.md:9–13`). The handler receives these arguments. Its deployment is unspecified, so reception by an external tool is possible under rule **6**, level **2** if external. The source does not specify forwarding `record_id`, `access_token` or the selection fields. | The specified address and exact body are needed for the prescribed notification. No excess in these specified parameters is established. An external handler, if present, is a receiving subject distinct from the intended notification recipient; do not count its request again as an additional proven network send. |
+| Each selected record’s intended notification recipient | That recipient receives its own record’s original summary; rejected records produce no such delivery | Notification delivery is explicit (`SKILL.md:11–13`). Recipient identity, interface, sharing and transport are unspecified. Delivery to another receiving subject is level **2**; public exposure is not supported. The source does not establish a separate user-facing output or particular network mechanism: rule **6**. | This is the declared result. No unnecessary content within an actual summary is established because no summaries are supplied. Keep each summary paired with its own recipient. |
+| Local `count.txt` | After processing completes, the number of processed records | Explicit `storage_write` (`SKILL.md:16`), defaulting to task-internal persistent storage, level **1**, under rule **7**. No cleanup is specified. The written version is a count, not the raw records. | This is an explicit auxiliary output, though not inherent to sending notifications. No excess payload is established. Event volume could be sensitive, but its sensitivity and the intended meaning of “processed” are unresolved. |
+
+**Supported unnecessary exposure and concrete reduction.** The principal finding is conditional on the supported model-observation route: if original records enter the processing model, their `access_token` values are unnecessarily exposed there. The workflow specifies no use for that field. Its prohibition is a restriction, not an implemented filter or routing barrier (`SKILL.md:8–14`; shared rules **2** and **5**). This conclusion follows from the credential’s lack of a functional role and the possible receiving route, rather than from the prohibition alone.
+
+The same route can unnecessarily expose identifying or confidential data from other fields. Initial reading precedes selection, so excluding rejected records from notification calls does not keep their summaries, recipients, identifiers or status data out of an earlier model input. `record_id` has no specified use. Even the selected records’ exact addresses and summaries need forwarding, but no stated requirement calls for their interpretation by a model (`SKILL.md:8–13`). Additional sensitive-data findings for these fields depend on their actual contents.
+
+A functionality-preserving proposal is to implement an **explicitly model-isolated reader and dispatcher** that:
+
+- Keeps raw file contents inside the isolated process and excludes `access_token` and unused `record_id` from model-visible returns.
+- Evaluates the exact eligibility condition locally.
+- Calls `notify.send` exactly once per selected record, using that record’s original recipient and unchanged summary value.
+- Makes no notification call for rejected records.
+- Writes the required count locally after processing, preserving the intended count semantics.
+- Returns only a minimal completion result if agent coordination requires one.
+
+This proposal preserves the opt-out restriction, urgency behavior, threshold, notification cardinality, pairing, exact body values and final count side effect. It removes the model’s need to observe raw records without claiming that local file processing can be eliminated. Merely naming the process “local” would not establish this protection; the implementation must explicitly constrain model-visible inputs and returns (shared rules **2–3**).
+
+**Required delivery versus unresolved content.** There is no supported basis for automatically redacting, summarizing or shortening notification bodies. The Skill requires the original summary and excludes rewriting and additional conversion (`SKILL.md:12,15`). Sensitive content in a summary would not, by itself, establish that delivering it to its paired recipient is unnecessary under this baseline.
+
+Conversely, the specified parameter assignments do not prove that summaries or recipient values are credential-free. The source provides neither actual records nor evidence that `access_token` is copied into another field. Thus:
+
+- No direct forwarding of the `access_token` field through a specified notification parameter is established.
+- Neither embedded credential leakage nor credential-free notification contents can be concluded.
+- If actual data establishes a conflict between prohibited credential disclosure and required exact-summary delivery, the bundle supplies no conflict-resolution policy. Silent rewriting cannot be justified as preserving all stated requirements.
+
+**Evidence gaps and limits.**
+
+- **Model routing:** Broad observation is a contract-based possibility, not an observed execution. An existing explicitly isolated implementation could avoid it, but none is supplied.
+- **Tool replies:** No `notify.send` response schema, contents or handling is given. If a reply is returned for agent processing, its returned version may become model-visible under shared rule **2**. Its dependence on the request would not prove that it contains the recipient, summary or credentials. No additional sensitive reply exposure is established.
+- **Deployment and retention:** Tool names and sending verbs do not prove network transport. No backend logging, recipient retention policy or public access is specified (shared rule **6**).
+- **Count semantics:** “Number of processed records” could mean all examined records, selected records or another intended processing count; the source does not resolve it (`SKILL.md:16`). The proposal must preserve that meaning rather than choose one silently. The count may reveal volume or selection outcomes depending on that meaning, but it is not evidence that raw fields or credentials persist in `count.txt` (shared rule **4**).
+- **Other boundaries:** No separate context save, cross-task memory, additional storage write, public publication or user-facing completion message is specified. Task-limited context is not a separate retention sink, and an ordinary tool return is not automatically user delivery (shared rules **6–7**).
+
+The actionable finding is to prevent unnecessary raw-record model observation while retaining the prescribed notification behavior and count output. No excess is established in the specified notification parameters or count payload; that limited conclusion does not prove complete authorization, safety or global minimality.
+
+*Correction note: The central finding required no material change. This replacement narrows the candidate’s claim that the specified notification arguments form an exhaustive interface, and explicitly distinguishes unknown tool-reply observation and aggregate-count influence from proven plaintext disclosure.*

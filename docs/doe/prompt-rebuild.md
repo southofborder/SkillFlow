@@ -45,7 +45,7 @@ Authority and limits
 Actual input
   Original material, current candidate, generated targets, goals, observations
 Compact output format
-  source_checks / requirement_checks / goal_checks / reviewed_ir_ids / findings
+  source_checks / requirement_checks / declaration_checks / reviewed_ir_ids / findings
 Four axes
   Source obligations, every requirement, every seed, every IR
 Routing and legitimate exceptions

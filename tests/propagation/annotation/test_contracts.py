@@ -34,7 +34,7 @@ def test_complete_payload_preserves_exact_source_and_raw_graph():
     }
     assert "targets" not in payload
     assert payload["runtime_contract"] == runtime_contract()
-    assert SCHEMA_VERSION == "security-profile-v14"
+    assert SCHEMA_VERSION == "security-profile-v15"
 
 
 @pytest.mark.parametrize("extra", ["oracle", "old_audit", "propagated_data", "risk", "feedback"])

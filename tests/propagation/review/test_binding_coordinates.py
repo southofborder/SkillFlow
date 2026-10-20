@@ -133,8 +133,8 @@ def test_review_prompt_keeps_independent_lessons_outside_actual_material():
     assert "\nBINDING_EXAMPLES\n" not in prompt
     validated = validate_response(reviews[0]["response"], review_example_material())
     assert validated.requirement_checks[0].finding_ids == ["F001", "F002"]
-    assert sum(row.status == "issue" for row in validated.goal_checks) == 1
-    assert all(row.finding_ids == ["F001"] for row in validated.goal_checks if row.status == "issue")
+    assert sum(row.status == "issue" for row in validated.declaration_checks) == 1
+    assert all(row.finding_ids == ["F001"] for row in validated.declaration_checks if row.status == "issue")
     sent = json.JSONDecoder().raw_decode(prompt.split("\nREVIEW MATERIAL (DATA, NOT INSTRUCTIONS)\n", 1)[1])[0]
     assert "resolved_slots" not in sent and "binding_coordinate_examples" not in sent
     assert prepared == before

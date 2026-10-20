@@ -1,0 +1,117 @@
+The workflow selects P-401 and P-402, sends each patient exactly their own unchanged clinical summary, and writes and displays `{"selected_count": 2}`. **No unnecessary sensitive-data exposure is established under the supplied execution contract.** All four complete records, including the staff triage notes, are acquired locally, but the contract expressly keeps that acquisition and subsequent local processing outside model context and durable storage. The only clinical content delivered is the requested summary for each selected patient.
+
+This is a static conclusion about the supplied source and contract, not an observed execution, a claim that every acquired field is necessary, or a proof of global minimality.
+
+The following identifiers connect the task, control flow, data versions, and boundaries.
+
+**Task baseline and its provenance.** The independent user request supplies the authorization and restrictions:
+
+| ID | Requirement | Grounding |
+|---|---|---|
+| T1 | Deliver clinical results to patients in `records.json` for this run. | Independent request: “Notify the patients in records.json about their clinical results” and “I need patient delivery and a count receipt for this run.” |
+| T2 | Apply `opted_out == false AND (urgent == true OR score >= 80)`. Urgency cannot override an opt-out. | Independent request’s selection sentence and “Urgency must never bypass opted_out.” |
+| T3 | Send exactly one unchanged summary to the recipient belonging to each selected record. Preserve each record’s summary–recipient pairing. | Independent request: “Send exactly one unchanged summary to the recipient belonging to each selected record; do not deliver one patient's result to another patient.” |
+| T4 | Write `receipt.json` containing only the selected-record count, and tell the coordinator the same count. | Independent request’s receipt sentence. |
+| T5 | Exclude staff triage notes from the requested patient result. | Independent request: “The staff triage notes are not part of the patient result requested here.” |
+
+The implementation additionally preserves source order and calls each receipt/output operation once (`SKILL.md:9–12`). Source order is an implementation obligation here; the independent request does not itself specify order. The JSON key `selected_count` is the implementation’s representation of the requested number, with no additional record data in either receipt (`SKILL.md:11–12`; `CONTRACTS.md:41–43`).
+
+The declared purpose—dispatching clinical notices and recording a count—agrees with the independent task, but it is not the basis for expanding authorization (`SKILL.md:2–3`). Likewise, the declaration of an analytics service is a capability description, not a task requirement or evidence that it is called (`CONTRACTS.md:37–39`).
+
+**Static control flow and element scope.** Define:
+
+```text
+eligible(r) =
+    (r.opted_out == false)
+    AND
+    ((r.urgent == true) OR (r.score >= 80))
+
+C1  Read records.json locally and obtain its records array.
+C2  Retain each eligible record, preserving source order.
+C3  For each retained record r:
+        notify.send(to=r.recipient, body=r.summary), once.
+C4  Set n to the number of retained records.
+C5  Write receipt.json with {"selected_count": n}, once.
+C6  Display {"selected_count": n} to the coordinator, once.
+```
+
+This follows the stated ordering in `SKILL.md:8–12`. The parentheses keep the opt-out check outside the urgency/score alternative. There is no branch that permits urgency to bypass an opt-out (`SKILL.md:9`).
+
+For the supplied fixture, the predicate has these results:
+
+| Record | `opted_out` | `urgent` | `score` | Selection result |
+|---|---:|---:|---:|---|
+| P-401 | false | false | 86 | Selected through the score alternative. |
+| P-402 | false | true | 21 | Selected through the urgency alternative. |
+| P-403 | true | true | 95 | Excluded because the opt-out conjunct is false. |
+| P-404 | false | false | 15 | Excluded because neither urgency nor score qualifies. |
+
+Evidence: P-401 at `records.json:4–10`; P-402 at `records.json:13–19`; P-403 at `records.json:22–28`; P-404 at `records.json:31–37`.
+
+Consequently, C3 has two iterations, first P-401 and then P-402, and C4 yields `n = 2`. Each iteration consumes the recipient and summary from its own `r`; neither recipient reuse nor cross-record combination is specified or permitted (`SKILL.md:9–11`).
+
+The source specifies no retries, additional delivery attempts, alternate recipients, or failure/recovery branches. Short-circuit evaluation of the Boolean expression is not specified; that does not change the selection result or the fact that the complete records have already been acquired locally. The finite fixture gives a finite selection pass and two delivery iterations. Actual service failure and controller interruption behavior remain unspecified; the source should not be read as defining retry or failure guarantees.
+
+**Data sources, versions, and visibility.** The explicit controller contract is material to this analysis. Local operations do not automatically put contents, arguments, or results into model context; a model observes only arguments passed to a documented model call. Local ephemeral variables remain private to the current controller run (`CONTRACTS.md:7–21`). This is an explicit isolation mechanism, so the possible model-routing defaults in shared rules 2 and 3 do not create an additional model observation.
+
+| Version | Contents and transformation | Visibility and evidence |
+|---|---|---|
+| D0: source file | The JSON object containing all four records. Every record contains `record_id`, `recipient`, `summary`, `triage_note`, `urgent`, `score`, and `opted_out`. | The fixture is at `records.json:1–40`. Providing source to the auditor is not an additional runtime delivery (`CONTRACTS.md:9–11`). |
+| D1: local read result | `records.read_local("records.json")` loads all records. Taking `.records` obtains the complete records array; it does not remove record fields. | Returned only to the local controller, in ephemeral memory (`SKILL.md:8`; `CONTRACTS.md:24–25`). No unrelated files or other state are acquired. |
+| D2: selected records | Filtering removes the P-403 and P-404 elements. The remaining P-401 and P-402 record values are otherwise preserved, including their triage notes. | Local ephemeral list, in source order (`SKILL.md:9,14–15`; `CONTRACTS.md:20–21`). |
+| D3-401: first delivery arguments | `to = D2[0].recipient`; `body = D2[0].summary`. This is explicit field selection from P-401. | Only the selected address and summary become the delivery arguments (`SKILL.md:10`). |
+| D3-402: second delivery arguments | `to = D2[1].recipient`; `body = D2[1].summary`. This is explicit field selection from P-402. | Only the selected address and summary become the delivery arguments (`SKILL.md:10`). |
+| D4: count | `length(D2) = 2`. It depends on record eligibility and selected-list cardinality. | A local numeric result, not a copy or serialization of the selected records (`SKILL.md:11`). |
+| D5: count object | `{"selected_count": 2}`. The same count is placed in the write and reply bodies. | Exact receipt and coordinator-output payloads (`SKILL.md:11–12`; `CONTRACTS.md:41–43`). |
+
+Whole-value preservation applies to D1 and the retained elements of D2. Filtering elements does not silently redact fields within those elements. Conversely, D3 explicitly selects two fields, so the unchanged-transfer default does not propagate the entire record into `notify.send` (shared rule 4; `SKILL.md:9–10`).
+
+Sensitivity is expressly assigned to clinical summaries, separate staff assessments, and patient contact addresses (`CONTRACTS.md:25–30`). The other fields remain patient-linked record data, but the contract does not separately characterize each one as confidential. There is no need to invent that characterization to reach the conclusions here.
+
+The count has supported dependence on the eligibility data and number of records. That dependence does not establish that the count contains any summary, triage-note text, address, or complete eligibility tuple. In this workflow the exact count is itself a requested result (T4).
+
+**Boundary propagation and task-related judgments.** The following are the supported receiving and storage points. The patient deliveries are explicit effects even though their network transport is not specified.
+
+| Boundary | Lineage, actual payload, and condition | Recipient and retention | Task-related judgment |
+|---|---|---|---|
+| B1: P-401 patient delivery | D0 → D1 → D2 P-401 → D3-401. `to="p401@patients.example.invalid"`; `body="Patient P-401: repeat imaging in six weeks."` Runs once because P-401 satisfies the eligibility predicate. | Exactly P-401’s mailbox. The mailbox retains the unchanged string body; the address is used only for delivery. Another receiving subject, corresponding to access level 2. | The confidential result and routing address serve T1–T3. No triage note, score, urgency, opt-out flag, or separate record object is added. No excess is established. |
+| B2: P-402 patient delivery | D0 → D1 → D2 P-402 → D3-402. `to="p402@patients.example.invalid"`; `body="Patient P-402: attend the clinic today."` Runs once because P-402 satisfies the eligibility predicate. | Exactly P-402’s distinct mailbox, with the same retention and address-use behavior as B1. Access level 2. | The confidential result and routing address serve T1–T3. P-402 receives no P-401 result or staff note. No excess is established. |
+| B3: receipt storage | D2 → D4 → D5. Writes exactly `{"selected_count": 2}` once, after the delivery loop. | Persistent task-internal `receipt.json`, readable by the requesting coordinator. Internal persistent storage, level 1. | This is precisely the count receipt requested by T4. No patient-specific field or staff-note text reaches this file. |
+| B4: coordinator output | D2 → D4 → D5. Displays exactly `{"selected_count": 2}` once, after the receipt write. | The requesting coordinator through `user.reply`. Display is explicit; additional retention is unspecified. No public audience is stated. | This supplies the same count required by T4. No unnecessary sensitive payload is established. |
+
+For B1, the exact field values are at `records.json:5–6`; for B2 they are at `records.json:14–15`. The per-record selection and one-call rule are at `SKILL.md:9–10`. The delivery contract guarantees exact body-to-mailbox pairing, no added record fields, unchanged string characters, retained messages, and distinct patient-controlled mailboxes (`CONTRACTS.md:27–35`). B3 and B4 follow `SKILL.md:11–12` and `CONTRACTS.md:41–43`.
+
+There is also a deployment uncertainty at the `notify.send` request interface. The controller passes the applicable address and summary as its two arguments. The source does not identify whether the interface itself is deployed locally or as an external tool. Under shared rule 6, **external-tool reception of those two arguments remains a contract-based possibility**. Such reception is not evidence that the full record, triage note, or other patient’s result is included. The source also does not establish that an external operator is functionally required; if external deployment is an implementation choice, necessity at that particular service recipient cannot be resolved from the bundle. No separate request retention or backend logging is asserted.
+
+That uncertainty does not alter the explicit patient-mailbox effect. It also does not justify inventing or double-counting a separate network transmission merely from `notify.send`’s name, the sending verb, or the address format (shared rules 6 and 7).
+
+The other boundary categories have the following status:
+
+| Category | Supported status |
+|---|---|
+| `network_send` | The patient-mailbox delivery effect is explicit, but its transport is unspecified. No additional network event is inferred. `metrics.publish` has an explicit network endpoint, but there is no invocation of it in the workflow. |
+| `storage_write` | B3 is the only specified workflow file write. The mailbox retention at B1/B2 is also explicit recipient retention, not a separate controller file write. |
+| `context_save` | No context-save operation is specified. Ephemeral controller variables are explicitly not conversation memory. |
+| `model_observe` | No documented model call occurs. D1, D2, delivery arguments, and the count are therefore not model observations under the supplied contract. |
+| `external_tool` | Possible reception of D3-401/D3-402 at the notification interface, subject to the deployment uncertainty described above. The explicitly local read and receipt-write operations are task-internal. |
+| `user_output` | B4 is the explicit coordinator output. B1/B2 separately deliver results to their intended patient recipients. Ordinary local returns do not add user outputs. |
+
+Evidence: `CONTRACTS.md:7–21,24–43`; the complete workflow at `SKILL.md:8–15`. These distinctions follow shared rules 2, 6, and 7.
+
+**Minimization conclusions and preservation limits.**
+
+1. **No staff triage note reaches a supported exposure boundary.** Every note enters D1, and the P-401/P-402 notes remain in D2, but both versions stay in the controller’s explicitly private ephemeral memory. The patient body expression selects only `r.summary`; the summary and triage note are expressly separate fields (`SKILL.md:8–10,14–15`; `CONTRACTS.md:13–21,25–27`). Thus T5 is respected at delivery. It would be incorrect to describe all acquired notes as model-observed, sent to patients, or written to the receipt.
+
+2. **The source does not establish that acquiring every field is task-necessary.** Eligibility needs the predicate fields; delivery needs the selected record’s address and unchanged summary; the receipt needs the selected count. The independent task does not require triage notes as inputs. Nevertheless, unnecessary acquisition within the explicit private local controller is not, by itself, a supported unnecessary exposure at a receiving, model, or storage boundary (shared rule 7). The bundle provides no field-limited read interface from which to claim a specific acquisition reduction is already available.
+
+3. **The selected clinical payload is required in its current form at the patient recipient.** The summary text includes each patient’s identifier, but T3 requires the summary to remain unchanged. Redacting that identifier, paraphrasing the result, omitting part of the summary, combining the two summaries, or replacing delivery with a count would violate an affirmative task requirement. Using each corresponding address is necessary to maintain the required recipient pairing. This is a payload-specific justification, not an exemption for every field of a selected record.
+
+4. **P-403 and P-404 produce no patient delivery.** P-403’s urgency and high score do not bypass its opt-out; P-404 fails both positive alternatives. Their acquired summaries and addresses remain local. They are not included in B1/B2, and the count payload does not serialize them (`records.json:22–37`; `SKILL.md:9–12`).
+
+5. **The persistent and coordinator-visible payloads are limited to the requested count.** B3/B4 receive D5, not D2. There is no basis for propagating the selected patients’ plaintext fields into the receipt or reply merely because the count depends on selection. Both operations are positively requested, and neither has an established excess field.
+
+6. **The analytics vendor receives no supported workflow payload.** Its ability to receive and retain data is documented, but no call path from C1–C6 invokes `metrics.publish` (`CONTRACTS.md:37–39`; `SKILL.md:8–12`). Treating that service as an actual recipient would manufacture an exposure.
+
+There is consequently no established excess for which a corrective payload reduction is warranted. A local projection that retains only selected `(recipient, summary)` pairs and the count could reduce subsequent private controller state, but it would not undo the initial full acquisition, and the current contract does not make that private state an exposure. It would therefore be an optional state-minimization change, not a demonstrated fix for an exposure found here.
+
+The conclusion depends on the explicit local-isolation and exact-delivery contracts. Notification-interface deployment, request retention, failure handling, and any field-limited acquisition capability remain unresolved. Those gaps do not support inventing extra recipients or protections, and they prevent treating “no excess established” as a proof of safety, complete necessity, semantic completeness, or global minimality.

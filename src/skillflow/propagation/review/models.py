@@ -10,7 +10,7 @@ from skillflow.common.source_evidence import StrictRecord, Text, SourceRef
 from skillflow.propagation.contracts.evidence import SpecEvidence
 from skillflow.propagation.contracts.task import TaskRepairObjection
 
-SCHEMA_VERSION = "annotation-review-v6"
+SCHEMA_VERSION = "annotation-review-v7"
 Evidence = SpecEvidence
 
 
@@ -84,11 +84,11 @@ class RequirementCheck(CheckedConclusion):
     requirement_id: Text
 
 
-class RawGoalCheck(RawCheck):
+class RawDeclarationCheck(RawCheck):
     raw_pointer: Text
 
 
-class GoalCheck(CheckedConclusion):
+class DeclarationCheck(CheckedConclusion):
     raw_pointer: Text
 
 
@@ -96,7 +96,7 @@ class RawReviewResponse(StrictRecord):
     outcome: Literal["completed"]
     source_checks: list[RawSourceCheck] = Field(min_length=1)
     requirement_checks: list[RawRequirementCheck] = Field(min_length=1)
-    goal_checks: list[RawGoalCheck]
+    declaration_checks: list[RawDeclarationCheck]
     reviewed_ir_ids: list[Text] = Field(min_length=1)
     findings: list[RawFinding]
 
@@ -114,7 +114,7 @@ class RawReviewResponse(StrictRecord):
 class ReviewResponse(RawReviewResponse):
     source_checks: list[SourceCheck] = Field(min_length=1)
     requirement_checks: list[RequirementCheck] = Field(min_length=1)
-    goal_checks: list[GoalCheck]
+    declaration_checks: list[DeclarationCheck]
     findings: list[Finding]
 
     @model_validator(mode="after")

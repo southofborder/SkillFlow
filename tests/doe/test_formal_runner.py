@@ -49,7 +49,10 @@ def propagation_run(tmp_path, monkeypatch):
         "property": "value", "label": "credential", "evidences": [{
             "file": "skill/SKILL.md", "start_line": 4, "end_line": 4,
             "reason": "The source identifies this field as a credential."}]}]
-    raw["realizations"][0].update(status="expressed", gaps=[])
+    raw["realizations"][0].update(status="expressed", gaps=[], constraints=[{
+        "kind": "at_most", "scope": {"kind": "task"},
+        "events": [{"instruction_id": "ir_read", "path": []}],
+        "limit": 1, "unit": "attempt"}])
     raw["ir_semantics"]["ir_filter"]["events"][0]["events"][0]["atomic_ops"][0]["demands"] = [{
         "requirement_id": "R001", "target": {"kind": "output"},
         "preserve": "value", "path": [], "reason": "Retain the actual computed result in this test."}]
@@ -72,10 +75,12 @@ def test_one_solve_and_one_result_with_joint_projection(propagation_run, tmp_pat
     directory = tmp_path / "doe"
     loaded = runner.run_doe(propagation_run, run_dir=directory)
     assert calls == [1]
-    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v4"
+    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v5"
     assert loaded["manifest"]["policy"]["candidate_origin"] == "model_annotation"
     assert loaded["annotation"]["task"]["basis"] == "user_request"
     assert loaded["result"]["coverage"]["declarations"] == 1
+    assert len(loaded["result"]["constraints"]["checks"]) == 1
+    assert all(row["status"] == "satisfied" for row in loaded["result"]["constraints"]["checks"].values())
     assert set(loaded["result"]["derivations"]["demand"]).isdisjoint(loaded["support"]["extra_derivations"])
     assert not any((directory / path).exists() for path in ("audit/demand", "task.json", "demand-result.json", "sensitivity-review.json"))
     assert 'href="doe-result.json"' in (directory / "report.html").read_text(encoding="utf-8")

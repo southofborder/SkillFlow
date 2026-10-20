@@ -1,0 +1,700 @@
+FILE SKILL.md
+1: ---
+2: name: getnote
+3: version: 2.3.1
+4: description: 通过官方 getnote CLI 连接得到大脑，完成浏览器授权、连接诊断、CLI 升级，以及保存、查询、搜索和管理真实笔记。用户要按录音台或录音卡来源找笔记、保存链接/图片、上传文件到知识库、查询文件限制、读取标记/发芽报告/时间线、整理知识库/文件夹、订阅博主、管理标签，或明确要求登录、诊断或升级时使用；不会自行安装或更新 Skill。
+5: metadata:
+6:   openclaw:
+7:     emoji: "🧠"
+8:     requires:
+9:       bins: ["getnote"]
+10:     install:
+11:       - id: "node-getnote"
+12:         kind: "node"
+13:         package: "@getnote/cli"
+14:         bins: ["getnote"]
+15:         label: "Install official GetNote CLI (npm)"
+16: ---
+17: 
+18: # 得到大脑（原 Get 笔记）
+19: 
+20: 让用户在当前 AI 中直接连接、诊断、升级 CLI，以及保存、查找和整理自己的得到大脑内容。本 Skill 理解用户意图、加载对应领域参考，并交给官方 `getnote` CLI 执行真实操作。
+21: 
+22: ## 能力与外部影响
+23: 
+24: - 本 Skill 会按用户请求执行 `getnote` 命令，并通过得到大脑官方 API 读取或修改当前已授权账号的数据。
+25: - 登录会打开浏览器授权页，并由 CLI 把授权信息保存在其本机配置目录；Skill 不读取、展示或转发完整凭证。
+26: - 保存、更新、归档、分享和删除会修改远端笔记数据，并遵守下方的确认规则。
+27: - 只有用户明确要求升级时才执行 `getnote update`；不会自行运行 npm、安装其他软件、下载并覆盖本 Skill 或修改其他 Skill 文件。
+28: - `getnote` 缺失时使用平台根据 frontmatter `install` 声明提供的官方安装流程；平台要求确认时只请求这一次确认，不查找或运行 `scripts/install.sh`。
+29: 
+30: ## 能力概览
+31: 
+32: | 用户想做什么 | 典型说法 | 完成后应返回什么 |
+33: | --- | --- | --- |
+34: | 保存内容 | “记一下”“保存这个链接”“把这张图存起来” | 真实标题、字符串笔记 ID、可打开的笔记链接；异步内容必须等生成完成 |
+35: | 查找内容 | “最近记了什么”“帮我找客户反馈” | 按相关度或时间排列的真实标题、摘要和链接 |
+36: | 深入阅读 | “打开这条笔记”“看录音原文”“有哪些会议待办” | 用户点名的详情视图，不用总结代替原文 |
+37: | 整理知识 | “放进产品研究的竞品文件夹” | 真实知识库、目录和归档结果；写后复读验证 |
+38: | 管理内容 | “加标签”“更新正文”“分享或删除” | 最终状态；危险操作先确认 |
+39: | 连接与排障 | “登录得到大脑”“检查为什么不能用”“更新到最新版” | CLI、授权和 API 的实际检查结果及下一步 |
+40: 
+41: 不要要求用户记命令。用户用自然语言表达目标即可。
+42: 
+43: ## 首次连接
+44: 
+45: 书籍身份查找、引用来源筛选和完整分页需要官方 CLI 1.7.1 或更新版本；文件上传、标记、发芽报告和章节时间线需要 CLI 1.6.0 或更新版本。缺少命令时告知用户升级，不以其它数据代替。
+46: 
+47: 课程容器定位、按课程筛选和预算批读还需当前 CLI 提供 `references list`、`notes batch`，且真实服务声明 `reference.resources.v1`、`note.course_filter.v1`、`note.batch_detail.v1`。以帮助、capabilities 和真实接口返回核验，不凭版本号假定能力已发布；旧参数用法保持兼容。
+48: 
+49: 例外：用户已授权云 MCP、只需要本地上传文件时，安装 CLI 后仅执行 `getnote upload`，不运行 `setup`、`auth login` 或要求第二次身份授权。按 `references/kb.md` 的直传流程完成；无需上传文件时继续使用云 MCP。
+50: 
+51: 1. 执行 `command -v getnote`。如果 CLI 不存在，调用平台根据 frontmatter `install` 声明提供的 `@getnote/cli` 安装流程；不要让用户选择安装方式，也不要查找本地安装脚本。
+52: 2. 执行 `getnote setup`，让 CLI 检测本机 AI、同步五个领域 Skill 并引导授权。当前独立 Skill 仍由平台管理，CLI 不覆盖它。
+53: 3. 尚未授权时运行 `getnote auth login` 并让用户只在浏览器确认；不得索要 API Key、Cookie 或 Authorization。
+54: 4. 执行 `getnote doctor -o json`。只有命令退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能说已经连接；`status=degraded` 时继续说明并处理非阻断警告。
+55: 5. 先运行 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意时才保存测试笔记，而且必须返回真实标题、字符串笔记 ID 和可打开的 `note_url` 才算完成。
+56: 
+57: ## 每次任务的执行闭环
+58: 
+59: 1. **理解目标**：识别用户要处理的对象、动作和目标位置；“这条笔记”“这个博主”等指代不明确时先澄清。
+60: 2. **加载领域参考**：只读取本次任务涉及的 `references/*.md`，不要凭印象猜命令、参数或返回字段。
+61: 3. **确认真实对象**：先读取笔记、知识库、文件夹或标签的真实字符串 ID。名称重名时让用户选择。
+62: 4. **执行官方 CLI**：机器调用加 `-o json`；长内容使用领域参考规定的文件或标准输入方式。
+63: 5. **判断结果**：同时检查退出码、`success` 和领域结果字段。异步任务轮询到最终状态，不能把“已提交”说成“已完成”。
+64: 6. **必要时复读**：归档、更新、删除标签等操作按领域参考重新读取结果，确认服务端最终状态。
+65: 7. **回复用户**：先给结论，再给标题、链接或必要摘要；失败时说明原因、是否可重试、下一步和 `request_id`。
+66: 
+67: ## 路由
+68: 
+69: 匹配用户意图后，必须读取并遵循对应领域参考：
+70: 
+71: - 登录、连接、配额、诊断和更新：[`references/auth.md`](references/auth.md)
+72: - 保存、查看、修改、分享和深层内容：[`references/note.md`](references/note.md)
+73: - 按书名或书籍作者查笔记：先读 [`references/kb.md`](references/kb.md)，区分书名 query 与作者 author，按用户要全部笔记还是划线选择筛选，并按完整分页读取。
+74: - 按课程名、文稿标题、授课人或评论找划线：先读 [`references/search.md`](references/search.md)。已知课程名/老师先定位课程容器，再按真实容器身份列笔记；少量个人笔记按预算批读原文/评论。有精确来源 ID/文章链接时读 [`references/note.md`](references/note.md)，无需先语义搜索。保留目录不完整警告，翻页结束不代表目录缺失已解决。
+75: - 查录音台、录音卡、即时录音、上传音频或自己录制的课堂笔记：读 [`references/note.md`](references/note.md) 的真实类型映射，不默认限定得到课程引用。
+76: - 按模糊主题或自然语言查找候选笔记：[`references/search.md`](references/search.md)
+77: - 知识库、文件上传、文件夹、博主订阅和直播：[`references/kb.md`](references/kb.md)
+78: - 查看、添加和删除标签：[`references/tag.md`](references/tag.md)
+79: 
+80: 一个任务涉及多个领域时，按实际步骤依次读取对应参考。例如“找到最近的客户反馈并放进客户档案”先读搜索，再读知识库。
+81: 
+82: ## 结果呈现标准
+83: 
+84: - **保存成功**：回复标题、字符串 `note_id` 和真实 `note_url`。链接或图片仍在生成时持续等待；超时则明确说仍在处理，不伪造完成。
+85: - **笔记列表与搜索**：优先展示 display_title 和真实链接；summary/preview 用于定位，不能冒充全文。相同 note_id 的多个搜索片段去重，Top-K 不代表全量；全量以领域参考中的遍历完成证据为准。
+86: - **笔记详情**：按用户点名的视图展示标题、总结、原文、录音转写、附件、时间线、快捷笔记或会议待办，不用其他字段冒充。
+87: - **知识库与目录**：展示真实名称、Scope 和字符串 ID；归档完成后说明笔记进入了哪个知识库及目录。
+88: - **更新、分享与删除**：明确最终状态和影响范围。取消或权限不足不能回复成功。
+89: - **空结果**：说明没有找到以及实际搜索范围，可建议换关键词、时间或知识库，但不能编造候选项。
+90: - **失败**：用用户能理解的话解释，并保留错误码和 `request_id` 供排查；敏感凭证不得出现在回复中。
+91: 
+92: ## 统一规则
+93: 
+94: - 所有真实操作由官方 `getnote` CLI 完成；参数不确定时读取对应命令 `--help`，机器调用统一加 `-o json`。
+95: - 退出码非 0 一律是失败。成功结果读取 `success=true` 和领域 Skill 指定的 `data` 字段；失败结果读取 `error.code/message/reason/retryable` 和可选 `request_id`，不能根据自然语言猜成功。
+96: - ID 始终按字符串原样传递；链接只使用真实返回值，不自行拼接域名。
+97: - 写操作结果不确定时先查询原任务或最近结果，禁止盲目重复创建。
+98: - 删除、覆盖、替换全部标签、公开分享和批量移出必须先确认。
+99: - 群聊或共享会话中不主动展开私密全文，先确认请求者和展示范围。
+100: - 失败时说明真实原因、是否可重试和下一步，并保留 `request_id`；不能伪造成功。
+101: 
+102: ## 常见恢复方式
+103: 
+104: - `unauthorized` 或授权过期：读 `references/auth.md`，引导浏览器重新授权，不索取凭证。
+105: - `forbidden`：说明当前账号或团队角色没有权限，不绕过权限或换 ID 猜测。
+106: - `not_found`：重新解析真实笔记、知识库或目录 ID；环境不同的链接和 ID 不能混用。
+107: - `conflict`：先读取当前版本或既有目录，避免覆盖和重复创建。
+108: - `rate_limited`：按返回的重试提示等待，不高频循环调用。
+109: - 网络中断或结果不确定：只做查询核验，不自动重复写入。
+110: 
+111: ## 用户要求更新
+112: 
+113: 用户说“更新得到大脑”已经构成完整更新授权，不再让用户选择内部组件：
+114: 
+115: 1. 按 `references/auth.md` 执行 `getnote update`，升级 CLI、同步 CLI 随附的五个领域 Skill 并完成诊断。
+116: 2. 使用 ClawHub/OpenClaw 的宿主流程检查并更新当前独立 Skill；平台需要用户确认时，只提供唯一必要的确认动作。
+117: 3. 本 Skill 不通过 CLI、npm 或下载脚本覆盖自身文件。
+
+FILE references/auth.md
+1: 
+2: # 得到大脑连接、诊断与升级
+3: 
+4: 负责把“用户想用得到大脑”推进到真正可执行的状态。不要只说“已安装”：CLI 可执行、账号已授权、API 可读三项都通过才算连接成功。
+5: 
+6: ## 首次连接闭环
+7: 
+8: 按顺序执行，已经满足的步骤直接跳过：
+9: 
+10: 1. 用 `command -v getnote` 检查官方 CLI。缺失时调用平台根据 `SKILL.md` frontmatter 提供的 `@getnote/cli` 安装流程；不要让用户选择安装方式，不查找或运行 `scripts/install.sh`。
+11: 2. 执行 `getnote setup`，让 CLI 检测本机 AI、同步五个领域 Skill 并引导授权。独立聚合 Skill 仍由 ClawHub/OpenClaw 管理，不由 CLI 覆盖。
+12: 3. 执行 `getnote version` 和 `getnote auth status`。未登录时运行 `getnote auth login`，让用户只在浏览器中确认，不索要 API Key、Cookie 或 Authorization。
+13: 4. 执行 `getnote doctor -o json`。只有退出码为 0、`diagnostics_completed=true` 且 `ready=true`，才能宣布连接完成；先处理 `issues[].blocking=true`，再按 `next_actions[]` 修复。
+14: 5. 先用 `getnote notes --limit 1 -o json` 做无写入验收。只有用户同意创建测试内容时，才保存测试笔记。
+15: 
+16: ## 日常路由
+17: 
+18: | 意图 | 命令 |
+19: |---|---|
+20: | 登录 | `getnote auth login` |
+21: | 查看登录状态 | `getnote auth status` |
+22: | 退出登录 | `getnote auth logout` |
+23: | 诊断连接 | `getnote doctor -o json` |
+24: | 查看 CLI 能力契约 | `getnote capabilities -o json` |
+25: | 为本机 AI 同步领域 Skill | `getnote setup` |
+26: | 查看 AI 对话额度 | `getnote quota -o json` |
+27: | 查看版本 | `getnote version` |
+28: | 检查升级 | `getnote update --check` |
+29: | 执行升级 | `getnote update` |
+30: 
+31: 参数不确定时读取对应命令的 `--help`，不要凭旧文档猜参数。
+32: 
+33: ## 每条命令的结果与下一步
+34: 
+35: | 命令 | 成功后读取/确认 | 成功后怎么做 |
+36: |---|---|---|
+37: | `getnote auth login` | 浏览器已确认，凭证已写入本机 | 再运行 `doctor -o json`；不在聊天中展示凭证。 |
+38: | `getnote auth status` | `Authenticated` / `Not authenticated` 或环境变量登录状态 | 未登录才启动 `auth login`；状态里只能出现掩码。 |
+39: | `getnote auth logout` | `Logged out successfully.` | 只说明本机已退出；不声称已撤销服务端授权。 |
+40: | `getnote doctor -o json` | `diagnostics_completed`、`ready`、`status`、`checks[]`、`issues[]`、`next_actions[]`、`integrations[]` | 退出码为 0 且 `ready=true` 才宣布核心连接可用；`status=degraded` 时继续处理警告。 |
+41: | `getnote capabilities -o json` | `contract_version`、`commands`、`command_aliases`、`command_results`、`guarantees` | 只在安装、升级或兼容排查时读取；这是命令和结果字段的唯一事实源。 |
+42: | `getnote setup -o json` | `success`、`targets[]`、`installed_skills`、`authenticated`、`next` | 仅同步本机 Agent 的领域 Skill；没有可识别目标不等于账号失败。 |
+43: | `getnote quota -o json` | `data.read/write/write_note` 下的 `daily/monthly.limit/used/remaining/reset_at` | 按真实桶说明剩余额度，不自行换算或合并桶。 |
+44: | `getnote version` | 版本文本 | 只用于展示版本；机器契约仍以 `capabilities -o json` 为准。 |
+45: | `getnote update --check` | 当前/可用新版本文本 | 有新版本再运行 `getnote update`。 |
+46: | `getnote update` | CLI 更新、五个领域 Skill 同步和 doctor 结果 | 命令会执行完整更新闭环；独立聚合 Skill 仍由宿主平台更新。 |
+47: 
+48: 所有命令以退出码为第一判断：退出码非 0 即失败。使用 `-o json` 的 API 与本地错误均返回 `success=false`、`data=null`、`error.code/message/reason/retryable` 和可选 `request_id`；不能把 HTTP 200 或“命令运行过”当成成功。
+49: 
+50: ## CLI 更新闭环
+51: 
+52: 用户说“更新得到大脑”已经构成完整更新授权，不要求用户选择内部组件：
+53: 
+54: 1. 执行 `getnote update --check`，随后执行 `getnote update`；默认流程会升级 CLI、同步五个领域 Skill 并运行 doctor。
+55: 2. 如果 CLI 明确要求由宿主或包管理器完成升级，使用平台声明的 `@getnote/cli` 安装流程，不下载或执行本地脚本。
+56: 3. 使用 ClawHub/OpenClaw 的宿主流程检查当前独立 Skill；需要用户确认时只提供唯一必要的确认动作。
+57: 4. 确认更新输出中的 CLI 版本、Skills 同步结果和 doctor 结果；再用最近笔记读取做验收。
+58: 5. CLI 不覆盖当前独立 Skill；独立 Skill 只由宿主平台更新。
+59: 
+60: ## 安全与恢复
+61: 
+62: - 不展示或记录完整凭证；`auth status` 只能出现掩码。
+63: - 用户未明确要求时不退出登录。
+64: - 授权超时、拒绝或验证码过期时重新启动一次登录流程，不复用旧 code。
+65: - 失败时保留执行步骤、错误原因和 `request_id`；不要只回复“连接失败”。
+
+FILE references/kb.md
+1: 
+2: # 得到大脑知识库
+3: 
+4: 通过官方 CLI 读取真实知识库、权限和目录后再操作；不能用名称猜 ID。机器调用统一使用 `-o json`；只有退出码为 0 且 `success=true` 才是业务成功。返回中的所有知识库、目录、博主和笔记 ID 都按字符串原样传递。
+5: 
+6: 所有 API 命令的 JSON 都先判断 `success`。`success=false` 或退出码非 0 时读取 `error.code/message/reason/retryable` 与可选 `request_id`；不要因为接口返回 HTTP 200 就说创建、归档、订阅或删除已经完成。
+7: 
+8: ## 意图路由
+9: 
+10: | 意图 | 命令入口 |
+11: |---|---|
+12: | 自有/可管理知识库 | `getnote kbs --scope <scope>` |
+13: | 我订阅的知识库 | `getnote kbs-sub --scope <scope>` |
+14: | 知识库笔记 | `getnote kb <topic_id>` |
+15: | 新建个人知识库 | `getnote kb create` |
+16: | 加入笔记 | `getnote kb add` |
+17: | 移出笔记 | `getnote kb remove` |
+18: | 浏览文件夹 | `gnote kb dir` |
+19: | 创建文件夹 | `gnote kb mkdir` |
+20: | 重命名/移动文件夹 | `gnote kb mvdir` |
+21: | 删除空文件夹 | `gnote kb rmdir` |
+22: | 博主列表 | `getnote kb bloggers` |
+23: | 博主内容列表 | `getnote kb blogger-contents` |
+24: | 博主内容详情 | `getnote kb blogger-content` |
+25: | 订阅抖音博主 | `getnote kb blogger-follow` |
+26: | 直播列表 | `getnote kb lives` |
+27: | 直播详情 | `getnote kb live` |
+28: | 订阅直播 | `getnote kb live-follow` |
+29: | 使用 MCP 临时凭据直传本地文件到 OSS | `getnote upload <file>` |
+30: | 查询文件约束 | `getnote file-capabilities` |
+31: | CLI 已登录时获取上传 token | `getnote file-token <extension>` |
+32: | CLI 已登录时提交 OSS 结果入库 | `getnote file-add <topic_id> <directory_id>` |
+33: 
+34: `gnote` 和短命令是稳定别名；旧环境没有别名时回退到 `getnote kb directories/directory-create/directory-update/directory-delete`。参数一律以目标命令 `--help` 为准。
+35: 
+36: ## 选择知识库和权限
+37: 
+38: 1. `getnote kbs` 和 `getnote kbs-sub` 默认只查询 `DEFAULT`。用户明确要书籍、客户档案或团队知识库时，分别传 `--scope BOOKSPACE`、`--scope CUSTOMER`、`--scope TEAMSPACE`；不能把多个 Scope 混在同一分页结果里。
+39: 2. 用户问“我管理的/我的知识库”时执行 `getnote kbs --scope <scope> -o json`；问“我订阅的知识库”时执行 `getnote kbs-sub --scope <scope> -o json`。订阅列表只包含他人创建且当前账号真实订阅的知识库，分别按 `has_more` 翻完页。
+40: 3. 按名称和 `scope` 匹配；同名或用户意图不明确时让用户选择，不猜 `topic_id`。目标名称既可能是知识库也可能是文件夹时，先问清楚。
+41: 4. 订阅知识库通常只读。若列表结果明确返回角色或可写标记，按真实字段判断；当前 CLI 契约未保证权限字段时，不得声称已经预检为 owner/admin，可在用户明确授权后尝试写入，并忠实处理权限失败。
+42: 5. 普通成员写入失败时明确说明权限不足，不尝试绕过。当前不代替用户新建团队知识库。
+43: 
+44: ## 按书名、作者定位，再选择内容范围
+45: 
+46: 用户要某本书或某位作者的划线时，先定位书籍知识库，不把语义搜索的 Top-K 当全量。`--query` 只匹配知识库名或书名，`--author` 匹配书籍作者；两个参数同时传时是 AND，不是任选其一。
+47: 
+48: - “找《某本书》的笔记”：传 `--query`，查询词只放书名，不把“我的笔记”“全部划线”或作者名拼进去。
+49: - “找某位作者的书籍笔记”：只传 `--author`，省略 `--query`，再按返回书籍库读取。用户要该作者全部书籍时逐库遍历；仅要其中一本但候选不唯一时再消歧。
+50: - “找某位作者写的《某本书》”：同时传书名 `--query` 和作者 `--author`。作者关键词误传 query 得到空列表不能解释为用户没有该作者的笔记。
+51: 
+52: ```bash
+53: # 只有作者线索，无需先猜书名
+54: getnote kbs --scope BOOKSPACE --author '用户提供的作者' --all -o json
+55: # 同时知道书名与作者
+56: getnote kbs --scope BOOKSPACE --query '书名' --author '用户提供的作者' --all -o json
+57: # 用户明确查订阅库时保持原有条件；只知作者仍只传 author
+58: getnote kbs-sub --scope BOOKSPACE --author '用户提供的作者' --all -o json
+59: # 只要划线 / 摘录
+60: getnote kb '<返回的 topic_id>' --note-type ref --page-size 20 --all -o json
+61: # 要这本书里的全部笔记：不加 note-type，避免漏掉读书心得等其它类型
+62: getnote kb '<返回的 topic_id>' --page-size 20 --all -o json
+63: getnote note original '<返回的 note_id>' -o json
+64: ```
+65: 
+66: - “全部笔记”和“全部划线”不是同一范围：只在用户明确要划线/摘录时加 `--note-type ref`。用户要某章划线时，在候选 `reference.location.chapter_name/chapter_id` 核对，不把章节名当书名；字段缺失不能证明该章没有笔记。
+67: - “书里关于某主题的内容”：定位书库后用 `getnote search '主题' --kb '<topic_id>' --limit 10 -o json`，不退回全局搜索再把别处内容归到这本书。搜索为空或结果不符合主题时，用 `getnote kb '<topic_id>' --page-size 20 -o json` 在同一库内补查；沿真实 pagination 翻页，先匹配定位信息，截断或不足时按需读候选详情的真实正文/原文。发现与深读预算沿用搜索参考，超出预算说明范围未查完而非判定没有。用户要求全部时按完整分页逐项核验，Top-K 不能给全量承诺。
+68: - 自有书库无匹配且用户未限定“只查我的”时，可以查询真实订阅书库，保留原有 scope/query/author/book-id；用户明确只查订阅库则直接用 kbs-sub。命令报错、权限不足或解析失败不能当空库，不能去掉条件后称筛选成功。
+69: - 作者未知时省略 `--author`。先用 `name`、`scope=BOOKSPACE`、`book_info.title/author/book_id` 核对候选；同名多作者、多版本仍不唯一时请用户选择，不能用第一项代替。已有真实书 ID 可加 `--book-id`，它不是知识库 ID。
+70: - query/author 会做 NFKC、外围书名号/引号和大小写归一化，但不是自动分词或模糊纠错。全名未匹配时可用用户原话中的稳定片段找候选（如作者姓氏、连续书名片段），再核对完整书名/作者；不擅自更换作者、季数或版本，不无提示忽略冲突条件。
+71: - `BOOKSPACE` 表示书籍库，不等于全部来自得到。用户明确“得到电子书”时核对 `book_info.source` 与引用的 `reference.source`；不要把豆瓣等其它来源的同名书当作得到来源。只说某本书时不擅自加平台限制。
+72: - 普通知识库在笔记的 `topics[]` 中仍只有 `id/name`；书籍关联才附带 `scope/book_info`。标签、知识库名称都不能代替 `reference` 来源证据。
+73: - 新查询核对 `meta.capabilities`（`knowledge.lookup.v1`、`pagination.v1`；笔记筛选还需 `note.filters.v1`，引用筛选还需 `note.reference.v1`）和 `applied_filters`。CLI 会拒绝不支持或未应用的条件；不得去掉条件后把未筛选结果交差。列表只返回定位信息，需要完整内容时按 `note_id` 调用 `getnote note`。
+74: - 候选知识库的 `stats.note_count` 可能滞后，也不代表筛选后的划线数；回答以本次验证过的分页结果和去重 ID 为准。
+75: - `--all` 只有退出码为 0、`success=true`、`data.traversal.completed=true` 且 `pagination_verified=true` 才能确认完成了当前授权范围的遍历。按字符串笔记 ID 去重；`traversal.returned_count` 是本次实际取回数，`traversal.total_count=null` 仍表示服务端精确总数未知。旧 `total` 保留兼容语义，不能当新的筛选总数。
+76: - 手动翻页或 MCP：保持 scope、全部筛选和 page_size 不变；按 `pagination.next_page` / `next_cursor` 原样继续，直到 `has_more=false`。记录已经访问的页码/游标和笔记 ID；循环、空页仍声称有下一页、重复结果无进展或中途失败都不能声称“全部找到”。
+77: - 书库不存在、无匹配、或库内无划线，不等于账号没有该书来源的引用。用户已明确得到电子书时，可用 `getnote notes --source dedao --note-type ref --reference-type ebook --page-size 20 -o json` 按来源补查，在 `reference.title/author/book_id` 匹配；按搜索参考的预算和分页规则继续，必要时用真实 `reference.resource_id` 精确筛选。只对当前授权范围下结论，不新建库、不修改归属。
+78: - 平台未限定且书库路线无匹配时，可用 `getnote notes --note-type ref --page-size 20 -o json` 读取个人引用定位信息，再按真实 `reference.resource_type/book_id/title/author` 核对书籍候选；保留已知时间、平台及知识库约束，不自加 dedao。一次发现最多5页，未翻完说明范围未查完；只按需读取匹配候选正文。用户限定只查某库时就在该库补查，不扩大到个人笔记。
+79: - `book_info.author` 是书籍目录作者，`reference.author` 是同步引用保存的来源作者。两者冲突时分别标注来源，把引用保留为待核验候选，不把空书库查询说成账号没有笔记，也不直接认定该候选就是所问作者的著作；不会自动改写作者或笔记归属。
+80: 
+81: ## 文件夹和归档流程
+82: 
+83: 1. 用户要求放入文件夹时，用 `gnote kb dir <topic_id> -o json` 读取根目录或指定目录。
+84: 2. 已有文件夹使用 `data.directories[].id` 返回的真实目录 ID；浏览指定目录时把该值传给 `--directory-id`。缺失时先询问是否创建，再用 `mkdir`。
+85: 3. `getnote kb add` 同时传真实 `topic_id`、字符串 `note_id` 和 CLI 帮助中规定的目录参数。
+86: 4. 每批最多 20 条。移出笔记和删除目录必须先确认；删除目录还必须由 CLI/服务校验为空。
+87: 5. 移动或重命名时只改变用户指定项，未指定的名称或父目录保持不变。
+88: 
+89: ## 本地文件直传（MCP 已授权）
+90: 
+91: 1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。
+92: 2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。
+93: 3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。
+94: 4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。
+95: 
+96: 已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。
+97: 
+98: ## 博主和直播
+99: 
+100: 1. 用户给出抖音主页并要求持续关注时，先确认目标知识库和写权限，再使用 `blogger-follow`；只是找某条内容时先查询，不创建订阅。
+101: 2. 列表先返回博主/直播名称、真实字符串 ID 和必要状态，选中后再读取完整内容。
+102: 3. 博主内容详情中的 `post_media_text` 才是完整原文，不用摘要冒充。
+103: 
+104: ## 每条命令的结果与回复格式
+105: 
+106: | 命令 | 成功结果必须包含 | 回复规则 |
+107: |---|---|---|
+108: | `getnote kbs --scope <scope> -o json` | `success=true`、`data.topics[].topic_id/name/scope/stats`、`has_more/total` | 默认 scope 为 `DEFAULT`；特殊类型必须显式传 scope。 |
+109: | `getnote kbs-sub --scope <scope> -o json` | `success=true`、`data.topics[].topic_id/name/scope`、`has_more/total` | 只返回该 scope 下真实订阅的他人知识库，通常只读。 |
+110: | `getnote kb <topic_id> -o json` | `success=true`、`data.notes[].note_id/title/note_type`、`has_more/total` | 返回知识库内真实笔记；需要链接时再用 `note` 读取详情。 |
+111: | `getnote kb create <name> -o json` | `success=true`、`data?` | 仅创建个人知识库；不得在没有返回 ID 时虚构 `topic_id`。 |
+112: | `getnote kb add <topic_id> <note_id…> -o json` | `success=true`、`data?` | 最多 20 条；需要确认最终目录归属时重新读取目录。 |
+113: | `getnote kb remove <topic_id> <note_id…> --yes -o json` | `success=true`、`data?` | 最多 20 条；先确认，再说明已从该知识库移出。 |
+114: | `gnote kb dir <topic_id> -o json` | `success=true`、`data.current_directory?`、`directories[].id/name`、`resources[].id/directory_id/note_id?/name/type/status`、`total` | 目录主键读取 `directories[].id`；资源归属读取 `resources[].directory_id`，笔记资源用 `resources[].note_id` 验证；旧环境回退 `getnote kb directories`。 |
+115: | `gnote kb mkdir <topic_id> --name <name> -o json` | `success=true`、`data?` | 也兼容位置参数 `<name>`；二者不可同时使用。若需给出新目录 ID 或层级，随后重新读取目录。 |
+116: | `gnote kb mvdir <topic_id> <directory_id> … -o json` | `success=true`、`data?` | 只确认用户指定的改名/移动；需要最终名称或父级时重新读取目录。 |
+117: | `gnote kb rmdir <topic_id> <directory_id> --yes -o json` | `success=true`、`data?` | 只删除空目录；说明已删除前必须拿到业务成功。 |
+118: | `getnote kb bloggers <topic_id> -o json` | `success=true`、`data.bloggers[].follow_id_str/account_name/platform`、`has_more/total` | 列表中使用 `follow_id_str` 作为后续查询 ID。 |
+119: | `getnote kb blogger-follow <topic_id> <link> -o json` | `success=true`、`data.follow_id_str/url/platform/type/created_at` | 说明实际订阅的平台和对象；先确认目标知识库有写权限。 |
+120: | `getnote kb blogger-contents <topic_id> <follow_id> -o json` | `success=true`、`data.contents[].post_id_alias/post_title/post_publish_time`、`has_more/total` | 返回标题与摘要；阅读全文前让用户选择具体内容。 |
+121: | `getnote kb blogger-content <topic_id> <post_id> -o json` | `success=true`、`data.post_title/post_summary?/post_media_text?/post_url?/post_publish_time` | `post_media_text` 才是完整原文，摘要不能替代它。 |
+122: | `getnote kb lives <topic_id> -o json` | `success=true`、`data.lives[].live_id/name/status`、`has_more/total` | 先列出真实直播，再按用户选择读取详情。 |
+123: | `getnote kb live <topic_id> <live_id> -o json` | `success=true`、`data.post_title/post_summary?/post_media_text?/post_publish_time` | `post_media_text` 是直播原文/转写；没有时不凭摘要补写。 |
+124: | `getnote kb live-follow <topic_id> <link> -o json` | `success=true`、`data.follow_id_str/url/platform/type/created_at` | 说明真实订阅对象和平台。 |
+125: 
+126: 权限不足、目录非空、批量超限等失败必须原样解释，不伪造降级成功；保留 `request_id` 和 `retryable`。
+127: 
+128: ## 完成、处理中与失败后的动作
+129: 
+130: - `kbs`、`kbs-sub`、`kb`、`dir`、博主和直播的空列表是本次查询无结果；按用户目标核对筛选、分页与已说明的补查路径，再说明“在本次范围内未找到”，不直接说账号没有，不自动创建知识库、目录或订阅。
+131: - `kb create`、`kb add`、`mkdir`、`mvdir` 等写操作的 `data` 可能因服务版本不同而不提供完整对象。只在 `success=true` 时确认动作已提交；若要向用户返回新目录 ID、最终层级或笔记归属，必须紧接着重新读取 `gnote kb dir` 或 `getnote kb <topic_id>`，不能猜字段。
+132: - `kb add` 即使请求成功，也不能把“已发起加入”说成“已进入某个目录”；只有重新读取后在 `resources[]` 的同一项出现对应字符串 `note_id` 和 `directory_id`，才能展示最终归属。
+133: - `kb remove`、`rmdir` 前必须有用户明确确认并带 `--yes`；若 `reason=knowledge_directory_not_empty`，明确提示“目录非空，请先移出内容或删除子目录”，不要原请求重试。其它失败也应说明真实原因和下一步，绝不宣称已删除。
+134: - 知识库未出现在某一页或某种 scope 的列表中不能直接推断权限不足；先核对 scope、完整分页以及自有/订阅范围。实际返回权限错误才说明无权访问；不把个人知识库同名项替代团队知识库。
+135: - “这条笔记”只能复用当前会话中已经由 CLI 返回并验证过的字符串 `note_id`。没有可靠上下文时先请用户提供笔记 ID；不能从不受支持的私有链接、标题或雪花 ID 数值转换中猜测。
+
+FILE references/note.md
+1: 
+2: # 得到大脑笔记
+3: 
+4: 通过官方 `getnote` CLI 完成真实操作。不要自己拼 OpenAPI 请求、ID 或笔记链接；机器调用优先使用 `-o json`，以退出码和下述结果契约判断结果。
+5: 
+6: ## 统一结果判定
+7: 
+8: 所有 API 命令的 JSON 结果先看下面这层结构，再读取每条命令规定的 `data` 字段：
+9: 
+10: ```json
+11: {
+12:   "success": true,
+13:   "data": {},
+14:   "request_id": "可选"
+15: }
+16: ```
+17: 
+18: 失败结果为 `success=false` 或命令退出码非 0，读取 `error.code`、`error.message`、`error.reason`、`error.retryable` 和可选 `request_id`。HTTP 成功、上传完成、出现任务 ID 或拿到空笔记链接，都不能替代最终成功结果。
+19: 
+20: ## 意图路由
+21: 
+22: | 意图 | 命令入口 |
+23: |---|---|
+24: | 保存文字、链接或本地图片 | `getnote save` |
+25: | 查询异步保存任务 | `getnote task` |
+26: | 查看最近笔记 | `getnote notes` |
+27: | 按预算读取少量个人笔记正文/原文 | `getnote notes batch` |
+28: | 查看详情或字段 | `getnote note` |
+29: | 引用/链接/文字原文 | `getnote note original` |
+30: | 录音、会议或课堂转写 | `getnote note transcript` |
+31: | 图片、音频和文件附件 | `getnote note attachments` |
+32: | 录音或会议时间线 | `getnote note timeline` |
+33: | 总结中的章节时间线 | `getnote note chapters` |
+34: | 录音笔记标记（独立数据） | `getnote marks <note_id>` |
+35: | 按月列出发芽报告 | `getnote sprouts <YYYY-MM>` |
+36: | 读取发芽报告原文 | `getnote sprout <id>` |
+37: | 录音快捷笔记 | `gnote note quick`，旧版回退 `getnote note quick-note` |
+38: | 会议总结中的派生待办 | `getnote note todos` |
+39: | 修改笔记 | `getnote note update` |
+40: | 删除笔记 | `getnote note delete` |
+41: | 公开分享 | `getnote note share` |
+42: 
+43: 不确定参数时先运行目标命令 `--help`。
+44: 
+45: ## 录音台与录音卡来源定位
+46: 
+47: 设备来源与笔记类型是两个独立条件。用户明确说“录音台”“AI录音台”“墨案/MOAN录音台”时使用 `--source vendor_moan`；“录音卡”“GetSeed录音卡”使用 `--source getseed`。查设备全部笔记时只限定来源，不额外加 `--note-type audio` 或 `meeting`，避免漏掉其他实际类型；录音卡长录音和闪念也由同一个 getseed 来源覆盖。用户明确只要长录音/闪念时，才分别叠加 `recorder_audio` / `recorder_flash_audio`。
+48: 
+49: ```bash
+50: getnote notes --source vendor_moan --page-size 20 --all -o json
+51: getnote notes --source getseed --page-size 20 --all -o json
+52: ```
+53: 
+54: “昨天/上周的录音台笔记”同时保留对应 `--created-from/to`，按用户时区换算为 RFC3339，from 包含、to 不包含；明确修改时间才改用 edited 或 record-updated。翻页始终保留 source、时间、知识库等原条件，核对 `applied_filters.source` 和每条笔记的 `source`，按真实游标继续并按字符串 note_id 去重。仅在遍历结束、没有未解决的 partial/warnings 或错误时，才能说当前授权范围已遍历；旧 total 不是设备范围的总条数。
+55: 
+56: 结果只涵盖已经同步成笔记且当前账号有权读取的主笔记，不代表设备端未同步、尚未形成笔记的全部会议记录。空结果不能改查其他来源后声称完成，不能用“AI录音台”标签或标题猜来源。只说“录音笔记”而未限定设备时不加 vendor_moan/getseed；按已知录音模式核对真实类型，模式不明时保留不同类型候选并说明范围。
+57: 
+58: 来源内有正文主题时，先在该来源和时间范围列出候选，再按需读取目标正文核实；`search` 不提供设备来源筛选，不能把全局 Top-K 后过滤当作该设备完整搜索。录音台/录音卡转写使用 `getnote note transcript '<note_id>' -o json`，不把 AI 总结、preview 或缺失转写当作原文。
+59: 
+60: ## 来源筛选、轻量定位与原文
+61: 
+62: 列表接口只返回定位信息，再用详情接口读取完整笔记。`display_title` 是展示标题，不覆盖原始 `title`；引用笔记空标题很正常。`preview` 是带来源和截断标记的定位片段，不是全文。
+63: 
+64: ```bash
+65: getnote notes --source dedao --note-type ref --page-size 20 -o json
+66: getnote note '<note_id>' -o json
+67: getnote note original '<note_id>' -o json
+68: ```
+69: 
+70: | note_type | 原文字段 | content 的语义 |
+71: |---|---|---|
+72: | ref | ref_content | 用户评论，不是引用原文 |
+73: | plain_text | content | 用户正文 |
+74: | link | web_page.content | 通常是摘要 |
+75: | audio / local_audio | audio.original | 通常是摘要 |
+76: 
+77: 录音按真实类型选择：即时录音/普通录音用 `--note-type audio`，上传的音频文件用 `local_audio`，自己录制的课堂笔记用 `class_audio`，会议录音用 `meeting`，系统内录用 `internal_record`，录音卡长录音/闪念分别用 `recorder_audio` / `recorder_flash_audio`。这些类型与得到课程引用不同；用户未限定平台时不加 `--source dedao` 或课程筛选。只说“录音”且模式不明时保留候选并说明类型，不能把上传音频当即时录音。
+78: 
+79: ```bash
+80: getnote notes --note-type audio --all -o json
+81: getnote notes --note-type local_audio --all -o json
+82: ```
+83: 
+84: `original` 只按真实类型读取上述字段，并返回 `original_source`；原文缺失或类型不支持会报错，不能把评论或定位片段补成原文。列表中的 `content_state` 会标明正文被省略；详情接口返回完整正文和元数据。用 `metadata_state.reference/topics` 区分完整、部分、不可用的元数据；缺失的作者、书 ID、来源 URL 不猜测补写。
+85: 
+86: 得到课程无需知识库：已知课程名/老师时先按搜索 Skill 执行 `getnote references list --source dedao --resource-type course --query '<课程名>' --all -o json`，再用真实课程容器身份筛选；author 精确匹配老师，query 可显式 prefix。同名版本先消歧，topics=[] 不阻断；不要求用户提供内部 ID。
+87: 
+88: ```bash
+89: getnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json
+90: ```
+91: 
+92: 课程容器身份是 course_type+course_id；当前66，不能用课节65的 resource_id 代替。课程筛选包含课程直接引用和所属课节，增量 reference.course 不改旧 resource_id。首版 course+topic_id 不支持，不用个人笔记冒充知识库交集。新能力缺失时报告不支持，不删除筛选继续查询。
+93: 
+94: 单篇文稿已有真实 reference ID 或文章 URL 时继续使用旧精确筛选：
+95: 
+96: ```bash
+97: getnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<reference.resource_id>' --all -o json
+98: # 缺少资源 ID，但有 reference.article.url 时，可改用精确文章 URL
+99: getnote notes --source dedao --note-type ref --article-url '<reference.article.url>' --all -o json
+100: ```
+101: 
+102: 平台值取 `reference.source`；资源类型取 `reference.resource_type`，不要用标签或内部 ptype 猜枚举。`--reference-id` 必须同时传 `--source` 和 `--reference-type`。课程文稿的 resource_id 指向单篇文稿，课程筛选再加 reference-id 时取交集。resource_id、course_id、original_note_id、书 ID 与笔记 ID 是不同身份；全程用返回的字符串。课程主页不传到 --article-url，也不解析编码 ID；文章 URL 保留 query/fragment。同篇文稿的不同笔记 ID 仍是不同划线。
+103: 
+104: 创建、正文编辑、记录更新是三个独立时间轴。按需使用 `--created-from/to`、`--edited-from/to`、`--record-updated-from/to`，值必须为带时区 RFC3339；区间 from 包含、to 不包含。不得把 `updated_at` 当正文编辑时间。“今天/上周”按用户当前日期和时区换算边界；保存时间不是文章发布日期，不把“最近”擅自解释成固定一个月。用户同时限定课程/知识库时保留这些条件。
+105: 
+106: 新参数需要服务端对应 `meta.capabilities` 且 `applied_filters` 与请求一致；不支持时停止该查询并说明升级服务/客户端的需要，不自动移除筛选。全量按知识库参考中的分页规则验收；只拿一页或一次语义搜索，不能说“全部找到”。
+107: 
+108: 分页结束与来源完整性分别判断：`partial=true`、`warnings`、候选 `metadata_state=partial` 仍须说明。特别是 `course_directory_no_lessons` 表示课程目录缺少课节，即使 `has_more=false` 或 `traversal.completed=true` 也不能保证找全老师的所有课程；保留已找到的真实结果和缺口，不通过删除筛选或重复同一请求消除警告。
+109: 
+110: ## 有预算的批量正文读取
+111: 
+112: 不超过20个已定位个人笔记用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`。默认 fields=content,ref_content,reference；original 显式选择，引用原文来自 ref_content，个人评论来自 content。默认32000个Unicode码点，--max-total-chars 可设1..64000，服务端另有1MiB上限；不是给旧单条详情加截断。
+113: 
+114: 退出码0和 success=true 只代表批量调用成功：逐条检查 status=ok/unavailable/failed/deferred_budget、content_state、partial、pending_ids。成功项正文完整，deferred_budget 整条待读，不能把 omitted 当空正文；未知未来状态原样保留并说明未确认。用户确需全文时再用旧 `getnote note original '<真实note_id>' -o json` 补读，不自动并发20次单条请求。不存在与无权统一 unavailable，不判断对象是否存在；首版不批量读知识库共享笔记，不绕过原单条权限。
+115: 
+116: 参数错误读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒重试；Agent 不叠加重试，日/月配额、写操作与上传凭证不自动重试。
+117: 
+118: ## 保存流程
+119: 
+120: ### 文字与长文
+121: 
+122: 1. 保留用户原意，不擅自扩写；未指定时不添加知识库、父笔记、标签或公开分享。
+123: 2. 短文本可作为参数传入。长文本、Markdown、含复杂引号或换行的内容必须使用 `--content-file` 或 `--stdin`，避免截断和转义损坏。
+124: 3. 重试同一次创建时复用同一个 `--idempotency-key`。
+125: 4. 只有命令退出码为 0，且最终结构中存在非空字符串 `data.note.note_id`、`data.note.title`、`data.note.note_url`，才回复保存成功。
+126: 
+127: ### 链接
+128: 
+129: 1. 以 `http://` 或 `https://` 开头且用户表达保存意图时按链接保存，不当作普通文字。
+130: 2. CLI 会轮询异步任务。处理中可以告诉用户“正在抓取并生成笔记”，但不能提前给出成功结论。
+131: 3. 最终成功必须满足文字保存的三项字段，并且 `data.note` 已能读取；不要自行拼接链接。
+132: 
+133: ### 图片
+134: 
+135: 1. 使用本轮用户明确给出的本地图片路径，不把文件名保存成文字，也不带上历史图片。
+136: 2. CLI 会校验真实文件格式、上传图片并轮询识别任务。
+137: 3. 只有最终笔记详情返回有效 `note_id/title/note_url` 才算成功；“图片已上传”不是“笔记已生成”。
+138: 
+139: ### 异步超时与安全重试
+140: 
+141: - `getnote save ... -o json` 正常会等待最终结果；若退出码非 0 且输出含 `task_id`、`status=pending|processing`，操作结果仍不确定。
+142: - 结果不确定时使用 `getnote task <task_id> -o json` 查询原任务。`done|success` 且有有效 `note_id` 后再读取笔记；`failed` 时展示 `error_msg` 或 `msg`。
+143: - 超时、断流或网络错误后禁止直接再次保存；先查询原任务或最近笔记。只有 CLI/API 明确 `retryable=true` 且已确认原操作没有成功时才重试。
+144: 
+145: ## 查询和深层读取
+146: 
+147: 1. “最近、列表、有哪些”使用 `getnote notes`；有明确书名或引用来源时按上面的来源/知识库路线查找，模糊主题才交给搜索 Skill。
+148: 2. 用户给出 ID 时直接读取详情；雪花 ID 全程按字符串原样传递。“这条笔记”只复用当前会话中已经由 CLI 返回并验证过的字符串 ID。当前 CLI 若不能直接接收某种私有链接，就先请用户提供 ID，不能自行截取、猜测或转成数字。
+149: 3. 用户只要列表时展示标题、字符串 ID 和真实 `note_url`。用户明确要某条或某来源的划线、原文、评论时，定位匹配候选后直接读详情完成请求，不额外等待用户选择；仅在候选仍有歧义、无法确认目标时请用户选择。
+150: 4. 不确定笔记类型时先读 `getnote note <id> -o json`：
+151:    - 引用/链接/文字原文：`original`；
+152:    - 录音、会议、课堂逐字稿：`transcript`；
+153:    - 图片、音频、文件：`attachments`；
+154:    - 章节时间点与会议过程：`chapters`，读取 `chapter_timeline.items`，保留规则解析来源 `source`；录音 moments 使用 `timeline`，两者不是同一份数据；
+155:    - 用户现场快捷记录：`quick-note`；
+156:    - 会议待办：`todos`，必须保留 `source`，不得把规则解析结果说成上游原生待办。
+157: 5. 不拿 `content` 中的 AI 摘要冒充原文。
+158: 6. 标记从 `getnote marks` 的 `data.marks[]` 读取，不使用 Timeline 的条数或内容替代。发芽从 `getnote sprouts` 列出报告，再用 `getnote sprout` 读取正文；`has_sprout=false` 如实表示没有可读报告，不把标记或笔记总结当作发芽。
+159: 
+160: ## 修改、删除和分享
+161: 
+162: 1. 先读取目标笔记和当前版本，确认用户指向的对象。
+163: 2. 追加或前置内容必须使用 CLI 当前帮助中对应的增量语义，不用覆盖模拟追加。
+164: 3. 覆盖正文、替换全部标签、删除和公开分享必须先确认；确认后才使用 `--yes`。
+165: 4. 分享录音类笔记时，确认话术必须说明公开链接是否包含音频；用户不希望公开音频时使用 CLI 帮助中的 `--exclude-audio`。不能替用户默认决定音频公开范围。
+166: 5. 用户未要求公开时只返回私有 `note_url`，不自动生成分享链接。
+167: 
+168: ## 每条命令的结果与回复格式
+169: 
+170: | 命令 | 成功结果必须包含 | 回复规则 |
+171: |---|---|---|
+172: | `getnote save … -o json` | `success=true`、`data.note.note_id/title/note_url` | 回复“已保存《标题》”和真实链接。链接/图片先只得到 `task_id` 时还未成功，继续查任务。 |
+173: | `getnote task <task_id> -o json` | `data.task_id/status/note_id?/msg?/error_msg?` | 仅 `done`/`success` 且有 `note_id` 为完成；`pending`/`processing` 是处理中；`failed` 说明真实原因。 |
+174: | `getnote notes -o json` | `data.notes[].note_id/title/note_url`；新筛选响应另有 `pagination` | 返回标题、字符串 ID 和真实链接。新筛选按 `pagination.has_more/next_cursor` 翻页；仅无 `pagination` 的旧响应按 `has_more/cursor`。旧 `total` 不能当作筛选后数量。 |
+175: | `getnote note <id> -o json` | `data.note.note_id/title/note_url/note_type`，按需读 `content` | 先给摘要和链接；私密全文只在用户明确要求时展开。 |
+176: | `getnote note original <id> -o json` | `data.note_id/title/original/original_source` | 只把 `original` 当原文；原文不可用会失败，不能拿评论或摘要补全。 |
+177: | `getnote note transcript <id> -o json` | `data.note_id/title/transcript` | 仅录音类笔记可用；不可用时如实说明。 |
+178: | `getnote note attachments <id> -o json` | `data.note_id/title/attachments[]` | 列出真实附件，不把笔记封面冒充附件。 |
+179: | `getnote note timeline <id> -o json` | `data.note_id/title/timeline` | 仅在存在录音/会议时间线时展示。 |
+180: | `getnote note chapters <id> -o json` | `data.note_id/title/chapter_timeline` | `items[].start_ms` 为毫秒；空数组表示无可解析章节，不拿标记补齐。 |
+181: | `gnote note quick <id> -o json` | `data.note_id/title/quick_note` | 返回现场快捷笔记；旧环境回退 `getnote note quick-note`。 |
+182: | `getnote note todos <id> -o json` | `data.note_id/title/meeting_todos[]` | 保留每项 `source`；这是从明确会议总结章节按规则解析，不说成上游原生待办。 |
+183: | `getnote note update <id> … -o json` | `success=true`、`data?` | 修改正文或全量标签前必须 `--yes`；需要展示最终内容时再读一次 `note`。 |
+184: | `getnote note delete <id> --yes -o json` | `success=true`、`data?` | 只能说“已移入回收站”，不是永久删除。 |
+185: | `getnote note share <id> --yes -o json` | `success=true`、`data.note_id/share_id/share_url` | 只返回真实 `share_url`，并明确其为公开链接。 |
+186: 
+187: API 失败时回复失败步骤、`error.message/reason`、是否可重试和 `request_id`；不能把 HTTP 200 当业务成功。
+188: 
+189: 群聊或共享会话中只先展示必要标题和链接，不主动展开私密全文。
+
+FILE references/search.md
+1: 
+2: # 得到大脑搜索
+3: 
+4: 通过官方 `getnote` CLI 搜索真实笔记。不要自己拼 OpenAPI 请求、笔记 ID 或访问链接。机器调用使用 `-o json`；只有退出码为 0 且 JSON 的 `success=true` 才是业务成功。
+5: 
+6: ## 何时使用
+7: 
+8: - “关于某主题、模糊记忆”：使用 `getnote search`；明确书籍/来源或要全量时按下方路径选择。
+9: - “最近有哪些笔记、按保存时间列出来”：交给笔记 Skill 的 `getnote notes`，不要把列表误当语义搜索。
+10: - 用户选中某一条后，再交给笔记 Skill 用 `getnote note <note_id>` 读取详情；搜索阶段不自动修改、移动、分享或创建笔记。
+11: 
+12: ## 先选查找路径
+13: 
+14: - 明确录音台或录音卡：先读笔记 Skill 的“录音台与录音卡来源定位”，分别用 `notes --source vendor_moan` / `notes --source getseed`，保留时间与知识库条件。设备全部笔记不默认加 note-type，也不先全局语义搜索。
+15: - 明确书籍（书名或书籍作者），尤其要“全部划线”：先读知识库参考。书名用 `kbs --scope BOOKSPACE --query`；只有作者名时用 `kbs --scope BOOKSPACE --author` 并省略 `--query`，不能把作者塞进只匹配名称的 query。书名和作者都已知时才同时传，两者为 AND 条件。必要时用真实 `--book-id` 消歧，再按用户要“全部笔记”还是“划线”选择是否加 `--note-type ref`，需要全文时按 ID 调用 `note`。
+16: - 明确文章/课程（包括“某老师的课”）：按下方“课程、文稿与评论定位”执行。已有真实来源 ID/文章链接时直接精确筛选；没有候选也能按来源列定位信息。`topics=[]` 不阻断这条路线。
+17: - 只有主题或模糊记忆：语义搜索 → 按字符串笔记 ID 去重 → 对选中候选读详情/原文。Top-K（最大 10）不是完整清单；零命中也不能证明全库没有相关笔记。
+18: 
+19: ## 容易混淆的组合问法
+20: 
+21: | 用户说法 | 路径与不能丢失的条件 |
+22: |---|---|
+23: | “找博尔赫斯的书籍笔记” / “找提到博尔赫斯的笔记” | 前者按书籍 author 定位；后者是内容主题搜索，不把所有提到一个人的笔记都限制为其著作。 |
+24: | “某课程共读《某本书》那篇文稿” | 明确课程/文稿时优先课程引用路径，书名在这里是文稿线索，不跳去 BOOKSPACE。 |
+25: | “课程笔记” | 先区分得到课程引用与自己录制的课堂笔记；只有用户明确来源时才设 dedao/course_article，不能把课堂录音排除掉。 |
+26: | “即时录音” / “上传的音频” | 前者用 notes --note-type audio，后者用 local_audio；课堂录音为 class_audio，会议为 meeting。平台未限定时不加 dedao 或课程条件。 |
+27: | “某库/某书里关于某主题” | 先定位真实 topic_id，再 search --kb；未命中按知识库参考在该库列表补查，不把空搜索当作库内没有，不得遗漏库范围。 |
+28: | “上周保存/昨天修改的某课程笔记” | 列表用对应时间筛选；search 没有时间/来源筛选参数，语义候选需核对 timestamps/reference。不能把时间词拼进 query 就宣称完成了时间筛选。 |
+29: | “某课程链接下的笔记” / “这篇文稿链接的划线” | 已知课程名/老师时查课程容器；只有主页 URL 时核对真实 reference.url，不猜课程 ID。文稿 URL 才传 --article-url。 |
+30: | “全部笔记” / “全部划线” | 前者不默认加 note-type ref；书籍库可能有心得等非引用笔记。得到课程引用路径只能证明该来源下的划线集合，不能涵盖用户另写的课程心得或录音。 |
+31: 
+32: 多条件查询要保留用户全部约束；从候选转入精确文稿列表时也保留已指定的 topic/time/source。条件冲突或作者、版本不符时说明实际候选，不静默删除条件。有正文主题限制时，来源匹配只证明“来自这里”，还需核对正文；截断 preview 未出现某词不能当作全文不包含。多个库/多本书合并结果时按字符串 note_id 去重，不能合并不同 ID 的不同划线。
+33: 
+34: 增强结果的 `resource_type` 使用小写 note/file 等资源类型，旧顶层 `note_type` 保留大写 NOTE/FILE 兼容值；真正笔记类型在 `note.note_type`。用 `note.display_title` 展示，用 `snippet`（旧接口为 `content`）解释命中，不拿详情 preview 替换搜索片段。`snippet_source=unknown` 如实保留；`score=null` 是未知，不是 0；`returned_count` 是片段数，`distinct_note_count` 是去重笔记数。FILE 等非笔记结果没有笔记 ID 时只呈现真实资源信息，不能拼笔记链接。
+35: 
+36: ## 课程、文稿与评论定位
+37: 
+38: 先区分课程容器和单篇文稿；`search` 是 Top-K 语义召回，来源元数据出现在结果中不能证明课程范围参与召回。课程名、老师、主题、评论、时间和真实知识库范围均需保留。
+39: 
+40: ### 已知课程名或老师：先查课程容器
+41: 
+42: 使用 `getnote references list`，无需用户提供内部 ID，也不需要先建知识库：
+43: 
+44: ```bash
+45: getnote references list --source dedao --resource-type course --query '<课程名>' --author '<准确老师姓名>' --match-mode exact --all -o json
+46: getnote notes --source dedao --course-type '<course_type>' --course-id '<course_id>' --note-type ref --all -o json
+47: ```
+48: 
+49: 只传已知的 query/author，至少一个；二者为 AND 条件，query 只匹配课程名，author 精确匹配老师。课程名不完整时显式用 `--match-mode prefix`；不把“讲概率”这样的正文主题塞进课程名。结果同名或版本不明时列候选消歧；用返回的 `course_type`+`course_id`，当前支持66，不解析标题、URL或课节 ID 生成课程 ID。空结果页若 `pagination.has_more=true` 仍按真实 `next_cursor` 继续，保持所有条件；循环或失败表示遍历未完成。`--all` 成功的 `traversal.completed=true` 只证明当前同步、授权范围内的遍历，不是得到 App 的全部划线。
+50: 
+51: 课程筛选同时包含课程直接引用和所属课节；显式增加 `--reference-type course_article` 会再限制为课节引用，`--reference-id` 仍是原课节 ID，组合按交集。需要时间条件时保留对应创建/编辑/记录更新时间参数。首版只支持个人笔记，course+topic_id 明确不支持；用户同时指定真实知识库时说明当前交集尚不可用，不能改查个人笔记后声称满足库范围。课程内语义搜索尚未开放，不能在全局 Top-K 后过滤冒充；可先精确列出课程笔记，再按需读正文核实主题。
+52: 
+53: 新请求需当前服务端声明 `reference.resources.v1` / `note.course_filter.v1`，并核对 applied_filters。服务未支持时报告能力缺失，不自动删除课程条件继续，不把 CLI 安装成功当作服务已发布。旧参数和默认调用继续可用。
+54: 
+55: 每页的 `partial`、`warnings` 和候选 `metadata_state` 都要保留。`course_directory_no_lessons` 表示目录缺少课节；翻到末页或 `traversal.completed=true` 不会消除这个缺口，回复“已找到这些，部分课程目录不完整，无法保证全部”。`candidate_work_budget` 且有下一游标时按原条件继续；游标结束后仍有目录警告，就保留部分完成结论，不改用账号全量扫描来宣称目录已经补齐。
+56: 
+57: ### 已知单篇文稿或文章 URL
+58: 
+59: 直接使用已验证的 `reference.resource_id`+`reference.resource_type` 或 `reference.article.url` 精确筛选：
+60: 
+61: ```bash
+62: getnote notes --source dedao --note-type ref --reference-type course_article --reference-id '<真实课节ID>' --all -o json
+63: getnote notes --source dedao --note-type ref --article-url '<真实文章URL>' --all -o json
+64: ```
+65: 
+66: 仅有文稿标题时可语义查候选并核对真实 reference.article.title；找到了课程线索就进入课程容器流程缩小范围。课程主页 URL 与文稿 URL 不互换，不从编码链接猜 ID。没有名称线索的课程主页可沿用既有来源列表核对 reference.url，但不得假称服务端按课程名筛选；定位前5页的预算到达时说明未完成，用户要全部时继续合法分页。metadata_state.reference 为 partial/unavailable 时保留为待核验候选，不能凭缺失字段排除。
+67: 
+68: ### 读取原文与评论
+69: 
+70: 对不超过20个已定位的个人笔记，使用 `getnote notes batch '<note_id_1>' '<note_id_2>' --fields original -o json`；引用原文来自 ref_content，查个人评论改用 fields=content。保留每条 status、content_state、pending_ids、partial；deferred_budget 表示整条待读，不能说完整，也不自动并发20次单条读取。用户确需未读全文时使用旧 `getnote note original '<note_id>' -o json`。知识库共享详情继续原单条权限路径，不用个人批量绕过权限。
+71: 
+72: 只记得评论时先语义搜索实质文本并读 content 核对；已指定课程就先按课程缩小，不因 preview 没出现评论而排除。定位候选多于20条时保留用户线索继续缩小或分页按需读取，不下载整个账号正文。同一篇文稿的不同笔记 ID 是不同划线，不按文章 ID 合并。
+73: 
+74: ## 语义搜索执行步骤
+75: 
+76: 仅当上面的路径选择需要语义搜索时执行；没有指定知识库不等于必须先语义搜索。
+77: 
+78: 定位时可显式使用 `getnote search '<主题>' --response-mode snippet --max-snippet-chars 400 -o json`，需当前接口声明 search.snippet.v1。旧调用不加参数仍返回原契约。摘要 full 只表示本次命中的完整片段，不是全文；保留 snippet_source、truncated、content_state 和资源身份，未知来源/类型原样保留。需要全文时读真实笔记详情。
+79: 
+80: 1. 用户没有指定知识库时，执行 `getnote search <query> --limit <1-10> -o json`。默认上限是 10，不能自行放大。
+81: 2. 用户指定知识库名称时，先按其类型执行 `getnote kbs --scope <scope> -o json`；默认查 `DEFAULT`，书籍、客户档案和团队知识库分别使用 `BOOKSPACE`、`CUSTOMER`、`TEAMSPACE`。用返回的真实 `topic_id` 和 `scope` 匹配；同名或意图不明确时必须让用户选择。
+82: 3. 已确认知识库后执行 `getnote search <query> --kb <topic_id> --limit <1-10> -o json`。
+83: 4. 只从返回值读取标题、摘要、字符串 `note_id` 和真实 `note_url`。没有 `note_id/note_url` 的非笔记结果可以展示内容，但不能伪造“打开笔记”链接。
+84: 5. 同一篇笔记可能因命中多个片段出现多次。面向用户列“几篇笔记”时必须按字符串 `note_id` 去重；若去重后不足用户要求的数量，可在上限 10 内增大 `--limit` 重搜，仍不足时如实返回实际数量。
+85: 
+86: ## 命令结果与用户呈现
+87: 
+88: ### 搜索
+89: 
+90: ```bash
+91: getnote search "支付流程" --limit 10 -o json
+92: getnote search "客户反馈" --kb <topic_id> --limit 5 -o json
+93: ```
+94: 
+95: 成功 JSON 的稳定字段：
+96: 
+97: | 字段 | 含义 | Agent 如何使用 |
+98: |---|---|---|
+99: | `success` | 业务是否成功 | 只有 `true` 才继续呈现结果。 |
+100: | `data.results[]` | 搜索结果 | 空数组是一次成功的“未找到”，不是失败。 |
+101: | `data.results[].title` | 笔记标题 | 优先用 note.display_title；旧响应再用 title，均缺失才显示未命名。 |
+102: | `data.results[].note_id` | 笔记雪花 ID | 始终作为字符串原样传入后续 `note` 命令。 |
+103: | `data.results[].note_url` | 真实笔记链接 | 只有非空时才给用户“打开笔记”。 |
+104: | `data.results[].content` | 命中摘要或正文片段 | 只摘取与问题相关的短片段，不能冒充全文。 |
+105: | `data.results[].score` | 相关性分数，可为 null | null 表示未知；仅用于内部排序，不向用户虚构“准确率”。 |
+106: 
+107: 成功时按相关性给出编号列表，例如：
+108: 
+109: ```text
+110: 这次搜索找到 3 条不同的相关笔记：
+111: 1. 《支付流程优化想法》——“用户等待时增加进度提示…”
+112:    打开：<真实 note_url>
+113: 2. 《客户支付反馈》——“…”
+114:    打开：<真实 note_url>
+115: 你想看哪一条的详情或原文？
+116: ```
+117: 
+118: 若 `data.partial=true` 或存在 `data.warnings`，先说明检索有部分结果未能完成权限验证或读取，并按 warnings 解释原因；空结果也不能表述为完整检索后无命中。若 `data.results=[]` 或结果均不符合用户指定来源，先按已选路径完成同一请求范围内的来源补查；补查不是跨知识库或跨账号扩大范围。只有主题搜索且无可用来源线索时，说明“这次语义搜索未找到”，不要说接口失败或全库没有；不创建笔记、不编造结果。
+119: 
+120: ## 失败、隐私与后续动作
+121: 
+122: - `success=false` 或退出码非 0：回复失败步骤、`error.message` / `error.reason`、是否 `retryable` 和可选 `request_id`；不要将 HTTP 成功或空输出说成搜索成功。
+123: - 参数错误先读取 field/supported_values；限流保留 retry_after_seconds。CLI 已对已知只读瞬时429做最多额外2次、累计等待5秒的重试，Agent 不再叠加无界重试；日/月配额和写操作不自动重试。
+124: - 若 CLI 提示“搜索服务响应超时”，这是检索未完成，不是“没有结果”。建议稍后重试，或缩小关键词、指定知识库后再试；不要伪造空列表。
+125: - 检索结果可能包含私密正文。群聊或共享会话默认只展示标题、必要摘要和真实链接；用户明确要求后再展开全文。
+126: - 用户选中结果后，复用返回的字符串 `note_id`，再读取 `getnote note <note_id> -o json`；不要从 URL 截取或转换为数字。
+
+FILE references/tag.md
+1: 
+2: # 得到大脑标签
+3: 
+4: 通过官方 `getnote` CLI 管理真实标签。不要自己构造标签 ID，也不要把标签名误当成删除参数。机器调用统一使用 `-o json`；退出码为 0 但 `success=false` 仍是失败。
+5: 
+6: ## 路由与安全边界
+7: 
+8: | 用户意图 | 命令 | 不能做什么 |
+9: |---|---|---|
+10: | “这条笔记有哪些标签” | `getnote tag list <note_id>` | 不自动添加或删除。 |
+11: | “给这条笔记加上产品优化” | `getnote tag add <note_id> <tag>` | 只新增指定标签，不覆盖原标签。 |
+12: | “删掉这个标签” | 先 `tag list`，再 `getnote tag remove <note_id> <tag_id>` | 不能把标签名称直接当作 `tag_id`。 |
+13: | “替换为这些标签” | 先读取当前标签，再交给 `getnote note update --help` | 属于覆盖性操作，必须先确认。 |
+14: 
+15: 笔记 ID、标签 ID 及任何雪花 ID 始终作为字符串原样传递。系统标签不可删除；权限不足、标签不存在或笔记不存在时不能说“已经删掉”。
+16: 
+17: ## 命令结果与用户呈现
+18: 
+19: ### 查看标签
+20: 
+21: ```bash
+22: getnote tag list <note_id> -o json
+23: ```
+24: 
+25: 成功 JSON：
+26: 
+27: | 字段 | 含义 | 回复规则 |
+28: |---|---|---|
+29: | `success=true` | 标签读取成功 | 才能展示列表。 |
+30: | `data.note_id` | 实际读取的笔记 | 必须与目标笔记一致。 |
+31: | `data.tags[].id` | 标签真实 ID | 仅用于后续删除，不必在普通回复中暴露。 |
+32: | `data.tags[].name` | 标签名称 | 展示给用户。 |
+33: | `data.tags[].type` | 普通/系统等标签类型 | 系统类型明确不能删除。 |
+34: 
+35: 若 `tags=[]`，回复“这条笔记目前没有标签”，这是成功结果。
+36: 
+37: ### 添加标签
+38: 
+39: ```bash
+40: getnote tag add <note_id> "产品优化" -o json
+41: ```
+42: 
+43: 成功 JSON 必须有 `success=true`、`data.note_id` 与更新后的 `data.tags[]`。回复“已添加「产品优化」”，并在用户要求时列出当前全部标签；不要说“已替换标签”。如果结果没有新的标签集合，先再执行一次 `tag list` 核验，再向用户确认。
+44: 
+45: ### 删除标签
+46: 
+47: ```bash
+48: getnote tag remove <note_id> <tag_id> -o json
+49: ```
+50: 
+51: 删除前必须从当前 `tag list` 结果中拿到真实 `tag_id`，并确认该条不是系统标签。成功返回 `success=true` 才能回复“已删除「标签名」”；如果用户需要看剩余标签，再执行 `tag list`，不能猜测剩余集合。
+52: 
+53: ## 失败与恢复
+54: 
+55: - 失败时展示实际 `error.message` / `error.reason`、是否可重试和 `request_id`；不要把“标签不存在”“系统标签”“无权限”归为通用网络错误。
+56: - 不能确定用户要删除哪一个同名标签时，先列出名称和类型让用户确认；不要按第一个结果擅自删除。
+57: - 在群聊中仅展示用户当前要求的标签信息；不通过标签列表推断或泄露笔记其他正文。

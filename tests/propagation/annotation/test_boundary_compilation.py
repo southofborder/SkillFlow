@@ -22,8 +22,8 @@ def test_generated_observation_carries_fixed_attributes_and_sink_without_role_re
     before = deepcopy(raw)
     checked, compiled, mapping = compile_response(raw, prepared)
     assert checked == before and raw == before
-    assert COMPILER_VERSION == "skillflow-processing-compiler-v8"
-    assert mapping["schema_version"] == "skillflow-processing-compilation-v8"
+    assert COMPILER_VERSION == "skillflow-processing-compiler-v9"
+    assert mapping["schema_version"] == "skillflow-processing-compilation-v9"
     sink = compiled["sink_boundaries"]
     assert len(sink) == 1 and sink[0]["instruction_id"] == "ir_read"
     assert sink[0]["sink_type"] == "model_observe" and sink[0]["exposure_level"] == 2

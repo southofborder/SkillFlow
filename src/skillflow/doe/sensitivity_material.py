@@ -117,6 +117,19 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
     sensitivity = value["derivations"]["sensitivity"]
     demand = value["derivations"]["demand"]
     diagnostics = {d["id"]: d for d in value["diagnostics"]}
+    constraint_analysis = None
+    if facts is not None and task is not None and annotation is not None and demand_candidate is not None:
+        from .demand_engine import DemandEngine
+        from .constraint_preservation import ConstraintAnalysis
+        checked_task = task if isinstance(task, Task) else Task.model_validate(task)
+        target_index = build_demand_target_index(facts.cfg, annotation["raw_annotation"])
+        checked_candidate = validate_demand_candidate(_json(demand_candidate), task=checked_task,
+            source_files=joint_source_files(annotation["material"]), targets=target_index)
+        # Rebuild the read-only index and checks, not a second demand solve.
+        constraint_analysis = ConstraintAnalysis(DemandEngine(facts, checked_task, annotation,
+            checked_candidate.model_dump(mode="json"), target_index))
+        if value["constraints"]["checks"] != constraint_analysis.checks:
+            raise ValueError("Forward constraint checks differ from verified facts")
     if len(diagnostics) != len(value["diagnostics"]):
         raise ValueError("Duplicate sensitivity diagnostic")
     for records in (sensitivity, demand):
@@ -230,6 +243,23 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             from .sensitivity_engine import SensitivityEngine
             expected_conclusion = SensitivityEngine._compare(row,
                 [(identity, demand[identity]) for identity in review["demand_refs"]], review["limitations"])[0]
+            expected_constraint_refs = []
+            if expected_conclusion == "excess_supported":
+                if constraint_analysis is not None:
+                    expected_constraint_refs, preserved = constraint_analysis.evaluate(
+                        review["operation_id"], review["input_index"], review["data_id"], review["path"])
+                else:
+                    preservation = value["constraints"]["preservation"]
+                    expected_constraint_refs = sorted(identity for identity, proof in preservation.items()
+                        if (proof["operation_id"], proof["input_index"], proof["data_id"], proof["path"])
+                        == (review["operation_id"], review["input_index"], review["data_id"], review["path"]))
+                    if {preservation[key]["constraint_id"] for key in expected_constraint_refs} != set(value["constraints"]["checks"]):
+                        raise ValueError("Constraint preservation does not cover every declared constraint")
+                    preserved = all(preservation[key]["preserved"] for key in expected_constraint_refs)
+                if not preserved:
+                    expected_conclusion = "no_excess_established"
+            if set(review["constraint_refs"]) != set(expected_constraint_refs) or len(review["constraint_refs"]) != len(expected_constraint_refs):
+                raise ValueError("Sensitivity review constraint references differ")
             if review["conclusion"] != expected_conclusion:
                 raise ValueError("Sensitivity conclusion differs from the supported comparison rule")
             if review["conclusion"] == "excess_supported":
@@ -264,11 +294,14 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
         if value["coverage"]["demand_status"] != expected_demand["status"]:
             raise ValueError("Sensitivity demand status differs from verified result")
     coverage = value["coverage"]
+    if constraint_analysis is not None and value["constraints"] != constraint_analysis.to_dict():
+        raise ValueError("Constraint preservation or forward influence differs from verified facts")
     if coverage["sinks"] != len(sink_ids) or coverage["resolved_declarations"] > coverage["declarations"]:
         raise ValueError("Invalid sensitivity coverage")
     if coverage["expected_sinks"] != len(sink_ids):
         raise ValueError("Sensitivity sink count differs")
     if value["status"] == "complete" and (coverage["demand_status"] != "complete" or
-        coverage["resolved_declarations"] != coverage["declarations"] or any(d["blocking"] for d in diagnostics.values())):
+        coverage["resolved_declarations"] != coverage["declarations"] or any(d["blocking"] for d in diagnostics.values())
+        or any(c["status"] == "not_established" for c in value["constraints"]["checks"].values())):
         raise ValueError("Incomplete sensitivity material cannot be complete")
     return deepcopy(value)

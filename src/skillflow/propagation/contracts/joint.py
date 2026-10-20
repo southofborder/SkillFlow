@@ -23,6 +23,7 @@ from skillflow.propagation.contracts.references import target_key
 from skillflow.propagation.contracts.sensitivity import (
     extract_sensitivity_candidate, validate_sensitivity_candidate,
 )
+from skillflow.propagation.contracts.constraints import validate_constraints
 
 
 def joint_source_files(material):
@@ -180,6 +181,14 @@ def normalize_joint_semantics(raw, material):
             invalid_seed_requirements=invalid_seed_requirements)
     except StructuralValidationError as error:
         diagnostics.extend(error.diagnostics)
+    else:
+        from skillflow.propagation.contracts.realizations import TaskRealization
+        try:
+            validate_constraints([TaskRealization.model_validate(row) for row in realizations],
+                cfg=material["cfg"], raw=raw, targets=targets,
+                expressions=candidate.expressions, locations=raw["locations"])
+        except StructuralValidationError as error:
+            diagnostics.extend(error.diagnostics)
     if diagnostics:
         raise StructuralValidationError(diagnostics)
     return {"task_ref": task_reference(task), "realizations": realizations,

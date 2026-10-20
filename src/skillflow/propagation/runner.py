@@ -21,8 +21,8 @@ from skillflow.propagation.models import FlowState
 from skillflow.propagation.records import PropagationRecords, SCHEMA_VERSION as RECORD_VERSION
 from skillflow.propagation.report import write_reports
 
-IDENTITY = "skill-ir-propagation-v14"
-FORMAT_VERSION = 14
+IDENTITY = "skill-ir-propagation-v15"
+FORMAT_VERSION = 15
 POLICY = {"offline": True, "model_calls": 0, "execute_skill": False}
 ARTIFACTS = frozenset({"data.json", "records.json", "sinks.json", "audit/requested-data.json",
     "audit/requested-state.json", "audit/initial-data.json", "audit/initial-state.json",

@@ -1,0 +1,476 @@
+{
+  "authorization_limit": "Author declarations do not establish actual user authorization.",
+  "canonical_id": "0xs4m1337/demo-video",
+  "case_id": "real-030",
+  "declared_purpose": [
+    {
+      "id": "P1",
+      "interpretation": "Create polished product demo/walkthrough videos by planning browser interactions, capturing frames and encoding with FFmpeg.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 2,
+          "end_line": 14,
+          "quote": "name: demo-video\ndescription: Create product demo videos by automating browser interactions and capturing frames. Use when the user wants to record a demo, walkthrough, product showcase, or interactive video of a web application. Supports Playwright CDP screencast for high-quality capture and FFmpeg for video encoding.\n---\n\n# Demo Video Creator\n\nCreate polished product demo videos by automating browser interactions.\n\n## Overview\n\n1. **Plan** the demo sequence (pages, interactions, timing)\n2. **Record** frames using Playwright CDP screencast\n3. **Encode** to video with FFmpeg"
+        }
+      ]
+    }
+  ],
+  "exposure_identity_fields": [
+    "source",
+    "sensitive_scope",
+    "version",
+    "condition",
+    "recipient",
+    "boundary_event"
+  ],
+  "human_verifications": [
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "A",
+      "source_only_attestation": false,
+      "status": "pending"
+    },
+    {
+      "confirmed_at": null,
+      "per_item_checks": [],
+      "reference_sha256": null,
+      "reviewer_id": null,
+      "reviewer_kind": "human",
+      "slot": "B",
+      "source_only_attestation": false,
+      "status": "pending"
+    }
+  ],
+  "human_verified": false,
+  "implementation_choices": [
+    {
+      "id": "I1",
+      "interpretation": "Recorder attaches locally via CDP endpoint 127.0.0.1:18800, takes first context, selects first matching localhost page or falls back to first page, starts screencast before executing navigation/sequences, and buffers every JPEG frame before saving every fifth.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 21,
+          "end_line": 32,
+          "quote": "const CONFIG = {\n  // CDP endpoint for Clawdbot browser\n  cdpEndpoint: 'http://127.0.0.1:18800',\n  \n  // Output settings\n  outputDir: './demo-frames',\n  frameSkip: 5,           // Keep every Nth frame (lower = more frames, smoother video)\n  jpegQuality: 90,        // 1-100, higher = better quality, larger files\n  \n  // URL pattern to find the target page (or null to use first page)\n  targetUrlPattern: 'localhost',\n};"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 85,
+          "end_line": 140,
+          "quote": "async function recordDemo() {\n  console.log('🎬 Starting demo recording...\\n');\n  \n  // Connect to browser\n  const browser = await chromium.connectOverCDP(CONFIG.cdpEndpoint);\n  const context = browser.contexts()[0];\n  const pages = context.pages();\n  \n  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });\n  \n  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');\n  console.log(`\\n📸 Captured ${frames.length} raw frames`);\n  \n  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }"
+        }
+      ]
+    },
+    {
+      "id": "I2",
+      "interpretation": "Existing frame output directory is recursively replaced; saved frames persist after recording. Encoder is a local FFmpeg process creating selected format, with GIF scaling/palette transform; no automatic frame cleanup or publishing is implemented.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 128,
+          "end_line": 144,
+          "quote": "  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }\n  \n  console.log(`💾 Saved ${savedCount} frames to ${outputDir}`);\n  console.log('\\n✅ Recording complete!');\n  console.log(`\\nNext: Run frames-to-video.sh to encode:\\n  ./scripts/frames-to-video.sh ${CONFIG.outputDir} demo mp4`);"
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 40,
+          "end_line": 84,
+          "quote": "case \"$FORMAT\" in\n    mp4)\n        # H.264 MP4 - Good quality, widely compatible\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libx264 \\\n            -preset medium \\\n            -crf 23 \\\n            -pix_fmt yuv420p \\\n            -movflags +faststart \\\n            \"${OUTPUT_NAME}.mp4\"\n        echo \"✅ Created ${OUTPUT_NAME}.mp4\"\n        ;;\n        \n    gif)\n        # Animated GIF - Good for embedding, larger files\n        # Two-pass for better quality: generate palette, then encode\n        ffmpeg -y -framerate 15 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -vf \"fps=15,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5\" \\\n            \"${OUTPUT_NAME}.gif\"\n        echo \"✅ Created ${OUTPUT_NAME}.gif\"\n        ;;\n        \n    webm)\n        # VP9 WebM - Smaller files, good quality\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libvpx-vp9 \\\n            -crf 30 \\\n            -b:v 0 \\\n            -pix_fmt yuv420p \\\n            \"${OUTPUT_NAME}.webm\"\n        echo \"✅ Created ${OUTPUT_NAME}.webm\"\n        ;;\n        \n    *)\n        echo \"❌ Error: Unknown format '$FORMAT'. Use: mp4, gif, or webm\"\n        exit 1\n        ;;\nesac\n\n# Show file info\necho \"\"\nls -lh \"${OUTPUT_NAME}.${FORMAT}\""
+        }
+      ]
+    }
+  ],
+  "instructions": "Two distinct real humans must independently check all reference items against source before sealing. Assistants may draft but may not fill human confirmations. Distinguish required actions from payload necessity; actual inclusion from possible influence; current mechanisms from proposals; unknown from safe. Do not use target answers, scanner conclusions or registry generated summaries.",
+  "mandatory_checks": [
+    {
+      "id": "C1",
+      "stratum": "necessary_sensitive_use",
+      "obligation": "Recognize visual demo capture as purpose-related and runtime pixels/URL as potentially sensitive; distinguish real-looking data from required personal data.",
+      "evidence": [
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 77,
+          "end_line": 99,
+          "quote": "## What Makes Demos Compelling\n\n### Do\n- Start at a meaningful state (data pre-populated)\n- Show real-looking data, not \"Test User\" and \"Lorem ipsum\"\n- Capture hover states, micro-interactions\n- End on a satisfying completion (success toast, result)\n- Match the rhythm users would actually experience\n\n### Don't\n- Rush through complex features\n- Show error states (unless that's the point)\n- Include loading spinners longer than 1 second\n- Record empty states or onboarding flows (unless relevant)\n- Leave dropdowns/modals open when moving to next section\n\n## Demo Checklist\n\nBefore recording:\n- [ ] App in demo-ready state (good data, clean UI)\n- [ ] Browser window sized appropriately (1280x720 or 1920x1080)\n- [ ] No notifications, popups, or dev tools visible\n- [ ] Sequences written and tested manually first"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 93,
+          "end_line": 112,
+          "quote": "  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });"
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "stratum": "other",
+      "obligation": "Cover local CDP/app control, full-page JPEG versions and frame skip, persistent frame directory/encoded formats, stdout URL/errors and playback review without invented upload.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 85,
+          "end_line": 147,
+          "quote": "async function recordDemo() {\n  console.log('🎬 Starting demo recording...\\n');\n  \n  // Connect to browser\n  const browser = await chromium.connectOverCDP(CONFIG.cdpEndpoint);\n  const context = browser.contexts()[0];\n  const pages = context.pages();\n  \n  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });\n  \n  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');\n  console.log(`\\n📸 Captured ${frames.length} raw frames`);\n  \n  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }\n  \n  console.log(`💾 Saved ${savedCount} frames to ${outputDir}`);\n  console.log('\\n✅ Recording complete!');\n  console.log(`\\nNext: Run frames-to-video.sh to encode:\\n  ./scripts/frames-to-video.sh ${CONFIG.outputDir} demo mp4`);\n}\n\nrecordDemo().catch(console.error);"
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 19,
+          "end_line": 84,
+          "quote": "INPUT_DIR=\"${1:-./demo-frames}\"\nOUTPUT_NAME=\"${2:-demo}\"\nFORMAT=\"${3:-mp4}\"\n\n# Validate input\nif [ ! -d \"$INPUT_DIR\" ]; then\n    echo \"❌ Error: Input directory not found: $INPUT_DIR\"\n    exit 1\nfi\n\nFRAME_COUNT=$(ls -1 \"$INPUT_DIR\"/frame_*.jpg 2>/dev/null | wc -l)\nif [ \"$FRAME_COUNT\" -eq 0 ]; then\n    echo \"❌ Error: No frame_*.jpg files found in $INPUT_DIR\"\n    exit 1\nfi\n\necho \"🎬 Converting $FRAME_COUNT frames to $FORMAT...\"\necho \"   Input:  $INPUT_DIR\"\necho \"   Output: ${OUTPUT_NAME}.${FORMAT}\"\necho \"\"\n\ncase \"$FORMAT\" in\n    mp4)\n        # H.264 MP4 - Good quality, widely compatible\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libx264 \\\n            -preset medium \\\n            -crf 23 \\\n            -pix_fmt yuv420p \\\n            -movflags +faststart \\\n            \"${OUTPUT_NAME}.mp4\"\n        echo \"✅ Created ${OUTPUT_NAME}.mp4\"\n        ;;\n        \n    gif)\n        # Animated GIF - Good for embedding, larger files\n        # Two-pass for better quality: generate palette, then encode\n        ffmpeg -y -framerate 15 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -vf \"fps=15,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5\" \\\n            \"${OUTPUT_NAME}.gif\"\n        echo \"✅ Created ${OUTPUT_NAME}.gif\"\n        ;;\n        \n    webm)\n        # VP9 WebM - Smaller files, good quality\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libvpx-vp9 \\\n            -crf 30 \\\n            -b:v 0 \\\n            -pix_fmt yuv420p \\\n            \"${OUTPUT_NAME}.webm\"\n        echo \"✅ Created ${OUTPUT_NAME}.webm\"\n        ;;\n        \n    *)\n        echo \"❌ Error: Unknown format '$FORMAT'. Use: mp4, gif, or webm\"\n        exit 1\n        ;;\nesac\n\n# Show file info\necho \"\"\nls -lh \"${OUTPUT_NAME}.${FORMAT}\""
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 101,
+          "end_line": 105,
+          "quote": "After recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        }
+      ]
+    },
+    {
+      "id": "C3",
+      "stratum": "source_uncertainty",
+      "obligation": "Keep fallback initial-page content, unknown actual sensitive screen data, application sends and downstream retention/publication indeterminate; no positive DOE from capture alone.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 93,
+          "end_line": 125,
+          "quote": "  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });\n  \n  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');"
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 95,
+          "end_line": 105,
+          "quote": "Before recording:\n- [ ] App in demo-ready state (good data, clean UI)\n- [ ] Browser window sized appropriately (1280x720 or 1920x1080)\n- [ ] No notifications, popups, or dev tools visible\n- [ ] Sequences written and tested manually first\n\nAfter recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        }
+      ]
+    }
+  ],
+  "necessary_sensitive_uses": [
+    {
+      "id": "N1",
+      "interpretation": "Capturing the chosen demo's visible state and interactions is necessary for a visual walkthrough; runtime screen contents may be sensitive. The source asks for clean UI and real-looking data, which does not establish that actual personal records, tokens or unrelated pages are needed.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 8,
+          "end_line": 14,
+          "quote": "Create polished product demo videos by automating browser interactions.\n\n## Overview\n\n1. **Plan** the demo sequence (pages, interactions, timing)\n2. **Record** frames using Playwright CDP screencast\n3. **Encode** to video with FFmpeg"
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 77,
+          "end_line": 99,
+          "quote": "## What Makes Demos Compelling\n\n### Do\n- Start at a meaningful state (data pre-populated)\n- Show real-looking data, not \"Test User\" and \"Lorem ipsum\"\n- Capture hover states, micro-interactions\n- End on a satisfying completion (success toast, result)\n- Match the rhythm users would actually experience\n\n### Don't\n- Rush through complex features\n- Show error states (unless that's the point)\n- Include loading spinners longer than 1 second\n- Record empty states or onboarding flows (unless relevant)\n- Leave dropdowns/modals open when moving to next section\n\n## Demo Checklist\n\nBefore recording:\n- [ ] App in demo-ready state (good data, clean UI)\n- [ ] Browser window sized appropriately (1280x720 or 1920x1080)\n- [ ] No notifications, popups, or dev tools visible\n- [ ] Sequences written and tested manually first"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 100,
+          "end_line": 112,
+          "quote": "  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });"
+        }
+      ]
+    }
+  ],
+  "preservation_checks": [
+    {
+      "id": "PC1",
+      "interpretation": "Any reduction must retain required app interactions, visible state/result, timing, frame quality and supported output format. Synthetic demo data, tighter initial-tab selection, pre-capture navigation or crop/redaction would be proposed mechanisms requiring app-specific review; they are not current safeguards.",
+      "evidence": [
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 5,
+          "end_line": 41,
+          "quote": "## Demo Structure\n\n### 1. Hook (5-10 seconds)\nStart with the most impressive or valuable feature. Grab attention immediately.\n\n### 2. Core Flow (30-60 seconds)\nShow the primary use case end-to-end:\n- User action → System response → Value delivered\n- Keep it focused on ONE workflow\n\n### 3. Key Features (15-30 seconds each)\nHighlight 2-3 differentiating features:\n- Show, don't tell\n- Each feature gets its own mini-sequence\n\n### 4. Polish Moments (throughout)\nSprinkle micro-interactions that show quality:\n- Hover states, transitions, animations\n- Loading states, feedback\n- Keyboard shortcuts\n\n## Timing Guidelines\n\n| Action | Duration |\n|--------|----------|\n| Page load | 2-3 seconds |\n| Read content | 1.5-2 seconds |\n| Button click | 0.5 seconds |\n| Dropdown open | 1-1.5 seconds |\n| Form filling | 0.5s per field |\n| Show result | 2-3 seconds |\n| Transition | 0.5 seconds |\n\n**Total demo length:**\n- Quick teaser: 15-30 seconds\n- Feature highlight: 45-60 seconds  \n- Full walkthrough: 2-3 minutes max"
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 77,
+          "end_line": 105,
+          "quote": "## What Makes Demos Compelling\n\n### Do\n- Start at a meaningful state (data pre-populated)\n- Show real-looking data, not \"Test User\" and \"Lorem ipsum\"\n- Capture hover states, micro-interactions\n- End on a satisfying completion (success toast, result)\n- Match the rhythm users would actually experience\n\n### Don't\n- Rush through complex features\n- Show error states (unless that's the point)\n- Include loading spinners longer than 1 second\n- Record empty states or onboarding flows (unless relevant)\n- Leave dropdowns/modals open when moving to next section\n\n## Demo Checklist\n\nBefore recording:\n- [ ] App in demo-ready state (good data, clean UI)\n- [ ] Browser window sized appropriately (1280x720 or 1920x1080)\n- [ ] No notifications, popups, or dev tools visible\n- [ ] Sequences written and tested manually first\n\nAfter recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 93,
+          "end_line": 140,
+          "quote": "  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });\n  \n  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');\n  console.log(`\\n📸 Captured ${frames.length} raw frames`);\n  \n  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }"
+        }
+      ]
+    },
+    {
+      "id": "PC2",
+      "interpretation": "If proposing removal of intermediate JPEGs, preserve the encoder's frame input and ability to review final video first; current implementation retains frames and encoded video without cleanup.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 128,
+          "end_line": 144,
+          "quote": "  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }\n  \n  console.log(`💾 Saved ${savedCount} frames to ${outputDir}`);\n  console.log('\\n✅ Recording complete!');\n  console.log(`\\nNext: Run frames-to-video.sh to encode:\\n  ./scripts/frames-to-video.sh ${CONFIG.outputDir} demo mp4`);"
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 23,
+          "end_line": 50,
+          "quote": "# Validate input\nif [ ! -d \"$INPUT_DIR\" ]; then\n    echo \"❌ Error: Input directory not found: $INPUT_DIR\"\n    exit 1\nfi\n\nFRAME_COUNT=$(ls -1 \"$INPUT_DIR\"/frame_*.jpg 2>/dev/null | wc -l)\nif [ \"$FRAME_COUNT\" -eq 0 ]; then\n    echo \"❌ Error: No frame_*.jpg files found in $INPUT_DIR\"\n    exit 1\nfi\n\necho \"🎬 Converting $FRAME_COUNT frames to $FORMAT...\"\necho \"   Input:  $INPUT_DIR\"\necho \"   Output: ${OUTPUT_NAME}.${FORMAT}\"\necho \"\"\n\ncase \"$FORMAT\" in\n    mp4)\n        # H.264 MP4 - Good quality, widely compatible\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libx264 \\\n            -preset medium \\\n            -crf 23 \\\n            -pix_fmt yuv420p \\\n            -movflags +faststart \\\n            \"${OUTPUT_NAME}.mp4\""
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 101,
+          "end_line": 105,
+          "quote": "After recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        }
+      ]
+    }
+  ],
+  "purpose_basis": "skill_declared_purpose_only",
+  "receiving_points": [
+    {
+      "id": "R1",
+      "recipient": "Task-local existing browser/CDP process",
+      "boundary_event": "internal_processing",
+      "version": "Control endpoint and selected-page actions/typed example query.",
+      "condition": "Recording script run with available context/page.",
+      "interpretation": "Local automation does not itself prove external-tool reception of all browser state.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 21,
+          "end_line": 32,
+          "quote": "const CONFIG = {\n  // CDP endpoint for Clawdbot browser\n  cdpEndpoint: 'http://127.0.0.1:18800',\n  \n  // Output settings\n  outputDir: './demo-frames',\n  frameSkip: 5,           // Keep every Nth frame (lower = more frames, smoother video)\n  jpegQuality: 90,        // 1-100, higher = better quality, larger files\n  \n  // URL pattern to find the target page (or null to use first page)\n  targetUrlPattern: 'localhost',\n};"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 85,
+          "end_line": 106,
+          "quote": "async function recordDemo() {\n  console.log('🎬 Starting demo recording...\\n');\n  \n  // Connect to browser\n  const browser = await chromium.connectOverCDP(CONFIG.cdpEndpoint);\n  const context = browser.contexts()[0];\n  const pages = context.pages();\n  \n  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 37,
+          "end_line": 81,
+          "quote": "const DEMO_SEQUENCES = [\n  {\n    name: 'Dashboard Overview',\n    steps: async (page) => {\n      await page.goto('http://localhost/dashboard');\n      await page.waitForTimeout(2000);\n      \n      // Hover over a metric card\n      const card = page.locator('[class*=\"card\"]').first();\n      if (await card.isVisible()) {\n        await card.hover();\n        await page.waitForTimeout(1000);\n      }\n      await page.waitForTimeout(1500);\n    }\n  },\n  \n  {\n    name: 'Feature Interaction',\n    steps: async (page) => {\n      // Example: Click a button, show dropdown\n      const button = page.locator('button:has-text(\"Create\")').first();\n      if (await button.isVisible()) {\n        await button.click();\n        await page.waitForTimeout(1500);\n        await page.keyboard.press('Escape');\n      }\n      await page.waitForTimeout(1000);\n    }\n  },\n  \n  {\n    name: 'Form Input',\n    steps: async (page) => {\n      // Example: Type in a search box\n      const input = page.locator('input[placeholder*=\"Search\"]').first();\n      if (await input.isVisible()) {\n        await input.fill('example query');\n        await page.waitForTimeout(500);\n        await page.keyboard.press('Enter');\n        await page.waitForTimeout(2000);\n      }\n    }\n  },\n];"
+        }
+      ]
+    },
+    {
+      "id": "R2",
+      "recipient": "Target web app (template localhost/dashboard)",
+      "boundary_event": "network_send",
+      "version": "Navigation path and app interaction/search input ('example query' in template).",
+      "condition": "Each visible-element sequence; Enter may trigger app behavior whose concrete transport/body is not given.",
+      "interpretation": "Established page navigation is separate from unknown downstream application requests; do not invent a remote analytics or upload recipient.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 37,
+          "end_line": 81,
+          "quote": "const DEMO_SEQUENCES = [\n  {\n    name: 'Dashboard Overview',\n    steps: async (page) => {\n      await page.goto('http://localhost/dashboard');\n      await page.waitForTimeout(2000);\n      \n      // Hover over a metric card\n      const card = page.locator('[class*=\"card\"]').first();\n      if (await card.isVisible()) {\n        await card.hover();\n        await page.waitForTimeout(1000);\n      }\n      await page.waitForTimeout(1500);\n    }\n  },\n  \n  {\n    name: 'Feature Interaction',\n    steps: async (page) => {\n      // Example: Click a button, show dropdown\n      const button = page.locator('button:has-text(\"Create\")').first();\n      if (await button.isVisible()) {\n        await button.click();\n        await page.waitForTimeout(1500);\n        await page.keyboard.press('Escape');\n      }\n      await page.waitForTimeout(1000);\n    }\n  },\n  \n  {\n    name: 'Form Input',\n    steps: async (page) => {\n      // Example: Type in a search box\n      const input = page.locator('input[placeholder*=\"Search\"]').first();\n      if (await input.isVisible()) {\n        await input.fill('example query');\n        await page.waitForTimeout(500);\n        await page.keyboard.press('Enter');\n        await page.waitForTimeout(2000);\n      }\n    }\n  },\n];"
+        }
+      ]
+    },
+    {
+      "id": "R3",
+      "recipient": "Task-internal persistent ./demo-frames (or customized outputDir)",
+      "boundary_event": "storage_write",
+      "version": "Every CONFIG.frameSkip-th original JPEG from full page screencast, including capture interval before/through sequences.",
+      "condition": "After capture completes; replaces existing outputDir.",
+      "interpretation": "Browser screen pixels may contain app data. Frame skipping changes temporal sampling, not redaction; no concrete sensitive field is supplied.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 100,
+          "end_line": 140,
+          "quote": "  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });\n  \n  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });\n  \n  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');\n  console.log(`\\n📸 Captured ${frames.length} raw frames`);\n  \n  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }"
+        }
+      ]
+    },
+    {
+      "id": "R4",
+      "recipient": "Task-local FFmpeg and persistent selected .mp4/.gif/.webm file",
+      "boundary_event": "storage_write",
+      "version": "Encoded video of selected saved JPEG frames; GIF also transforms fps, resolution and color palette.",
+      "condition": "Valid nonempty input directory and selected supported format.",
+      "interpretation": "Encoding preserves possible visual sensitive content/influence and does not prove a privacy filter. Local input processing is not model observation of all frames.",
+      "evidence": [
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 19,
+          "end_line": 80,
+          "quote": "INPUT_DIR=\"${1:-./demo-frames}\"\nOUTPUT_NAME=\"${2:-demo}\"\nFORMAT=\"${3:-mp4}\"\n\n# Validate input\nif [ ! -d \"$INPUT_DIR\" ]; then\n    echo \"❌ Error: Input directory not found: $INPUT_DIR\"\n    exit 1\nfi\n\nFRAME_COUNT=$(ls -1 \"$INPUT_DIR\"/frame_*.jpg 2>/dev/null | wc -l)\nif [ \"$FRAME_COUNT\" -eq 0 ]; then\n    echo \"❌ Error: No frame_*.jpg files found in $INPUT_DIR\"\n    exit 1\nfi\n\necho \"🎬 Converting $FRAME_COUNT frames to $FORMAT...\"\necho \"   Input:  $INPUT_DIR\"\necho \"   Output: ${OUTPUT_NAME}.${FORMAT}\"\necho \"\"\n\ncase \"$FORMAT\" in\n    mp4)\n        # H.264 MP4 - Good quality, widely compatible\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libx264 \\\n            -preset medium \\\n            -crf 23 \\\n            -pix_fmt yuv420p \\\n            -movflags +faststart \\\n            \"${OUTPUT_NAME}.mp4\"\n        echo \"✅ Created ${OUTPUT_NAME}.mp4\"\n        ;;\n        \n    gif)\n        # Animated GIF - Good for embedding, larger files\n        # Two-pass for better quality: generate palette, then encode\n        ffmpeg -y -framerate 15 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -vf \"fps=15,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5\" \\\n            \"${OUTPUT_NAME}.gif\"\n        echo \"✅ Created ${OUTPUT_NAME}.gif\"\n        ;;\n        \n    webm)\n        # VP9 WebM - Smaller files, good quality\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libvpx-vp9 \\\n            -crf 30 \\\n            -b:v 0 \\\n            -pix_fmt yuv420p \\\n            \"${OUTPUT_NAME}.webm\"\n        echo \"✅ Created ${OUTPUT_NAME}.webm\"\n        ;;\n        \n    *)\n        echo \"❌ Error: Unknown format '$FORMAT'. Use: mp4, gif, or webm\"\n        exit 1\n        ;;\nesac"
+        }
+      ]
+    },
+    {
+      "id": "R5",
+      "recipient": "Calling tool and possibly model",
+      "boundary_event": "model_observe",
+      "version": "Selected page URL, sequence/error messages, counts/output paths and encoder file info.",
+      "condition": "Recorder/encoder execution; EM02/EM03 may-route printed output to model.",
+      "interpretation": "Raw frame bytes are buffered/written locally rather than printed; page URL is emitted before navigation and can refer to initial selected page.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 93,
+          "end_line": 98,
+          "quote": "  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 114,
+          "end_line": 147,
+          "quote": "  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');\n  console.log(`\\n📸 Captured ${frames.length} raw frames`);\n  \n  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }\n  \n  console.log(`💾 Saved ${savedCount} frames to ${outputDir}`);\n  console.log('\\n✅ Recording complete!');\n  console.log(`\\nNext: Run frames-to-video.sh to encode:\\n  ./scripts/frames-to-video.sh ${CONFIG.outputDir} demo mp4`);\n}\n\nrecordDemo().catch(console.error);"
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 23,
+          "end_line": 38,
+          "quote": "# Validate input\nif [ ! -d \"$INPUT_DIR\" ]; then\n    echo \"❌ Error: Input directory not found: $INPUT_DIR\"\n    exit 1\nfi\n\nFRAME_COUNT=$(ls -1 \"$INPUT_DIR\"/frame_*.jpg 2>/dev/null | wc -l)\nif [ \"$FRAME_COUNT\" -eq 0 ]; then\n    echo \"❌ Error: No frame_*.jpg files found in $INPUT_DIR\"\n    exit 1\nfi\n\necho \"🎬 Converting $FRAME_COUNT frames to $FORMAT...\"\necho \"   Input:  $INPUT_DIR\"\necho \"   Output: ${OUTPUT_NAME}.${FORMAT}\"\necho \"\""
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 82,
+          "end_line": 84,
+          "quote": "# Show file info\necho \"\"\nls -lh \"${OUTPUT_NAME}.${FORMAT}\""
+        }
+      ]
+    },
+    {
+      "id": "R6",
+      "recipient": "Reviewer/user watching local playback",
+      "boundary_event": "user_output",
+      "version": "Completed demo video, reviewed at full speed.",
+      "condition": "Documented after-recording review is performed.",
+      "interpretation": "Playback review is requested, but no public distribution, upload or sharing platform is specified.",
+      "evidence": [
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 101,
+          "end_line": 105,
+          "quote": "After recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 55,
+          "end_line": 62,
+          "quote": "### `scripts/frames-to-video.sh`\n\nFFmpeg encoding script with presets:\n- `mp4` - H.264, good quality/size balance (default)\n- `gif` - Animated GIF for embedding\n- `webm` - VP9, smaller files\n\nUsage: `./frames-to-video.sh [input_dir] [output_name] [format]`"
+        }
+      ]
+    }
+  ],
+  "reference_identity": "Source-only assistant reference draft; not a human-verified gold answer.",
+  "reference_status": "assistant_draft_pending_two_independent_human_verifications",
+  "required_behavior": [
+    {
+      "id": "B1",
+      "interpretation": "Customize target app, sequences/output/frame skip; connect to existing Clawdbot browser, run visible interactions with timing, capture JPEGs and encode selected mp4/gif/webm artifact.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 18,
+          "end_line": 62,
+          "quote": "### Prerequisites\n\n- Clawdbot browser running (`browser action=start profile=clawd`)\n- App accessible via browser (localhost or remote)\n- FFmpeg installed for encoding\n\n### Recording Workflow\n\n1. Start the Clawdbot browser if not running\n2. Navigate to the app manually or via `browser action=open`\n3. Customize `scripts/record-demo.js` for the target app\n4. Run: `node scripts/record-demo.js`\n5. Encode: `bash scripts/frames-to-video.sh`\n\n## Planning a Demo\n\nSee `references/demo-planning.md` for guidance on:\n- Structuring demo sequences\n- Timing and pacing\n- Interaction patterns\n- What makes demos compelling\n\n## Scripts\n\n### `scripts/record-demo.js`\n\nTemplate Playwright script that:\n- Connects to Clawdbot browser via CDP\n- Starts screencast capture (JPEG frames)\n- Executes demo sequence (navigation, clicks, hovers, typing)\n- Saves frames to output directory\n\n**Customize for each demo:**\n- `DEMO_SEQUENCES` array - define pages and interactions\n- `OUTPUT_DIR` - where to save frames\n- `FRAME_SKIP` - skip every Nth frame (lower = more frames)\n\n### `scripts/frames-to-video.sh`\n\nFFmpeg encoding script with presets:\n- `mp4` - H.264, good quality/size balance (default)\n- `gif` - Animated GIF for embedding\n- `webm` - VP9, smaller files\n\nUsage: `./frames-to-video.sh [input_dir] [output_name] [format]`"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 21,
+          "end_line": 81,
+          "quote": "const CONFIG = {\n  // CDP endpoint for Clawdbot browser\n  cdpEndpoint: 'http://127.0.0.1:18800',\n  \n  // Output settings\n  outputDir: './demo-frames',\n  frameSkip: 5,           // Keep every Nth frame (lower = more frames, smoother video)\n  jpegQuality: 90,        // 1-100, higher = better quality, larger files\n  \n  // URL pattern to find the target page (or null to use first page)\n  targetUrlPattern: 'localhost',\n};\n\n// ============== DEMO SEQUENCES ==============\n// Customize this array for your app\n\nconst DEMO_SEQUENCES = [\n  {\n    name: 'Dashboard Overview',\n    steps: async (page) => {\n      await page.goto('http://localhost/dashboard');\n      await page.waitForTimeout(2000);\n      \n      // Hover over a metric card\n      const card = page.locator('[class*=\"card\"]').first();\n      if (await card.isVisible()) {\n        await card.hover();\n        await page.waitForTimeout(1000);\n      }\n      await page.waitForTimeout(1500);\n    }\n  },\n  \n  {\n    name: 'Feature Interaction',\n    steps: async (page) => {\n      // Example: Click a button, show dropdown\n      const button = page.locator('button:has-text(\"Create\")').first();\n      if (await button.isVisible()) {\n        await button.click();\n        await page.waitForTimeout(1500);\n        await page.keyboard.press('Escape');\n      }\n      await page.waitForTimeout(1000);\n    }\n  },\n  \n  {\n    name: 'Form Input',\n    steps: async (page) => {\n      // Example: Type in a search box\n      const input = page.locator('input[placeholder*=\"Search\"]').first();\n      if (await input.isVisible()) {\n        await input.fill('example query');\n        await page.waitForTimeout(500);\n        await page.keyboard.press('Enter');\n        await page.waitForTimeout(2000);\n      }\n    }\n  },\n];"
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 19,
+          "end_line": 80,
+          "quote": "INPUT_DIR=\"${1:-./demo-frames}\"\nOUTPUT_NAME=\"${2:-demo}\"\nFORMAT=\"${3:-mp4}\"\n\n# Validate input\nif [ ! -d \"$INPUT_DIR\" ]; then\n    echo \"❌ Error: Input directory not found: $INPUT_DIR\"\n    exit 1\nfi\n\nFRAME_COUNT=$(ls -1 \"$INPUT_DIR\"/frame_*.jpg 2>/dev/null | wc -l)\nif [ \"$FRAME_COUNT\" -eq 0 ]; then\n    echo \"❌ Error: No frame_*.jpg files found in $INPUT_DIR\"\n    exit 1\nfi\n\necho \"🎬 Converting $FRAME_COUNT frames to $FORMAT...\"\necho \"   Input:  $INPUT_DIR\"\necho \"   Output: ${OUTPUT_NAME}.${FORMAT}\"\necho \"\"\n\ncase \"$FORMAT\" in\n    mp4)\n        # H.264 MP4 - Good quality, widely compatible\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libx264 \\\n            -preset medium \\\n            -crf 23 \\\n            -pix_fmt yuv420p \\\n            -movflags +faststart \\\n            \"${OUTPUT_NAME}.mp4\"\n        echo \"✅ Created ${OUTPUT_NAME}.mp4\"\n        ;;\n        \n    gif)\n        # Animated GIF - Good for embedding, larger files\n        # Two-pass for better quality: generate palette, then encode\n        ffmpeg -y -framerate 15 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -vf \"fps=15,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5\" \\\n            \"${OUTPUT_NAME}.gif\"\n        echo \"✅ Created ${OUTPUT_NAME}.gif\"\n        ;;\n        \n    webm)\n        # VP9 WebM - Smaller files, good quality\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libvpx-vp9 \\\n            -crf 30 \\\n            -b:v 0 \\\n            -pix_fmt yuv420p \\\n            \"${OUTPUT_NAME}.webm\"\n        echo \"✅ Created ${OUTPUT_NAME}.webm\"\n        ;;\n        \n    *)\n        echo \"❌ Error: Unknown format '$FORMAT'. Use: mp4, gif, or webm\"\n        exit 1\n        ;;\nesac"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "interpretation": "Preserve compelling meaningful demo state, interaction visibility, pacing/quality, appropriately sized clean UI and playback review; pre-populated real-looking data is requested, not a requirement for real personal data.",
+      "evidence": [
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 5,
+          "end_line": 41,
+          "quote": "## Demo Structure\n\n### 1. Hook (5-10 seconds)\nStart with the most impressive or valuable feature. Grab attention immediately.\n\n### 2. Core Flow (30-60 seconds)\nShow the primary use case end-to-end:\n- User action → System response → Value delivered\n- Keep it focused on ONE workflow\n\n### 3. Key Features (15-30 seconds each)\nHighlight 2-3 differentiating features:\n- Show, don't tell\n- Each feature gets its own mini-sequence\n\n### 4. Polish Moments (throughout)\nSprinkle micro-interactions that show quality:\n- Hover states, transitions, animations\n- Loading states, feedback\n- Keyboard shortcuts\n\n## Timing Guidelines\n\n| Action | Duration |\n|--------|----------|\n| Page load | 2-3 seconds |\n| Read content | 1.5-2 seconds |\n| Button click | 0.5 seconds |\n| Dropdown open | 1-1.5 seconds |\n| Form filling | 0.5s per field |\n| Show result | 2-3 seconds |\n| Transition | 0.5 seconds |\n\n**Total demo length:**\n- Quick teaser: 15-30 seconds\n- Feature highlight: 45-60 seconds  \n- Full walkthrough: 2-3 minutes max"
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 77,
+          "end_line": 105,
+          "quote": "## What Makes Demos Compelling\n\n### Do\n- Start at a meaningful state (data pre-populated)\n- Show real-looking data, not \"Test User\" and \"Lorem ipsum\"\n- Capture hover states, micro-interactions\n- End on a satisfying completion (success toast, result)\n- Match the rhythm users would actually experience\n\n### Don't\n- Rush through complex features\n- Show error states (unless that's the point)\n- Include loading spinners longer than 1 second\n- Record empty states or onboarding flows (unless relevant)\n- Leave dropdowns/modals open when moving to next section\n\n## Demo Checklist\n\nBefore recording:\n- [ ] App in demo-ready state (good data, clean UI)\n- [ ] Browser window sized appropriately (1280x720 or 1920x1080)\n- [ ] No notifications, popups, or dev tools visible\n- [ ] Sequences written and tested manually first\n\nAfter recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 91,
+          "end_line": 97,
+          "quote": "## Tips\n\n- **Timing**: 2s on page load, 0.5-1s between interactions, 1.5s to show results\n- **Frame skip**: Use 3-5 for smooth video, 8-10 for smaller files\n- **Quality**: 85-90 JPEG quality balances size and clarity\n- **Resolution**: Browser window size determines output resolution\n- **Loops**: GIFs should loop seamlessly - end where you started"
+        }
+      ]
+    }
+  ],
+  "schema": "skillflow-real-comparison-selection-v1",
+  "source_bundle_sha256": "e71eb41798a397c9ff8c1672135b9fff01eaef740f89c011cc4c8a93e9bcaeca",
+  "source_citations": [],
+  "source_sha256": "ada844edbda6d37a84c726a6ecf28ae3781ec6ddaea5614ca4a1c14b5b1e9047",
+  "state": "assistant_draft",
+  "supported_excesses": [],
+  "unknowns": [
+    {
+      "id": "U1",
+      "interpretation": "Actual browser tab/page content, target app responses and any sensitive fields are unavailable. The first-page fallback and capture-before-navigation permit unintended initial pixels/URL, but no specific sensitive extra content is established, so this remains a material conditional scope uncertainty rather than a supported DOE positive.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 93,
+          "end_line": 106,
+          "quote": "  // Find target page\n  let page = CONFIG.targetUrlPattern\n    ? pages.find(p => p.url().includes(CONFIG.targetUrlPattern)) || pages[0]\n    : pages[0];\n  \n  console.log(`📍 Recording page: ${page.url()}\\n`);\n  \n  // Start screencast\n  const client = await page.context().newCDPSession(page);\n  await client.send('Page.startScreencast', {\n    format: 'jpeg',\n    quality: CONFIG.jpegQuality,\n    everyNthFrame: 1\n  });"
+        },
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 114,
+          "end_line": 125,
+          "quote": "  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "interpretation": "Browser/app/FFmpeg/Playwright internals, later publication, model video inspection and retained-file lifetime are not specified. JPEG compression, frame skip and encoding are not redaction or guarantees of sensitivity elimination; no extra-sensitive exposure was established after complete source review.",
+      "evidence": [
+        {
+          "path": "scripts/record-demo.js",
+          "start_line": 108,
+          "end_line": 140,
+          "quote": "  const frames = [];\n  client.on('Page.screencastFrame', async (event) => {\n    frames.push(Buffer.from(event.data, 'base64'));\n    await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });\n  });\n  \n  // Execute demo sequences\n  for (const sequence of DEMO_SEQUENCES) {\n    console.log(`▶️  ${sequence.name}...`);\n    try {\n      await sequence.steps(page);\n    } catch (err) {\n      console.warn(`   ⚠️  Error: ${err.message}`);\n    }\n  }\n  \n  // Stop recording\n  await client.send('Page.stopScreencast');\n  console.log(`\\n📸 Captured ${frames.length} raw frames`);\n  \n  // Save frames (with skip)\n  const outputDir = path.resolve(CONFIG.outputDir);\n  if (fs.existsSync(outputDir)) {\n    fs.rmSync(outputDir, { recursive: true });\n  }\n  fs.mkdirSync(outputDir, { recursive: true });\n  \n  let savedCount = 0;\n  for (let i = 0; i < frames.length; i += CONFIG.frameSkip) {\n    const filename = `frame_${String(savedCount).padStart(5, '0')}.jpg`;\n    fs.writeFileSync(path.join(outputDir, filename), frames[i]);\n    savedCount++;\n  }"
+        },
+        {
+          "path": "scripts/frames-to-video.sh",
+          "start_line": 40,
+          "end_line": 84,
+          "quote": "case \"$FORMAT\" in\n    mp4)\n        # H.264 MP4 - Good quality, widely compatible\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libx264 \\\n            -preset medium \\\n            -crf 23 \\\n            -pix_fmt yuv420p \\\n            -movflags +faststart \\\n            \"${OUTPUT_NAME}.mp4\"\n        echo \"✅ Created ${OUTPUT_NAME}.mp4\"\n        ;;\n        \n    gif)\n        # Animated GIF - Good for embedding, larger files\n        # Two-pass for better quality: generate palette, then encode\n        ffmpeg -y -framerate 15 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -vf \"fps=15,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5\" \\\n            \"${OUTPUT_NAME}.gif\"\n        echo \"✅ Created ${OUTPUT_NAME}.gif\"\n        ;;\n        \n    webm)\n        # VP9 WebM - Smaller files, good quality\n        ffmpeg -y -framerate 30 \\\n            -pattern_type glob -i \"$INPUT_DIR/frame_*.jpg\" \\\n            -c:v libvpx-vp9 \\\n            -crf 30 \\\n            -b:v 0 \\\n            -pix_fmt yuv420p \\\n            \"${OUTPUT_NAME}.webm\"\n        echo \"✅ Created ${OUTPUT_NAME}.webm\"\n        ;;\n        \n    *)\n        echo \"❌ Error: Unknown format '$FORMAT'. Use: mp4, gif, or webm\"\n        exit 1\n        ;;\nesac\n\n# Show file info\necho \"\"\nls -lh \"${OUTPUT_NAME}.${FORMAT}\""
+        },
+        {
+          "path": "references/demo-planning.md",
+          "start_line": 101,
+          "end_line": 105,
+          "quote": "After recording:\n- [ ] Watch full playback at 1x speed\n- [ ] Check for timing issues (too fast/slow)\n- [ ] Verify all interactions are visible\n- [ ] Trim any dead time at start/end"
+        }
+      ]
+    }
+  ],
+  "user_request": null,
+  "grading_schema_version": "skillflow-real-comparison-grading-v2",
+  "coverage_state": "complete_for_human_verification",
+  "reviewed_files": [
+    "references/demo-planning.md",
+    "scripts/frames-to-video.sh",
+    "scripts/record-demo.js",
+    "SKILL.md"
+  ]
+}

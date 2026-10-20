@@ -1,4 +1,4 @@
-# 原文 → Task → demands 的正式分析链 v6
+# Source → Task → declarations formal analysis chain v7
 
 当前协议（2026-10-15）先建立只读源文驱动的 Task，再在固定基准下标注需求、处理、可见性和敏感性。独立审查重新检查原文、Task、每个 demand 与全部 IR；程序保留逐项对应并执行确定性传播和 DOE。没有最终 DOE 模型调用，不执行 Skill，不在本链中重建 CFG。
 
@@ -40,14 +40,14 @@ Language policy (2026-10-16): prompts, synthetic examples, Task interpretations,
 |---|---|
 | 原文 | `source_checks` 重新覆盖全部非空物理行，允许独立分组，不能复制提取器结论充当复查。 |
 | Task | `requirement_checks` 每项一次，核对支持、忠实、拆分、条件、范围、冲突与表达缺口。 |
-| Demand | `goal_checks` 每个原始 `raw_pointer` 一次，核对任务依据、真实履约位置、属性、字段、原值、版本、成员、条件及接收方。 |
+| Declarations | `declaration_checks` covers every raw demand and constraint pointer exactly once. Demand checks inspect value, property, scope and receiver; constraint checks inspect the information relation, condition version, event unit/scope, matching and remaining gaps. Neither records implementation satisfaction. |
 | IR | `reviewed_ir_ids` 精确覆盖全部指令，继续审查处理、来源、观察、交付、敏感声明与作用域。 |
 
 前三类检查为 `accepted / issue`，问题结论必须关联真实 finding；程序检查覆盖、重复、引用和关联，不证明判断正确。Task finding 只能引用原始源文，并携带闭合的 `task_objection`；标注 finding 不得夹带 Task 修订对象。
 
 逐 seed 检查必须区分字段与整个对象、存在／数量／truth 与全部内容、模型筛选需求与工具参数、必要动作与整份载荷、正确结果与过早的宽输入，以及不同版本、元素和接收方。真实全值要求与保守计算依赖不能为获取更小需求而被删掉。
 
-Task 明确指定的交付参数和保存内容还须在实际接收／保存操作输入建立可追溯需求；只有上游 producer seed 或 action seed 不能代替载荷需求。`requirement_checks` 检查不存在的 seed，`goal_checks` 检查已经存在的 seed；不要求所有 sink 自动拥有整值需求。完整规则与三例验收见 [Sink 载荷需求绑定](sink-payload-demand-binding.md)。
+Required delivery parameters and saved contents need traceable demands at the actual receiver/write input; upstream or action-only seeds do not replace payload demands. `requirement_checks` checks missing declarations, while `declaration_checks` inspects existing demands and constraints. No sink automatically receives a whole-value demand. See [sink payload demand binding](sink-payload-demand-binding.md).
 
 程序生成源文摘录 → requirement → realization／gaps → raw demand pointer → compiled goal → `seed_goal_id` 推导 → sink 的关联。登记范围全覆盖不代表一行中的所有语义已被提取；审查可能与提取共享盲点。
 
@@ -81,7 +81,7 @@ analysis-run/
    └─ report.html / report.md
 ```
 
-当前身份为 pipeline `skillflow-analysis-run-v6`、Task `skillflow-task-v3`、标注运行 v17／业务协议 `security-profile-v14`、审查运行 v10／业务协议 v6、编译与映射 v8、demand v3、sensitivity result v3 和正式 DOE run v4。Task 单独拥有，编译标注保存精确 `task_ref`；统一加载器解析内存视图，审计展示不产生新的可编辑 Task。
+Current identities: pipeline `skillflow-analysis-run-v7`, Task `skillflow-task-v3`, annotation run v18 / `security-profile-v15`, review run v11 / review contract v7, compilation v9, demand v4, sensitivity result v4 and formal DOE run v5. Task remains separately owned; compiled annotation retains the exact `task_ref`. Loaders resolve in-memory views without generating another editable Task. Constraint expression and forward checking do not generate positive demand seeds or modify propagation facts.
 
 审查状态、需求表达状态和计算状态分别保留。审查失败仍可保留诊断计算，但后端完成不能冲销失败；未表达限制当前保守视为全局，不能凭模型绑定局部化，受影响 sink 不得输出支持缩减结论。停止和恢复沿用接受响应记录，旧格式拒绝，不重写历史输入、传播事实或实验结果。
 

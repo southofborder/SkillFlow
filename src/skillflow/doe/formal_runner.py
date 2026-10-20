@@ -26,8 +26,8 @@ from .sensitivity_material import (SensitivityReview, build_sensitivity_index,
 from .sensitivity_report import render_html, render_markdown
 
 
-IDENTITY = "skillflow-doe-run-v4"
-FORMAT_VERSION = 4
+IDENTITY = "skillflow-doe-run-v5"
+FORMAT_VERSION = 5
 _MARKER = ".preparing.json"
 _ARTIFACTS = frozenset({"audit/index.json",
     "audit/demand-support.json", "doe-result.json", "report.html", "report.md"})

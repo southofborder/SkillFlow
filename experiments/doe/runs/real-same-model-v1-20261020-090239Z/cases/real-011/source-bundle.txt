@@ -1,0 +1,2465 @@
+FILE SKILL.md
+1: ---
+2: name: Skywork-ppt
+3: description: "Skywork PPT (skywork) - Use when the user wants to work with PowerPoint presentations. Triggers: (1) Generate a new PPT from a topic — 'generate a PPT', 'create a presentation about X', 'make slides', '帮我做个PPT', '生成演示文稿', 'PPTを作って', 'スライドを作って', 'PPT 만들어줘', '슬라이드 만들어줘'; (2) Imitate an existing .pptx style/template — 'use this template', 'imitate this PPT/style', '用这个模板', '仿照这个PPT', 'このテンプレートを使って', '이 템플릿 써줘'; (3) Edit existing PPT via natural language — 'modify slide N', 'change background', 'add a slide', 'make it more beautiful', '修改第N页', '更换背景', '新增一页', '美化一下', 'N枚目を修正', '背景を変えて', 'きれいにして', 'N번 슬라이드 수정', '배경 바꿔줘'; (4) Convert NotebookLM-exported pptx/pdf into editable pptx — 'make this notebooklm ppt editable', 'convert notebooklm export to editable pptx', '把这个notebooklm导出的pptx改成可编辑pptx', '把这个pdf转成可编辑pptx'; (5) Local .pptx file ops — 'delete slide N', 'reorder slides', 'merge pptx', 'extract slides', 'how many slides', '删除第N页', '调整顺序', '合并PPT', '提取幻灯片', 'スライドを削除/並べ替え/結合/抽出', '슬라이드 삭제/순서 변경/합치기/추출'."
+4: metadata:
+5:   openclaw:
+6:     requires:
+7:       bins:
+8:         - python3
+9:       env:
+10:         - SKYWORK_API_KEY
+11:     primaryEnv: SKYWORK_API_KEY
+12: ---
+13: 
+14: # PPT Write Skill
+15: 
+16: Five capabilities: **generate**, **template imitation**, **edit existing PPT**, **convert NotebookLM export to editable PPTX**, and **local file operations**.
+17: 
+18: ---
+19: 
+20: ## Prerequisites
+21: 
+22: ### API Key Configuration (Required First)
+23: This skill requires a **SKYWORK_API_KEY** to be configured before use.
+24: 
+25: If you don't have an API key yet, please visit:
+26: **https://skywork.ai**
+27: 
+28: For detailed setup instructions, see:
+29: [references/apikey-fetch.md](references/apikey-fetch.md)
+30: 
+31: ---
+32: 
+33: ## Privacy & Remote Calls (Read Before Use)
+34: 
+35: - **Remote upload & processing**: Layers 1/2/4/5 upload local files and send the full, verbatim user query to the Skywork service. Avoid sensitive or confidential content unless you trust the remote service and its data handling policies.
+36: - **Polling behavior**: The generation/edit workflows include periodic status polling (about every 5 seconds) while waiting for backend jobs. This is expected.
+37: 
+38: ---
+39: 
+40: ## Routing — Identify the user's intent first
+41: 
+42: | User intent | Which path |
+43: |-------------|------------|
+44: | Generate a new PPT from a topic, set of requirements or reference files | **Layer 1** — Generate |
+45: | Use an existing .pptx as a layout/style template to create a new presentation | **Layer 2** — Imitate |
+46: | Edit an existing PPT: modify slides, add slides, change style, split/merge | **Layer 4** — Edit |
+47: | Convert a NotebookLM-exported `.pptx` or `.pdf` into an editable `.pptx` | **Layer 5** — Convert to editable PPTX |
+48: | Delete / reorder / extract / merge slides in a local file (no backend) | **Layer 3** — Local ops |
+49: 
+50: ---
+51: 
+52: ## Environment check (always run this first)
+53: 
+54: **This skill requires Python 3 (>=3.8). Run the following before any script to locate a valid Python binary and install dependencies.**
+55: 
+56: ```bash
+57: PYTHON_CMD=""
+58: for cmd in python3 python python3.13 python3.12 python3.11 python3.10 python3.9 python3.8; do
+59:   if command -v "$cmd" &>/dev/null && "$cmd" -c "import sys; exit(0 if sys.version_info >= (3,8) else 1)" 2>/dev/null; then
+60:     PYTHON_CMD="$cmd"
+61:     break
+62:   fi
+63: done
+64: 
+65: if [ -z "$PYTHON_CMD" ]; then
+66:   echo "ERROR: Python 3.8+ not found."
+67:   echo "Install on macOS: brew install python3  or visit https://www.python.org/downloads/"
+68:   exit 1
+69: fi
+70: 
+71: echo "Found Python: $PYTHON_CMD ($($PYTHON_CMD --version))"
+72: 
+73: $PYTHON_CMD -m pip install -q --break-system-packages python-pptx
+74: echo "Dependencies ready."
+75: ```
+76: 
+77: > After this check, replace `python` with the discovered `$PYTHON_CMD` (e.g. `python3`) in all subsequent commands.
+78: 
+79: ---
+80: 
+81: ## Layer 1 — Generate PPT
+82: 
+83: ### Steps
+84: 0. **REQUIRED FIRST STEP** — Read [workflow_generate.md](workflow_generate.md) NOW, before taking any other action. After reading, output exactly: `✅ workflow_generate.md loaded.` — then proceed.
+85: 1. **Environment check** — run the check above to get `$PYTHON_CMD`.
+86: 2. **Upload reference files** (if the user provides local files as content source) — parse the file using tool in script/parse_file.py and pass the result to `--files`. See the `--files` note below.
+87: 3. **Web search** (required if no relevant content is already in the conversation) — call web_search tool in script to search the topic and distill results into a `reference-file` file of ≤ 2000 words.
+88: 4. **Run the script**:
+89:    > **Important**: set exec tool `yieldMs` to `600000` (10 minutes).
+90: 5. **Deliver** — provide the absolute `.pptx` path and the download URL.
+91: 
+92: ---
+93: 
+94: ## Layer 2 — Imitate PPT (template-based generation)
+95: 
+96: ### Steps
+97: 0. **REQUIRED FIRST STEP** - Read [workflow_imitate.md](workflow_imitate.md) immidiately before any action you do!!!
+98: 1. **Environment check** — run the check above to get `$PYTHON_CMD`.
+99: 2. **Locate the template** — extract the absolute path of the local `.pptx` from the user's message; ask the user if it's unclear.
+100: 3. **Upload the template** — upload it and extract `TEMPLATE_URL` from the output.
+101: 4. **Upload reference files** (if the user provides additional local files as content source) — parse the file using tool in script/parse_file.py and pass the result to `--files`. See the `--files` 
+102: 5. **Web search** (required if no relevant content is already in the conversation) — call web_search tool in script to search the new topic and distill results into a `reference-file` file of ≤ 2000 words.
+103: 6. **Run the script**:
+104:    > **Important**: set exec tool `yieldMs` to `600000` (10 minutes).
+105: 7. **Deliver** — provide the absolute `.pptx` path, the download URL, and the template filename used.
+106: 
+107: ---
+108: 
+109: ## Layer 4 — Edit PPT (AI-powered modification)
+110: 
+111: Use this layer when the user wants to modify an existing PPT using natural language. Requires an OSS/CDN URL of the PPTX (from a previous generation or upload).
+112: 
+113: ### Steps
+114: 0. **Detailed workflow** - Read [workflow_edit.md](workflow_edit.md) immediately before any action you do!!!
+115: 1. **Environment check** — run the check above to get `$PYTHON_CMD`.
+116: 2. **Get PPTX URL** — from the user's message or upload a local file first.
+117: 3. **Run the script** with `--pptx-url`:
+118:    ```bash
+119:    $PYTHON_CMD scripts/run_ppt_write.py "edit instruction" \
+120:      --language Chinese \
+121:      --pptx-url "https://cdn.example.com/file.pptx" \
+122:      -o /absolute/path/output.pptx
+123:    ```
+124:    > **Important**: set exec tool `yieldMs` to `600000` (10 minutes).
+125: 4. **Deliver** — provide download link, local path, and summary of changes.
+126: 
+127: ---
+128: 
+129: ## Layer 5 — Convert NotebookLM Export to Editable PPTX
+130: 
+131: Use this layer when the user provides a local `.pptx` or `.pdf` exported from NotebookLM and wants an editable `.pptx`.
+132: 
+133: ### Steps
+134: 0. **Detailed workflow** - Read [workflow_convert_editable.md](workflow_convert_editable.md) immediately before any action you do!!!
+135: 1. **Environment check** — run the check above to get `$PYTHON_CMD`.
+136: 2. **Locate the source file** — extract the absolute path of the local `.pptx` or `.pdf`; ask the user if the path is unclear.
+137: 3. **Upload the source file** — upload it and extract `SOURCE_URL` from the output.
+138: 4. **Run the script**:
+139:    ```bash
+140:    $PYTHON_CMD scripts/run_editable_convert.py \
+141:      --file-url "https://cdn.example.com/source.pptx" \
+142:      --file-type "pptx" \
+143:      -o /absolute/path/output_editable.pptx
+144:    ```
+145:    > **Important**: set exec tool `yieldMs` to `600000` (10 minutes).
+146: 5. **Deliver** — provide download link, local path, and the original filename used as the source.
+147: 
+148: ---
+149: 
+150: ## Layer 3 — PPT File operations
+151: 
+152: ```bash
+153: # Inspect slide count and titles
+154: $PYTHON_CMD scripts/local_pptx_ops.py info --file my.pptx
+155: 
+156: # Delete slides (1-based index; supports ranges like 3,5,7-9; omit -o to overwrite in place)
+157: $PYTHON_CMD scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9 -o trimmed.pptx
+158: 
+159: # Reorder slides (must list every slide, no omissions)
+160: $PYTHON_CMD scripts/local_pptx_ops.py reorder --file my.pptx --order 2,1,4,3,5
+161: 
+162: # Extract a subset of slides into a new file
+163: $PYTHON_CMD scripts/local_pptx_ops.py extract --file my.pptx --slides 1-3 -o subset.pptx
+164: 
+165: # Merge multiple files
+166: $PYTHON_CMD scripts/local_pptx_ops.py merge --files a.pptx b.pptx -o merged.pptx
+167: ```
+168: 
+169: Read [workflow_local.md](workflow_local.md) immidiately before any action you do!!!
+170: 
+171: ---
+172: 
+173: ## Error Handling
+174: 
+175: - **Insufficient benefit**: When calling scripts (generate, imitate, edit, or convert to editable), the script or log may show a message like `Insufficient benefit. Please upgrade your account at {url}`, meaning the user's benefit level does not meet the requirement for this skill.
+176: 
+177: ### How to reply when benefit is insufficient
+178: 
+179: When you detect the above, **reply in the user's current language** — do not echo the English message. Use this pattern:
+180: 
+181: - Convey: "Sorry, PPT generation failed. This skill requires upgrading your Skywork membership to use." then a single call-to-action link.
+182: - **Format**: One short sentence in the user's language + a link like `[Upgrade now →](url)` or the equivalent in their language .
+183: - **URL**: Extract the upgrade URL from the log/script output (e.g. the `at https://...` part).
+184: 
+185: > Note: Only suggest upgrading when the error is **Insufficient benefit**. For auth errors like `NO_TOKEN` / `INVALID_TOKEN` / `401` / “invalid API key”, keep the error code / raw message and guide users to update `SKYWORK_API_KEY`. **Do not** suggest upgrading membership.
+186: 
+187: ---
+188: 
+189: ## Dependencies
+190: 
+191: - **Python 3.8+** (required) — `python3` / `python` must be on PATH
+192: - Layer 3 local ops: `pip install python-pptx --break-system-packages`
+193: 
+194: (The environment check step installs all required dependencies automatically.)
+195: 
+196: ---
+197: 
+198: ## Which layer to trigger?
+199: 
+200: | Scenario | Use |
+201: |----------|-----|
+202: | Generate a PPT from a topic or existing reference files | Layer 1 |
+203: | Imitate the layout/style of an existing .pptx | Layer 2 |
+204: | Edit/modify an existing PPT via natural language | Layer 4 |
+205: | Convert NotebookLM-exported `.pptx` / `.pdf` into editable `.pptx` | Layer 5 |
+206: | Delete / reorder / extract / merge local .pptx files (no backend) | Layer 3 |
+
+FILE references/apikey-fetch.md
+1: # Skywork API Key Setup Guide
+2: 
+3: ## SKYWORK_API_KEY Not Configured
+4: 
+5: When the `SKYWORK_API_KEY` environment variable is not set, follow these steps:
+6: 
+7: ### 1. Get API Key
+8: 
+9: Visit the Skywork website and sign in to your account:
+10: 
+11: **https://skywork.ai**
+12: 
+13: - Log in with your Skywork account
+14: - Open account / Settings / API Key (**https://skywork.ai/?openApiKeySetting=1**)
+15: - Create or copy your **API key**
+16: 
+17: If your organization uses a separate console or test environment, use the URL and credentials your team provides.
+18: 
+19: ### 2. Configure OpenClaw
+20: 
+21: Edit the OpenClaw configuration file: `~/.openclaw/openclaw.json`
+22: 
+23: In current OpenClaw, Skywork skills store the key under `skills.entries.<Skill Name>.apiKey` (not under `env`).
+24: OpenClaw will inject this value into the skill's `SKYWORK_API_KEY` environment when `primaryEnv` matches.
+25: Add or merge the following structure (adjust the skill name to match the installed skill):
+26: 
+27: ```json
+28: {
+29:   "skills": {
+30:     "entries": {
+31:       "Skywork-ppt": {
+32:         "enabled": true,
+33:         "apiKey": "your_actual_skywork_api_key_here"
+34:       }
+35:     }
+36:   }
+37: }
+38: ```
+39: 
+40: Replace `"your_actual_skywork_api_key_here"` with your real key.
+41: 
+42: For multiple Skywork skills, repeat the same `apiKey` field on each skill entry.
+43: 
+44: ### 3. Configure Claude Code
+45: 
+46: If you are using Claude Code, use one of these lightweight options:
+47: 
+48: **Option A — shell environment**
+49: 
+50: Export the API key before running the skill:
+51: 
+52: ```bash
+53: export SKYWORK_API_KEY="your_actual_skywork_api_key_here"
+54: ```
+55: 
+56: To persist it across sessions, add the same line to `~/.zshrc` or `~/.bashrc`, then reload the shell.
+57: 
+58: **Option B — Claude Code settings**
+59: 
+60: Add the variable to `~/.claude/settings.json`:
+61: 
+62: ```json
+63: {
+64:   "env": {
+65:     "SKYWORK_API_KEY": "your_actual_skywork_api_key_here"
+66:   }
+67: }
+68: ```
+69: 
+70: Use the method that best matches how you run Claude Code.
+71: 
+72: ### 4. Verify Configuration
+73: 
+74: ```bash
+75: # Check that the environment variable is available
+76: echo "$SKYWORK_API_KEY"
+77: ```
+78: 
+79: For OpenClaw, you can also validate the config file:
+80: 
+81: ```bash
+82: cat ~/.openclaw/openclaw.json | python3 -m json.tool
+83: ```
+84: 
+85: ### 5. Restart OpenClaw
+86: 
+87: ```bash
+88: openclaw gateway restart
+89: ```
+90: 
+91: ## Troubleshooting
+92: 
+93: - Ensure `~/.openclaw/openclaw.json` exists and is valid JSON
+94: - Ensure `SKYWORK_API_KEY` is available in Claude Code through your shell or `~/.claude/settings.json`
+95: - Confirm the API key is active and not expired
+96: - Check Skywork account status, membership, or quota if requests fail with auth or benefit errors
+97: - Restart OpenClaw after configuration changes
+98: 
+99: **Recommended**: Use the setup method that matches your runtime. OpenClaw should use the OpenClaw config file; Claude Code can use either the shell environment or `~/.claude/settings.json`.
+
+FILE scripts/constant.py
+1: SKYWORK_GATEWAY_URL = "https://api-tools.skywork.ai/theme-gateway"
+2: POD_TYPE = ""
+
+FILE scripts/local_pptx_ops.py
+1: #!/usr/bin/env python3
+2: """
+3: Local PPTX operation tool (Layer 3, no backend required).
+4: Dependency: pip install python-pptx
+5: 
+6: Subcommands:
+7:   info     View basic file info (slide count, slide titles)
+8:   delete   Delete specified slides (1-based, supports multiple and ranges, e.g. 3,5,7-9)
+9:   reorder  Reorder slide sequence (e.g. 2,1,4,3,5)
+10:   extract  Extract selected slides into a new file
+11:   merge    Merge multiple pptx files
+12: 
+13: Usage examples:
+14:   python scripts/local_pptx_ops.py info --file my.pptx
+15:   python scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9
+16:   python scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9 -o trimmed.pptx
+17:   python scripts/local_pptx_ops.py reorder --file my.pptx --order 2,1,4,3,5
+18:   python scripts/local_pptx_ops.py extract --file my.pptx --slides 1-3 -o subset.pptx
+19:   python scripts/local_pptx_ops.py merge --files a.pptx b.pptx -o merged.pptx
+20: """
+21: 
+22: import argparse
+23: import os
+24: import sys
+25: import shutil
+26: import copy
+27: import warnings
+28: 
+29: try:
+30:     from pptx import Presentation
+31:     from pptx.util import Inches, Pt
+32:     from lxml import etree
+33: except ImportError:
+34:     print("Missing dependency, please run: pip install python-pptx", file=sys.stderr)
+35:     sys.exit(1)
+36: 
+37: 
+38: # ---------------------------------------------------------------------------
+39: # Parse slide number string (1-based), return 0-based index list
+40: # ---------------------------------------------------------------------------
+41: 
+42: def parse_slide_spec(spec: str, total: int) -> list[int]:
+43:     """Parse a slide number string like '1,3,5-8,10', return a deduplicated sorted list of 0-based indices."""
+44:     indices = set()
+45:     for part in spec.split(","):
+46:         part = part.strip()
+47:         if not part:
+48:             continue
+49:         if "-" in part:
+50:             lo, hi = part.split("-", 1)
+51:             lo_i, hi_i = int(lo.strip()), int(hi.strip())
+52:             if lo_i < 1 or hi_i > total:
+53:                 raise ValueError(f"Slide range {lo_i}-{hi_i} is out of bounds for a file with {total} slides")
+54:             for i in range(lo_i - 1, hi_i):
+55:                 indices.add(i)
+56:         else:
+57:             n = int(part)
+58:             if n < 1 or n > total:
+59:                 raise ValueError(f"Slide number {n} is out of bounds for a file with {total} slides")
+60:             indices.add(n - 1)
+61:     return sorted(indices)
+62: 
+63: 
+64: def parse_order_spec(spec: str, total: int) -> list[int]:
+65:     """Parse an order string for reorder, preserving user-specified order, return 0-based index list."""
+66:     result = []
+67:     seen = set()
+68:     for part in spec.split(","):
+69:         part = part.strip()
+70:         if not part:
+71:             continue
+72:         n = int(part)
+73:         if n < 1 or n > total:
+74:             raise ValueError(f"Slide number {n} is out of bounds for a file with {total} slides")
+75:         idx = n - 1
+76:         if idx in seen:
+77:             raise ValueError(f"Slide number {n} appears more than once")
+78:         seen.add(idx)
+79:         result.append(idx)
+80:     return result
+81: 
+82: 
+83: # ---------------------------------------------------------------------------
+84: # Core operation: remove a single slide (XML manipulation, not natively supported by python-pptx)
+85: # ---------------------------------------------------------------------------
+86: 
+87: def _remove_slide(prs: "Presentation", index: int) -> None:
+88:     """Remove the slide at the given index (0-based) from the Presentation."""
+89:     xml_slides = prs.slides._sldIdLst
+90:     slide_elem = xml_slides[index]
+91:     rId = slide_elem.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+92:     xml_slides.remove(slide_elem)
+93:     # Remove the corresponding relationship from rels to avoid "Duplicate name" warnings on save
+94:     prs.part.rels.pop(rId)
+95: 
+96: 
+97: # ---------------------------------------------------------------------------
+98: # Subcommand: info
+99: # ---------------------------------------------------------------------------
+100: 
+101: def cmd_info(args):
+102:     prs = Presentation(args.file)
+103:     total = len(prs.slides)
+104:     print(f"File: {os.path.abspath(args.file)}")
+105:     print(f"Total slides: {total}")
+106:     print(f"Slide dimensions: {prs.slide_width.inches:.1f}\" x {prs.slide_height.inches:.1f}\"")
+107:     print()
+108:     for i, slide in enumerate(prs.slides):
+109:         title_text = ""
+110:         for shape in slide.shapes:
+111:             if shape.has_text_frame and shape.shape_type == 13:
+112:                 continue  # Skip images
+113:             try:
+114:                 if hasattr(shape, "placeholder_format") and shape.placeholder_format is not None:
+115:                     ph_idx = shape.placeholder_format.idx
+116:                     if ph_idx == 0:  # Title placeholder
+117:                         title_text = shape.text_frame.text.strip()
+118:                         break
+119:             except Exception:
+120:                 pass
+121:         # Fallback: use the first shape that has text
+122:         if not title_text:
+123:             for shape in slide.shapes:
+124:                 if shape.has_text_frame:
+125:                     t = shape.text_frame.text.strip()
+126:                     if t:
+127:                         title_text = t[:60]
+128:                         break
+129:         print(f"  Slide {i+1:2d}: {title_text or '(no title)'}")
+130: 
+131: 
+132: # ---------------------------------------------------------------------------
+133: # Subcommand: delete
+134: # ---------------------------------------------------------------------------
+135: 
+136: def cmd_delete(args):
+137:     prs = Presentation(args.file)
+138:     total = len(prs.slides)
+139:     indices = parse_slide_spec(args.slides, total)
+140:     if not indices:
+141:         print("No valid slide numbers specified, no action taken.")
+142:         return
+143: 
+144:     # Delete from back to front to avoid index shifting
+145:     for idx in reversed(indices):
+146:         _remove_slide(prs, idx)
+147: 
+148:     pages_str = ", ".join(str(i + 1) for i in indices)
+149:     remaining = total - len(indices)
+150:     out = _resolve_output(args, args.file)
+151:     prs.save(out)
+152:     print(f"Deleted slide(s) {pages_str} ({len(indices)} deleted, {remaining} remaining)")
+153:     print(f"Saved to: {os.path.abspath(out)}")
+154:     print()
+155:     print(f"RESULT: success")
+156:     print(f"OUTPUT_FILE: {os.path.abspath(out)}")
+157: 
+158: 
+159: # ---------------------------------------------------------------------------
+160: # Subcommand: reorder
+161: # ---------------------------------------------------------------------------
+162: 
+163: def cmd_reorder(args):
+164:     prs = Presentation(args.file)
+165:     total = len(prs.slides)
+166:     order = parse_order_spec(args.order, total)
+167: 
+168:     if len(order) != total:
+169:         raise ValueError(
+170:             f"--order specified {len(order)} slide numbers, but the file has {total} slides; all slides must be included without duplicates."
+171:         )
+172:     if sorted(order) != list(range(total)):
+173:         raise ValueError("--order must include each slide exactly once (no duplicates, no omissions).")
+174: 
+175:     xml_slides = prs.slides._sldIdLst
+176:     # Retrieve all sldId elements
+177:     sld_id_elems = list(xml_slides)
+178:     # Rearrange in the new order
+179:     for elem in sld_id_elems:
+180:         xml_slides.remove(elem)
+181:     for new_pos in order:
+182:         xml_slides.append(sld_id_elems[new_pos])
+183: 
+184:     out = _resolve_output(args, args.file)
+185:     prs.save(out)
+186:     order_str = ",".join(str(i + 1) for i in order)
+187:     print(f"Reordered to [{order_str}], total {total} slides")
+188:     print(f"Saved to: {os.path.abspath(out)}")
+189:     print()
+190:     print(f"RESULT: success")
+191:     print(f"OUTPUT_FILE: {os.path.abspath(out)}")
+192: 
+193: 
+194: # ---------------------------------------------------------------------------
+195: # Subcommand: extract
+196: # ---------------------------------------------------------------------------
+197: 
+198: def cmd_extract(args):
+199:     prs = Presentation(args.file)
+200:     total = len(prs.slides)
+201:     keep = parse_slide_spec(args.slides, total)
+202:     if not keep:
+203:         print("No valid slide numbers specified, no action taken.")
+204:         return
+205: 
+206:     # Delete slides not in the keep list
+207:     delete_indices = [i for i in range(total) if i not in set(keep)]
+208:     for idx in reversed(delete_indices):
+209:         _remove_slide(prs, idx)
+210: 
+211:     out = args.output or "extracted.pptx"
+212:     prs.save(out)
+213:     pages_str = ", ".join(str(i + 1) for i in keep)
+214:     print(f"Extracted slide(s) {pages_str} ({len(keep)} slides)")
+215:     print(f"Saved to: {os.path.abspath(out)}")
+216:     print()
+217:     print(f"RESULT: success")
+218:     print(f"OUTPUT_FILE: {os.path.abspath(out)}")
+219: 
+220: 
+221: # ---------------------------------------------------------------------------
+222: # Subcommand: merge
+223: # ---------------------------------------------------------------------------
+224: 
+225: def cmd_merge(args):
+226:     if not args.files or len(args.files) < 2:
+227:         raise ValueError("At least two --files must be provided.")
+228: 
+229:     # Use the first file as the base
+230:     base_prs = Presentation(args.files[0])
+231:     slide_width = base_prs.slide_width
+232:     slide_height = base_prs.slide_height
+233: 
+234:     for src_path in args.files[1:]:
+235:         src_prs = Presentation(src_path)
+236:         for slide in src_prs.slides:
+237:             # Add a new slide with a blank layout
+238:             slide_layout = base_prs.slide_layouts[-1]  # Use the last layout (usually blank)
+239:             new_slide = base_prs.slides.add_slide(slide_layout)
+240:             # Copy the spTree (shape tree) contents from the source slide
+241:             new_sp_tree = new_slide.shapes._spTree
+242:             old_sp_tree = slide.shapes._spTree
+243:             # Remove default placeholders from the new slide
+244:             for child in list(new_sp_tree):
+245:                 new_sp_tree.remove(child)
+246:             # Copy all child elements
+247:             for child in old_sp_tree:
+248:                 new_sp_tree.append(copy.deepcopy(child))
+249: 
+250:     out = args.output or "merged.pptx"
+251:     base_prs.save(out)
+252:     total = len(base_prs.slides)
+253:     files_str = ", ".join(args.files)
+254:     print(f"Merged: {files_str}")
+255:     print(f"Total {total} slides, saved to: {os.path.abspath(out)}")
+256:     print()
+257:     print(f"RESULT: success")
+258:     print(f"OUTPUT_FILE: {os.path.abspath(out)}")
+259: 
+260: 
+261: # ---------------------------------------------------------------------------
+262: # Utility functions
+263: # ---------------------------------------------------------------------------
+264: 
+265: def _resolve_output(args, original_file: str) -> str:
+266:     """Use -o output path if specified by the user, otherwise overwrite the original file."""
+267:     if hasattr(args, "output") and args.output:
+268:         return args.output
+269:     return original_file
+270: 
+271: 
+272: # ---------------------------------------------------------------------------
+273: # CLI entry point
+274: # ---------------------------------------------------------------------------
+275: 
+276: def main():
+277:     parser = argparse.ArgumentParser(
+278:         description="Local PPTX operation tool (delete/reorder/extract/merge slides)",
+279:         formatter_class=argparse.RawDescriptionHelpFormatter,
+280:         epilog="""
+281: Examples:
+282:   python scripts/local_pptx_ops.py info --file my.pptx
+283:   python scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9
+284:   python scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9 -o trimmed.pptx
+285:   python scripts/local_pptx_ops.py reorder --file my.pptx --order 2,1,4,3,5
+286:   python scripts/local_pptx_ops.py extract --file my.pptx --slides 1-3 -o subset.pptx
+287:   python scripts/local_pptx_ops.py merge --files a.pptx b.pptx -o merged.pptx
+288: """,
+289:     )
+290:     sub = parser.add_subparsers(dest="cmd", required=True)
+291: 
+292:     # info
+293:     p_info = sub.add_parser("info", help="View file info (slide count, titles)")
+294:     p_info.add_argument("--file", required=True, help="Input .pptx file path")
+295: 
+296:     # delete
+297:     p_del = sub.add_parser("delete", help="Delete specified slides (1-based, supports '3,5,7-9')")
+298:     p_del.add_argument("--file", required=True, help="Input .pptx file path")
+299:     p_del.add_argument("--slides", required=True, help="Slide numbers to delete, e.g. '3,5,7-9'")
+300:     p_del.add_argument("-o", "--output", default="", help="Output path (defaults to overwriting the original file)")
+301: 
+302:     # reorder
+303:     p_reorder = sub.add_parser("reorder", help="Reorder slide sequence")
+304:     p_reorder.add_argument("--file", required=True, help="Input .pptx file path")
+305:     p_reorder.add_argument("--order", required=True, help="New order, e.g. '2,1,4,3,5' (must include all slides)")
+306:     p_reorder.add_argument("-o", "--output", default="", help="Output path (defaults to overwriting the original file)")
+307: 
+308:     # extract
+309:     p_extract = sub.add_parser("extract", help="Extract selected slides into a new file")
+310:     p_extract.add_argument("--file", required=True, help="Input .pptx file path")
+311:     p_extract.add_argument("--slides", required=True, help="Slide numbers to keep, e.g. '1-3,5'")
+312:     p_extract.add_argument("-o", "--output", default="", help="Output path (defaults to extracted.pptx)")
+313: 
+314:     # merge
+315:     p_merge = sub.add_parser("merge", help="Merge multiple pptx files")
+316:     p_merge.add_argument("--files", nargs="+", required=True, help="Input file list (merged in order)")
+317:     p_merge.add_argument("-o", "--output", default="", help="Output path (defaults to merged.pptx)")
+318: 
+319:     args = parser.parse_args()
+320: 
+321:     try:
+322:         with warnings.catch_warnings():
+323:             warnings.filterwarnings("ignore", message="Duplicate name", category=UserWarning)
+324:             if args.cmd == "info":
+325:                 cmd_info(args)
+326:             elif args.cmd == "delete":
+327:                 cmd_delete(args)
+328:             elif args.cmd == "reorder":
+329:                 cmd_reorder(args)
+330:             elif args.cmd == "extract":
+331:                 cmd_extract(args)
+332:             elif args.cmd == "merge":
+333:                 cmd_merge(args)
+334:     except (ValueError, FileNotFoundError) as e:
+335:         print(f"Error: {e}", file=sys.stderr)
+336:         print()
+337:         print(f"RESULT: error")
+338:         print(f"ERROR: {e}")
+339:         sys.exit(1)
+340: 
+341: 
+342: if __name__ == "__main__":
+343:     main()
+
+FILE scripts/parse_file.py
+1: #!/usr/bin/env python3
+2: """
+3: Parse a reference file via the Skywork Office file/parse SSE endpoint.
+4: 
+5: Uploads the file, triggers server-side analysis (OCR, text extraction),
+6: polls until complete, and returns the parsed content.
+7: 
+8: Usage:
+9:     python parse_file.py /path/to/document.pdf [--output parsed_content.txt]
+10: 
+11: Environment variables:
+12:     SKYWORK_API_KEY      - Auth api key
+13: """
+14: 
+15: import argparse
+16: import io
+17: import json
+18: import mimetypes
+19: import os
+20: import sys
+21: import uuid
+22: from pathlib import Path
+23: from urllib.request import Request, urlopen
+24: from urllib.error import URLError, HTTPError
+25: 
+26: from constant import SKYWORK_GATEWAY_URL
+27: from skywork_auth import get_skywork_api_key
+28: 
+29: 
+30: def build_multipart_body(file_path: str):
+31:     """Build a multipart/form-data request body."""
+32:     boundary = f"----FormBoundary{uuid.uuid4().hex[:16]}"
+33:     body = io.BytesIO()
+34:     file_name = os.path.basename(file_path)
+35:     mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+36: 
+37:     body.write(f"--{boundary}\r\n".encode())
+38:     body.write(f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'.encode())
+39:     body.write(f"Content-Type: {mime_type}\r\n\r\n".encode())
+40:     with open(file_path, "rb") as f:
+41:         body.write(f.read())
+42:     body.write(b"\r\n")
+43:     body.write(f"--{boundary}--\r\n".encode())
+44: 
+45:     return body.getvalue(), f"multipart/form-data; boundary={boundary}"
+46: 
+47: 
+48: def parse_sse_events(response):
+49:     """Parse SSE events from an HTTP response stream."""
+50:     cur_event = None
+51:     cur_data = None
+52:     for line_bytes in response:
+53:         line = line_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
+54:         if line == "":
+55:             if cur_event is not None and cur_data is not None:
+56:                 try:
+57:                     data = json.loads(cur_data)
+58:                     yield cur_event, data
+59:                 except json.JSONDecodeError:
+60:                     pass
+61:             cur_event = None
+62:             cur_data = None
+63:         elif line.startswith("event: "):
+64:             cur_event = line[7:].strip()
+65:         elif line.startswith("data: "):
+66:             cur_data = line[6:]
+67:     if cur_event is not None and cur_data is not None:
+68:         try:
+69:             data = json.loads(cur_data)
+70:             yield cur_event, data
+71:         except json.JSONDecodeError:
+72:             pass
+73: 
+74: 
+75: def parse_file(base_url: str, api_key: str, file_path: str) -> dict:
+76:     """Upload and parse a file, streaming progress. Returns parsed metadata."""
+77:     url = f"{base_url}/api/sse/file/parse"
+78:     file_name = os.path.basename(file_path)
+79:     file_size = os.path.getsize(file_path)
+80: 
+81:     print(f"[parse] File: {file_name} ({file_size:,} bytes)")
+82:     print(f"[parse] Server: {base_url}")
+83:     print()
+84: 
+85:     body, content_type = build_multipart_body(file_path)
+86:     req = Request(url, data=body, method="POST")
+87:     req.add_header("Content-Type", content_type)
+88:     if api_key:
+89:         req.add_header("Authorization", f"Bearer {api_key}")
+90: 
+91:     try:
+92:         resp = urlopen(req, timeout=300)
+93:     except HTTPError as e:
+94:         body_text = e.read().decode('utf-8', errors='replace')
+95:         print(f"[error] HTTP {e.code}: {body_text}", file=sys.stderr)
+96:         sys.exit(1)
+97:     except URLError as e:
+98:         print(f"[error] Cannot reach server: {e.reason}", file=sys.stderr)
+99:         sys.exit(1)
+100: 
+101:     result = None
+102:     event_count = 0
+103:     for event_type, data in parse_sse_events(resp):
+104:         event_count += 1
+105:         print(f"[debug] Event #{event_count}: {event_type}\n", flush=True)
+106:         if event_type == "progress":
+107:             stage = data.get("stage", "")
+108:             pct = data.get("percentage", 0)
+109:             msg = data.get("message", "")
+110:             bar = "=" * int(pct / 5) + ">" + " " * (20 - int(pct / 5))
+111:             print(f"\r[{bar}] {pct:5.1f}%  {msg}", end="", flush=True)
+112:         elif event_type == "success":
+113:             print()  # newline after progress bar
+114:             result = data
+115:             metadata = data.get("metadata", {})
+116:             exec_time = data.get("execution_time", 0)
+117:             print()
+118:             print(f"[success] File parsed!")
+119:             print(f"  File ID:    {data.get('file_id', '?')}")
+120:             print(f"  File NAME:    {metadata.get('file_name', '')}")
+121:             print(f"  File URL:    {metadata.get('file_url', '')}")
+122:             print(f"  Title:      {metadata.get('parsed_title', '(none)')}")
+123:             print(f"  Summary:    {metadata.get('summary', '(none)')}")
+124:         elif event_type == "error":
+125:             print()
+126:             code = data.get("code", "UNKNOWN")
+127:             msg = data.get("message", "Unknown error")
+128:             print(f"\n[error] {code}: {msg}", file=sys.stderr)
+129:             sys.exit(1)
+130: 
+131:     if result is None:
+132:         print("[debug] No success/error event received — stream may have been empty or malformed", file=sys.stderr)
+133:     return result
+134: 
+135: 
+136: def main():
+137:     parser = argparse.ArgumentParser(description="Parse a reference file via Skywork Office API")
+138:     parser.add_argument("file", help="Path to the file to parse")
+139:     parser.add_argument("--output", "-o", default=None, help="Save parsed content to this file")
+140:     parser.add_argument("--json", action="store_true", help="Output full result as JSON")
+141:     args = parser.parse_args()
+142: 
+143:     if not os.path.isfile(args.file):
+144:         print(f"[error] File not found: {args.file}", file=sys.stderr)
+145:         sys.exit(1)
+146: 
+147:     base_url = SKYWORK_GATEWAY_URL
+148:     api_key = get_skywork_api_key()
+149:     if not api_key:
+150:         print("[error] SKYWORK_API_KEY is required", file=sys.stderr)
+151:         sys.exit(1)
+152: 
+153:     result = parse_file(base_url, api_key, args.file)
+154: 
+155:     if result:
+156:         metadata = result.get("metadata", {})
+157:         parsed_content = metadata.get("parsed_content", "")
+158: 
+159:         if args.output:
+160:             with open(args.output, "w", encoding="utf-8") as f:
+161:                 f.write(parsed_content)
+162:             print(f"\n[saved] Parsed content written to: {args.output}")
+163:         elif args.json:
+164:             print()
+165:             print(json.dumps(result, indent=2, ensure_ascii=False))
+166:         else:
+167:             # Print a preview of the parsed content
+168:             if parsed_content:
+169:                 preview = parsed_content[:1000]
+170:                 if len(parsed_content) > 1000:
+171:                     preview += f"\n... ({len(parsed_content) - 1000:,} more chars)"
+172: 
+173:         # Machine-readable summary for downstream parsing
+174:         file_name = metadata.get("file_name") or os.path.basename(args.file)
+175:         file_url = metadata.get("file_url", "")
+176:         parsed_info = {
+177:             "file_id": result.get("file_id", ""),
+178:             "filename": file_name,
+179:             "file_type": metadata.get("file_type", ""),
+180:             "url": file_url,
+181:         }
+182:         print(f"PARSED_FILE: {json.dumps(parsed_info, ensure_ascii=False)}")
+183: 
+184: 
+185: if __name__ == "__main__":
+186:     main()
+
+FILE scripts/run_editable_convert.py
+1: #!/usr/bin/env python3
+2: """
+3: Call the editable PPTX conversion SSE API, output progress to stdout, and save the generated .pptx locally.
+4: """
+5: import argparse
+6: import datetime
+7: import json
+8: import os
+9: import sys
+10: import urllib.error
+11: import urllib.request
+12: import uuid
+13: 
+14: from constant import SKYWORK_GATEWAY_URL
+15: from skywork_auth import get_skywork_api_key
+16: 
+17: 
+18: def write_log(log_file: str, line: str):
+19:     try:
+20:         time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+21:         log_str = f"{time_str} {line.rstrip()}\n"
+22:         print(log_str, flush=True)
+23:         with open(log_file, "a", encoding="utf-8") as f:
+24:             f.write(log_str)
+25:             f.flush()
+26:     except Exception:
+27:         pass
+28: 
+29: 
+30: def parse_sse_stream(resp):
+31:     cur_event = None
+32:     cur_data = None
+33:     for line in resp:
+34:         line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+35:         if line == "":
+36:             if cur_event is not None and cur_data is not None:
+37:                 try:
+38:                     raw = json.loads(cur_data) if cur_data else {}
+39:                 except json.JSONDecodeError:
+40:                     raw = {}
+41:                 data = raw.get("data", raw) if isinstance(raw, dict) else raw
+42:                 if isinstance(data, str):
+43:                     try:
+44:                         data = json.loads(data)
+45:                     except json.JSONDecodeError:
+46:                         data = {}
+47:                 if not isinstance(data, dict):
+48:                     data = {}
+49:                 yield cur_event, data
+50:             cur_event = None
+51:             cur_data = None
+52:             continue
+53:         if line.startswith("event:"):
+54:             cur_event = line[6:].strip()
+55:         elif line.startswith("data:"):
+56:             cur_data = line[5:].strip()
+57:     if cur_event is not None and cur_data is not None:
+58:         try:
+59:             raw = json.loads(cur_data) if cur_data else {}
+60:         except json.JSONDecodeError:
+61:             raw = {}
+62:         data = raw.get("data", raw) if isinstance(raw, dict) else raw
+63:         if isinstance(data, str):
+64:             try:
+65:                 data = json.loads(data)
+66:             except json.JSONDecodeError:
+67:                 data = {}
+68:         if not isinstance(data, dict):
+69:             data = {}
+70:         yield cur_event, data
+71: 
+72: 
+73: def phase_to_message(phase: str, data: dict) -> str:
+74:     if phase == "ping":
+75:         progress = data.get("progress", "")
+76:         stage = data.get("stage", "")
+77:         return f"Now {progress}% was done, and is working on {stage}" if stage else f"{progress}%"
+78:     if phase == "get_screenshots":
+79:         status = data.get("status", "")
+80:         if status == "start":
+81:             file_type = data.get("file_type", "")
+82:             return f"Capturing screenshots from {file_type or 'source file'}..."
+83:         if status == "done":
+84:             slide_count = data.get("slide_count", "")
+85:             return f"Screenshots captured, {slide_count} pages total."
+86:         return ""
+87:     if phase == "upload_screenshots":
+88:         status = data.get("status", "")
+89:         if status == "start":
+90:             return "Uploading screenshot images..."
+91:         if status == "done":
+92:             page_count = data.get("page_count", "")
+93:             return f"Screenshot upload complete, {page_count} pages total."
+94:         return ""
+95:     if phase == "screenshot_uploaded":
+96:         page_num = data.get("page_num", "")
+97:         return f"Screenshot {page_num} uploaded."
+98:     if phase == "build_nano_html":
+99:         status = data.get("status", "")
+100:         if status == "start":
+101:             return "Building nano HTML..."
+102:         if status == "done":
+103:             page_count = data.get("page_count", "")
+104:             return f"Nano HTML built, {page_count} pages total."
+105:         return ""
+106:     if phase == "nano_html_page":
+107:         page_num = data.get("page_num", "")
+108:         return f"Nano HTML ready for page {page_num}."
+109:     if phase == "convert_html":
+110:         status = data.get("status", "")
+111:         if status == "start":
+112:             return "Converting HTML..."
+113:         if status == "done":
+114:             page_count = data.get("page_count", "")
+115:             return f"HTML conversion complete, {page_count} pages total."
+116:         return ""
+117:     if phase == "convert_batch":
+118:         batch_index = data.get("batch_index", "")
+119:         batch_count = data.get("batch_count", "")
+120:         return f"Converted batch {batch_index}/{batch_count}."
+121:     if phase == "export":
+122:         status = data.get("status", "")
+123:         if status == "start":
+124:             return "Exporting editable PPTX..."
+125:         if status == "done":
+126:             return "Export complete."
+127:         return ""
+128:     if phase == "done":
+129:         return "Conversion complete, saving file..."
+130:     if phase:
+131:         return f"[{phase}]"
+132:     return ""
+133: 
+134: 
+135: def main():
+136:     parser = argparse.ArgumentParser(description="Convert a PPTX or PDF file to an editable PPTX")
+137:     parser.add_argument("--file-url", required=True, dest="file_url", help="OSS URL of the source pptx/pdf file")
+138:     parser.add_argument("--file-type", default="", dest="file_type", help="Optional file type override: pptx or pdf")
+139:     parser.add_argument("--title", default="", help="Optional output file title used by the backend export")
+140:     parser.add_argument("-o", "--output", default="output_editable.pptx", help="Output .pptx path")
+141:     parser.add_argument("--session_id", default=str(uuid.uuid4()), help="session_id used for the request")
+142:     parser.add_argument("--log_path", default="", dest="log_path", help="A file path to save the progress log")
+143:     args = parser.parse_args()
+144: 
+145:     session_id = args.session_id.replace("-", "_")
+146:     log_file = f"/tmp/ppt_editable_{session_id}.log" if args.log_path == "" else args.log_path
+147:     open(log_file, "w").close()
+148:     print(f"[LOG-File]: {log_file}", flush=True)
+149: 
+150:     print(f"[PID] {os.getpid()}", flush=True)
+151:     print(f"[START] mode=editable_convert session={session_id} \nIS about to take 5-10minutes, please wait and check the process log every 5 seconds!", flush=True)
+152:     write_log(log_file, f"[PID] {os.getpid()}")
+153:     write_log(log_file, f"[START] mode=editable_convert session={session_id} \nIS about to take 5-10minutes, please wait and check the process log every 5 seconds!")
+154: 
+155:     payload = {"file_url": args.file_url}
+156:     if args.file_type:
+157:         payload["file_type"] = args.file_type
+158:     if args.title:
+159:         payload["title"] = args.title
+160: 
+161:     api_key = get_skywork_api_key()
+162:     if not api_key:
+163:         print("[error] SKYWORK_API_KEY is required", file=sys.stderr)
+164:         sys.exit(1)
+165: 
+166:     headers = {
+167:         "Content-Type": "application/json",
+168:         "Accept": "text/event-stream",
+169:         "Session-Id": session_id,
+170:         "Authorization": f"Bearer {api_key}",
+171:     }
+172:     req = urllib.request.Request(
+173:         f"{SKYWORK_GATEWAY_URL}/convert_file_to_editable_pptx",
+174:         data=json.dumps(payload).encode("utf-8"),
+175:         method="POST",
+176:         headers=headers,
+177:     )
+178: 
+179:     out_abs = os.path.abspath(args.output)
+180:     try:
+181:         with urllib.request.urlopen(req, timeout=600) as resp:
+182:             for event_type, data in parse_sse_stream(resp):
+183:                 if not isinstance(data, dict):
+184:                     data = {}
+185:                 if event_type == "phase":
+186:                     phase = data.get("phase", "")
+187:                     msg = phase_to_message(phase, data)
+188:                     if msg:
+189:                         tag = "[PROGRESS]" if phase == "ping" else "[PHASE]"
+190:                         write_log(log_file, f"{tag} {msg}")
+191:                 elif event_type == "completionEvent":
+192:                     if data.get("phase", "") == "done":
+193:                         download_url = data.get("download_url", "")
+194:                         slide_count = data.get("slide_count", "")
+195:                         output_id = data.get("output_id", "")
+196:                         if slide_count != "":
+197:                             write_log(log_file, f"[PHASE] Editable PPTX contains {slide_count} slides.")
+198:                         if output_id:
+199:                             write_log(log_file, f"[PHASE] output_id={output_id}")
+200:                         if not download_url:
+201:                             write_log(log_file, "[ERROR] No download_url in completionEvent")
+202:                             sys.exit(1)
+203:                         try:
+204:                             req2 = urllib.request.Request(download_url, method="GET")
+205:                             with urllib.request.urlopen(req2, timeout=120) as r:
+206:                                 with open(out_abs, "wb") as f:
+207:                                     f.write(r.read())
+208:                             write_log(log_file, f"[DONE] saved={out_abs} download_url={download_url}")
+209:                         except Exception as e:
+210:                             write_log(log_file, f"[ERROR] Download failed: {e}")
+211:                             sys.exit(1)
+212:                 elif event_type == "error":
+213:                     err_msg = data.get("message", str(data))
+214:                     write_log(log_file, f"[ERROR] {err_msg}")
+215:                     sys.exit(1)
+216:     except urllib.error.HTTPError as e:
+217:         body = e.read().decode("utf-8", errors="replace")
+218:         write_log(log_file, f"[ERROR] HTTP {e.code}: {body}")
+219:         sys.exit(1)
+220:     except Exception as e:
+221:         write_log(log_file, f"[ERROR] {e}")
+222:         sys.exit(1)
+223: 
+224: 
+225: if __name__ == "__main__":
+226:     main()
+
+FILE scripts/run_ppt_write.py
+1: #!/usr/bin/env python3
+2: """
+3: Call the ppt_write streaming API, output progress to stdout (for skill to relay in conversation), and save to disk via download_url upon completion.
+4: Supports multiple environments: specify Base URL via environment variables or --env.
+5: 
+6: General usage (independent of skill installation path):
+7:   - Recommended: have the platform execute run_ppt_write.py from the skill root, e.g.: python <skill_root>/run_ppt_write.py "title" -o my.pptx
+8:     When the user types /ppt-write title, the platform resolves the skill root and runs the above command; no need for the user to specify the path.
+9:   - Or call this script directly: python <skill_root>/scripts/call_stream.py "title" -o my.pptx
+10: """
+11: import argparse
+12: import datetime
+13: import json
+14: import os
+15: import sys
+16: import urllib.request
+17: import urllib.error
+18: import uuid
+19: 
+20: from constant import SKYWORK_GATEWAY_URL, POD_TYPE
+21: 
+22: from skywork_auth import get_skywork_api_key
+23: 
+24: def get_base_url() -> str:
+25:     return SKYWORK_GATEWAY_URL
+26: 
+27: 
+28: def write_log(log_file: str, line: str):
+29:     """Append a plain-text line to the log file."""
+30:     try:
+31:         time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+32:         log_str = f"{time_str} {line.rstrip()}\n"
+33:         print(log_str, flush=True)
+34:         with open(log_file, "a", encoding="utf-8") as f:            
+35:             f.write(log_str)
+36:             f.flush()
+37:     except Exception:
+38:         pass
+39: 
+40: 
+41: def phase_to_message(phase: str, data: dict) -> str:
+42:     """Convert phase to a message suitable for conversation output (consistent with SKILL progress output)"""
+43:     if phase == "outline":
+44:         return "Generating outline..."
+45:     if phase == "outline_page":
+46:         # Outline page-by-page streaming output: show page number and content (newlines collapsed to spaces for single-line console display)
+47:         page_num = data.get("page_num") or 0
+48:         content = (data.get("content") or "").strip()
+49:         if isinstance(content, str):
+50:             content = " ".join(content.split())
+51:         else:
+52:             content = str(content) if content else ""
+53:         if content:
+54:             line = f"  Page {page_num}: {content[:300]}{'...' if len(content) > 300 else ''}"
+55:             return line
+56:         return f"  Page {page_num}: (no body text)"
+57:     if phase == "outline_done":
+58:         return "Outline generated successfully!"
+59:     if phase == "slides":
+60:         return "Generating slides..."
+61:     if phase == "slides_page":
+62:         page_num = data.get("page_num") or 0
+63:         return f"Finish generating Page {page_num} "
+64:     if phase == "slides_page_start":
+65:         page_num = data.get("page_num") or 0
+66:         content = " ".join((data.get("content") or "").split())
+67:         snippet = content[:200] + ("..." if len(content) > 200 else "")
+68:         return f"Start generating page {page_num},content: \n{snippet}" if snippet else f"Start generating page {page_num}"
+69:     if phase == "slides_done":
+70:         return "Slides generated, exporting PPTX..."
+71:     if phase == "export":
+72:         status = data.get("status", "")
+73:         if status == "done":
+74:             return "Export complete."
+75:         return "Exporting PPTX... this step takes 2-5 minutes. KEEP reading this log every 5 seconds — do NOT stop polling until you see [DONE] or [ERROR]."
+76:     if phase == "done":
+77:         return "Generation complete, saving file..."
+78:     if phase == "ping":
+79:         progress = data.get("progress", "")
+80:         stage = data.get("stage", "")
+81:         return f"Now {progress}% was done, and is working on {stage}" if stage else f"{progress}%"
+82:     # --- Update/Edit PPT specific phases ---
+83:     if phase == "parse_pptx":
+84:         status = data.get("status", "")
+85:         if status == "start":
+86:             return "Parsing existing PPTX..."
+87:         if status == "done":
+88:             count = data.get("original_pptx_slide_count", "")
+89:             return f"PPTX parsed, {count} slides total."
+90:         return ""
+91:     if phase == "gen_update_plan":
+92:         status = data.get("status", "")
+93:         if status == "start":
+94:             return "Generating update plan..."
+95:         if status == "done":
+96:             update_count = data.get("update_pptx_slide_count", "")
+97:             new_count = data.get("new_slide_count", 0)
+98:             return f"Update plan ready: {update_count} slides to update, {new_count} new slides to generate."
+99:         return ""
+100:     if phase == "gen_new_slides":
+101:         status = data.get("status", "")
+102:         if status == "start":
+103:             return "Generating updated slides..."
+104:         if status == "done":
+105:             count = data.get("generated_new_slide_count", "")
+106:             return f"Updated slides generated ({count} slides)."
+107:         page_num = data.get("page_num")
+108:         if page_num is not None:
+109:             return f"Slide {page_num} updated."
+110:         return ""
+111:     if phase == "export_update_pptx":
+112:         status = data.get("status", "")
+113:         if status == "start":
+114:             return "Exporting updated PPTX..."
+115:         if status == "done":
+116:             count = data.get("generated_update_pptx_slide_count", "")
+117:             return f"Export complete, {count} slides."
+118:         return ""
+119:     # --- Template-based generation specific phases ---
+120:     if phase == "parse_template":
+121:         status = data.get("status", "")
+122:         if status == "start":
+123:             return "Parsing template..."
+124:         if status == "done":
+125:             slide_count = data.get("slide_count", "")
+126:             return f"Template parsing complete, {slide_count} pages in total."
+127:         return ""
+128:     if phase == "gen_outline":
+129:         status = data.get("status", "")
+130:         if status == "start":
+131:             return "Generating outline..."
+132:         if status == "done":
+133:             page_count = data.get("page_count", "")
+134:             return f"Outline generated, {page_count} pages in total."
+135:         return ""
+136:     if phase == "assign_templates":
+137:         status = data.get("status", "")
+138:         page_count = data.get("page_count", "")
+139:         if status == "start":
+140:             return "Assigning templates to each page..."
+141:         if status == "done":
+142:             return f"Template assignment complete, {page_count} pages in total."
+143:         return ""
+144:     if phase == "fill_content":
+145:         status = data.get("status", "")
+146:         page_count = data.get("page_count", "")
+147:         if status == "start":
+148:             return "Filling in content..."
+149:         if status == "done":
+150:             return f"Content filled, {page_count} pages in total."
+151:         return ""
+152:     if phase == "gen_images":
+153:         status = data.get("status", "")
+154:         if status == "start":
+155:             return "Generating images..."
+156:         if status == "done":
+157:             return "Image generation complete."
+158:         return ""
+159:     if phase == "slide_image":
+160:         page_num = data.get("page_num", "")
+161:         return f"Page {page_num} image generated."
+162:     if phase == "convert_html":
+163:         status = data.get("status", "")
+164:         if status == "start":
+165:             return "Converting HTML..."
+166:         if status == "done":
+167:             page_count = data.get("page_count", "")
+168:             return f"HTML conversion complete, {page_count} pages in total."
+169:         return ""
+170:     if phase:
+171:         return f"[{phase}]"
+172:     return "..."
+173: 
+174: 
+175: def parse_sse_stream(resp):
+176:     """Parse SSE stream, yield (event_type, data_dict).
+177:     The backend SendEventData wraps data as {"code":0,"message":"success","data": payload}; the data field needs to be extracted.
+178:     """
+179:     cur_event = None
+180:     cur_data = None
+181:     for line in resp:
+182:         line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+183:         if line == "":
+184:             if cur_event is not None and cur_data is not None:
+185:                 try:
+186:                     raw = json.loads(cur_data) if cur_data else {}
+187:                 except json.JSONDecodeError:
+188:                     raw = {}
+189:                 # Compatible with backend wrapper format: {"code":0,"message":"success","data": {...}}; data may also be a JSON string
+190:                 data = raw.get("data", raw) if isinstance(raw, dict) else raw
+191:                 if isinstance(data, str):
+192:                     try:
+193:                         data = json.loads(data)
+194:                     except json.JSONDecodeError:
+195:                         data = {}
+196:                 if not isinstance(data, dict):
+197:                     data = {}
+198:                 yield cur_event, data
+199:             cur_event = None
+200:             cur_data = None
+201:             continue
+202:         if line.startswith("event:"):
+203:             cur_event = line[6:].strip()
+204:         elif line.startswith("data:"):
+205:             cur_data = line[5:].strip()
+206:     if cur_event is not None and cur_data is not None:
+207:         try:
+208:             raw = json.loads(cur_data) if cur_data else {}
+209:         except json.JSONDecodeError:
+210:             raw = {}
+211:         data = raw.get("data", raw) if isinstance(raw, dict) else raw
+212:         if isinstance(data, str):
+213:             try:
+214:                 data = json.loads(data)
+215:             except json.JSONDecodeError:
+216:                 data = {}
+217:         if not isinstance(data, dict):
+218:             data = {}
+219:         yield cur_event, data
+220: 
+221: 
+222: def main():
+223:     parser = argparse.ArgumentParser(description="Call ppt_write stream API and save .pptx")
+224:     parser.add_argument("query", nargs="?", default="", help="User query / PPT topic")
+225:     parser.add_argument("--language", default="en", help="Language used to generate slides. e.g. English, Chinese, etc.")
+226:     parser.add_argument("--reference", default="", help="Reference content for enriching slide content, e.g. web search results summary.")
+227:     parser.add_argument("--reference-file", default="", dest="reference_file", help="Path to a local file whose content will be used as reference (preferred over --reference to avoid shell encoding issues).")
+228:     parser.add_argument("-o", "--output", default="output.pptx", help="Output .pptx path")
+229:     parser.add_argument("--session_id", default=str(uuid.uuid4()), help="session_id used for distinct ppt generate query")
+230:     parser.add_argument("--template_urls", default="", help="Comma-separated list of template PPTX OSS URLs for style imitation")
+231:     parser.add_argument("--files", default="", help='Reference files JSON from upload_files.py UPLOADED_FILES output, format: [{"filename":"a.pdf","url":"https://..."}]')
+232:     parser.add_argument("--pptx-url", default="", dest="pptx_url", help="OSS URL of an existing PPTX to edit (triggers update/edit mode instead of generation).")
+233:     parser.add_argument("--log_path", default="", dest="log_path", help="A file path to save the progress log.")
+234:     args = parser.parse_args()
+235:     query = args.query.strip()
+236:     if not query:
+237:         parser.error("query is required")
+238:         return
+239: 
+240:     base_url = get_base_url()
+241:     payload = {"query": query, "language": args.language}
+242: 
+243:     session_id = args.session_id.replace('-', '_')
+244:     log_file = f"/tmp/ppt_run_{session_id}.log" if args.log_path == "" else args.log_path
+245:     open(log_file, "w").close()  # clear previous run
+246:     print(f"[LOG-File]: {log_file}", flush=True)
+247: 
+248:     # Determine endpoint and mode
+249:     if args.pptx_url:
+250:         url = f"{base_url}/update_pptx_process"
+251:         payload["pptx_url"] = args.pptx_url
+252:         mode = "editing"
+253:     elif args.template_urls:
+254:         url = f"{base_url}/chat_pptx_process"
+255:         payload["template_urls"] = [u.strip() for u in args.template_urls.split(",") if u.strip()]
+256:         mode = "imitation"
+257:     else:
+258:         url = f"{base_url}/ppt_write_stream"
+259:         mode = "generating"
+260: 
+261:     print(f"[PID] {os.getpid()}", flush=True)
+262:     print(f"[START] mode={mode} session={session_id} \nIS about to take 5-10minutes, please wait and check the process log every 5 seconds!", flush=True)
+263:     write_log(log_file, f"[PID] {os.getpid()}")
+264:     write_log(log_file, f"[START] mode={mode} session={session_id} \nIS about to take 5-10minutes, please wait and check the process log every 5 seconds!")
+265: 
+266:     reference = args.reference
+267:     if args.reference_file:
+268:         try:
+269:             with open(args.reference_file, "r", encoding="utf-8") as f:
+270:                 reference = f.read()
+271:         except Exception as e:
+272:             print(f"[error] Failed to read reference file: {e}", file=sys.stderr)
+273:             sys.exit(1)
+274:     if reference:
+275:         payload["reference"] = reference
+276:     if args.files:
+277:         try:
+278:             payload["files"] = json.loads(args.files)
+279:         except json.JSONDecodeError as e:
+280:             print(f"--files JSON parse error: {e}", file=sys.stderr)
+281:             sys.exit(1)
+282:     payload["source_platform"] = "skyclaw" if POD_TYPE == "skyclaw" else ""
+283:     body = json.dumps(payload).encode("utf-8")
+284:     headers = {
+285:         "Content-Type": "application/json",
+286:         "Accept": "text/event-stream",
+287:         "Session-Id": session_id,
+288:         "Language": args.language,
+289:     }
+290:     api_key = get_skywork_api_key()
+291:     if not api_key:
+292:         print("[error] SKYWORK_API_KEY is required", file=sys.stderr)
+293:         sys.exit(1)
+294:     headers["Authorization"] = f"Bearer {api_key}"
+295: 
+296:     req = urllib.request.Request(
+297:         url,
+298:         data=body,
+299:         method="POST",
+300:         headers=headers,
+301:     )
+302: 
+303:     out_abs = os.path.abspath(args.output)
+304:     try:
+305:         with urllib.request.urlopen(req, timeout=600) as resp:
+306:             for event_type, data in parse_sse_stream(resp):
+307:                 if not isinstance(data, dict):
+308:                     data = {}
+309:                 if event_type == "phase":
+310:                     phase = data.get("phase", "")
+311:                     msg = phase_to_message(phase, data)
+312:                     if msg:
+313:                         tag = "[PROGRESS]" if phase == "ping" else "[PHASE]"
+314:                         write_log(log_file, f"{tag} {msg}")
+315:                     if phase == "outline_done":
+316:                         outline = data.get("outline", "")
+317:                         if outline:
+318:                             write_log(log_file, f"[OUTLINE]\n{outline}")
+319:                 elif event_type == "completionEvent":
+320:                     phase = data.get("phase", "")
+321:                     if phase == "done":
+322:                         download_url = data.get("download_url")
+323:                         write_log(log_file, "[PHASE] Generation complete, saving file to local disk. This may take 1 or 2 minutes, we are already success!")
+324:                         if not download_url:
+325:                             write_log(log_file, "[ERROR] No download_url in completionEvent")
+326:                             sys.exit(1)
+327:                         try:
+328:                             req2 = urllib.request.Request(download_url, method="GET")
+329:                             with urllib.request.urlopen(req2, timeout=120) as r:
+330:                                 with open(out_abs, "wb") as f:
+331:                                     f.write(r.read())
+332:                             write_log(log_file, f"[DONE] saved={out_abs} download_url={download_url}")
+333:                         except Exception as e:
+334:                             write_log(log_file, f"[ERROR] Download failed: {e}")
+335:                             sys.exit(1)
+336:                 elif event_type == "error":
+337:                     err_msg = data.get("message", str(data))
+338:                     write_log(log_file, f"[ERROR] {err_msg}")
+339:                     sys.exit(1)
+340:     except urllib.error.HTTPError as e:
+341:         body = e.read().decode("utf-8", errors="replace")
+342:         write_log(log_file, f"[ERROR] HTTP {e.code}: {body}")
+343:         sys.exit(1)
+344:     except Exception as e:
+345:         write_log(log_file, f"[ERROR] {e}")
+346:         sys.exit(1)
+347: 
+348: 
+349: if __name__ == "__main__":
+350:     main()
+
+FILE scripts/skywork_auth.py
+1: import os
+2: from typing import Optional
+3: 
+4: 
+5: def get_skywork_api_key() -> Optional[str]:
+6:     """
+7:     Returns skywork api key.
+8:     """
+9:     api_key = os.environ.get("SKYWORK_API_KEY", "")
+10:     if not api_key:
+11:         print("SKYWORK_API_KEY is not set.")
+12:         return None
+13:     return api_key
+
+FILE scripts/upload_files.py
+1: #!/usr/bin/env python3
+2: """
+3: Upload local files to OSS by calling the /upload_oss endpoint.
+4: 
+5: Usage:
+6:   python upload_files.py file1.png file2.jpg
+7:   python upload_files.py file1.png --path skills/images/
+8: """
+9: import argparse
+10: import io
+11: import json
+12: import mimetypes
+13: import os
+14: import sys
+15: import urllib.request
+16: import urllib.error
+17: import uuid
+18: 
+19: from pptx import api
+20: 
+21: 
+22: from constant import SKYWORK_GATEWAY_URL
+23: 
+24: from skywork_auth import get_skywork_api_key
+25: 
+26: 
+27: def build_multipart(fields: dict, files: dict) -> tuple[bytes, str]:
+28:     """Build a multipart/form-data request body, returns (body_bytes, content_type).
+29: 
+30:     fields: {"field_name": "value", ...}
+31:     files:  {"field_name": (filename, file_bytes, mime_type), ...}
+32:     """
+33:     boundary = uuid.uuid4().hex
+34:     parts = []
+35: 
+36:     for name, value in fields.items():
+37:         parts.append(
+38:             f'--{boundary}\r\n'
+39:             f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+40:             f'{value}\r\n'
+41:         )
+42: 
+43:     for name, (filename, data, mime) in files.items():
+44:         parts.append(
+45:             f'--{boundary}\r\n'
+46:             f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+47:             f'Content-Type: {mime}\r\n\r\n'
+48:         )
+49:         if isinstance(data, str):
+50:             data = data.encode()
+51:         parts_bytes = b''.join(
+52:             p.encode() if isinstance(p, str) else p for p in parts
+53:         ) + data + b'\r\n'
+54:         parts = [parts_bytes]
+55: 
+56:     body = b''.join(p.encode() if isinstance(p, str) else p for p in parts)
+57:     body += f'--{boundary}--\r\n'.encode()
+58:     content_type = f'multipart/form-data; boundary={boundary}'
+59:     return body, content_type
+60: 
+61: 
+62: def upload_file(local_path: str, oss_prefix: str | None, base_url: str, api_key: str = None) -> str:
+63:     """Upload a single local file and return the OSS URL. Raises an exception on failure."""
+64:     if not os.path.isfile(local_path):
+65:         raise FileNotFoundError(f"File not found: {local_path}")
+66: 
+67:     filename = os.path.basename(local_path)
+68:     mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+69: 
+70:     with open(local_path, "rb") as f:
+71:         file_bytes = f.read()
+72: 
+73:     fields = {}
+74:     if oss_prefix:
+75:         fields["path"] = oss_prefix
+76: 
+77:     body, content_type = build_multipart(
+78:         fields=fields,
+79:         files={"file": (filename, file_bytes, mime)},
+80:     )
+81: 
+82:     url = base_url.rstrip("/") + "/upload_oss"
+83:     headers = {
+84:         "Content-Type": content_type,
+85:     }
+86:     if api_key:
+87:         headers["Authorization"] = f"Bearer {api_key}"
+88:     req = urllib.request.Request(
+89:         url,
+90:         data=body,
+91:         method="POST",
+92:         headers=headers,
+93:     )
+94: 
+95:     with urllib.request.urlopen(req, timeout=60) as resp:
+96:         raw = resp.read().decode("utf-8", errors="replace")
+97: 
+98:     result = json.loads(raw)
+99:     code = result.get("code")
+100:     if code != 200:
+101:         raise RuntimeError(f"Upload failed code={code} msg={result.get('msg')}")
+102: 
+103:     return result["url"]
+104: 
+105: 
+106: def upload_files(local_paths: list[str], oss_prefix: str | None = None, base_url: str = SKYWORK_GATEWAY_URL, api_key: str = None) -> list[dict]:
+107:     """Upload a batch of local files and return a list of results for each file.
+108: 
+109:     Return format:
+110:         [{"path": "/local/file.png", "url": "https://cdn.../xxx.png", "ok": True}, ...]
+111:         On failure, url is empty, ok is False, and an error field is included.
+112:     """
+113:     results = []
+114:     for path in local_paths:
+115:         try:
+116:             url = upload_file(path, oss_prefix, base_url, api_key)
+117:             filename = os.path.basename(path)
+118:             print(f"[OK] {path} -> {url}", flush=True)
+119:             results.append({"path": path, "filename": filename, "url": url, "ok": True})
+120:         except Exception as e:
+121:             print(f"[FAIL] {path}: {e}", file=sys.stderr, flush=True)
+122:             results.append({"path": path, "filename": os.path.basename(path), "url": "", "ok": False, "error": str(e)})
+123:     # Print machine-readable summary for downstream parsing
+124:     uploaded = [{"filename": r["filename"], "url": r["url"]} for r in results if r["ok"]]
+125:     if uploaded:
+126:         print(f"UPLOADED_FILES: {json.dumps(uploaded, ensure_ascii=False)}", flush=True)
+127:     return results
+128: 
+129: 
+130: def main():
+131:     parser = argparse.ArgumentParser(description="Batch upload local files to OSS")
+132:     parser.add_argument("files", nargs="+", help="List of local file paths")
+133:     args = parser.parse_args()
+134: 
+135:     api_key = get_skywork_api_key()
+136:     if not api_key:
+137:         print("[error] SKYWORK_API_KEY is required", file=sys.stderr)
+138:         sys.exit(1)
+139: 
+140:     results = upload_files(args.files, oss_prefix='', api_key=api_key)
+141: 
+142:     failed = [r for r in results if not r["ok"]]
+143:     if failed:
+144:         print(f"\n{len(failed)}/{len(results)} file(s) failed to upload", file=sys.stderr)
+145:         sys.exit(1)
+146:     else:
+147:         print(f"\nAll {len(results)} file(s) uploaded successfully")
+148: 
+149: 
+150: if __name__ == "__main__":
+151:     main()
+
+FILE scripts/web_search.py
+1: #!/usr/bin/env python3
+2: """
+3: web_search.py - Call local web search API and print results.
+4: 
+5: Usage:
+6:     python web_search.py "query1" ["query2" ...]
+7: """
+8: 
+9: import argparse
+10: import json
+11: import os
+12: import sys
+13: import tempfile
+14: import urllib.request
+15: 
+16: from constant import SKYWORK_GATEWAY_URL, POD_TYPE
+17: from skywork_auth import get_skywork_api_key
+18: 
+19: def search(query: str, api_key: str) -> str:
+20:     """Call web_search API and return formatted text of results."""
+21:     url = f"{SKYWORK_GATEWAY_URL}/web_search"
+22:     payload = {"query": query, "source_platform": "skyclaw" if POD_TYPE == "skyclaw" else ""}
+23:     body = json.dumps(payload).encode("utf-8")
+24:     headers = {"Content-Type": "application/json"}
+25:     if api_key:
+26:         headers["Authorization"] = f"Bearer {api_key}"
+27:     req = urllib.request.Request(
+28:         url,
+29:         data=body,
+30:         method="POST",
+31:         headers=headers,
+32:     )
+33:     try:
+34:         with urllib.request.urlopen(req, timeout=30) as resp:
+35:             raw = resp.read().decode("utf-8")
+36:     except urllib.error.URLError as e:
+37:         print(f"[ERROR] Error call web_search, try only 1 time more: {e}", file=sys.stderr)
+38:         sys.exit(1)
+39: 
+40:     try:
+41:         data = json.loads(raw)
+42:     except json.JSONDecodeError:
+43:         return raw  # fallback: return raw if not JSON
+44: 
+45:     results = data.get("search_res", [])
+46:     if not results:
+47:         return "(no results)"
+48: 
+49:     lines = []
+50:     for i, item in enumerate(results, 1):
+51:         content = (item.get("content") or "").strip()
+52:         source_url = item.get("url", "")
+53:         lines.append(f"[result-{i}] {source_url}\n{content}")
+54:     return "\n\n".join(lines)
+55: 
+56: 
+57: def main():
+58:     parser = argparse.ArgumentParser(description="Call local web_search API")
+59:     parser.add_argument("queries", nargs="+", help="One or more search queries (max 3)")
+60:     args = parser.parse_args()
+61: 
+62:     queries = args.queries[:3]
+63:     out_dir = tempfile.mkdtemp(prefix="web_search_")
+64: 
+65:     api_key = get_skywork_api_key()
+66:     if not api_key:
+67:         print("[error] SKYWORK_API_KEY is required", file=sys.stderr)
+68:         sys.exit(1)
+69: 
+70:     for i, q in enumerate(queries, 1):
+71:         print(f"[query] {q} ...", file=sys.stderr, flush=True)
+72:         raw = search(q, api_key)
+73:         out_path = os.path.join(out_dir, f"{q}_result.txt")
+74:         with open(out_path, "w", encoding="utf-8") as f:
+75:             f.write(f"query: {q}\n\n{raw}")
+76:             print(f'Already saved search result for query[{q}], \nout_path: {out_path}', flush=True)
+77: 
+78: 
+79: if __name__ == "__main__":
+80:     main()
+
+FILE workflow_convert_editable.md
+1: # Convert NotebookLM Export to Editable PPTX Workflow
+2: 
+3: Use this workflow when the user provides a local `.pptx` or `.pdf` file and wants to convert a NotebookLM-exported deck into an editable `.pptx`.
+4: 
+5: Follow these steps in order: identify the source file → upload it → run the conversion script in background → **read the log every 5 seconds and report progress** → deliver.
+6: 
+7: ---
+8: 
+9: ## 1. Confirm the source file
+10: 
+11: The user must provide a local `.pptx` or `.pdf` file.
+12: 
+13: - If the file path is ambiguous, ask the user for the full absolute path.
+14: - If the file extension is not `.pptx` or `.pdf`, stop and explain that this workflow only supports those two input types.
+15: 
+16: ---
+17: 
+18: ## 2. Upload the source file to OSS
+19: 
+20: ```bash
+21: $PYTHON_CMD scripts/upload_files.py "/absolute/path/to/source.pptx"
+22: ```
+23: 
+24: or
+25: 
+26: ```bash
+27: $PYTHON_CMD scripts/upload_files.py "/absolute/path/to/source.pdf"
+28: ```
+29: 
+30: - Extract the OSS URL from the `[OK] ... -> https://...` output line.
+31: - Call this value `SOURCE_URL`.
+32: 
+33: ---
+34: 
+35: ## 3. Run the conversion script
+36: 
+37: Run in the **background**, then read the progress log file every 5 seconds until done.
+38: 
+39: ### 3a. Choose a log path and start in background
+40: 
+41: ```bash
+42: PPT_LOG=/tmp/ppt_editable_$(date +%s).log
+43: 
+44: $PYTHON_CMD scripts/run_editable_convert.py \
+45:   --file-url "SOURCE_URL" \
+46:   --file-type "pptx" \
+47:   --log_path "$PPT_LOG" \
+48:   -o /absolute/path/to/output_editable.pptx \
+49:   > /dev/null 2>&1 &
+50: 
+51: echo "Log: $PPT_LOG"
+52: ```
+53: 
+54: or for pdf:
+55: 
+56: ```bash
+57: $PYTHON_CMD scripts/run_editable_convert.py \
+58:   --file-url "SOURCE_URL" \
+59:   --file-type "pdf" \
+60:   --log_path "$PPT_LOG" \
+61:   -o /absolute/path/to/output_editable.pptx \
+62:   > /dev/null 2>&1 &
+63: ```
+64: 
+65: - **`--file-url`** (required): OSS URL of the uploaded source file.
+66: - **`--file-type`** (recommended): explicitly pass `pptx` or `pdf`.
+67: - **`--log_path`** (required): pass the pre-chosen path.
+68: - **`-o`** (required): absolute output path for the converted `.pptx`.
+69: 
+70: ### 3b. Monitor progress （REQUIRED）
+71: 
+72: > **STRICT RULES — no exceptions:**
+73: > 1. **Read the log exactly every 5 seconds.** Do NOT extend the interval, do NOT skip reads.
+74: > 2. **Before every read, check if the process is still alive.** If alive → only read log, NEVER restart.
+75: 
+76: **Every 5 seconds, run this exact sequence:**
+77: 
+78: ```bash
+79: # Step 1: extract PID from log
+80: PPT_PID=$(grep '^\[PID\]' "$PPT_LOG" | tail -1 | awk '{print $2}')
+81: # Step 2: check if process is alive
+82: kill -0 "$PPT_PID" 2>/dev/null && PPT_ALIVE=true || PPT_ALIVE=false
+83: # Step 3: read the log regardless
+84: tail -20 "$PPT_LOG"
+85: ```
+86: 
+87: - If process is **RUNNING** → report status to user, wait 5s, repeat. Do NOT touch the script.
+88: - If process is **not running** AND log ends with `[DONE]` or `[ERROR]` → stop polling, proceed to deliver/handle error.
+89: - If process is **not running** AND no `[DONE]`/`[ERROR]` in log → the script crashed; report error to user, ask whether to retry.
+90: 
+91: Each line is plain text:
+92: - `[PID] <pid>` — process ID written at startup
+93: - `[START]` — job started
+94: - `[PHASE] <message>` — in progress
+95: - `[PROGRESS] <message>` — heartbeat progress update
+96: - `[DONE] saved=<path> download_url=<url>` — finished
+97: - `[ERROR] <message>` — failed
+98: 
+99: **After each read, report status to the user:**
+100: 
+101: ```text
+102: [Main stage] | [current action]
+103: Example: Converting HTML | Converting batch 2/4
+104: ```
+105: 
+106: Progress phases:
+107: 
+108: | Message contains | Main stage |
+109: |-----------------|------------|
+110: | "Capturing screenshots" / "Screenshots captured" | Capturing screenshots |
+111: | "Uploading screenshot" / "Screenshot upload complete" | Uploading screenshots |
+112: | "Building nano HTML" / "Nano HTML ready" | Building nano HTML |
+113: | "Converting HTML" / "Converted batch" | Converting HTML |
+114: | "Exporting editable PPTX" / "Export complete" | Exporting PPTX |
+115: 
+116: **Stop polling** as soon as you see `[DONE]` or `[ERROR]`.
+117: 
+118: ---
+119: 
+120: ## 4. Deliver
+121: 
+122: Provide all of the following:
+123: 1. Download link (`download_url` from the completion event)
+124: 2. Local `.pptx` absolute path
+125: 3. The original filename used as the source
+126: 
+127: ### Failure
+128: 
+129: Briefly explain the error.
+
+FILE workflow_edit.md
+1: # PPT Edit Workflow
+2: 
+3: Edit an existing PPT via natural language: modify individual slides, add new slides, change the overall style, split or merge slides.
+4: 
+5: Follow these steps in order: get pptx_url → confirm intent → run script (background) → **read log every 5s and report progress** (required) → deliver. **Never go silent — always report status as you poll the log.**
+6: 
+7: ---
+8: 
+9: ## 1. Get the PPTX URL
+10: 
+11: The user must supply a publicly accessible OSS/CDN URL of the existing PPTX to edit.
+12: 
+13: - If the user provides a **local file path** instead of a URL, upload it first:
+14:   ```bash
+15:   $PYTHON_CMD scripts/upload_files.py "/absolute/path/to/file.pptx"
+16:   ```
+17:   Extract the URL from the `[OK] ... -> https://...` output line.
+18: 
+19: - If the URL is already provided (e.g. from a previous generation's `Download URL:` output), use it directly.
+20: 
+21: ---
+22: 
+23: ## 2. Confirm edit intent
+24: 
+25: Understand what the user wants to change. Supported operations include:
+26: 
+27: | Operation | Example user intent |
+28: |-----------|---------------------|
+29: | Modify a slide | "change page 4 background to black, text to white" |
+30: | Add a new slide | "insert a new slide after page 3 about X" |
+31: | Change overall style | "make all slides use a dark theme" |
+32: | Split a slide | "split page 5 into two slides" |
+33: | Merge slides | "merge pages 2 and 3 into one slide" |
+34: 
+35: Pass the user's original instruction verbatim as `query`. Do not paraphrase — the backend interprets it directly.
+36: 
+37: ---
+38: 
+39: ## 3. Run the script
+40: 
+41: Run in the **background**, then read the progress log file every 5 seconds until done.
+42: 
+43: ### 3a. Choose a log path and start in background
+44: ```bash
+45: PPT_LOG=/tmp/ppt_$(date +%s).log
+46: 
+47: $PYTHON_CMD scripts/run_ppt_write.py "user's edit instruction" \
+48:   --language Chinese \
+49:   --pptx-url "https://cdn.example.com/path/to/file.pptx" \
+50:   --log_path "$PPT_LOG" \
+51:   -o /absolute/path/to/output.pptx \
+52:   > /dev/null 2>&1 &
+53: 
+54: echo "Log: $PPT_LOG"
+55: ```
+56: 
+57: - **`--log_path`** (required): Pass the pre-chosen path. The script writes all progress here.
+58: - **`--pptx-url`** (required): OSS URL of the PPTX to edit. This triggers edit mode.
+59: - **`--language`** (required): Detect from user input — `Chinese` or `English`.
+60: - **`-o`** (required): Absolute output path for the edited PPTX.
+61: 
+62: ### 3b. Monitor progress （REQUIRED）
+63: 
+64: > **STRICT RULES — no exceptions:**
+65: > 1. **Read the log exactly every 5 seconds.** Do NOT extend the interval, do NOT skip reads.
+66: > 2. **Before every read, check if the process is still alive.** If alive → only read log, NEVER restart.
+67: 
+68: **Every 5 seconds, run this exact sequence:**
+69: ```bash
+70: # Step 1: extract PID from log
+71: PPT_PID=$(grep '^\[PID\]' "$PPT_LOG" | tail -1 | awk '{print $2}')
+72: # Step 2: check if process is alive
+73: kill -0 "$PPT_PID" 2>/dev/null && PPT_ALIVE=true || PPT_ALIVE=false
+74: # Step 3: read the log regardless
+75: tail -20 "$PPT_LOG"
+76: ```
+77: - If process is **RUNNING** → report status to user, wait 5s, repeat. Do NOT touch the script.
+78: - If process is **not running** AND log ends with `[DONE]` or `[ERROR]` → stop polling, proceed to deliver/handle error.
+79: - If process is **not running** AND no `[DONE]`/`[ERROR]` in log → the script crashed; report error to user, ask whether to retry. **Both conditions must hold: PID gone AND no terminal log line. NEVER retry without explicit user confirmation.**
+80: 
+81: Each line is plain text: 
+82: - `[PID] <pid>` — process ID written at startup
+83: - `[START]` — job started
+84: - `[PHASE] <message>` — in progress
+85: - `[DONE] saved=<path> download_url=<url>` — finished
+86: - `[ERROR] <message>` — failed
+87: 
+88: **After each read, report status to the user:**
+89: ```
+90: [Main stage] | [current action] 
+91: Example: Generating slides | Working on page 3 
+92: ```
+93: 
+94: Progress phases:
+95: 
+96: | Message contains | Main stage |
+97: |-----------------|------------|
+98: | "Parsing existing PPTX" | Parsing original PPTX |
+99: | "update plan" | Planning updates |
+100: | "updated slides" / "Slide N updated" | Generating updated slides |
+101: | "Exporting" / "Export complete" | Exporting PPTX |
+102: 
+103: **Stop polling** as soon as you see `[DONE]` or `[ERROR]`.
+104: 
+105: ---
+106: 
+107: ## 4. Deliver
+108: 
+109: Provide all of the following:
+110: 1. Download link (`download_url` from the completion event)
+111: 2. Local `.pptx` absolute path
+112: 3. Brief summary of what was changed (which pages, what modifications)
+113: 
+114: ### Failure
+115: 
+116: Briefly explain the error.
+
+FILE workflow_generate.md
+1: # PPT Generate Workflow
+2: 
+3: Follow these steps in order: confirm inputs → run script (streaming) → **output progress at every phase** (required) → save file → deliver. **Never go silent for an extended period — always stream progress as it arrives.**
+4: 
+5: ---
+6: 
+7: ## 1. Parse reference files (optional — only if the user provides local files)
+8: 
+9: If the user provides local files (PDF, DOCX, PPTX, images, etc.) as content source for the PPT, parse each file with the document parse service. This uploads the file, extracts its content, and returns metadata (file_id, file_url).
+10: 
+11: Run `parse_file.py` once per filet, his may cost a few minutes to finish completely::
+12: 
+13: ```bash
+14: $PYTHON_CMD scripts/parse_file.py /path/to/file1.pdf
+15: $PYTHON_CMD scripts/parse_file.py /path/to/file2.docx
+16: ```
+17: - **exec tool `yieldMs`**: Must be set to `600000` (10 minutes) when invoking the exec tool.
+18: 
+19: Each call prints a `PARSED_FILE:` line on success:
+20: ```
+21: PARSED_FILE: {"filename": "file1.pdf", "url": "https://...", "file_id": "123456789"}
+22: ```
+23: 
+24: Collect every `PARSED_FILE:` result and assemble them into a JSON array as `DOC_FILES_JSON`:
+25: ```json
+26: [
+27:   {"filename":"file1.pdf","url":"https://...","file_id":"123456789","file_type":"pdf"},
+28:   {"filename":"file2.docx","url":"https://...","file_id":"987654321","file_type":"docx"}
+29: ]
+30: ```
+31: 
+32: Pass this array to `--files` in Step 3. If no local files are provided, skip this step entirely.
+33: 
+34: ---
+35: 
+36: ## 2. Web search (required if no relevant content is already in the conversation)
+37: 
+38: Skip this step if the user has already provided sufficient reference material or reference files.
+39: Otherwise, run up to 3 targeted searches on the topic, make sure your query contains the date if you need to search the latest information:
+40: 
+41: ### Run searches
+42: 
+43: ```bash
+44: $PYTHON_CMD scripts/web_search.py "query1" "query2" "query3"
+45: ```
+46: 
+47: - Break the topic into 1–3 focused queries (e.g. for "Beijing travel guide": "Beijing top attractions", "Beijing food recommendations", "Beijing transportation tips").
+48: - **If the topic involves current events, trends, statistics, or anything time-sensitive**, append the current year (e.g. `2026`) or a date range to each query to ensure results are up to date. Example: `"AI agent market trends 2026"` instead of `"AI agent market trends"`.
+49: - Deduplicate and distill all results into a `reference` text to enrich the PPT content.
+50: 
+51: ### Synthesize search results
+52: 
+53: **If reference files were parsed in Step 1**, use their `parsed_content` as the primary source and supplement with search results. The parsed content contains the full document text — extract and preserve all detail, do not compress it into a short summary.
+54: 
+55: Produce a detailed **reference report**. **Target 800–2000 words — do not stop early.** Write as much specific detail as the sources provide:
+56: 
+57: ```
+58: ## Key Findings
+59: 3–5 sentences covering the main conclusions, background, and why it matters.
+60: 
+61: ## Key Data & Facts
+62: - List every specific number, percentage, date, and metric found. Do not skip data.
+63: - Format: "Exact figure — what it measures (source)"
+64: - Aim for at least 5 data points if the source contains them.
+65: 
+66: ## Topic Breakdown
+67: Organize by sub-topic. For each sub-topic write 3–5 specific bullet points.
+68: Do not use vague phrases like "it is important" — state the actual fact.
+69: Preserve names of people, companies, products, places, and dates exactly as found.
+70: 
+71: ## Cases & Examples (if available)
+72: Concrete examples, case studies, or use cases with specific details and outcomes.
+73: 
+74: ## Summary
+75: 3–5 bullet points capturing the core message the PPT must convey.
+76: ```
+77: 
+78: **Hard constraints**:
+79: - Only include information that **explicitly appears** in the sources. Do not invent or infer.
+80: - Numbers, percentages, and proper nouns must be quoted exactly — do not paraphrase or round.
+81: - **Never produce fewer than 500 words** unless the source material is genuinely sparse.
+82: - If a section has no relevant information, omit that section entirely.
+83: - **Note the publication date of each source.** Always include the current date context in the summary where relevant.
+84: 
+85: After writing the reference report, save it to a local temp file to avoid shell encoding issues:
+86: ```bash
+87: cat > /tmp/ppt_reference.md << 'REFERENCE_EOF'
+88: <paste the full reference report here>
+89: REFERENCE_EOF
+90: ```
+91: Use this file path as `--reference-file` in Step 3.
+92: 
+93: ---
+94: 
+95: ## 2. Confirm inputs
+96: 
+97: - **query** (required): Faithfully reproduce the user's full request — include every instruction the user mentioned. Cover the following if the user specified them; do not add anything they didn't mention:
+98:   - Slide count (if the user set a limit, it must be included — never drop it)
+99:   - Topic / content direction
+100:   - Style preference (e.g. business, academic, playful, minimalist)
+101:   - Audience / purpose (e.g. "exec briefing for the CXO", "science explainer for kids")
+102:   - Structure preference (e.g. "data-heavy", "one case study per slide")
+103:   - Other constraints (tone, things to avoid, required talking points, etc.)
+104: 
+105:   **Rule**: Do not fabricate requirements the user never mentioned, and do not omit anything they explicitly said. If the user gives only a title, the query is exactly that title — don't add qualifiers.
+106: 
+107:   **Examples**:
+108: 
+109:   | User input | Correct query |
+110:   |------------|---------------|
+111:   | Make me a PPT about Beijing travel | `Beijing Travel Guide PPT` |
+112:   | 8-page English slides on AI Agent, clean business style, targeting investors | `8-page English slides on AI Agent, clean business style, targeting investors` |
+113:   | PPT for our Q1 sales summary, 10 slides, with data charts, formal style | `Q1 Sales Summary PPT, 10 slides, data charts, formal business style` |
+114:   | A fun solar system PPT for elementary school kids, 6 pages | `Solar System explainer PPT for elementary school kids, fun and engaging style, 6 slides` |
+115: 
+116: - **language** (required): Detect from the user's input language — if the user writes in Chinese pass `Chinese`; English → `English`; etc. Never default to a fixed value.
+117: - **--reference-file** (optional): Pass the path to the temp file written at the end of Step 2 (e.g. `/tmp/ppt_reference.md`). Omit if no search was performed.
+118: - **--files** (optional): Pass the JSON array assembled from the `PARSED_FILE:` lines in Step 1. Omit if no files were provided. Format: `[{"file_name":"...","url":"...","file_id":"...", "file_type": "pdf"},...]`
+119: 
+120: ---
+121: 
+122: ## 3. Run the script
+123: 
+124: PPT generation takes ~10 minutes. Choose a log path first, pass it to the script, then read it every 5 seconds.
+125: 
+126: ### 3a. Choose a log path and start in background
+127: ```bash
+128: PPT_LOG=/tmp/ppt_$(date +%s).log
+129: 
+130: $PYTHON_CMD scripts/run_ppt_write.py "user query" \
+131:   --language English \
+132:   --reference-file /tmp/ppt_reference.md \
+133:   --files '[{"file_name":"report.pdf","url":"https://...", "file_id":"1212121", "file_type":"pdf"}]' \
+134:   --log_path "$PPT_LOG" \
+135:   -o /absolute/path/to/output.pptx \
+136:   > /dev/null 2>&1 &
+137: 
+138: echo "Log: $PPT_LOG"
+139: ```
+140: 
+141: - **`--log_path`** (required): Pass the pre-chosen path. The script writes all progress here.
+142: - **`-o`** (required): Use an absolute path.
+143: - **`--files`**: JSON array from `DOC_FILES_JSON:` lines **verbatim**. Omit if no reference files.
+144: 
+145: ### 3b. Monitor progress （REQUIRED）
+146: 
+147: > **STRICT RULES — no exceptions:**
+148: > 1. **Read the log exactly every 5 seconds.** Do NOT extend the interval, do NOT skip reads.
+149: > 2. **Before every read, check if the process is still alive.** If alive → only read log, NEVER restart.
+150: 
+151: **Every 5 seconds, run this exact sequence:**
+152: ```bash
+153: # Step 1: extract PID from log
+154: PPT_PID=$(grep '^\[PID\]' "$PPT_LOG" | tail -1 | awk '{print $2}')
+155: # Step 2: check if process is alive
+156: kill -0 "$PPT_PID" 2>/dev/null && PPT_ALIVE=true || PPT_ALIVE=false
+157: # Step 3: read the log regardless
+158: tail -20 "$PPT_LOG"
+159: ```
+160: - If process is **RUNNING** → report status to user, wait 5s, repeat. Do NOT touch the script.
+161: - If process is **not running** AND log ends with `[DONE]` or `[ERROR]` → stop polling, proceed to deliver/handle error.
+162: - If process is **not running** AND no `[DONE]`/`[ERROR]` in log → the script crashed; report error to user, ask whether to retry. **Both conditions must hold: PID gone AND no terminal log line. NEVER retry without explicit user confirmation.**
+163: 
+164: Each line is plain text:
+165: - `[PID] <pid>` — process ID written at startup
+166: - `[START]` — job started
+167: - `[PHASE] <message>` — stage transition (outline, slides, export, etc.)
+168: - `[PING] <progress>% | <stage>` — heartbeat every few seconds with current progress and stage label
+169: - `[OUTLINE]` — outline content (appears once after outline_done)
+170: - `[DONE] saved=<path> download_url=<url>` — finished
+171: - `[ERROR] <message>` — failed
+172: 
+173: **After each read, report status to the user:**
+174: ```
+175: [Main stage] | [current action]
+176: Example: Generating slides | Working on page 3 
+177: ```
+178: 
+179: Map phase messages to main stages:
+180: 
+181: | Message contains | Main stage |
+182: |-----------------|------------|
+183: | "outline" | Generating outline |
+184: | "slide" / "page" / "content" | Generating slides |
+185: | "image" / "HTML" | Rendering images |
+186: | "Export" / "export" | Exporting PPTX |
+187: | "Parsing existing PPTX" | Parsing original PPTX |
+188: | "update plan" | Planning updates |
+189: | "template" | Processing template |
+190: 
+191: **Stop polling** as soon as you see `[DONE]` or `[ERROR]`.
+192: 
+193: ---
+194: 
+195: ## 4. Deliver
+196: 
+197: ### Success
+198: 
+199: Provide all of the following:
+200: 1. Download link
+201: 2. Local `.pptx` absolute path
+202: 3. Presentation title
+203: 4. Brief description of each slide's content
+204: 
+205: ### Failure
+206: 
+207: Briefly explain the error. 
+208: 
+209: ## Technical Notes
+210: - **Timeout**: PPT generation takes ~10 minutes, set sufficient timeout
+
+FILE workflow_imitate.md
+1: # PPT Imitation Workflow
+2: 
+3: The user provides an existing PPTX file as a layout/style reference. Generate a new presentation on a different topic that follows the same visual structure.
+4: 
+5: Follow these steps in order: identify intent → locate template → web search → upload template → run script (streaming) → **output progress at every phase** (required) → save file → deliver. **Never go silent for an extended period — always stream progress as it arrives.**
+6: 
+7: ---
+8: 
+9: ## 0. Confirm imitation intent
+10: 
+11: Use this workflow (instead of the standard generate flow) when **both** of the following are true:
+12: 
+13: - The user mentions a template, style reference, or an existing file — e.g. "use this template", "match the style of this PPT", "imitate this layout" — **or** provides a `.pptx` file path or filename.
+14: - The user has a new generation request (topic, content, slide count, etc.).
+15: 
+16: If the user provides a template but no new topic, **ask what they want to create** before proceeding.
+17: 
+18: ---
+19: 
+20: ## 1. Locate the local template file
+21: 
+22: Extract the local PPTX path from the user's message. It may appear as:
+23: 
+24: - An absolute path: `/Users/xxx/templates/style.pptx`
+25: - A relative path or filename: `my_template.pptx` (ask the user to confirm the exact full path before using it)
+26: - An attachment uploaded in the conversation (the platform will provide a local temp path)
+27: 
+28: **If the path is ambiguous, ask the user for the full absolute path.**
+29: 
+30: ---
+31: 
+32: ## 2. Parse reference files (optional — only if the user provides local files as content source)
+33: 
+34: If the user provides additional local files (PDF, DOCX, PPTX, images, etc.) to use as content source — separate from the template — parse each file with the document parse service.
+35: 
+36: Run `parse_file.py` once per file, this may cost a few minutes to finish completely:
+37: 
+38: ```bash
+39: $PYTHON_CMD scripts/parse_file.py /path/to/file1.pdf
+40: $PYTHON_CMD scripts/parse_file.py /path/to/file2.docx
+41: ```
+42: - **exec tool `yieldMs`**: Must be set to `600000` (10 minutes) when invoking the exec tool.
+43: 
+44: Each call prints a `PARSED_FILE:` line on success:
+45: ```
+46: PARSED_FILE: {"filename": "file1.pdf", "url": "https://...", "file_id": "123456789"}
+47: ```
+48: 
+49: Collect every `PARSED_FILE:` result and assemble them into a JSON array as `DOC_FILES_JSON`:
+50: ```json
+51: [
+52:   {"filename":"file1.pdf","url":"https://...","file_id":"123456789","file_type":"pdf"},
+53:   {"filename":"file2.docx","url":"https://...","file_id":"987654321","file_type":"docx"}
+54: ]
+55: ```
+56: 
+57: Pass this array to `--files` in Step 6. If no additional content files are provided, skip this step entirely.
+58: 
+59: ---
+60: 
+61: ## 3. Web search (required if no relevant content is already in the conversation)
+62: 
+63: Skip if the user has already provided sufficient reference material or reference files.
+64: Otherwise, run up to 3 targeted searches on the **new PPT topic**:
+65: 
+66: ```bash
+67: $PYTHON_CMD scripts/web_search.py "query1" "query2" "query3"
+68: ```
+69: 
+70: Produce a detailed reference report following the same format and constraints as the generate workflow (target 800–2000 words, preserve all specific details, never fewer than 500 words).
+71: 
+72: After writing the reference report, save it to a local temp file:
+73: ```bash
+74: cat > /tmp/ppt_reference.md << 'REFERENCE_EOF'
+75: <paste the full reference report here>
+76: REFERENCE_EOF
+77: ```
+78: Use this file path as `--reference-file` in Step 6.
+79: 
+80: ---
+81: 
+82: ## 4. Upload the template to OSS
+83: 
+84: ```bash
+85: $PYTHON_CMD scripts/upload_files.py "/absolute/path/to/template.pptx"
+86: ```
+87: 
+88: - Script output format: `[OK] /path/to/file.pptx -> https://cdn.xxx/skills/upload/yyyy-mm-dd/uuid_filename.pptx`
+89: - Extract the OSS URL from the output and call it `TEMPLATE_URL`.
+90: - If the upload fails, inform the user and stop.
+91: 
+92: ---
+93: 
+94: ## 5. Confirm generation parameters
+95: 
+96: - **query** (required): Faithfully reproduce the user's full request — include every instruction (slide count, style, audience, etc.). Do not fabricate or omit anything.
+97: - **language** (required): Language for the slides, e.g. `Chinese`, `English`.
+98: - **language** (required): Detect from the user's input language — if the user writes in Chinese pass `Chinese`; English → `English`; etc. Never default to a fixed value.
+99: - **template_urls** (required): The OSS URL(s) from Step 4. Multiple URLs are supported (comma-separated) — the backend selects the best-matching layout from each. One URL is sufficient in most cases; pass multiple only if the user provided several template files.
+100: - **--reference-file** (optional): Path to the temp file written at the end of Step 3 (e.g. `/tmp/ppt_reference.md`). Omit if no search was performed.
+101: - **--files** (optional): Pass the JSON array assembled from the `PARSED_FILE:` lines in Step 2. Omit if no content files were provided. Format: `[{"filename":"...","url":"...","file_id":"...", "file_type": "pdf"},...]`
+102: 
+103: ---
+104: 
+105: ## 6. Run the script
+106: 
+107: PPT generation takes ~10 minutes. Run it in the **background**, then read the progress log file every 5 seconds until done.
+108: 
+109: ### 6a. Choose a log path and start in background
+110: ```bash
+111: PPT_LOG=/tmp/ppt_$(date +%s).log
+112: 
+113: $PYTHON_CMD scripts/run_ppt_write.py "user query" \
+114:   --language Chinese \
+115:   --template_urls "TEMPLATE_URL1,TEMPLATE_URL2" \
+116:   --reference-file /tmp/ppt_reference.md \
+117:   --files '[{"file_name":"report.pdf","url":"https://...", "file_id":"1212121", "file_type":"pdf"}]' \
+118:   --log_path "$PPT_LOG" \
+119:   -o /absolute/path/to/output.pptx \
+120:   > /dev/null 2>&1 &
+121: 
+122: echo "Log: $PPT_LOG"
+123: ```
+124: 
+125: - **`--log_path`** (required): Pass the pre-chosen path. The script writes all progress here.
+126: - **`-o`** (required): Use an absolute path for reliable delivery.
+127: - **`--template_urls`**: Comma-separated OSS URLs of template files from Step 4.
+128: - **`--files`**: Pass the JSON array assembled from `PARSED_FILE:` lines **verbatim**. Omit if no reference files.
+129: 
+130: ### 6b. Monitor progress （REQUIRED）
+131: 
+132: > **STRICT RULES — no exceptions:**
+133: > 1. **Read the log exactly every 5 seconds.** Do NOT extend the interval, do NOT skip reads.
+134: > 2. **Before every read, check if the process is still alive.** If alive → only read log, NEVER restart.
+135: 
+136: **Every 5 seconds, run this exact sequence:**
+137: ```bash
+138: # Step 1: extract PID from log
+139: PPT_PID=$(grep '^\[PID\]' "$PPT_LOG" | tail -1 | awk '{print $2}')
+140: # Step 2: check if process is alive
+141: kill -0 "$PPT_PID" 2>/dev/null && PPT_ALIVE=true || PPT_ALIVE=false
+142: # Step 3: read the log regardless
+143: tail -20 "$PPT_LOG"
+144: ```
+145: - If process is **RUNNING** → report status to user, wait 5s, repeat. Do NOT touch the script.
+146: - If process is **not running** AND log ends with `[DONE]` or `[ERROR]` → stop polling, proceed to deliver/handle error.
+147: - If process is **not running** AND no `[DONE]`/`[ERROR]` in log → the script crashed; report error to user, ask whether to retry. **Both conditions must hold: PID gone AND no terminal log line. NEVER retry without explicit user confirmation.**
+148: 
+149: 
+150: Each line is plain text: 
+151: - `[PID] <pid>` — process ID written at startup
+152: - `[START]` — job started
+153: - `[PHASE] <message>` — in progress
+154: - `[DONE] saved=<path> download_url=<url>` — finished
+155: - `[ERROR] <message>` — failed
+156: 
+157: **After each read, report status to the user:**
+158: ```
+159: [Main stage] | [current action] 
+160: Example: Generating slides | Working on page 3 
+161: ```
+162: 
+163: **Stop polling** as soon as you see `[DONE]` or `[ERROR]`.
+164: 
+165: 
+166: ## 7. Deliver
+167: 
+168: ### Success
+169: 
+170: Provide all of the following:
+171: 1. Download link
+172: 2. Local `.pptx` absolute path
+173: 3. Presentation title
+174: 4. Brief description of each slide's content
+175: 5. Template filename used (so the user can verify)
+176: 
+177: ### Failure
+178: 
+179: Briefly explain the error.
+180: ---
+181: 
+182: ## Appendix — Intent classification examples
+183: 
+184: | User input | Use this workflow? |
+185: |------------|--------------------|
+186: | Make me a PPT about Beijing travel | ❌ Standard generate |
+187: | Use this template to make a PPT on AI trends — template at `/tmp/style.pptx` | ✅ Imitate |
+188: | Imitate the uploaded pptx style, 10-slide quarterly review | ✅ Imitate |
+189: | What style is this template? | ❌ Not a generation request — just answer the question |
+
+FILE workflow_local.md
+1: # Local PPTX Operations Workflow (Layer 3)
+2: 
+3: No backend or token needed — uses `python-pptx` to operate on local `.pptx` files directly.
+4: 
+5: ---
+6: 
+7: ## Install Dependencies
+8: 
+9: ```bash
+10: pip install python-pptx
+11: ```
+12: 
+13: ---
+14: 
+15: ## Trigger Keywords
+16: 
+17: When the user expresses the following intents, use this workflow (instead of calling the backend API):
+18: 
+19: | User Intent | Example Keywords |
+20: |----------|-----------|
+21: | View file info | View PPT page count, how many pages, pptx info |
+22: | Delete specific slides | Delete slide N, remove slide 3, delete slide 3, remove page 5 |
+23: | Reorder slides | Reorder PPT, rearrange slide order, reorder slides |
+24: | Extract slides | Extract slides 1-3, export certain slides, extract slides |
+25: | Merge files | Merge two PPTs, merge pptx, combine a and b |
+26: 
+27: ---
+28: 
+29: ## Unified Entry Point
+30: 
+31: All operations are done via `scripts/local_pptx_ops.py`:
+32: 
+33: ```bash
+34: $PYTHON_CMD scripts/local_pptx_ops.py <subcommand> [arguments]
+35: ```
+36: 
+37: ---
+38: 
+39: ## Subcommand Details
+40: 
+41: ### info — View file info
+42: 
+43: ```bash
+44: $PYTHON_CMD scripts/local_pptx_ops.py info --file my.pptx
+45: ```
+46: 
+47: Output: file path, total slides, dimensions, title of each slide.
+48: 
+49: ---
+50: 
+51: ### delete — Delete slides
+52: 
+53: ```bash
+54: # Delete slide 3
+55: $PYTHON_CMD scripts/local_pptx_ops.py delete --file my.pptx --slides 3
+56: 
+57: # Delete slides 3, 5, 7-9, overwrite the original file
+58: $PYTHON_CMD scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9
+59: 
+60: # Save to a new file after deletion (don't overwrite the original)
+61: $PYTHON_CMD scripts/local_pptx_ops.py delete --file my.pptx --slides 3,5,7-9 -o trimmed.pptx
+62: ```
+63: 
+64: **Note**:
+65: - Page numbers are 1-based (slide 1 = 1)
+66: - Supports comma-separated and `-` ranges, e.g. `1,3,5-8,10`
+67: - If `-o` is not specified, the original file is overwritten
+68: 
+69: ---
+70: 
+71: ### reorder — Reorder slide order
+72: 
+73: ```bash
+74: # Move original slide 2 to position 1, slide 1 to position 2 (rest unchanged)
+75: $PYTHON_CMD scripts/local_pptx_ops.py reorder --file my.pptx --order 2,1,3,4,5
+76: 
+77: # Save to a new file
+78: $PYTHON_CMD scripts/local_pptx_ops.py reorder --file my.pptx --order 2,1,3,4,5 -o reordered.pptx
+79: ```
+80: 
+81: **Note**: `--order` must include all page numbers — no omissions or duplicates.
+82: 
+83: ---
+84: 
+85: ### extract — Extract specific slides
+86: 
+87: ```bash
+88: # Extract slides 1 through 3
+89: $PYTHON_CMD scripts/local_pptx_ops.py extract --file my.pptx --slides 1-3 -o subset.pptx
+90: 
+91: # Extract slides 1, 3, 5
+92: $PYTHON_CMD scripts/local_pptx_ops.py extract --file my.pptx --slides 1,3,5 -o subset.pptx
+93: ```
+94: 
+95: Extracted result is saved as a new file (original file is not modified).
+96: 
+97: ---
+98: 
+99: ### merge — Merge multiple files
+100: 
+101: ```bash
+102: # Merge two files
+103: $PYTHON_CMD scripts/local_pptx_ops.py merge --files a.pptx b.pptx -o merged.pptx
+104: 
+105: # Merge three or more
+106: $PYTHON_CMD scripts/local_pptx_ops.py merge --files a.pptx b.pptx c.pptx -o merged.pptx
+107: ```
+108: 
+109: **Note**: The slide dimensions of the first file are used as the standard; shapes are preserved as much as possible during merging, but complex animations/video effects may be lost.
+110: 
+111: ---
+112: 
+113: ## Agent Decision Logic
+114: 
+115: User intent → Route selection:
+116: 
+117: ```
+118: User says "Generate a PPT about X"
+119:   → Layer 1: scripts/run_ppt_write.py (call backend to generate)
+120: 
+121: User says "Delete slide 3 from this PPT" / "Merge these two pptx" / "Extract the first 5 slides"
+122:   → Layer 3: scripts/local_pptx_ops.py (local operation, no token needed)
+123: ```
+124: 
+125: ---
+126: 
+127: ## FAQ
+128: 
+129: **Q: Do page numbers change after deletion?**
+130: A: Yes. After deletion, page numbers are renumbered starting from 1. If you need to delete multiple slides, it's recommended to pass them all at once (`--slides 3,5,7`) rather than running multiple times.
+131: 
+132: **Q: What if styles are wrong after merging?**
+133: A: Merging uses deep-copy of the shape tree; themes/masters come from the first file. If there are significant style differences, manual adjustments in PowerPoint are recommended.
+134: 
+135: **Q: Does python-pptx support deleting slides?**
+136: A: Not natively. This tool operates on the underlying XML (`_sldIdLst`), consistent with common python-pptx community approaches.

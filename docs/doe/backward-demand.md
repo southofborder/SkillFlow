@@ -1,4 +1,11 @@
-# Task 保持需求与逐 seed 反向推导 v3
+# Task preservation and per-seed backward demand v4
+
+Current amendment (2026-10-19): the sealed Task remains v3. Supported constraints
+are declared beside positive demands in realizations; they do not seed backward
+demand. Their baseline checks and candidate preservation belong to the separate
+[constraint analysis](constraint-implementation.md). The existing six positive
+properties, per-seed identities, and ordinary field-reduction eligibility remain
+unchanged. The historical section below retains earlier interfaces as history.
 
 当前协议（2026-10-15）以独立封存的 [Task v3](task-evidence.md) 为基准。标注模型声明逐项表达情况和正向保持目标，程序沿已声明的处理、控制、数据版本及读写关系反推各接收边界需要保留的信息。既有前向事实保持不变；不按动作必要性筛除任何 sink。
 
@@ -11,10 +18,16 @@ realizations[]
 ├─ requirement_id
 ├─ status: expressed / partial / retained_only / unmapped
 ├─ bindings[]: target / reason
-└─ gaps[]: reason / evidences[]
+├─ gaps[]: reason / evidences[]
+└─ constraints[]: optional typed restrictions, omitted when empty
 ```
 
-`expressed` 表示已给出保持目标且未声明剩余表达缺口，仍待语义审查；`partial` 明确列出未表达部分；`retained_only` 保留要求但当前规则不能表达保持条件；`unmapped` 尚无合适图位置。非 `expressed` 必须有 gap；`unmapped` 不得宣称图绑定。前两类需要真实正向 goal，后两类不能附带正向种子。
+`expressed` requires a positive demand or supported constraint and no remaining
+gap; `partial` requires a positive demand or supported constraint and an explicit
+remainder. These are correspondence claims subject to semantic review, not
+satisfaction claims. `retained_only` and `unmapped` carry neither demands nor
+constraints. Every non-expressed status needs a gap; `unmapped` cannot claim a
+graph binding. A pure prohibition can therefore be expressed without any seed.
 
 图绑定只建立对应，不能因为有一个 goal 就断言整项要求已经表达或满足。需求仅支持六类 `preserve`：
 
@@ -27,7 +40,11 @@ realizations[]
 | `truth` | 条件结果及其所需信息 |
 | `action` | 指定行为与相关控制、迭代结构 |
 
-`constraint / prohibit` 已移出正向目标类型。禁止事项及未支持限制留在 Task 与 realization，不再以一个限制 goal 获得 `bound`。本版没有通用禁止项、次数、顺序、质量或路径可行性验证器。
+`constraint` and `prohibit` remain excluded from positive demand properties.
+The five typed constraint variants support bounded original-content, guard,
+occurrence and ordering checks; unsupported quality, arbitrary path semantics,
+or other source restrictions remain gaps. Constraint checking never creates a
+positive receiver-content demand from the forbidden information.
 
 `demands` 引用已有 requirement，保存真实目标、`preserve / path / expected / expected_path / reason`。CFG 目标直接引用真实输入／输出／操作；响应中新建的操作采用附着式 `self / input(index) / output`。编译坐标由程序生成，模型不预测内部 ID。
 
@@ -45,15 +62,27 @@ realizations[]
 
 每条推导必须有 `seed_goal_id`。推导身份和队列携带 seed，同一 requirement 的多个种子即使在同一值处合流，也保持独立记录；parent 必须属于同一 seed。FIFO／LIFO 应产生相同结果。单元素作用域、递归路径和不透明计算的能力边界继续产生明确诊断或保守保留。
 
-`skillflow-demand-v3` 的 `coverage.requirements` 保存 realization、gaps、goal IDs 和是否有可应用目标，不再使用含糊的 `bound/unbound`。编译映射保存 `raw_pointer → goal_id / requirement_id / target`，结果 `traceability` 保存 Task 引用、source accounting indices 和每个 seed 的完整推导 ID。
+`skillflow-demand-v4` retains realization status, gaps, goal IDs, and applicable
+positive-goal coverage. It adds `constraint_ids` per requirement, referencing
+the verified compilation mapping without copying constraint bodies. Goal
+mapping and per-seed traceability continue to record exact raw pointers, Task
+identity, source-accounting indices and derivation IDs. Constraint IDs do not
+appear as `seed_goal_id` values.
 
 报告由程序生成“真实原文 → Task → realization／缺口 → 原始 demand 位置 → 编译 goal → 逐 seed 推导 → sink”。显式离线实验种子若不属于接受的原始标注，其 `raw_pointer` 为 `null`，不会伪装成模型响应中的声明。
 
 ## 未表达限制与结论
 
-不允许仅凭模型任意绑定节点就把 gap 限为局部。当前没有通用、独立的局部影响范围证明；未完整表达的要求和未解决的 Task 问题均按全局阻断诊断保留，所有受影响 sink 不得产生 `excess_supported`。已有局部计算仍保存为诊断，不把缺需求当成删除许可。
+A model-authored node binding cannot localize an unexpressed source restriction.
+Remaining realization gaps and unresolved Task issues stay global blocking
+diagnostics; affected sinks cannot produce `excess_supported`. Existing local
+calculations remain available for audit. Missing positive demands never supply
+permission to delete content.
 
-这比未来可证明局部影响的规则更保守。只有来源明确、图边界可独立核验的范围证据成立时，才能安全放开不受影响的局部结论；目前不会由模型 bindings 自动得到这种证据。
+For a supported declared constraint, the separate candidate gate can establish
+structural, terminal-subset or complete no-influence preservation. That does not
+clear an unexpressed requirement, remaining realization gap, or unresolved Task
+issue. Model-authored bindings alone never release a global limitation.
 
 工程验收覆盖同 requirement 多 seed、跨 seed parent 拒绝、真实原值／字段关系、版本、作用域、全局 gap、引用重放和历史文件保护。通过这些检查不证明任意需求最小、行为满足要求、路径可执行或不存在 DOE。
 

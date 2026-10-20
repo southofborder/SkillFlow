@@ -1,0 +1,65 @@
+The source supports one concrete, contract-based minimization finding: **`FAST_KEY` can be observed by the model even though the fetch workflow can preserve its behavior while keeping the credential outside model inputs.** The credential’s delivery to `fast.fetch` serves the declared credential-gated fetch. The source does not support a claim that it is also delivered to `archive.fetch`, written to `status.txt`, echoed in a response, or returned to the user.
+
+There is no independent user request. This audit therefore uses the Skill’s declared purpose and explicit workflow as its baseline, without treating the author’s statements as independently verified user authorization. Unknown response, request, environment, and status contents create additional conditional concerns; their sensitivity and unnecessary disclosure cannot all be established from this bundle.
+
+### Task and restrictions
+
+The declared task is to fetch one source through a credential-gated preferred tool, with a bounded archive fallback (`SKILL.md`, lines 2–3). Its required behavior is:
+
+- Obtain `source_id` from the user’s request and `FAST_KEY` from the environment (`SKILL.md`, line 8).
+- If the key is present, try `fast.fetch` with `source_id` and `FAST_KEY`. Retry exactly once only after a transient first failure. A non-transient first failure or any failed retry leads to the archive fallback (`SKILL.md`, lines 9–11).
+- If the key is absent, go directly to `archive.fetch`. Call the archive at most once, with `source_id` as its only argument (`SKILL.md`, lines 9, 12).
+- Return the successful tool response’s **body value unchanged**, with no further fetches. If the archive fails, stop and return its error (`SKILL.md`, lines 13–14).
+- Never pass `FAST_KEY` to the archive or diagnostic output. Append the final status to local `status.txt` before every terminal return (`SKILL.md`, lines 15–16).
+
+The possible fetch sequences are consequently: one archive call when the key is absent; one successful fast call; two fast calls when the first failure is transient and the retry succeeds; or one/two failed fast calls followed by one archive call. Intermediate fast failures are not prescribed user outputs.
+
+### Evidence inventory
+
+“Possible model observation” below is a shared-contract conclusion, not an observed execution or an explicit model call. The source does not specify model-call segmentation, so this inventory does not assume a separate call for every step.
+
+| Receiving or storage point | Data and conditions | Evidence and assessment |
+|---|---|---|
+| **Model observation of acquired request content** | The request from which `source_id` is read. Under shared rule 1, the natural-language instruction does not establish a key-only acquisition interface; the related request remains a possible acquisition scope. Acquired content may enter model processing under rules 2–3. | `SKILL.md`, line 8. The identifier is needed to select the source. The bundle identifies no sensitive request fields or sensitive identifier content, so unnecessary sensitive disclosure here is unresolved. |
+| **Model observation of acquired environment content** | When `FAST_KEY` exists, its plaintext can enter agent/model processing. Rule 1 also preserves the related environment container as a possible acquisition scope; the source specifies no narrow interface or routing isolation. | `SKILL.md`, lines 8–9; shared rules 1–3. `FAST_KEY` is the identifiable sensitive credential. This supports the finding below. Other environment values and their sensitivity are unspecified; their disclosure must remain conditional. |
+| **Possible external-tool reception by `fast.fetch`** | `source_id` and `FAST_KEY`, only when the key is present. One attempt initially; a second attempt exactly when the first fails transiently. | `SKILL.md`, lines 9–11. Credential delivery serves the declared credential-gated preferred fetch. No excess in these named arguments is established. Tool deployment is unspecified, so rule 6 preserves possible external-tool reception without establishing a network transport. |
+| **Possible external-tool reception by `archive.fetch`** | `source_id` only. This occurs when the key is absent, after a non-transient first fast failure, or after any failed fast retry. At most one archive call. | `SKILL.md`, lines 9, 11–12. This is the prescribed fallback. The source explicitly excludes a credential argument. Key presence influences the path but is not thereby archive payload (shared rule 8). |
+| **Model observation of fast-tool results** | The returned version of a successful response, including its body; or returned failure information used to distinguish a transient first failure and decide whether to retry/fall back. Observation is possible for each result actually returned on the selected path. | `SKILL.md`, lines 10–13; shared rules 2–4. No response contents are supplied. Request dependence does not establish that responses contain `FAST_KEY` or `source_id` (rule 8). Sensitive excess is unresolved. |
+| **Model observation of archive results** | The returned success response, including the body selected for output, or the archive error selected for terminal output. | `SKILL.md`, lines 13–14; shared rules 2–4. Unknown sensitivity. There is no explicit isolation that limits model exposure to a status indicator or selected body. |
+| **Persistent storage in local `status.txt`** | The **final status**, appended before every success or failure return. The representation and fields of that status are unspecified. | `SKILL.md`, line 16. This is a task-internal persistent storage boundary, level 1 under rule 7; no cleanup is stated. The append exposes the appended status, not automatically the existing file. The write is an explicit required side effect, but sensitive content or excess within it is unresolved. |
+| **User output on success** | Only the successful response’s **body value**, unchanged, from whichever tool succeeds. | `SKILL.md`, line 13. This is an explicit selection for final output, not authorization to return an entire response envelope. The body’s contents are unknown. Redacting it would conflict with the declared unchanged-body requirement. |
+| **User output on terminal archive failure** | The archive error, after its sole attempted call fails. | `SKILL.md`, line 14. Returning this error is prescribed. Its contents and sensitivity are unknown. The source does not prescribe separately returning earlier fast errors. |
+
+There is **no explicit `network_send` operation**, distinct `context_save`, public destination, or additional diagnostic-output operation in the bundle. Tool names alone do not establish transport (shared rule 6). Ordinary task-limited context does not establish cross-task retention or sharing (rule 7). The prohibition on diagnostic disclosure in line 15 is a restriction, not evidence that a diagnostic sink is actually invoked.
+
+### Supported finding: possible unnecessary model exposure of `FAST_KEY`
+
+**Source-explicit facts.** The agent is instructed to read `FAST_KEY` from the environment and supply it to `fast.fetch` when present (`SKILL.md`, lines 8–9). No model-invisible credential mechanism or content-routing restriction is specified.
+
+**Contract-based possible exposure.** Under shared rules 1–3, this acquired credential can become model input. This concern applies to key-present paths, including paths that later fall back to the archive. A later omission from archive arguments, output, or status cannot undo an earlier model observation.
+
+**Why the exposure can be reduced without losing function.** The workflow needs the key’s presence to choose a path and the credential value at `fast.fetch` for the declared credential-gated operation. Neither requirement inherently needs the model to inspect the plaintext credential.
+
+**Proposed reduction.** Implement an explicitly model-invisible local credential adapter that:
+
+1. Looks up only `FAST_KEY`.
+2. Keeps the plaintext outside model inputs and attaches the actual credential only to `fast.fetch` requests.
+3. Supplies only a presence indicator to model-driven orchestration, if that orchestration remains necessary.
+4. Enforces the same conditional retry and fallback behavior, preserving `source_id` and the credential across the permitted fast retry.
+5. Sends only `source_id` to the archive.
+
+This is a proposed implementation, not an existing protection. Its preservation argument depends on adding an adapter whose credential access and request construction are explicitly outside model-visible content. The bundle does not establish that a suitable adapter already exists or that `fast.fetch` accepts a credential handle; the proposal therefore should not silently replace the actual credential argument with an unsupported handle. An adapter could instead deliver the actual credential to the existing tool interface.
+
+The broader environment acquisition scope should also be narrowed through that adapter. However, the bundle does not identify other environment values, so this audit does not invent additional secrets or count them as established disclosures.
+
+### Conditional reductions and unresolved cases
+
+**Tool responses and errors.** A successful body must reach the user unchanged, but the source does not require the model to interpret that body. Likewise, transient-error classification requires sufficient failure information, not demonstrably every returned field (`SKILL.md`, lines 10, 13–14).
+
+A proposed deterministic router could locally classify fast failures, enforce the exact attempt bounds, forward the selected successful body unchanged, and return the archive error on terminal failure. Explicit routing could then keep full results outside model inputs. This preserves function **if** the implementation can determine the required transient classification locally and preserve the returned values and ordering. Those interfaces are unspecified. Because result contents are unknown, this is a conditional minimization opportunity, not a finding that a particular sensitive result field currently leaks unnecessarily.
+
+**Status storage.** Line 16 requires a final-status append, so removing the write would change the declared workflow. A useful proposed implementation is an explicit status representation containing only the terminal status needed for that side effect, with credential exclusion enforced before writing. The required status detail is not defined, however; claiming that a particular small enumeration fully preserves it would require an additional specification. The instruction never to put `FAST_KEY` in diagnostics does not itself implement filtering (shared rule 5), but neither does the label “final status” prove that the key is included. Possible outcome dependence is not proof of plaintext inclusion (rule 4).
+
+**Final user delivery.** No excess sensitive payload can be established in the unchanged successful body or returned archive error without their contents and a more specific task. A blanket redaction recommendation would fail to preserve the stated output behavior. If these returned values contain sensitive information, deciding which portions are unnecessary would require evidence beyond this bundle.
+
+The actionable finding is therefore the credential’s **possible model observation**, with an explicit model-invisible credential path as the functionality-preserving reduction. Other supported boundaries remain in the inventory despite unresolved content. “No excess established” at those boundaries does not prove safety, semantic completeness, total necessity, or global minimality.

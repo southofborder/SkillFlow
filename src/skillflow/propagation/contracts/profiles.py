@@ -12,7 +12,7 @@ from skillflow.propagation.contracts.realizations import TaskRealization
 from skillflow.propagation.contracts.demand import DemandGoal, RawDemandGoal, DemandSupplement, RawDemandSupplement
 
 Text = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
-SCHEMA_VERSION = "security-profile-v14"
+SCHEMA_VERSION = "security-profile-v15"
 
 
 class StrictRecord(BaseModel):

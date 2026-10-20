@@ -1,0 +1,140 @@
+This is a static analysis against the Skill’s declared purpose: “Fetch one source using a credential-gated preferred tool and a bounded archive fallback” (`SKILL.md:3`). No independent user request was supplied. The necessity judgments therefore preserve the source-declared functionality and restrictions; they do not establish independent user authorization for the workflow.
+
+The supported minimization finding is **possible unnecessary model observation of `FAST_KEY`**. The preferred tool’s credential requirement supports delivery of the key to that tool, but does not require the model to receive the key. A local credential adapter can preserve the specified requests and branching while withholding the credential from model-visible acquisition results. This is a contract-based possible exposure, not an observed execution or source-explicit model delivery.
+
+In what follows, **explicit** means stated in the source, **contract-possible** means supported by a numbered shared runtime assumption, and **unresolved** means the source does not determine the matter. Proposed mechanisms are not treated as existing protections.
+
+**The task baseline comes from the source, with the following obligations and limits.**
+
+| ID | Declared requirement, condition, or restriction | Grounding and scope |
+|---|---|---|
+| R1 | Fetch one source identified by `source_id` from the user’s request. | `SKILL.md:3,8`. No identifier format, concrete value, or sensitivity is supplied. |
+| R2 | Read `FAST_KEY` from the environment and use its presence to select the initial tool. | `SKILL.md:8–9`. A present key selects `fast.fetch`; an absent key selects `archive.fetch` without a preferred-tool call. |
+| R3 | The preferred request contains `source_id` and `FAST_KEY`. | `SKILL.md:9`. This supports credential use by the preferred tool. It does not independently justify plaintext observation by intermediaries. |
+| R4 | Retry the preferred tool exactly once only after a transient first failure. | `SKILL.md:10`. A non-transient first failure must not be retried. |
+| R5 | Fall back after a non-transient first preferred failure or any failed preferred retry. | `SKILL.md:11`. The second preferred failure need not itself be transient. |
+| R6 | Call the archive at most once, with `source_id` as its only argument. | `SKILL.md:12`, together with the direct-fallback condition at line 9. |
+| R7 | After either tool succeeds, return that successful response’s `body` unchanged and make no further fetch calls. | `SKILL.md:13`. The result is the body of the successful attempt, not a combination of responses. Redaction, summarization, or substitution of that returned body would change the declared result. |
+| R8 | If the archive fails, stop and return its error without retrying it. | `SKILL.md:14`. No error schema or content is specified. |
+| R9 | Never pass `FAST_KEY` to the archive or diagnostic output. | `SKILL.md:15`. This is a restriction, not evidence that filtering or isolation has been implemented; shared rule 5. |
+| R10 | Before every success or failure return, append the final status to local `status.txt`. | `SKILL.md:16`. This is a required persistent side effect. The status representation is unspecified. |
+
+These requirements do not supply a concrete runtime request, key, fetched body, or error. They also do not define tool deployment, ultimate output recipient, status detail, retention duration, or the mechanics of acquisition and model routing. Existing use of a value is not itself proof that every receiving subject needs it.
+
+**The control flow is a bounded decision tree.** Let `P` mean that the acquired key is present; let `F1` and `F2` be the first and second preferred attempts, and `A1` the single possible archive attempt.
+
+The identifier and credential are acquired before the presence test (`SKILL.md:8–9`). The source gives no meaningful ordering requirement between those two reads beyond placing both before the fetch decision.
+
+| Condition | Ordered fetch calls | Terminal value |
+|---|---|---|
+| `¬P`; archive succeeds | `A1` | `A1.body`, unchanged |
+| `¬P`; archive fails | `A1` | Archive error |
+| `P`; `F1` succeeds | `F1` | `F1.body`, unchanged |
+| `P`; `F1` fails non-transiently; archive succeeds | `F1 → A1` | `A1.body`, unchanged |
+| `P`; `F1` fails non-transiently; archive fails | `F1 → A1` | Archive error |
+| `P`; `F1` fails transiently; `F2` succeeds | `F1 → F2` | `F2.body`, unchanged |
+| `P`; `F1` fails transiently; `F2` fails; archive succeeds | `F1 → F2 → A1` | `A1.body`, unchanged |
+| `P`; `F1` fails transiently; `F2` fails; archive fails | `F1 → F2 → A1` | Archive error |
+
+The fetch transitions come from `SKILL.md:9–14`. In every row, the final-status append must occur before the terminal return (`SKILL.md:16`). A preferred failure that leads to retry or fallback is an intermediate event, not a declared terminal return. Line 16 does not independently require a status append after each intermediate attempt.
+
+There is no element loop. The only repetition is the single preferred retry. The maximum is two preferred calls, one archive call, and three fetch calls overall (`SKILL.md:10–12`). A success terminates fetching immediately, while the status append remains required (`SKILL.md:13,16`).
+
+The definition of key “presence,” the transient-error classifier, and the behavior of acquisition, classification, missing-body, or status-write failures are unresolved. The source does not describe additional recovery paths for those cases. The general pre-return status obligation remains stated, but it does not supply the missing failure-handling implementation. The path table represents the described fetch outcomes; it does not prove that every listed response combination can occur.
+
+**The data versions below preserve selection, unchanged transfer, and possible influence separately.**
+
+| ID | Source or derived value | Relations and transformations |
+|---|---|---|
+| `U` | The runtime user request mentioned by the Skill. | `source_id` is read from this request (`SKILL.md:8`). Under shared rule 1, this natural-language field request does not establish a key-only acquisition interface: the related whole request remains a possible acquired version. This does not extend to unrelated user state. |
+| `S` | Selected `source_id` from `U`. | Passed as the source identifier to each reached fetch call (`SKILL.md:9,11–12`). No normalization, replacement, or changed identifier is specified. |
+| `E` | The environment containing the named credential, if present. | The instruction to read `FAST_KEY` does not demonstrate a field-limited acquisition mechanism (`SKILL.md:8`). Under shared rule 1, the related environment container remains a possible acquisition scope. No particular additional variable or secret is assumed. |
+| `K` | Selected `FAST_KEY`, or absence, from `E`. | It is a credential in light of the declared credential-gated functionality and its preferred-tool use (`SKILL.md:3,8–9`). No masking, proxy, or model-invisible route is stated. |
+| `P` | Presence predicate over `K`. | Controls whether preferred requests occur (`SKILL.md:9`). A presence flag does not automatically contain the credential value; shared rule 8. |
+| `QF1` | First preferred request, containing `S` and `K`. | Exists only when `P` (`SKILL.md:9`). |
+| `QF2` | Retried preferred request, containing the same stated `S` and `K`. | Exists only after transient failure of `F1` (`SKILL.md:10`). No credential refresh, identifier change, or additional argument is specified. |
+| `RF1`, `RF2` | Returned versions of reached preferred attempts. | Their outcomes control success, first-error classification, retry, and fallback (`SKILL.md:10–13`). On success, the response has the selected `body`. Other response fields are unspecified. |
+| `QA1` | Archive request containing only `S`. | Exists under the archive-entry conditions above (`SKILL.md:9,11–12`). “Only argument” explicitly narrows the request. Earlier acquisition of `K` does not make it an archive argument. |
+| `RA1` | Returned archive version. | Its successful `body` or failure error determines the terminal value (`SKILL.md:13–14`). No returned-content isolation is stated. |
+| `B1`, `B2`, `BA` | Successful bodies selected from `RF1`, `RF2`, or `RA1`, respectively. | Exactly the successful reached attempt supplies the body returned unchanged (`SKILL.md:13`). These are alternative results, not merged values. |
+| `EA` | Error selected from a failed `RA1`. | Supplies the terminal failure result (`SKILL.md:14`). No additional diagnostic fields or transformation are specified. |
+| `T` | Final status corresponding to the terminal outcome. | Appended to `status.txt` before return (`SKILL.md:16`). The outcome relationship is supported; inclusion of `S`, `K`, a response body, or a complete error is not established. |
+
+`K` is the only specifically identified sensitive value. The request may contain other information, and responses or statuses may contain sensitive content, but their actual fields and sensitivity are unknown. Unknown content must not be treated as empty or safe; it also does not justify inventing sensitive fields.
+
+The request/response relations support **possible influence**, not proven echoing. In particular:
+
+- `S` and `K` influence a preferred request, and that request may influence the preferred response. This does not prove that either value appears as plaintext in the response; shared rules 4 and 8.
+- `S` influences the archive request and may influence its response. No supported argument-level path carries `K` into that request.
+- `K → P → chosen fetch path → terminal outcome → T` is a control-dependence path. It does not prove that the appended status contains `K`, or even an explicit key-presence flag.
+- Returning a successful body unchanged preserves whatever content that body actually has. The source does not reveal that content or establish that it includes the credential.
+
+No explicit local isolation is present. Acquired or tool-returned content used for agent processing can therefore possibly enter a model request under shared rules 2–3. This applies to the acquired or returned version actually available at that point. It does not automatically expose a tool’s undisclosed internal inputs, and it does not establish a separate model call for each branch, selection, or append operation.
+
+**The supported receiving, observation, and storage points are as follows.**
+
+| Point | Actual or possible payload and condition | Recipient and retention | Task-related judgment |
+|---|---|---|---|
+| **M-Acquire: possible model observation of acquisitions** | `U → S` and `E → K/P`. The acquired versions can possibly include the related whole request and environment. If `K` is present and the credential-bearing acquired version reaches model processing, the model can observe the key. Evidence: `SKILL.md:8–9`; shared rules 1–3. | Model, a distinct receiving subject; possible level 2 observation. Model retention is unspecified. | Possible unnecessary credential observation, addressed in J1. Other collateral sensitive content cannot be established without its contents. |
+| **F-Receive: preferred-tool request reception** | `QF1 = {source_id: S, FAST_KEY: K}` when `P`; `QF2` with those same stated arguments after transient first failure. Evidence: `SKILL.md:9–10`. | `fast.fetch`. Deployment is unspecified, so possible external-tool reception is retained under shared rule 6; level 2 if it is another recipient. Network transport and retention are unresolved. | The declared credential-gated interface supports receipt of `K` by this tool. No excess request member or forbidden retry is specified. |
+| **M-Fast: possible model observation of preferred returns** | Each reached `RF1` or `RF2`, in its returned version, may enter model processing for outcome handling, transience classification, or body selection. Evidence: `SKILL.md:10–13`; shared rules 2–3. | Model; possible level 2 observation. No retention behavior is supplied. | Response sensitivity is unknown. Credential influence is possible; credential plaintext inclusion is not established. A later selection of `body` would not undo earlier observation of a broader return. |
+| **A-Receive: archive-tool request reception** | `QA1 = {source_id: S}` under `¬P`, non-transient `F1` failure, or any failed `F2`. Evidence: `SKILL.md:9,11–12`. | `archive.fetch`. Possible external-tool reception under shared rule 6; level 2 if another recipient. Deployment, network transport, and retention are unresolved. | The identifier supports the requested fetch. Its sensitivity is unspecified. The explicit request carries no `K`; no excess is established here. |
+| **M-Archive: possible model observation of archive returns** | Reached `RA1`, including its successful body or failure error, may enter model processing before return selection. Evidence: `SKILL.md:13–14`; shared rules 2–3. | Model; possible level 2 observation. Retention is unspecified. | Content sensitivity is unresolved. No key echo or other sensitive excess is established. |
+| **W-Status: persistent append** | Only the appended `T`, before every described terminal return. Existing file contents are not automatically part of the append payload. Evidence: `SKILL.md:16`; shared rule 7. | Local task-internal persistent `status.txt`, level 1. No cleanup or retention duration is stated. | The write is required. Sensitive contents are not established. If this status is diagnostic output, the key prohibition applies; its diagnostic status and representation are unspecified (`SKILL.md:15–16`). |
+| **Return: workflow return port** | `B1`, `B2`, or `BA` unchanged on the corresponding successful path, or `EA` after archive failure, following the status append. Evidence: `SKILL.md:13–16`. | Caller or ultimate recipient unspecified. Ordinary return alone does not establish user delivery or an external recipient; shared rule 6. | The returned body or archive error is required by the declared workflow. Its sensitivity is unknown. A definite `user_output` exposure boundary is not established. |
+
+Acquisition and task-limited internal flow remain part of the lineage, but are not additional exposure sinks merely because they occur inside the workflow; shared rule 7. No explicit `network_send`, `context_save`, public publication, or separate diagnostic emission is supported. Possible external-tool reception is not duplicated as an invented network-send boundary. The source also does not establish backend logging, cross-task context retention, or sharing.
+
+**J1 — Model observation of the credential is a supported conditional excess.**
+
+The source identifies `K` as the credential used by the preferred tool (`SKILL.md:3,8–9`). The supported possible path is:
+
+`environment acquisition E → credential-bearing acquired version → model input`
+
+The acquisition breadth and possible model routing follow shared rules 1–3. The condition is that a credential exists and the acquired credential-bearing version enters model processing. The source does not explicitly say that a model receives the key, so this finding must remain conditional.
+
+The declared workflow needs to know whether the key is present, and the preferred tool needs the credential for its request. No stated requirement requires the model to inspect the credential value. Its plaintext observation by the model can therefore be removed while preserving the fetch interface and control flow. This conclusion rests on a concrete alternative route, not merely on the credential crossing a boundary.
+
+A preserving proposal is to implement a local credential adapter that:
+
+1. Reads only `FAST_KEY` through a field-limited environment access mechanism.
+2. Keeps the key outside model-visible acquisition results and request descriptions, exposing only the presence result needed for orchestration.
+3. Injects the private key into the actual `fast.fetch` request when the preferred branch is taken.
+4. Supplies the same required credential on the single allowed retry.
+5. Constructs archive requests with only `source_id`.
+
+The adapter need not change how the existing workflow classifies transient errors. It can leave response handling and classification intact while isolating credential acquisition and injection. It must preserve the original presence predicate, exact retry condition and bound, archive-entry conditions, single archive-call bound, unchanged successful body, archive error result, and pre-return status append (`SKILL.md:9–16`).
+
+This removes a possible model-input path for the credential while retaining its required delivery to the preferred tool. It does not prove that unknown tool responses cannot independently contain sensitive information. It is a proposed mechanism: calling a getter “local,” renaming the key, or redacting it after model observation would not establish this isolation; shared rules 2–3 and 5.
+
+**J2 — Credential delivery to the preferred tool has no established excess.**
+
+Under the declared interface, each reached preferred request requires `S` and `K` (`SKILL.md:9–10`). Removing the credential from that request has no demonstrated functionality-preserving basis. The retry repeats this use only after the specified transient first failure.
+
+This is necessary sensitive use relative to the declared workflow, subject to the absence of independent user authorization noted at the start. It does not establish the tool’s trustworthiness, deployment, or retention practices. The preferred tool’s justified credential use does not justify model observation of the same value.
+
+**J3 — No credential-bearing archive request is established.**
+
+The archive receives only `S` (`SKILL.md:12`), and credential delivery there is also prohibited (`SKILL.md:15`). These have distinct roles: the only-argument instruction defines the request’s selected payload, while the prohibition supplies a restriction. Neither supports asserting that a credential leak occurs.
+
+An archive request constructor that accepts only `source_id` would make this restriction concrete. That is an enforcement proposal, not a demonstrated reduction of an existing key-bearing archive payload. The source also gives no basis for removing or replacing `S`, because it identifies the source to fetch.
+
+**J4 — Status persistence is required, but sensitive status content is unresolved.**
+
+The source requires `T` to be appended persistently before terminal returns (`SKILL.md:16`). It does not specify whether `T` is a fixed outcome code, a sentence, a raw error, or another representation. Therefore neither secret logging nor a safe minimal representation is established.
+
+A concrete implementation can use fixed final-outcome codes without interpolating the request, credential, successful body, or raw error. The codes must retain the distinctions required by the adopted meaning of “final status.” Because that meaning is not fully specified, this is a reasonable implementation proposal rather than proof that a particular existing status format is excessive or that every detail can be removed.
+
+If the append is diagnostic output, `FAST_KEY` must be excluded under `SKILL.md:15`. A violation cannot be inferred merely from the existence of a status write, and the prohibition alone does not implement exclusion.
+
+**J5 — Required return values and possible model observation of them need separate judgments.**
+
+On success, the selected body must be returned unchanged (`SKILL.md:13`). On archive failure, the archive error must be returned (`SKILL.md:14`). Their unknown content prevents a concrete judgment that sensitive output is either necessary or excessive. In particular, response dependence on a credential-bearing request does not prove that the response contains the credential.
+
+A local response adapter could select and forward the required body or archive error directly, with model-visible control information limited to what orchestration needs. Such a design can preserve the terminal return value while avoiding model inspection of the full response. Any transience classification must retain the required semantics; the source does not supply a classifier or prove that an arbitrary fixed metadata field is sufficient.
+
+This is a possible routing improvement. Without evidence of sensitive content in these returned versions, it is not an additional positive sensitive-excess finding. It also does not turn the unspecified workflow return into a proven user-delivery boundary.
+
+Across the chain, the identifier remains paired with the requested source, the same stated credential is supplied only to reached preferred attempts, the archive request contains only the identifier, and terminal body versions are not combined or altered. The maximum fetch count remains three, with no fetch after success, and the final-status append precedes each described terminal return. The supported positive finding is conditional model exposure of `FAST_KEY`; the other judgments remain bounded by the missing content, routing, deployment, and retention evidence. “No excess established” does not prove safety, complete necessity, semantic completeness, or global minimality.
+
+No material correction to the candidate’s substantive conclusions was necessary.
