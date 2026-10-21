@@ -1,8 +1,16 @@
 # 文档导航
 
-- [Cloud research handoff](cloud-research-handoff.md): current research status,
-  frozen decisions, preserved calibration failure, cross-computer workflow and
-  the boundary between offline readiness and model authorization.
+- [Research and chat handoff](research-chat-handoff.md): current objective,
+  conversation decisions, implemented flow, latest evidence, unresolved research
+  questions and second-computer continuation without experiment dispatch.
+- [Handoff submission verification](research-handoff-verification.md): review of
+  the two research changes, exact offline regression scope and submission checks.
+- [Local-only material inventory](research-local-only-inventory.json): paths and
+  hashes of newer preparation not included in this Git submission; metadata is
+  not a transfer of the listed files or authorization to resume them.
+- [Cloud preparation handoff](cloud-research-handoff.md): earlier preparation
+  snapshot, preserved calibration failure and the boundary between offline
+  readiness and model authorization. Cloud creation is currently paused.
 - [Cloud preparation verification](cloud-verification.md): submission scope,
   dependency checks and actual environment verification status.
 

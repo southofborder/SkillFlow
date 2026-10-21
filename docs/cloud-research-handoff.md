@@ -1,5 +1,11 @@
 # SkillFlow research handoff and cloud preparation
 
+Current continuation note (2026-10-21): the user has chosen local Git and a
+[research/chat handoff](research-chat-handoff.md); Cloud creation is paused.
+The document below retains the earlier cloud-preparation snapshot. Newer local-only
+long preparation and explicitly paused CLI-v3 calibration are described in the
+current handoff, not silently included in the old submitted-material closure.
+
 Updated: 2026-10-20. This is a development handoff, not an experiment
 authorization or an evaluation result.
 

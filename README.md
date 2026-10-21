@@ -1,9 +1,11 @@
 # SkillFlow
 
 Cross-computer development: start with the
-[research handoff](docs/cloud-research-handoff.md) and
-[offline cloud setup](tools/cloud/README.md). Environment setup does not
-authorize model experiments; the formal long comparison has not started.
+[research and chat handoff](docs/research-chat-handoff.md) and its
+[submission verification](docs/research-handoff-verification.md). The current
+choice is GitHub plus a local checkout; Cloud creation is paused. Environment
+setup does not authorize experiments. The formal long comparison has not started;
+a newer local-only CLI calibration is explicitly paused.
 
 SkillFlow develops task-related static data minimization analysis for Agent Skills.
 **SkillFlow** implements graph construction, controlled source comparison, bounded
@@ -14,7 +16,8 @@ A source-only Task extraction now establishes the preservation baseline before
 receiving a CFG, annotation, payload or DOE result. The grounded annotation
 references that exact sealed Task revision and declares realizations, positive
 demands, expressions, processing and sensitivity. A full-source review must
-account for every source range, Task requirement, demand seed and actual IR.
+account for every source range, Task requirement, demand/constraint declaration
+and actual IR.
 [The recorded pipeline](docs/doe/joint-pipeline.md) supports one semantic repair
 round: annotation-only repair keeps Task immutable; Task errors use an isolated
 source-only revision followed by a fresh complete annotation and review.
@@ -22,8 +25,10 @@ source-only revision followed by a fresh complete annotation and review.
 The normal path has three semantic calls, annotation repair five, and Task
 revision plus rebuilding six. Structural correction is recorded separately.
 The deterministic backend traces each seed to its derivations and every sink.
-Unexpressed constraints remain visible limitations; they are not executable
-checks or proof of necessity. Propagation facts and historical runs remain
+Supported constraints are checked independently in the forward direction;
+they neither erase payload facts nor create positive demands. Unexpressed
+constraints remain limitations, not executable checks or proof of necessity.
+Propagation facts and historical runs remain
 immutable. Engineering tests and real-model error-detection experiments are
 reported separately; neither parsing nor review acceptance proves completeness.
 Conservative retention is not indispensability; supported local reductions do
