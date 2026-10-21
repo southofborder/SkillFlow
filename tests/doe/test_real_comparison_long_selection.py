@@ -252,3 +252,116 @@ def test_shortfall_and_insufficient_selected_clusters_do_not_relax_rules(build):
     result = selector.select_long_cases(proposal, corpus)
     assert result["status"] == "insufficient_selected_source_clusters"
     assert result["thresholds_relaxed"] is False and result["final_seal"] is False
+
+
+def test_supporting_manifest_connector_is_rooted_but_never_receives_operative_credit():
+    modules = [f"src/module{n}.js" for n in range(6)]
+    operative = ["src/index.js", "hooks/request-before.js"] + modules
+    texts = {"SKILL.md": "Read README.md for the current setup.\n", "README.md": "npm run setup\n",
+        "package.json": json.dumps({"scripts": {"setup": "node setup.js"}, "main": "src/index.js",
+            "hooks": {"before": "hooks/request-before.js"}}, indent=2),
+        "hooks/request-before.js": "import { manager } from '../src/index.js';\n",
+        "src/index.js": "\n".join(f"import {{ value{n} }} from './module{n}.js';" for n in range(6)) + "\n",
+        **{path: f"export const value{n} = {n};\n" for n, path in enumerate(modules)}}
+    def edge(source, target, number=1):
+        return {"source": source, "target": target, "evidence": [{"path": source,
+            "start_line": number, "end_line": number, "quote": texts[source].splitlines()[number - 1]}]}
+    package_lines = texts["package.json"].splitlines()
+    main_line = next(n for n, line in enumerate(package_lines, 1) if '"main"' in line)
+    hook_line = next(n for n, line in enumerate(package_lines, 1) if '"before"' in line)
+    edges = [edge("SKILL.md", "README.md"), edge("README.md", "package.json"),
+        edge("package.json", "src/index.js", main_line), edge("package.json", "hooks/request-before.js", hook_line)]
+    edges += [edge("src/index.js", path, n + 1) for n, path in enumerate(modules)]
+    basis = {"operative_files": operative, "count": 8, "reference_edges": edges}
+    inventory = {"texts": texts, "files": [{"path": path, "kind": "supporting_text" if path == "package.json" else "operational_text"} for path in texts]}
+    selector._nested_quotes(basis, texts)
+    result = selector._file_proof(basis, inventory)
+    assert result["threshold_met"] and len(result["connected_operative_files"]) == 8
+    assert result["supporting_connectors_without_operative_credit"] == ["README.md", "SKILL.md", "package.json"]
+    wrong = deepcopy(basis)
+    wrong["reference_edges"][1]["evidence"][0]["quote"] = "npm run missing-command"
+    with pytest.raises(ValueError, match="local target"):
+        selector._file_proof(wrong, inventory)
+    detached = deepcopy(basis)
+    detached["reference_edges"].pop()
+    with pytest.raises(ValueError, match="disconnected"):
+        selector._file_proof(detached, inventory)
+    manifest_credit = deepcopy(basis)
+    manifest_credit["operative_files"][-1] = "package.json"
+    with pytest.raises(ValueError, match="support-only"):
+        selector._file_proof(manifest_credit, inventory)
+
+
+@pytest.mark.parametrize("source,target,supported", [
+    ("README.md", "package.json", True),
+    ("sub/README.md", "sub/package.json", True),
+    ("README.md", "unrelated/package.json", False),
+    ("sub/README.md", "package.json", False),
+])
+def test_npm_connector_requires_the_local_manifest_identity(source, target, supported):
+    text = "npm run setup"
+    inventory = {source: text, target: json.dumps({"scripts": {"setup": "node setup.js"}})}
+    evidence = [{"path": source, "start_line": 1, "end_line": 1, "quote": text}]
+    assert selector._edge_target_supported(source, target, evidence, inventory) is supported
+
+
+@pytest.mark.parametrize("scripts", [None, [], "setup", {"setup": None}, {"setup": []},
+                                     {"setup": True}, {"setup": ""}, {"setup": "  "}])
+def test_npm_connector_rejects_malformed_or_empty_script_definitions(scripts):
+    evidence = [{"path": "README.md", "start_line": 1, "end_line": 1, "quote": "npm run setup"}]
+    texts = {"package.json": json.dumps({"scripts": scripts})}
+    assert not selector._edge_target_supported("README.md", "package.json", evidence, texts)
+
+
+@pytest.mark.parametrize("quote", ["cd unrelated && npm run setup", "Do not run npm run setup",
+                                  "npm run setup.prod", "npm run setup --prefix unrelated"])
+def test_implicit_npm_connector_requires_a_complete_isolated_command(quote):
+    evidence = [{"path": "README.md", "start_line": 1, "end_line": 1, "quote": quote}]
+    texts = {"package.json": json.dumps({"scripts": {"setup": "node setup.js"}})}
+    assert not selector._edge_target_supported("README.md", "package.json", evidence, texts)
+
+
+@pytest.mark.parametrize("source_directory", ["/unrelated/templates", "~/.tool/templates", "templates"])
+def test_recursive_copy_directory_does_not_prove_individual_local_file_identity(source_directory):
+    evidence = [{"path": "README.md", "start_line": 1, "end_line": 1,
+                 "quote": f"cp -r {source_directory} destination"}]
+    assert not selector._edge_target_supported("README.md", "templates/item.txt", evidence,
+                                              {"templates/item.txt": "Unrelated source content."})
+
+
+def test_text_asset_keywords_do_not_replace_explicit_operative_content_evidence():
+    texts = {"SKILL.md": "Do not read assets/item.txt; it is illustrative only.\n",
+             "assets/item.txt": "Use the supplied value in this output template.\n"}
+    edge = {"source": "SKILL.md", "target": "assets/item.txt", "evidence": [{
+        "path": "SKILL.md", "start_line": 1, "end_line": 1, "quote": texts["SKILL.md"].strip()}]}
+    basis = {"operative_files": ["assets/item.txt"], "count": 1, "reference_edges": [edge]}
+    inventory = {"texts": texts, "files": [{"path": path,
+        "kind": "text_asset" if path.startswith("assets/") else "operational_text"} for path in texts]}
+    selector._nested_quotes(basis, texts)
+    with pytest.raises(ValueError, match="explicit operative"):
+        selector._file_proof(basis, inventory)
+    texts["SKILL.md"] = "Use assets/item.txt as the required output template.\n"
+    edge["evidence"][0]["quote"] = texts["SKILL.md"].strip()
+    basis["operative_content_evidence"] = [{"path": "assets/item.txt", "start_line": 1,
+        "end_line": 1, "quote": texts["assets/item.txt"].strip()}]
+    selector._nested_quotes(basis, texts)
+    assert selector._file_proof(basis, inventory)["connected_operative_files"] == ["assets/item.txt"]
+
+
+@pytest.mark.parametrize("change", [
+    {"path": "./SKILL.md"}, {"path": "folder\\SKILL.md"}, {"path": "folder//SKILL.md"},
+    {"start_line": True}, {"end_line": True},
+])
+def test_source_quote_coordinates_are_canonical_physical_references(change):
+    evidence = {"path": "SKILL.md", "start_line": 1, "end_line": 1, "quote": "Original source."}
+    evidence.update(change)
+    with pytest.raises(ValueError, match="noncanonical"):
+        selector._nested_quotes(evidence, {"SKILL.md": "Original source."})
+
+
+@pytest.mark.parametrize("path", ["./main.py", "src\\main.py", "src//main.py"])
+def test_counted_spans_reject_noncanonical_file_identity(path):
+    span = {"path": path, "start_line": 1, "end_line": 1, "operative_nonempty_lines": 1,
+            "counted_physical_line_numbers": [1]}
+    with pytest.raises(ValueError, match="exact portable"):
+        selector._count_proof({"counted_spans": [span]}, {"main.py": "value = 1"})

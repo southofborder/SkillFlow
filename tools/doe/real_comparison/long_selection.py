@@ -168,6 +168,10 @@ def _nested_quotes(value, texts, location="review"):
         if "quote" in value:
             if not {"path", "start_line", "end_line", "quote"} <= value.keys():
                 raise ValueError("A nested source quote lacks its exact source coordinates: " + location)
+            if (not isinstance(value["path"], str) or "\\" in value["path"]
+                    or old._relative(value["path"]) != value["path"]
+                    or type(value["start_line"]) is not int or type(value["end_line"]) is not int):
+                raise ValueError("A nested source quote has noncanonical physical source coordinates")
             old.validate_evidence(texts, [value])
             count += 1
         for key, child in value.items():
@@ -272,6 +276,8 @@ def _count_proof(basis, texts):
     spans, total, normalized, discrepancies = basis.get("counted_spans", []), set(), [], []
     for span in spans:
         path = old._relative(span["path"])
+        if path != span["path"] or "\\" in span["path"]:
+            raise ValueError("A counted proof requires an exact portable physical source path")
         if path not in texts:
             raise ValueError("A counted proof refers to excluded or absent source")
         text = texts[path]
@@ -326,6 +332,20 @@ def _edge_target_supported(source, target, evidence, actual_paths=()):
         basename = PurePosixPath(target).name
         if basename in quote and sum(PurePosixPath(p).name == basename for p in actual_paths) == 1:
             return True
+        if (target == str(parent / "package.json") and isinstance(actual_paths, dict)
+                and target in actual_paths):
+            # A bare command can only connect a co-located manifest. Its script
+            # name does not establish identity for another package in the bundle.
+            commands = [match[1] for line in quote.splitlines()
+                        if (match := re.fullmatch(r"\s*npm\s+run\s+([A-Za-z0-9:_.-]+)\s*", line))]
+            try:
+                scripts = json.loads(actual_paths[target]).get("scripts", {})
+            except (ValueError, AttributeError):
+                scripts = {}
+            if (commands and isinstance(scripts, dict)
+                    and all(isinstance(scripts.get(command), str) and scripts[command].strip()
+                            for command in commands)):
+                return True
         for literal in re.findall(r"[\w./<>*{}-]+\.(?:md|py|tsx?|m?js|ya?ml|json|sh)", quote):
             literals.append(literal)
         module = str(PurePosixPath(target).with_suffix("")).replace("/", ".")
@@ -346,20 +366,24 @@ def _file_proof(basis, inventory):
     paths = basis.get("operative_files", [])
     if not paths:
         return {"connected_operative_files": [], "reference_edges": [], "threshold_met": False}
-    if len(paths) != len(set(paths)) or "SKILL.md" not in paths:
-        raise ValueError("An eight-file proof must include the entry and unique actual operative files")
+    if len(paths) != len(set(paths)) or "SKILL.md" not in inventory["texts"]:
+        raise ValueError("An eight-file proof needs an actual entry and unique operative files")
     kinds = {f["path"]: f["kind"] for f in inventory["files"]}
     for path in paths:
         old._relative(path)
-        if path not in inventory["texts"] or kinds[path] == "non_operational_support":
+        if (path not in inventory["texts"] or kinds[path] == "non_operational_support"
+                or PurePosixPath(path).name in {"package.json", "pyproject.toml", "Cargo.toml"}):
             raise ValueError("The operative file proof includes missing, metadata, test or support-only source")
-        if kinds[path] == "text_asset" and not any(e.get("path") == path for e in basis.get("operative_content_evidence", [])):
-            raise ValueError("A named text asset lacks explicit operative input/output-template content evidence")
+        if kinds[path] == "text_asset":
+            content_proof = any(e.get("path") == path for e in basis.get("operative_content_evidence", []))
+            if not content_proof:
+                raise ValueError("A named text asset lacks explicit operative input/output-template content evidence")
     edges = []
     for edge in basis.get("local_reference_edges", basis.get("reference_edges", [])):
         source, target = edge.get("source", edge.get("path")), edge.get("target")
         evidence = edge.get("evidence", [edge] if "quote" in edge else [])
-        if source not in paths or target not in paths or not evidence or not _edge_target_supported(source, target, evidence, inventory["texts"]):
+        if (source not in inventory["texts"] or target not in inventory["texts"] or not evidence
+                or not _edge_target_supported(source, target, evidence, inventory["texts"])):
             raise ValueError("A claimed operative file connection lacks a source-supported local target")
         edges.append({"source": source, "target": target, "evidence": evidence})
     reached = {"SKILL.md"}
@@ -369,9 +393,11 @@ def _file_proof(basis, inventory):
             break
         reached = expanded
     declared = basis.get("count", basis.get("confirmed_file_count"))
-    if declared != len(paths) or reached != set(paths):
+    if declared != len(paths) or not set(paths) <= reached:
         raise ValueError("The eight-file proof has a wrong count or disconnected operative members")
-    return {"connected_operative_files": sorted(reached), "reference_edges": edges, "threshold_met": len(reached) >= 8}
+    return {"root": "SKILL.md", "connected_operative_files": sorted(paths),
+            "supporting_connectors_without_operative_credit": sorted(reached - set(paths)),
+            "reference_edges": edges, "threshold_met": len(paths) >= 8}
 
 
 def _inventory(corpus, candidate):
@@ -442,6 +468,13 @@ def validate_reviews(proposal_dir, corpus_root, *, write=True):
                     if document.get("rules_sha256", sha256(proposal / "rules.json")) != sha256(proposal / "rules.json"):
                         raise ValueError("A source-review batch is bound to different prospective rules")
             basis = record.get("complexity_basis", record.get("basis", {}))
+            member_kinds = {f["path"]: f["kind"] for f in inventory["files"]}
+            for span in basis.get("counted_spans", []):
+                path = span.get("path", "")
+                if (member_kinds.get(path) == "non_operational_support"
+                        or any(part.casefold() in {"vendor", "node_modules", "site-packages", ".venv", "third_party"}
+                               for part in PurePosixPath(path).parts)):
+                    raise ValueError("An operative line proof counts support, tests or dependency/vendor source")
             feature_names = []
             for feature in record.get("features", []):
                 if feature.get("feature") not in rules["feature_criterion"]["allowed_features"] or not feature.get("reason") or not feature.get("evidence"):
@@ -457,7 +490,7 @@ def validate_reviews(proposal_dir, corpus_root, *, write=True):
             if count["count_discrepancies"]:
                 raise ValueError("Operative physical-line count differs from the declared source proof; explicit author correction is required")
             if record["decision"] == "include":
-                if record.get("source_closure", {}).get("status") != "complete_for_static_audit":
+                if record.get("source_closure", {}).get("status") not in {"complete_for_static_audit", "complete_for_static_source_audit"}:
                     raise ValueError("An included source review lacks complete static source closure")
                 if len(feature_names) < rules["feature_criterion"]["minimum_source_confirmed_distinct_features"]:
                     raise ValueError("An included review has fewer than three distinct source-confirmed features")
