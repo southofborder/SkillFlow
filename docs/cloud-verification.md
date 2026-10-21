@@ -109,7 +109,47 @@ before publication. Do not start a research task or calibration to test the
 environment. Publication, a real cloud checkout, and continuation from a second
 computer remain separate unchecked items.
 
-The exact focused regression command was:
+### Creation retry on 2026-10-21
+
+The user requested another real Cloud creation attempt for
+`southofborder/SkillFlow`, branch `codex/cloud-setup`, with **Only me** access.
+A fresh `git ls-remote` confirmed the branch at
+`14fc189a7ce731986c07cb9d946b7d00d83f2f09` before this attempt.
+
+The stale local-chat URL was replaced by the official ChatGPT web start page.
+The signed-in profile was available, but both official Cloud entry points
+failed before repository selection could complete:
+
+- **Work in > Cloud > Select environment > Create environment:** the repository
+  picker reported that it could not load the GitHub connection. An explicit
+  retry and a refreshed session did not resolve it; **Get started** remained
+  disabled.
+- **Settings > Codex Cloud > Environments:** the page could not load saved
+  environments. Its retry did not resolve the error, and its creation dialog
+  showed the same GitHub-connection failure.
+
+The UI did not establish a root cause. Repository availability through Git is
+not evidence that the Cloud GitHub connector works. No new usable environment,
+branch selection inside Cloud, **Only me** setting, installation, offline cloud
+test, or publication was confirmed. No research inference, calibration, or long
+experiment was launched. The earlier Windows verification results remain local
+results, not cloud results. Existing local research and billing edits were not
+included in this retry.
+
+Screenshots are retained locally under `tmp/cloud-setup/` as
+`cloud-retry-github-connection-20261021.png` and
+`cloud-retry-environments-20261021.png`. The Cloud settings page remains the
+handoff point. Do not substitute a simulated environment-catalog entry for a real
+published environment.
+
+After the service becomes available, confirm the requested branch and private
+access, run `bash tools/cloud/setup.sh`, then run the focused command below in
+the actual cloud checkout. Record its real results before publishing. On the
+second computer, sign in to the same account and workspace and reopen the same
+cloud task; a new task has separate working state. Commit important work to
+GitHub rather than relying on cross-task sharing of uncommitted files.
+
+### Focused regression command
 
 ```text
 python -B -X utf8 -m pytest tests/cloud tests/test_installed_cli.py tests/doe/test_real_comparison_cli_adapter.py tests/doe/test_real_comparison_cli_amendment.py tests/doe/test_real_comparison_execution.py tests/doe/test_real_comparison_long_selection.py -q -p no:cacheprovider
