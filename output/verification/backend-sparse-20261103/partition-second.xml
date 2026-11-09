@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="5" time="2.794" timestamp="2026-11-03T16:46:42.900452" hostname="xuss"><testcase classname="tests.propagation.test_partition_worklist" name="test_relation_row_key_does_not_union_correlated_fields" time="0.002" /><testcase classname="tests.propagation.test_partition_worklist" name="test_projected_exit_retains_public_output_but_drops_dead_seed_at_return" time="0.305" /><testcase classname="tests.propagation.test_partition_worklist" name="test_partitioned_nested_receivers_remain_paired_and_schedules_agree" time="0.338" /><testcase classname="tests.propagation.test_partition_worklist" name="test_unknown_branch_rows_do_not_mix_repeated_operand" time="0.003"><failure message="pydantic_core._pydantic_core.ValidationError: 1 validation error for ControlFlowGraph&#10;  Value error, DISPATCH_INPUTS_MISSING: block 'entry': guarded or branching DISPATCH must declare condition dependencies in inputs [type=value_error, input_value={'entry_block_id': 'entry...get_block_id': 'join'}]}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.5/v/value_error">def test_unknown_branch_rows_do_not_mix_repeated_operand():
+        from tests.propagation.test_explicit_loops import fixture_annotation, literal, local, input_ref
+        def block(name, rows):
+            return {"block_id": name, "block_name": name, "instructions": rows}
+        cfg = {"entry_block_id": "entry", "blocks": {
+            "entry": block("entry", [instruction("start", opcode="dispatch")]),
+            "left": block("left", [instruction("left"), instruction("left_next", opcode="dispatch")]),
+            "right": block("right", [instruction("right"), instruction("right_next", opcode="dispatch")]),
+            "join": block("join", [instruction("read", outputs=["x"]),
+                instruction("twice", [operand("x")], ["both"]), instruction("return", [operand("both")], opcode="return")])},
+            "edges": [{"source_block_id": a, "target_block_id": b} for a, b in
+                      [("entry", "left"), ("entry", "right"), ("left", "join"), ("right", "join")]]}
+        plans = {
+            "left": (["context_write"], [(0, [{"op": "write", "target": "xloc", "mode": "replace", "input": literal("a")}])], []),
+            "right": (["context_write"], [(0, [{"op": "write", "target": "xloc", "mode": "replace", "input": literal("b")}])], []),
+            "read": (["context_read"], [(0, [{"op": "read", "location": "xloc", "output": "x"}])], [local("x")]),
+            "twice": (["transform"], [(0, [{"op": "compute", "inputs": [input_ref(), input_ref()],
+                 "dependencies": ["possible", "possible"], "output": "both"}])], [local("both")])}
+&gt;       cfg, annotation = fixture_annotation(cfg, plans, {"xloc": ("runtime_context", "x")})
+
+tests\propagation\test_partition_worklist.py:60: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+examples\propagation\propagation_demo.py:72: in fixture_annotation
+    material = prepare_material(source, cfg, task_baseline=task)
+src\skillflow\propagation\material.py:20: in prepare_material
+    cfg = checked_cfg(cfg)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cfg = {'blocks': {'entry': {'block_id': 'entry', 'block_name': 'entry', 'instructions': [{'id': 'ir_start', 'inputs': [], 'o...left', 'target_block_id': 'join'}, {'source_block_id': 'right', 'target_block_id': 'join'}], 'entry_block_id': 'entry'}
+
+    def checked_cfg(cfg: dict[str, Any]) -&gt; dict[str, Any]:
+        if type(cfg) is not dict:
+            raise ValueError("cfg must be the actual CFG JSON object")
+        _require_json(cfg, "")
+        # Use JSON validation so the existing enum contracts remain unchanged.
+&gt;       model = ControlFlowGraph.model_validate_json(json.dumps(cfg, ensure_ascii=False, allow_nan=False))
+E       pydantic_core._pydantic_core.ValidationError: 1 validation error for ControlFlowGraph
+E         Value error, DISPATCH_INPUTS_MISSING: block 'entry': guarded or branching DISPATCH must declare condition dependencies in inputs [type=value_error, input_value={'entry_block_id': 'entry...get_block_id': 'join'}]}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.5/v/value_error
+
+src\skillflow\graph\validation.py:39: ValidationError</failure></testcase><testcase classname="tests.propagation.test_partition_worklist" name="test_unrelated_branch_is_not_revisited_when_loop_families_grow" time="0.097"><failure message="pydantic_core._pydantic_core.ValidationError: 1 validation error for ControlFlowGraph&#10;blocks.independent&#10;  Value error, block 'independent': last instruction 'ir_independent' must have opcode DISPATCH or RETURN, got independent [type=value_error, input_value={'block_id': 'independent...ier': 'independent'}]}]}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.5/v/value_error">def test_unrelated_branch_is_not_revisited_when_loop_families_grow():
+        cfg, annotation = explicit_loop_fixture()
+        # A disconnected root is an admitted independent branch in this CFG contract.
+        extra = instruction("independent", outputs=["independent"])
+        cfg["blocks"]["independent"] = {"block_id": "independent", "block_name": "independent", "instructions": [extra]}
+        template = deepcopy(annotation["ir_semantics"]["ir_seed"])
+        template["output_bindings"] = [template["output_bindings"][0]]
+        annotation["ir_semantics"]["ir_independent"] = template
+&gt;       result = propagate(cfg, annotation)
+
+tests\propagation\test_partition_worklist.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cfg = {'blocks': {'body': {'block_id': 'body', 'block_name': 'body', 'instructions': [{'id': 'ir_member', 'inputs': [{...}],...'head', 'target_block_id': 'exit'}, {'source_block_id': 'body', 'target_block_id': 'head'}], 'entry_block_id': 'entry'}
+annotation = {'demands': [], 'expressions': [], 'ir_semantics': {'ir_append': {'empty_effect_evidences': [{'reason': '离线示例显式指定此关系；真....}, 'locations': {'api': {'access_scope': 'recipient', 'kind': 'remote', 'name': 'api', 'operand_refs': [], ...}}, ...}
+
+    def propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
+                  schedule="fifo", max_variants=100000):
+        """Compute static may-records. Invalid inputs raise; solve limitations are results.
+    
+        No online clients are imported. Source Data is cloned and never mutated.
+        ``complete`` means convergence within this domain, not semantic correctness.
+        """
+        if schedule not in {"fifo", "lifo"}:
+            raise ValueError("schedule must be fifo or lifo")
+        if type(max_variants) is not int or max_variants &lt; 1:
+            raise ValueError("max_variants must be a positive integer")
+        if isinstance(cfg, ControlFlowGraph):
+            cfg.validate_integrity()
+            cfg = json.loads(cfg.to_json())
+        else:
+&gt;           graph = ControlFlowGraph.model_validate(cfg)
+E           pydantic_core._pydantic_core.ValidationError: 1 validation error for ControlFlowGraph
+E           blocks.independent
+E             Value error, block 'independent': last instruction 'ir_independent' must have opcode DISPATCH or RETURN, got independent [type=value_error, input_value={'block_id': 'independent...ier': 'independent'}]}]}, input_type=dict]
+E               For further information visit https://errors.pydantic.dev/2.5/v/value_error
+
+src\skillflow\propagation\solver.py:390: ValidationError</failure></testcase></testsuite></testsuites>

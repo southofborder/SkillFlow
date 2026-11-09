@@ -1,0 +1,28 @@
+# Independent engineering review: CFG/processing alignment v9
+
+The final reviewed snapshot has **no unresolved engineering blocker**. Four issues or fixture defects were resolved; one overbroad initial review claim was withdrawn. This compares the saved pre-edit baseline with current production, not Git HEAD. It does not establish online GA4 coverage or accuracy.
+
+The changes preserve seven normal semantic calls, two workers, Task/mapping/sensitivity isolation, and completed material/index reuse. Current CFG and semantic-fragment initial generation and rebuilds receive full frozen source. Source-review ownership uses the existing dependency closure. Omitted model-side write mode becomes explicit `replace` before the raw write contract; explicit append/delete remain distinct. Empty-filter/map proofs use finite supported content alternatives, leaving unknown and cyclic inputs unknown.
+
+The review findings are:
+
+- **R1, resolved — topology correction.** A three-successor dispatch diagnostic selected a fixed existing-block replacement, which could not add a block or rewire/remove edges. Only `cfg` plus `binary_dispatch` now uses the existing full-object correction within the same single-correction budget. New topology and fake-client zero-call replay pass. Original evidence: [review-binary-correction-repro.json](review-binary-correction-repro.json).
+- **R2, withdrawn — observer I/O claim.** The callback-only reproduction proved an exception escaped that callback, but the existing `runner.mark` already isolates ordinary observer exceptions. My initial inference that the active analysis would terminate was too broad. The redundant new callback wrapper was removed. The final real orchestration test deliberately supplies failing progress output, completes all seven fake calls, and replays with zero new calls. `KeyboardInterrupt` remains distinct. [Original callback evidence](review-progress-io-repro.json) is retained, with this corrected interpretation.
+- **R3, resolved — inactive demands.** The 013 fixture exposed producer lookup on a path proven `not_reached`. Its goal now remains declared and gets a nonblocking `inactive_goal`; it does not gain an invented producer or fulfilled requirement. Blocked/unmodeled paths remain unresolved. An independent all-inactive-R1 check retained `unbound_requirement`, `has_applicable_goal=false`, and `partial`. [Evidence](review-inactive-demand-repro.json) is explicitly post-fix and its selected diagnostic array is not an inventory of all notices.
+- **R4, resolved — fixture fidelity.** The temporary explicit read before a 013 append was source-unsupported and unnecessary. It was removed. Explicit test states seed unknown prior storage; the normal production entry already acquires it. No engine change was needed.
+- **R5, resolved — early interruption in the queue.** An interruption before runner terminal-state handling could leave a prepared/running result alongside a controller-finished marker with null status. The old queue could proceed to the next case. The queue now requires terminal analysis statuses and rejects controller interruption. Ordinary terminal failures still continue. [Before](review-queue-handoff-before.json) and [after](review-queue-handoff-after.json) fake-subprocess evidence preserves the distinction.
+
+Independent test receipts:
+
+- [independent-review-tests.xml](independent-review-tests.xml): 29 passed, zero failures.
+- [independent-review-fixes.xml](independent-review-fixes.xml): 26 passed, zero failures.
+- [independent-review-013.xml](independent-review-013.xml): 8 passed, zero failures.
+- [independent-review-final-observation.xml](independent-review-final-observation.xml): 3 passed, zero failures.
+
+These targeted runs contain **50 current distinct test cases** and 66 historical test executions. One superseded callback-wrapper test remains in an earlier receipt and is excluded from the current distinct count. This is not one whole-repository run. The final 013 subset covers terminal paths, unknown append storage and the full guided CFG repair through DOE. Other checks cover full-source/isolation, connected compiled examples, default write semantics, conservative empty guards, structural correction/replay, timing and seven-call orchestration. Replay checks used newly authored fixtures, never historical runs.
+
+The final queue check passed **eight additional standalone fake scenarios**: ordinary failure continued through exactly GA4/001/010/013; missing finish, recorded interruption, early interruption and a nonterminal result stopped after the first fake child; wrong order, an existing controller marker and a changed CLI launched none. Working directory resolves to `D:/projects/SkillFlow`. High normalizes to the intended model config, the actual command builder supplies `openai`, and the controller has one replay call site. The preparer checks matching offline acceptance, decoded source identity and raw relative-path file hashes before producing its queue. It imports only the frozen source package. No real preparation or subprocess was executed by the reviewer.
+
+The final SHA-256 inventory for 13 changed production files and four harness files, receipt hashes and findings are in [independent-review.json](independent-review.json). Production remained unchanged during this final handoff check. Root owns final offline acceptance and dispatch.
+
+Authored corrected fixtures do not prove the model will generate the right graph/processing. Full source still has the existing transport size boundary, and combined examples add prompt text. Useful real source-boundary coverage, correctness, tokens and time require the authorized fresh batch. No general accuracy or advantage claim follows from this review.

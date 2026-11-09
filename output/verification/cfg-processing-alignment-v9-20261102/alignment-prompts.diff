@@ -1,0 +1,218 @@
+--- before/src/skillflow/common/abstraction.py
++++ src/skillflow/common/abstraction.py
+@@ -9,21 +9,38 @@
+ returned content or state versions. Prefer existing CFG branches for ordinary
+ conditional reads, optional saves, empty-input returns and conditional output.
+ Branch conditions consume actual operands; prose constraints do not execute them.
++Acquire public entry parameters from explicit context keys. At an internal call
++site, summarize its real arguments, returned version and boundary effects there;
++a callee name, metadata parameter list or disconnected function body supplies no
++caller inputs or returns. Do not replace these relations with an empty binder.
++Real zero-argument calls, constants and source expressions remain valid; opaque
++normalization or serialization details alone do not stop a supported boundary.
+ Keep source-supported loops and nested loops explicit in the CFG. Processing
+ declares predecessor merges, collection members and typed branch relations;
+ the program derives loop scopes and finite summaries. Do not unroll iterations,
+ invent loop-management tables, or use opaque compute for member selection.
++For collection traversal, a header dispatch consumes the actual collection and
++uses branch(predicate=has_member). Its true body obtains member; member produces
++the current element only, not a second Boolean. The backedge returns to the
++header and the false edge exits. Split multiway decisions into binary dispatches
++with actual operands; each guarded dispatch has at most two distinct successors.
+ Do not require line-by-line code expansion or an internal call stack. Do not
+ hide privacy-relevant conditional effects in one indivisible code black box.
+ A source-supported call-boundary summary may retain alternative outcomes and
+ named local state effects when exact internal execution is unnecessary. Preserve
+ request-before/after-failure differences, returned versions and receiving scopes.
++Normal results and actual caught exceptions have distinct sources; a successful
++response is not an exception value. Merge alternatives by their real predecessors.
+ An existing handle retains its creation-time provenance; a newly created handle
+ is a distinct value, not credential plaintext. Possible state effects do not
+ prove exact cache hits, creation counts, ordering or unconditional overwrites.
+ Separate interface acquisition from relevant initialization. An initialization
+ post-state is not the pre-state renamed; preserve its actual call origin and
+ known affected bindings without inventing library internals or source locations.
++Ordinary unspecified save/write uses replace as a runtime abstraction convention,
++not a source quotation. Explicit source append, delete or other supported update
++semantics take precedence. Save the actual response/result version, not its
++request arguments merely because they are available at the caller.
+ Keep genuine missing provenance local. Adjacency, filenames and shared labels
+ do not connect a saved result to an analysis invocation.
+ """
+--- before/src/skillflow/document_guided/prompts.py
++++ src/skillflow/document_guided/prompts.py
+@@ -2,7 +2,7 @@
+ from skillflow.common.prompt_format import compact_json, render_prompt_format
+ from skillflow.propagation.contracts.abstraction import BOUNDARY_GRANULARITY, NECESSITY_EXAMPLE
+ from skillflow.task.prompts import PRE_SUBMIT_CHECK
+-from .source import render_source, source_packet, select_document_source, select_fragment_source, prompt_cfg
++from .source import render_source, source_packet, select_document_source, prompt_cfg
+ from .interface_examples import phase_examples
+ 
+ _STEPS = {
+@@ -184,9 +184,9 @@
+         raise ValueError("Only processing receives the runtime contract")
+     texts = {key: value if isinstance(value, str) else compact_json(value)
+              for key, value in documents.items()}
+-    typed_context = {"processing": documents.get("processing"), **({"task": task} if task is not None else {})}
+-    packet = (select_fragment_source(files, typed_context) if step != "processing"
+-              else select_document_source(files, texts))
++    # Earlier documents are fallible semantic inputs, never a source visibility
++    # filter. The same complete package is used for initial and repair requests.
++    packet = source_packet(files)
+     previous = ["DOCUMENT " + key + "\n" + value for key, value in texts.items()]
+     previous.append("CFG\n" + compact_json(prompt_cfg(cfg, packet=packet)))
+     if task is not None:
+@@ -221,7 +221,7 @@
+     """Reuse the graph semantics, exposing only the new non-refusal schema."""
+     from .cfg_wire import CFGWire, cfg_contract_rules
+     files, documents = kwargs["files"], kwargs["documents"]
+-    packet = select_document_source(files, documents, spans=kwargs.get("spans"))
++    packet = source_packet(files)
+     previous = _working_documents(documents, ("flow",))
+     if kwargs.get("feedback") is not None:
+         feedback = dict(kwargs["feedback"])
+--- before/src/skillflow/document_guided/cfg_wire.py
++++ src/skillflow/document_guided/cfg_wire.py
+@@ -12,11 +12,12 @@
+     "operand_variant": "A literal is {type:literal,literal_value:<actual JSON>}. Other operand types supply a nonempty identifier and omit literal_value, even null. Public outputs are result operands. Instruction IDs, semantic_name and the context-key inventory are generated; omit them.",
+     "external_acquisition_inputs": "An external acquisition explicitly consumes the real external_resource or previously produced result source. Resource identity is not its acquired contents or an invented positional argument.",
+     "dispatch_inputs": "A branching or guarded dispatch names the actual condition operands. Edge text does not substitute for these inputs. Return and dispatch terminate their block and have no public outputs.",
++    "binary_dispatch": "Each dispatch has at most two distinct successor blocks. Express a multiway decision as successive binary decisions using actual operands; do not ask processing to invent a third branch or let the program guess conditions.",
+     "cfg_connections": "Entry and every edge endpoint refer to existing blocks. Result names have one producer. Ordinary inputs consume defined versions; forward/backedge uses require a real graph path and cannot be read before definition inside the same block. Preserve independent capabilities and genuine returns/throws.",
+     "acquisition_shape": "A context/external acquisition block has exactly one acquisition instruction followed by dispatch/return; context acquisition consumes its context_key entries. Ordinary computation uses data_source_kind=null. Do not create relay acquisitions or duplicate producers. Outgoing blocks end in dispatch and terminal blocks in return; preserve repeated source calls as different versions.",
+     "source_scope": "Retain real entry points, independent components and cross-file links, not proximity/name-based edges. Each instruction is a meaningful action, version or boundary; declarations, examples and repeated explanations do not automatically become executable nodes. Put source restrictions at their real graph/block/instruction scope; they are not implemented guards or extra operations.",
+     "source_span": "For code, metadata._source_span={file,start_line,end_line} selects exact inclusive frozen source lines. The program copies the original text into script_content; do not duplicate code or invent ranges. Other meaningful metadata is retained.",
+-    "loop_relations": "A real loop may retain its header, body, backedges and exits. Preserve the collection/member and initial/updated values needed for processing; do not invent a numeric cursor solely as CFG bookkeeping. Program loop regions and iteration identities are not model fields. Conditional merge membership must be expressible from actual predecessors, not only a prose phi description.",
++    "loop_relations": "A collection loop header dispatch consumes the collection for branch(predicate=has_member); its true body obtains member with one element output, its false edge exits, and its backedge returns to the header. Do not combine Boolean availability and member into a dual-output operation. Preserve initial/updated values and real merge predecessors. Do not invent a numeric cursor or loop-management fields.",
+ }
+ 
+ 
+@@ -93,6 +94,14 @@
+                     diagnostics.extend(structural_error("external_acquisition_inputs", f"/blocks/{index}/instructions/0/inputs",
+                         "external acquisition requires an explicit external_resource or previously produced result input; resource identity is not acquired content or a positional call argument").diagnostics)
+             outgoing = [edge for edge in edges if isinstance(edge, dict) and edge.get("source_block_ref") == block.get("block_ref")] if isinstance(edges, list) else []
++            successors = sorted({edge["target_block_ref"] for edge in outgoing
++                                 if isinstance(edge.get("target_block_ref"), str)})
++            if isinstance(terminal, dict) and terminal.get("opcode") == "dispatch" and len(successors) > 2:
++                diagnostics.extend(structural_error("binary_dispatch", f"/blocks/{index}/instructions/{len(instructions)-1}",
++                    "dispatch has more than two distinct successors; split this decision into binary dispatch blocks with actual condition operands",
++                    block_ref=block.get("block_ref"), successors=successors,
++                    edge_indices=[position for position, edge in enumerate(edges) if edge in outgoing],
++                    current_value=terminal).diagnostics)
+             if (isinstance(terminal, dict) and terminal.get("opcode") == "dispatch" and
+                     (len(outgoing) > 1 or any(edge.get("condition_text") for edge in outgoing)) and not terminal.get("inputs")):
+                 diagnostics.extend(structural_error("dispatch_inputs", f"/blocks/{index}/instructions/{len(instructions)-1}/inputs",
+--- before/src/skillflow/document_guided/interface_examples.py
++++ src/skillflow/document_guided/interface_examples.py
+@@ -92,9 +92,90 @@
+         elif kind == "sensitivity":
+             context["existing_cases"] = {"scope": ["segments", 0], "cached": ["segments", 0, "body", 0, "cases", 0]}
+     payload = {"context": context, "response": response}
+-    if kind == "processing":
+-        payload["additional_operation_forms"] = loop_operation_examples()
++    if kind in {"cfg", "processing"}:
++        payload["aligned_boundary_examples"] = alignment_examples()
+     return "VALIDATED FORMAT EXAMPLE (synthetic; names and citations are not target evidence)\n" + compact_json(payload)
++
++
++def alignment_examples():
++    """Small connected pairs, rather than another disconnected operation catalog.
++
++    Numbering mirrors the public graph compiler and is checked by compilation
++    tests. These examples run no compiler or validator while preparing a prompt.
++    """
++    def result(name):
++        return {"type": "result", "identifier": name}
++
++    def literal(value):
++        return {"type": "literal", "literal_value": value}
++
++    def inp(index=0):
++        return {"kind": "input", "index": index}
++
++    def ir(opcode, inputs=(), output=None):
++        value = {"opcode": opcode}
++        if inputs:
++            value["inputs"] = list(inputs)
++        if output is not None:
++            value["outputs"] = [result(output)]
++        return value
++
++    def spec(ops=(), output=None):
++        value = {"evidences": [deepcopy(EVIDENCE)]}
++        if ops:
++            value["segments"] = [{"mode": "local", "returns": [], "ops": list(ops)}]
++        if output is not None:
++            value["output_bindings"] = [{"output_index": 0, "value": output}]
++        return value
++
++    def pair(source, blocks, edges, specifications, locations=None):
++        # Only demonstration coordinates change. Real prompt responses use the
++        # supplied current CFG's IDs, never infer them from this example.
++        refs = {block["block_ref"]: f"block_{index + 1:03d}" for index, block in enumerate(blocks)}
++        for item in specifications:
++            for segment in item.get("segments", []):
++                for operation in segment["ops"]:
++                    if operation["op"] == "branch":
++                        for key in ("true_target", "false_target"):
++                            operation[key] = refs[operation[key]]
++        return {"source": source, "cfg": {"entry_block_ref": blocks[0]["block_ref"], "blocks": blocks,
++                    "edges": [{"source_block_ref": a, "target_block_ref": b} for a, b in edges]},
++                "processing": {"locations": locations or {}, "ir_semantics": {
++                    f"ir_{index + 1:03d}": value for index, value in enumerate(specifications)}}}
++
++    service = {"service": {"kind": "tool", "name": "Service", "evidences": [deepcopy(EVIDENCE)]}}
++    call = {"op": "call", "location": "service", "inputs": [inp()], "output": "response"}
++    caller = pair("Acquire request from context; helper(request) calls Service(request) and returns its actual response.", [
++        {"block_ref": "entry", "data_source_kind": "context", "instructions": [
++            ir("acquire_request", [{"type": "context_key", "identifier": "request"}], "request_value"), ir("dispatch")]},
++        {"block_ref": "caller", "instructions": [ir("helper_call", [result("request_value")], "reply"), ir("return", [result("reply")])]}],
++        [("entry", "caller")], [
++            spec([{"op": "read", "location": "request", "output": "acquired"}], {"kind": "local", "name": "acquired"}),
++            spec(), spec([deepcopy(call)], {"kind": "local", "name": "response"}), spec()],
++        {**deepcopy(service), "request": {"kind": "runtime_context", "name": "request", "access_scope": "task",
++            "retention": "task", "evidences": [deepcopy(EVIDENCE)]}})
++    traversal = pair("For each URL in ['same','same'], call Service(URL); return the original URL list after traversal.", [
++        {"block_ref": "entry", "instructions": [ir("urls", [literal(["same", "same"])], "urls"), ir("dispatch")]},
++        {"block_ref": "head", "instructions": [ir("dispatch", [result("urls")])]},
++        {"block_ref": "body", "instructions": [ir("current_member", [result("urls")], "url"),
++            ir("fetch", [result("url")], "reply"), ir("dispatch")]},
++        {"block_ref": "exit", "instructions": [ir("return", [result("urls")])]}],
++        [("entry", "head"), ("head", "body"), ("head", "exit"), ("body", "head")], [
++            spec(output=inp()), spec(), spec([{"op": "branch", "input": inp(), "predicate": "has_member",
++                "true_target": "body", "false_target": "exit"}]),
++            spec([{"op": "member", "input": inp(), "output": "element"}], {"kind": "local", "name": "element"}),
++            spec([deepcopy(call)], {"kind": "local", "name": "response"}), spec(), spec()], deepcopy(service))
++    binary = pair("Given ready=false and retry=true, return 'ready' if ready, else 'retry' if retry, else 'stop'.", [
++        {"block_ref": "ready_check", "instructions": [ir("dispatch", [literal(False)])]},
++        {"block_ref": "retry_check", "instructions": [ir("dispatch", [literal(True)])]},
++        {"block_ref": "ready", "instructions": [ir("return", [literal("ready")])]},
++        {"block_ref": "retry", "instructions": [ir("return", [literal("retry")])]},
++        {"block_ref": "stop", "instructions": [ir("return", [literal("stop")])]}],
++        [("ready_check", "ready"), ("ready_check", "retry_check"), ("retry_check", "retry"), ("retry_check", "stop")], [
++            spec([{"op": "branch", "input": inp(), "predicate": "truthy", "true_target": "ready", "false_target": "retry_check"}]),
++            spec([{"op": "branch", "input": inp(), "predicate": "truthy", "true_target": "retry", "false_target": "stop"}]),
++            spec(), spec(), spec()])
++    return {"caller_boundary": caller, "guard_then_member": traversal, "binary_outcome_routing": binary}
+ 
+ 
+ def example_material():
+--- before/src/skillflow/document_guided/source_review.py
++++ src/skillflow/document_guided/source_review.py
+@@ -335,7 +335,14 @@
+ Use only target_index IDs. Targets locate claims or existing parents for omitted
+ content; source_refs locate original physical lines and the program extracts
+ them. Each finding must target an object in its own domain. cfg findings concern
+-source-to-CFG fidelity; annotation findings keep faithful Task fixed. Task
++source-to-CFG fidelity. A change to blocks, edges, instruction inputs, public
++outputs or their producer positions is a cfg finding, even when processing
++first exposed the defect. Target that existing CFG object so its dependent
++processing and other fragments are rebuilt. Use annotation/processing only
++when the fixed CFG can already express the corrected processing facts. A gap
++entry does not resolve a missing relationship. Do not add a repair_owner field
++or route by suggested prose; domain and actual targets select the repair.
++Annotation findings keep faithful Task fixed. Task
+ findings target only Task and carry the finite source-only task_objection.
+ That objection contains only code, source_spans and existing requirement_ids;
+ do not put graph, payload, sensitivity or free review prose in it. Missing Task

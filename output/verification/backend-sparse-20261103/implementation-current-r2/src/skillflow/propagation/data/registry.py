@@ -1,0 +1,1315 @@
+"""Identity and description updates; no execution or propagation semantics.
+
+All mutations are transactional and every public record is detached from the
+registry.  A caller supplies the meaning of a processing result, never an opcode
+for this module to interpret.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from contextlib import contextmanager
+import hashlib
+import json
+from typing import Annotated, Literal
+from dataclasses import dataclass
+
+from pydantic import BeforeValidator, Field, TypeAdapter, model_validator
+
+from skillflow.propagation.data.models import Annotations
+from skillflow.propagation.data.models import Content
+from skillflow.propagation.data.models import Data
+from skillflow.propagation.data.models import DataPart
+from skillflow.propagation.data.models import ElementStep
+from skillflow.propagation.data.models import FieldUpdatesContent
+from skillflow.propagation.data.models import KnownPartsContent
+from skillflow.propagation.data.models import LiteralContent
+from skillflow.propagation.data.models import MappedCollectionContent
+from skillflow.propagation.data.models import OpaqueContent
+from skillflow.propagation.data.models import Origin
+from skillflow.propagation.data.models import Path
+from skillflow.propagation.data.models import StrictRecord
+from skillflow.propagation.data.models import SubsetViewContent
+from skillflow.propagation.data.models import Text
+from skillflow.propagation.data.models import WholeExceptContent
+from skillflow.propagation.data.models import path_key
+from skillflow.propagation.data.models import LoopSummaryContent, SelectionContent, AccumulatedCollectionContent, Dependency
+from skillflow.propagation.data._computation import ComputationState, DataView
+
+SCHEMA_VERSION = "skillflow-data-v6"
+_TEXT = TypeAdapter(Text)
+_PATH = TypeAdapter(Path)
+
+
+@dataclass(frozen=True)
+class IterationEntry:
+    selector: int | ElementStep
+    element: Data
+
+
+class DataRegistryError(ValueError):
+    """The supplied descriptions violate the registry's structural contract."""
+
+
+class DataConflictError(DataRegistryError):
+    """An update would overwrite a different identity or established fact."""
+
+
+class DataReferenceError(DataRegistryError):
+    """A data reference or requested part is missing or excluded."""
+
+
+class _MissingPart(DataReferenceError):
+    """No registered identity is known, without asserting absence."""
+
+
+class _ExcludedPart(DataReferenceError):
+    """An explicit exclusion prevents returning the unfiltered data."""
+
+
+class _ClosedPart(DataReferenceError):
+    """The request conflicts with a literal or a closed composition."""
+
+
+def _list_only(value: object) -> object:
+    if type(value) is not list:
+        raise ValueError("expected a list")
+    return value
+
+
+class _Identity(StrictRecord):
+    kind: Literal["source", "result", "part"]
+    key: Text | None = None
+    parent_id: Text | None = None
+    path: Path | None = None
+
+    @model_validator(mode="after")
+    def consistent_identity(self) -> "_Identity":
+        if self.kind == "part":
+            if self.key is not None or self.parent_id is None or self.path is None:
+                raise ValueError("part identity requires only parent_id and path")
+        elif self.key is None or self.parent_id is not None or self.path is not None:
+            raise ValueError("source/result identity requires only key")
+        return self
+
+
+class _Entry(StrictRecord):
+    identity: _Identity
+    data: Data
+
+
+class _Snapshot(StrictRecord):
+    schema_version: Literal["skillflow-data-v6"]
+    namespace: Text
+    records: Annotated[list[_Entry], BeforeValidator(_list_only)]
+
+
+class _IdentityIndex(StrictRecord):
+    schema_version: Literal["skillflow-data-v6"]
+    namespace: Text
+    identities: dict[Text, _Identity]
+
+
+def _canonical(value: object) -> str:
+    def element(step):
+        if isinstance(step, ElementStep):
+            return step.model_dump(mode="json")
+        raise TypeError(f"not a JSON value: {type(step).__name__}")
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+                      allow_nan=False, default=element)
+
+
+def _equal(left: object, right: object) -> bool:
+    # Python equality collapses True/1 and 1/1.0; JSON identity must not.
+    return _canonical(left) == _canonical(right)
+
+
+def _union(left: list[str], right: list[str]) -> list[str]:
+    return list(dict.fromkeys([*left, *right]))
+
+
+def _prefix(left: Path, right: Path) -> bool:
+    return len(left) <= len(right) and left == right[:len(left)]
+
+
+def _unstable_offsets(records, identity):
+    content = records[identity].content
+    if isinstance(content, SubsetViewContent):
+        return True
+    if isinstance(content, WholeExceptContent) and any(len(path) == 1 for path in content.excluded_parts):
+        return True
+    return (isinstance(content, (WholeExceptContent, FieldUpdatesContent, MappedCollectionContent))
+            and _unstable_offsets(records, content.base))
+
+
+def _literal_value(value: object, path: Path) -> object:
+    for step in path:
+        if type(value) is dict and type(step) is str and step in value:
+            value = value[step]
+        elif type(value) is list and type(step) is int and step < len(value):
+            value = value[step]
+        else:
+            raise _ClosedPart(f"literal has no part at typed path {path!r}")
+    return value
+
+
+def _annotations_merge(old: Annotations, new: Annotations) -> Annotations:
+    if old.description is not None and new.description not in (None, old.description):
+        raise DataConflictError("description conflicts; refinement cannot overwrite it")
+    return Annotations(
+        description=old.description if old.description is not None else new.description,
+        sensitivity=_union(old.sensitivity, new.sensitivity),
+        evidences=_union(old.evidences, new.evidences),
+    )
+
+
+def _parts_merge(old: Content, incoming: KnownPartsContent) -> KnownPartsContent:
+    if isinstance(old, OpaqueContent):
+        return incoming.model_copy(deep=True)
+    if not isinstance(old, KnownPartsContent):
+        raise DataConflictError("only opaque/known_parts content accepts part refinement")
+    merged = {path_key(item.path): item for item in old.parts}
+    for item in incoming.parts:
+        key = path_key(item.path)
+        existing = merged.get(key)
+        if existing is not None and existing.data != item.data:
+            raise DataConflictError(f"part {item.path!r} already refers to different data")
+        if existing is None and old.parts_complete:
+            raise DataConflictError("cannot add a part to a complete composition")
+        merged[key] = item
+    return KnownPartsContent(
+        parts=list(merged.values()),
+        parts_complete=old.parts_complete or incoming.parts_complete,
+    )
+
+
+def _content_merge(old: Content, new: Content) -> Content:
+    if isinstance(new, OpaqueContent):
+        # Re-registering an initially opaque source must not erase refinements.
+        return old
+    if isinstance(new, KnownPartsContent):
+        if isinstance(old, KnownPartsContent) and new.parts_complete:
+            declared = {path_key(item.path): item.data for item in new.parts}
+            if any(declared.get(path_key(item.path)) != item.data for item in old.parts):
+                raise DataConflictError("complete replacement omits previously known parts")
+        return _parts_merge(old, new)
+    if _equal(old.model_dump(mode="python"), new.model_dump(mode="python")):
+        return old
+    raise DataConflictError("content changed; register a new processing result instead")
+
+
+def _content_references(content):
+    if isinstance(content, KnownPartsContent):
+        yield from (part.data for part in content.parts)
+    elif isinstance(content, MappedCollectionContent):
+        yield content.base
+        for member in content.members:
+            yield member.element
+            yield from member.values
+    elif isinstance(content, (WholeExceptContent, SubsetViewContent, SelectionContent)):
+        yield content.base
+    elif isinstance(content, FieldUpdatesContent):
+        yield content.base
+        yield from (part.data for part in content.updates)
+    elif isinstance(content, AccumulatedCollectionContent):
+        yield content.base
+        yield content.added
+    elif isinstance(content, LoopSummaryContent):
+        for variant in content.variants:
+            yield from variant.inputs
+            yield from (item.data for item in variant.dependencies)
+            yield from _content_references(variant.content)
+
+
+def _references(data):
+    yield from data.origin.inputs
+    yield from (item.data for item in data.origin.dependencies)
+    if data.origin.part_of is not None:
+        yield data.origin.part_of
+    yield from _content_references(data.content)
+
+
+class DataRegistry:
+    """One namespace of Data identities and additive description refinements.
+
+    ``key`` is a stable acquisition/output position supplied by the caller.  The
+    namespace and identity, not the contents, determine a SHA-256 data ID.  This
+    is not an allocation-site propagation engine or a loop solver.
+    """
+
+    def __init__(self, namespace: str):
+        self._namespace = _TEXT.validate_python(namespace, strict=True)
+        self._records: dict[str, _Entry] = {}
+        self._revision = 0
+        self._computation = ComputationState()
+        self._part_index = {}
+
+    def enable_computation(self):
+        """Enter the private backend path after validating imported inputs once."""
+        if not self._computation.enabled:
+            self._rebuild_part_index()
+            self._computation.enabled = True
+        return self
+
+    def observe_reads(self):
+        return self._computation.observe()
+
+    def key_version(self, key):
+        return self._computation.version(key)
+
+    def take_changes(self):
+        if self._computation.journals:
+            raise RuntimeError("cannot consume changes inside a registry transaction")
+        changed = set(self._computation.changes)
+        self._computation.changes.clear()
+        return changed
+
+    def _read_data(self, identity):
+        self._computation.read(("data", identity))
+
+    def contains_data(self, identity):
+        self._read_data(identity)
+        return identity in self._records
+
+    def data_ids(self):
+        """Enumerate owned IDs for publication, outside semantic observations."""
+        return tuple(self._records)
+
+    @staticmethod
+    def _part_key(root, path):
+        return ("part", root, _canonical(path))
+
+    def _find_part(self, root, path):
+        lookup = self._part_key(root, path)
+        self._computation.read(lookup)
+        return self._part_index.get(lookup)
+
+    def _rebuild_part_index(self):
+        self._part_index = {}
+        for identity, entry in self._records.items():
+            origin = entry.data.origin
+            if origin.part_of is not None:
+                lookup = self._part_key(origin.part_of, origin.path)
+                if lookup in self._part_index:
+                    raise DataConflictError("duplicate canonical part origin")
+                self._part_index[lookup] = identity
+
+    @contextmanager
+    def _transaction(self):
+        revision = self._revision
+        extra = {name: getattr(self, name) for name in ("fact_revision", "_fact_count")
+                 if hasattr(self, name)}
+        if self._computation.enabled:
+            try:
+                with self._computation.transaction():
+                    yield
+            except Exception:
+                self._revision = revision
+                for name, value in extra.items():
+                    setattr(self, name, value)
+                raise
+        else:
+            records, parts = self._records, dict(self._part_index)
+            try:
+                with self._computation.transaction():
+                    yield
+            except Exception:
+                self._records, self._part_index, self._revision = records, parts, revision
+                for name, value in extra.items():
+                    setattr(self, name, value)
+                raise
+
+    def _make_entry(self, identity, data):
+        if self._computation.enabled:
+            return _Entry.model_construct(identity=identity, data=data)
+        return _Entry(identity=identity, data=data)
+
+    def _changed_updates(self, updates):
+        return {identity: entry for identity, entry in updates.items()
+                if identity not in self._records or not _equal(
+                    self._records[identity].model_dump(mode="python"),
+                    entry.model_dump(mode="python"))}
+
+    def _validate_computed_updates(self, updates):
+        """Check newly supplied identities/references, not the complete owned graph."""
+        known = set(updates)
+        for identity, entry in updates.items():
+            data, allocation = entry.data, entry.identity
+            if data.id != identity or identity != self._id(allocation):
+                raise DataConflictError("data ID does not match namespace and identity key")
+            origin = data.origin
+            if allocation.kind == "source":
+                if origin.acquired_from is None or origin.part_of is not None:
+                    raise DataConflictError("source identity requires an acquisition origin")
+            elif allocation.kind == "result":
+                if origin.at is None or origin.part_of is not None:
+                    raise DataConflictError("result identity requires an operation location")
+            elif origin.part_of != allocation.parent_id or origin.path != allocation.path:
+                raise DataConflictError("part identity disagrees with its origin")
+            if origin.part_of is not None:
+                lookup = self._part_key(origin.part_of, origin.path)
+                other = self._part_index.get(lookup)
+                if other is not None and other != identity:
+                    raise DataConflictError("duplicate canonical part origin")
+            for ref in _references(data):
+                if ref not in known and not self.contains_data(ref):
+                    raise DataReferenceError(f"{identity} references unknown data {ref}")
+
+    def _apply_updates(self, updates):
+        if any(identity in self._records for identity in updates):
+            self._revision += 1
+        if not self._computation.enabled:
+            self._records = {**self._records, **updates}
+        for identity, entry in updates.items():
+            if self._computation.enabled:
+                self._computation.remember(self._records, identity)
+                self._records[identity] = entry
+            self._computation.changed(("data", identity))
+            origin = entry.data.origin
+            if origin.part_of is not None:
+                lookup = self._part_key(origin.part_of, origin.path)
+                if self._part_index.get(lookup) != identity:
+                    self._computation.remember(self._part_index, lookup)
+                    self._part_index[lookup] = identity
+                    self._computation.changed(lookup)
+
+    def snapshot_computed(self):
+        """Detach trusted calculated records without revalidating the whole graph."""
+        if not self._computation.enabled:
+            raise RuntimeError("computed snapshots require owned computation state")
+        return {"schema_version": SCHEMA_VERSION, "namespace": self.namespace,
+                "records": [self._entry(identity).model_dump(mode="python")
+                            for identity in sorted(self.data_ids())]}
+
+    def identity_index_computed(self):
+        if not self._computation.enabled:
+            raise RuntimeError("computed identity export requires owned computation state")
+        return {"schema_version": SCHEMA_VERSION, "namespace": self.namespace,
+                "identities": {identity: self._entry(identity).identity.model_dump(mode="json")
+                               for identity in sorted(self.data_ids())}}
+
+    @property
+    def namespace(self) -> str:
+        return self._namespace
+
+    @property
+    def revision(self) -> int:
+        """Local descriptor-change counter, excluding pure record additions.
+
+        The counter starts at zero on import; it is an invalidation aid, not a
+        stored identity or an analysis iteration number. Adding a part changes
+        its existing parent's description and therefore advances the counter.
+        """
+        return self._revision
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def _id(self, identity: _Identity) -> str:
+        payload = [SCHEMA_VERSION, self._namespace, identity.model_dump(mode="python")]
+        return "data_" + hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+
+    def _entry(self, data_id: str) -> _Entry:
+        _TEXT.validate_python(data_id, strict=True)
+        self._read_data(data_id)
+        try:
+            return self._records[data_id]
+        except KeyError as exc:
+            raise DataReferenceError(f"unknown data ID: {data_id}") from exc
+
+    def get(self, data_id: str) -> Data:
+        """Return a detached description; mutating it cannot edit the registry."""
+        return self._entry(data_id).data.model_copy(deep=True)
+
+    def _commit(self, updates: dict[str, _Entry]) -> None:
+        changed = self._changed_updates(updates)
+        if self._computation.enabled:
+            if not changed:
+                return
+            self._validate_computed_updates(changed)
+        else:
+            self._validate_records({**self._records, **updates})
+        self._apply_updates(changed)
+
+    def _register(self, identity: _Identity, data: Data) -> Data:
+        # Public registration revalidates forged model_copy instances. The
+        # private computation path receives models from the checked builders.
+        incoming = (self._make_entry(identity, data) if self._computation.enabled else
+                    _Entry.model_validate({"identity": identity, "data": data}))
+        data = incoming.data
+        old = self._records.get(data.id)
+        if old is not None:
+            if old.identity != identity:
+                raise DataConflictError("data ID collision between different identities")
+            if not _equal(old.data.origin.model_dump(mode="python"),
+                          data.origin.model_dump(mode="python")):
+                raise DataConflictError("identity already has a different origin or input relation")
+            data = Data(
+                id=data.id, content=_content_merge(old.data.content, data.content),
+                origin=old.data.origin, annotations=_annotations_merge(old.data.annotations, data.annotations),
+            )
+        self._commit({data.id: self._make_entry(identity, data)})
+        return self.get(data.id)
+
+    def register_source(
+        self, key: str, *, acquired_from: str, at: str | None = None,
+        content: Content | None = None, annotations: Annotations | None = None,
+    ) -> Data:
+        identity = _Identity(kind="source", key=key)
+        return self._register(identity, Data(
+            id=self._id(identity), content=content if content is not None else OpaqueContent(),
+            origin=Origin(at=at, acquired_from=acquired_from),
+            annotations=annotations if annotations is not None else Annotations(),
+        ))
+
+    def create_result(
+        self, key: str, *, content: Content, origin: Origin,
+        annotations: Annotations | None = None,
+    ) -> Data:
+        identity = _Identity(kind="result", key=key)
+        return self._register(identity, Data(
+            id=self._id(identity), content=content, origin=origin,
+            annotations=annotations if annotations is not None else Annotations(),
+        ))
+
+    def subset_view(self, key: str, base: str, predicate: str, origin: Origin) -> Data:
+        """Register a caller-declared element-preserving filter, without executing it."""
+        return self.create_result(key, content=SubsetViewContent(base=base, predicate=predicate), origin=origin)
+
+    def resolve_element(self, collection_id: str, scope: str) -> Data:
+        """Resolve a stable symbolic member; scope does not denote a concrete index.
+
+        A subset preserves original member values, so the same scope resolves
+        through it to the original collection. Closed/literal collections
+        cannot be silently extended with an unknown additional member.
+        """
+        content = self._entry(collection_id).data.content
+        if isinstance(content, SubsetViewContent):
+            return self.resolve_element(content.base, scope)
+        if isinstance(content, KnownPartsContent) and any(type(part.path[0]) is str for part in content.parts):
+            raise DataReferenceError("object fields cannot be treated as collection elements")
+        return self.resolve_part(collection_id, [ElementStep(scope=scope)])
+
+    def resolve_elements(self, collection_id: str, scope: str) -> tuple[Data, ...]:
+        """Bind finite statically supplied members, or one open symbolic member.
+
+        This never fetches real contents or evaluates a subset predicate. A
+        subset retains its base's candidate members, not its base's offsets.
+        Known open integer members remain candidates alongside one symbolic
+        remainder; those candidates are not asserted disjoint. Only a literal
+        list or complete contiguous integer parts close the member universe.
+        An object and an untyped empty composition are not assumed to be lists.
+        """
+        return tuple({entry.element.id: entry.element for entry in
+                      self.resolve_iteration_entries(collection_id, scope)}.values())
+
+    def resolve_iteration_entries(self, collection_id: str, scope: str) -> tuple[IterationEntry, ...]:
+        """Preserve source selectors, including repeated equal-valued occurrences."""
+        ElementStep(scope=scope)
+        content = self._entry(collection_id).data.content
+        if isinstance(content, (LoopSummaryContent, SelectionContent, AccumulatedCollectionContent)):
+            selector = ElementStep(scope=scope)
+            return tuple(IterationEntry(selector, value)
+                         for value in self.resolve_part_candidates(collection_id, [selector]))
+        if isinstance(content, SubsetViewContent):
+            return self.resolve_iteration_entries(content.base, scope)
+        if isinstance(content, MappedCollectionContent):
+            filtered = _unstable_offsets(self._data_values(), content.base)
+            return tuple(IterationEntry(ElementStep(scope=scope + ":" + _canonical(member.selector))
+                                        if filtered else member.selector, self.get(value))
+                         for member in content.members for value in member.values)
+        indices, open_members = self._collection_layout(collection_id)
+        with self._transaction():
+            candidates = []
+            for index in indices:
+                if self._whole_member_excluded(self._data_values(), collection_id, index):
+                    continue
+                try:
+                    candidates.append(IterationEntry(index, self.resolve_part(collection_id, [index])))
+                except _ExcludedPart:
+                    continue  # An explicitly excluded entire member is not returned.
+            if open_members:
+                candidates.append(IterationEntry(ElementStep(scope=scope), self.resolve_element(collection_id, scope)))
+            return tuple(candidates)
+
+    def _collection_layout(self, data_id: str) -> tuple[tuple[int, ...], bool]:
+        return self._collection_layout_data(self._data_values(), data_id)
+
+    def _data_values(self) -> DataView:
+        return DataView(self)
+
+    @staticmethod
+    def _collection_layout_data(records: dict[str, Data], data_id: str) -> tuple[tuple[int, ...], bool]:
+        """Known selectors and whether an unknown remainder remains."""
+        content = records[data_id].content
+        if isinstance(content, (LoopSummaryContent, SelectionContent)):
+            from skillflow.propagation.data.summary import content_options
+            options = content_options(records, data_id)
+            if options and all(item["form"] == "literal" and type(item["value"]) is list for item in options):
+                lengths = {len(item["value"]) for item in options}
+                return tuple(range(max(lengths))), len(lengths) != 1
+            return (), True
+        if isinstance(content, MappedCollectionContent):
+            if _unstable_offsets(records, content.base):
+                base = content.base
+                while isinstance(records[base].content, SubsetViewContent):
+                    base = records[base].content.base
+                indices, opened = DataRegistry._collection_layout_data(records, base)
+                if not opened and all(DataRegistry._whole_member_excluded(records, base, index) for index in indices):
+                    return (), False
+                return (), True
+            return DataRegistry._collection_layout_data(records, content.base)
+        if isinstance(content, LiteralContent):
+            if type(content.value) is not list:
+                raise DataReferenceError("only a literal list has collection elements")
+            return tuple(range(len(content.value))), False
+        if isinstance(content, KnownPartsContent):
+            if any(type(part.path[0]) is str for part in content.parts):
+                raise DataReferenceError("object fields cannot be treated as collection elements")
+            indices = tuple(sorted({part.path[0] for part in content.parts if type(part.path[0]) is int}))
+            if content.parts_complete and (not indices or indices != tuple(range(len(indices)))):
+                raise DataReferenceError("complete collection requires contiguous integer list positions")
+            return indices, not content.parts_complete
+        if isinstance(content, WholeExceptContent):
+            return DataRegistry._collection_layout_data(records, content.base)
+        if isinstance(content, FieldUpdatesContent):
+            if any(type(part.path[0]) is str for part in content.updates):
+                raise DataReferenceError("object fields cannot be treated as collection elements")
+            indices, open_members = DataRegistry._collection_layout_data(records, content.base)
+            indices = tuple(sorted({*indices, *(part.path[0] for part in content.updates if type(part.path[0]) is int)}))
+            if not open_members and indices != tuple(range(len(indices))):
+                raise DataReferenceError("complete collection update leaves unbound integer positions")
+            return indices, open_members
+        if isinstance(content, SubsetViewContent):
+            # Direct subset iteration delegates to its base above. A positional
+            # update *after* filtering cannot borrow original array offsets.
+            raise DataReferenceError("fixed member positions cannot be inferred through a subset_view")
+        return (), True
+
+    @staticmethod
+    def _whole_member_excluded(records: dict[str, Data], data_id: str, index: int) -> bool:
+        """Use explicit path containment, never a membership predicate."""
+        content = records[data_id].content
+        if isinstance(content, MappedCollectionContent):
+            return DataRegistry._whole_member_excluded(records, content.base, index)
+        path = [index]
+        if isinstance(content, WholeExceptContent):
+            return (any(_prefix(excluded, path) for excluded in content.excluded_parts)
+                    or DataRegistry._whole_member_excluded(records, content.base, index))
+        if isinstance(content, FieldUpdatesContent):
+            if any(_prefix(update.path, path) or _prefix(path, update.path) for update in content.updates):
+                return False  # An explicit whole/member-field update reintroduces this member.
+            return DataRegistry._whole_member_excluded(records, content.base, index)
+        return False
+
+    def refine(
+        self, data_id: str, *, parts: list[DataPart] | None = None,
+        parts_complete: bool | None = None, annotations: Annotations | None = None,
+    ) -> Data:
+        """Add descriptions without changing identity, origin, or content extent."""
+        old = self._entry(data_id)
+        content = old.data.content
+        if parts is not None or parts_complete is not None:
+            if parts_complete is not None and type(parts_complete) is not bool:
+                raise DataRegistryError("parts_complete must be a boolean")
+            if isinstance(content, KnownPartsContent) and content.parts_complete and parts_complete is False:
+                raise DataConflictError("cannot reopen a complete composition")
+            incoming = KnownPartsContent(
+                parts=parts if parts is not None else [], parts_complete=parts_complete is True,
+            )
+            content = _parts_merge(content, incoming)
+        merged_annotations = old.data.annotations
+        if annotations is not None:
+            annotations = Annotations.model_validate(annotations)
+            merged_annotations = _annotations_merge(merged_annotations, annotations)
+        data = Data(id=data_id, content=content, origin=old.data.origin, annotations=merged_annotations)
+        self._commit({data_id: self._make_entry(old.identity, data)})
+        return self.get(data_id)
+
+    def _part_identity(self, parent_id: str, path: Path) -> _Identity:
+        # Equivalent walks through registered *parts* share the root/path key.
+        # A composed output referencing a source is not flattened into that
+        # source merely because the source also appears in its contents.
+        seen: set[str] = set()
+        while True:
+            parent = self._entry(parent_id).data
+            if parent_id in seen:
+                raise DataConflictError("cyclic part origins")
+            seen.add(parent_id)
+            if parent.origin.part_of is None:
+                break
+            path = [*parent.origin.path, *path]
+            parent_id = parent.origin.part_of
+        return _Identity(kind="part", parent_id=parent_id, path=path)
+
+    def register_part(
+        self, parent_id: str, path: Path, *, content: Content | None = None,
+        annotations: Annotations | None = None,
+    ) -> Data:
+        path = _PATH.validate_python(path, strict=True)
+        parent = self._entry(parent_id).data
+        if isinstance(parent.content, SubsetViewContent):
+            self._subset_member_path(path)
+            return self.register_part(parent.content.base, path, content=content, annotations=annotations)
+        # Exclusions must be checked before consulting a potentially shared ID.
+        try:
+            existing_id = self._locate_data(self._data_values(), parent_id, path, set())
+        except _ClosedPart as exc:
+            raise DataConflictError(str(exc)) from exc
+        except _MissingPart:
+            if isinstance(parent.content, (WholeExceptContent, FieldUpdatesContent, LiteralContent)):
+                raise
+            existing_id = None
+        if existing_id is not None:
+            old = self._entry(existing_id)
+            return self._register(old.identity, Data(
+                id=existing_id, content=content if content is not None else OpaqueContent(),
+                origin=old.data.origin, annotations=annotations if annotations is not None else Annotations(),
+            ))
+        if not isinstance(parent.content, (OpaqueContent, KnownPartsContent)):
+            raise DataConflictError("this content form cannot be refined into parts")
+        if isinstance(parent.content, KnownPartsContent):
+            # An existing enclosing part owns refinements below that position.
+            prefixes = [p for p in parent.content.parts if len(p.path) < len(path) and _prefix(p.path, path)]
+            if prefixes:
+                prefix = max(prefixes, key=lambda p: len(p.path))
+                return self.register_part(
+                    prefix.data, path[len(prefix.path):], content=content,
+                    annotations=annotations,
+                )
+        identity = self._part_identity(parent_id, path)
+        data_id = self._id(identity)
+        if self.contains_data(data_id):
+            raise DataConflictError("part identity exists without a consistent composition reference")
+        part = Data(
+            id=data_id, content=content if content is not None else OpaqueContent(),
+            origin=Origin(part_of=identity.parent_id, path=identity.path),
+            annotations=annotations if annotations is not None else Annotations(),
+        )
+        parent_content = _parts_merge(parent.content, KnownPartsContent(parts=[DataPart(path=path, data=data_id)]))
+        updated_parent = Data(
+            id=parent_id, content=parent_content, origin=parent.origin, annotations=parent.annotations,
+        )
+        self._commit({
+            data_id: self._make_entry(identity, part),
+            parent_id: self._make_entry(self._entry(parent_id).identity, updated_parent),
+        })
+        return self.get(data_id)
+
+    @staticmethod
+    def _subset_member_path(path: Path) -> None:
+        if not isinstance(path[0], ElementStep):
+            raise DataReferenceError("subset_view preserves element values, not fixed indices or collection fields")
+
+    @staticmethod
+    def _locate(records: dict[str, _Entry], data_id: str, path: Path, seen: set[tuple]) -> str:
+        return DataRegistry._locate_data({key: entry.data for key, entry in records.items()}, data_id, path, seen)
+
+    @staticmethod
+    def _closed_part(records: dict[str, Data], data_id: str, path: Path, content: Content) -> str:
+        """Locate a canonical part explicitly materialized from closed content."""
+        parent = records[data_id]
+        root = parent.origin.part_of or data_id
+        full_path = [*(parent.origin.path or []), *path]
+        if isinstance(records, DataView):
+            found = records.find_part(root, full_path)
+            matches = [] if found is None else [found]
+        else:
+            matches = [data for data in records.values()
+                       if data.origin.part_of == root and data.origin.path == full_path]
+        if len(matches) > 1:
+            raise DataConflictError("duplicate canonical part origin")
+        if not matches:
+            raise _MissingPart("closed content part has not been materialized")
+        match = matches[0]
+        if not _equal(match.content.model_dump(mode="python"), content.model_dump(mode="python")):
+            raise DataConflictError("part content contradicts its closed parent")
+        return match.id
+
+    @staticmethod
+    def _locate_data(records: dict[str, Data], data_id: str, path: Path, seen: set[tuple]) -> str:
+        marker = (data_id, path_key(path))
+        if marker in seen:
+            raise _MissingPart("part has no explicit composition reference")
+        seen = {*seen, marker}
+        try:
+            data = records[data_id]
+        except KeyError as exc:
+            raise DataReferenceError(f"unknown data ID: {data_id}") from exc
+        content = data.content
+        if isinstance(content, MappedCollectionContent):
+            filtered = _unstable_offsets(records, content.base)
+            values = {value for member in content.members
+                      if filtered or isinstance(path[0], ElementStep) or member.selector == path[0]
+                      or isinstance(member.selector, ElementStep)
+                      for value in member.values}
+            if len(values) != 1:
+                raise DataReferenceError("mapped member has alternative values; use candidate projection")
+            value = next(iter(values))
+            return value if len(path) == 1 else DataRegistry._locate_data(records, value, path[1:], seen)
+        if isinstance(content, SubsetViewContent):
+            DataRegistry._subset_member_path(path)
+            return DataRegistry._locate_data(records, content.base, path, seen)
+        if isinstance(content, FieldUpdatesContent):
+            for update in content.updates:
+                if _prefix(update.path, path):
+                    suffix = path[len(update.path):]
+                    return update.data if not suffix else DataRegistry._locate_data(records, update.data, suffix, seen)
+                if _prefix(path, update.path):
+                    raise _ExcludedPart("requested ancestor is partially updated; resolve its updated view explicitly")
+            return DataRegistry._locate_data(records, content.base, path, seen)
+        if isinstance(content, WholeExceptContent):
+            for excluded in content.excluded_parts:
+                if _prefix(excluded, path):
+                    raise _ExcludedPart(f"requested part {path!r} is explicitly excluded")
+                if _prefix(path, excluded):
+                    raise _ExcludedPart("requested ancestor is partially excluded; define its filtered result explicitly")
+            return DataRegistry._locate_data(records, content.base, path, seen)
+        if isinstance(content, LiteralContent):
+            value = _literal_value(content.value, path)
+            return DataRegistry._closed_part(records, data_id, path, LiteralContent(value=deepcopy(value)))
+        if isinstance(content, KnownPartsContent):
+            for part in content.parts:
+                if part.path == path:
+                    return part.data
+            prefixes = [p for p in content.parts if len(p.path) < len(path) and _prefix(p.path, path)]
+            if prefixes:
+                prefix = max(prefixes, key=lambda p: len(p.path))
+                return DataRegistry._locate_data(records, prefix.data, path[len(prefix.path):], seen)
+            if content.parts_complete:
+                descendants = [DataPart(path=part.path[len(path):], data=part.data)
+                               for part in content.parts if _prefix(path, part.path)]
+                if descendants:
+                    return DataRegistry._closed_part(records, data_id, path, KnownPartsContent(
+                        parts=descendants, parts_complete=True,
+                    ))
+                raise _ClosedPart("part is not present in the complete composition")
+        if data.origin.part_of is not None:
+            return DataRegistry._locate_data(records, data.origin.part_of, [*data.origin.path, *path], seen)
+        raise _MissingPart(f"part {path!r} is not explicitly registered; unknown does not mean absent")
+
+    def get_part(self, data_id: str, path: Path) -> Data:
+        """Resolve a registered, unexcluded part without interpreting operations.
+
+        This is a structural lookup, not a statement that the part exists in
+        every execution.  A partially filtered ancestor is never returned as
+        its unfiltered base.
+        """
+        self._entry(data_id)
+        path = _PATH.validate_python(path, strict=True)
+        return self.get(self._locate_data(self._data_values(), data_id, path, set()))
+
+    def resolve_part_candidates(self, data_id: str, path: Path) -> tuple[Data, ...]:
+        if isinstance(self.get(data_id).content, (LoopSummaryContent, SelectionContent, AccumulatedCollectionContent)):
+            path = _PATH.validate_python(path, strict=True)
+            return (self.create_result("projection:" + _canonical([data_id, path]),
+                content=SelectionContent(base=data_id, path=path),
+                origin=Origin(at="symbolic projection", inputs=[data_id],
+                              dependencies=[Dependency(data=data_id, relation="derived")])),)
+        """Project alternative map members without composing them into one value."""
+        path = _PATH.validate_python(path, strict=True)
+        content = self.get(data_id).content
+        if isinstance(content, MappedCollectionContent):
+            first, rest = path[0], path[1:]
+            if type(first) is str:
+                raise DataReferenceError("mapped collection selection requires an index or element")
+            candidates = []
+            filtered = _unstable_offsets(self._data_values(), content.base)
+            for member in content.members:
+                if filtered or isinstance(first, ElementStep) or member.selector == first or isinstance(member.selector, ElementStep):
+                    for value in member.values:
+                        try:
+                            candidates.extend(self.resolve_part_candidates(value, rest) if rest else [self.get(value)])
+                        except DataReferenceError:
+                            continue
+            if not candidates:
+                raise DataReferenceError("mapped collection has no matching yielded candidate")
+            return tuple({value.id: value for value in candidates}.values())
+        return (self.resolve_part(data_id, path),)
+
+    def resolve_part(self, data_id: str, path: Path) -> Data:
+        """Resolve a typed path, registering stable structural views as needed.
+
+        Unknown parts refine their original base. Closed children have canonical
+        part identities; partial exclusion/overlay ancestors get result views
+        and never expose an unfiltered ancestor. This interprets only content
+        forms, not an opcode, a script, or a user-defined function. A failed
+        resolution rolls back every intermediate refinement and its revision.
+        """
+        self._entry(data_id)
+        path = _PATH.validate_python(path, strict=True)
+        with self._transaction():
+            return self._resolve_part(data_id, path, set())
+
+    def _part_view(self, data_id: str, path: Path, content: Content) -> Data:
+        source = self._entry(data_id).data
+        key = "data-resolved-part:" + _canonical([data_id, path])
+        return self.create_result(
+            key, content=content,
+            origin=Origin(
+                at=source.origin.at or f"data:{data_id}/content",
+                inputs=[data_id],
+            ),
+        )
+
+    def _materialize_closed_part(self, data_id: str, path: Path, content: Content) -> Data:
+        identity = self._part_identity(data_id, path)
+        return self._register(identity, Data(
+            id=self._id(identity), content=content,
+            origin=Origin(part_of=identity.parent_id, path=identity.path),
+        ))
+
+    def _resolve_part(self, data_id: str, path: Path, seen: set[tuple]) -> Data:
+        marker = (data_id, path_key(path))
+        if marker in seen:
+            raise DataReferenceError("cyclic path resolution")
+        seen = {*seen, marker}
+        data = self._entry(data_id).data
+        content = data.content
+        if isinstance(content, MappedCollectionContent):
+            candidates = self.resolve_part_candidates(data_id, path)
+            if len(candidates) != 1:
+                raise DataReferenceError("mapped member has alternative values; use candidate projection")
+            return candidates[0]
+        if isinstance(content, SubsetViewContent):
+            self._subset_member_path(path)
+            return self._resolve_part(content.base, path, seen)
+        if isinstance(content, FieldUpdatesContent):
+            for update in content.updates:
+                if _prefix(update.path, path):
+                    suffix = path[len(update.path):]
+                    return self.get(update.data) if not suffix else self._resolve_part(update.data, suffix, seen)
+            descendants = [
+                DataPart(path=update.path[len(path):], data=update.data)
+                for update in content.updates if _prefix(path, update.path)
+            ]
+            if descendants:
+                try:
+                    base = self._resolve_part(content.base, path, seen)
+                except (_ClosedPart, _ExcludedPart):
+                    # The overlay explicitly introduces these children where
+                    # the base has no such ancestor. No old remainder exists.
+                    return self._part_view(data_id, path, KnownPartsContent(
+                        parts=descendants, parts_complete=True,
+                    ))
+                return self._part_view(data_id, path, FieldUpdatesContent(
+                    base=base.id, updates=descendants,
+                ))
+            return self._resolve_part(content.base, path, seen)
+        if isinstance(content, WholeExceptContent):
+            if any(_prefix(excluded, path) for excluded in content.excluded_parts):
+                raise _ExcludedPart(f"requested part {path!r} is explicitly excluded")
+            relative = [
+                excluded[len(path):] for excluded in content.excluded_parts
+                if _prefix(path, excluded)
+            ]
+            base = self._resolve_part(content.base, path, seen)
+            if relative:
+                return self._part_view(data_id, path, WholeExceptContent(
+                    base=base.id, excluded_parts=relative,
+                ))
+            return base
+        if isinstance(content, LiteralContent):
+            value = _literal_value(content.value, path)
+            return self._materialize_closed_part(data_id, path, LiteralContent(value=deepcopy(value)))
+        if isinstance(content, KnownPartsContent):
+            for part in content.parts:
+                if part.path == path:
+                    return self.get(part.data)
+            prefixes = [part for part in content.parts if _prefix(part.path, path)]
+            if prefixes:
+                prefix = max(prefixes, key=lambda part: len(part.path))
+                return self._resolve_part(prefix.data, path[len(prefix.path):], seen)
+            descendants = [
+                DataPart(path=part.path[len(path):], data=part.data)
+                for part in content.parts if _prefix(path, part.path)
+            ]
+            if content.parts_complete:
+                if descendants:
+                    return self._materialize_closed_part(data_id, path, KnownPartsContent(
+                        parts=descendants, parts_complete=True,
+                    ))
+                raise _ClosedPart(f"part {path!r} is absent from complete composition")
+        # Existing canonical part identities may be discoverable via their
+        # enclosing whole. register_part preserves these aliases and refines
+        # the original source, never a filtered/overlaid view.
+        return self.register_part(data_id, path)
+
+    def _validate_records(self, records: dict[str, _Entry]) -> None:
+        for data_id, entry in records.items():
+            data, identity = entry.data, entry.identity
+            if data.id != data_id or data_id != self._id(identity):
+                raise DataConflictError("data ID does not match namespace and identity key")
+            origin, content = data.origin, data.content
+            if identity.kind == "source":
+                if origin.acquired_from is None or origin.part_of is not None:
+                    raise DataConflictError("source identity requires an acquisition origin")
+            elif identity.kind == "result":
+                if origin.at is None or origin.part_of is not None:
+                    raise DataConflictError("result identity requires an operation location")
+            elif origin.part_of != identity.parent_id or origin.path != identity.path:
+                raise DataConflictError("part identity disagrees with its origin")
+        self._validate_data_values({key: entry.data for key, entry in records.items()})
+
+    @staticmethod
+    def _validate_data_values(records: dict[str, Data]) -> None:
+        """Content/origin integrity independent of allocation identities."""
+        content_edges: dict[str, list[str]] = {}
+        parent_edges: dict[str, list[str]] = {}
+        part_origins: set[tuple] = set()
+        for data_id, data in records.items():
+            origin, content = data.origin, data.content
+            refs = [*origin.inputs, *(d.data for d in origin.dependencies)]
+            edges: list[str] = []
+            if origin.part_of is not None:
+                refs.append(origin.part_of)
+                part_origin = (origin.part_of, path_key(origin.path))
+                if part_origin in part_origins:
+                    raise DataConflictError("duplicate canonical part origin")
+                part_origins.add(part_origin)
+            parent_edges[data_id] = [origin.part_of] if origin.part_of is not None else []
+            if isinstance(content, KnownPartsContent):
+                edges.extend(p.data for p in content.parts)
+            elif isinstance(content, MappedCollectionContent):
+                edges.extend([content.base, *(value for member in content.members for value in member.values)])
+                refs.extend(member.element for member in content.members)
+            elif isinstance(content, (WholeExceptContent, SubsetViewContent)):
+                edges.append(content.base)
+            elif isinstance(content, FieldUpdatesContent):
+                edges.extend([content.base, *(part.data for part in content.updates)])
+            elif isinstance(content, SelectionContent):
+                edges.append(content.base)
+            elif isinstance(content, AccumulatedCollectionContent):
+                edges.extend([content.base, content.added])
+            elif isinstance(content, LoopSummaryContent):
+                # Summary variants are equations, not recursive physical objects.
+                for variant in content.variants:
+                    refs.extend(variant.inputs)
+                    refs.extend(item.data for item in variant.dependencies)
+                    value = variant.content
+                    if isinstance(value, KnownPartsContent):
+                        refs.extend(part.data for part in value.parts)
+                    elif isinstance(value, MappedCollectionContent):
+                        refs.extend([value.base, *(m.element for m in value.members),
+                                     *(v for m in value.members for v in m.values)])
+                    elif isinstance(value, AccumulatedCollectionContent):
+                        refs.extend([value.base, value.added])
+                    elif isinstance(value, (WholeExceptContent, SubsetViewContent, SelectionContent)):
+                        refs.append(value.base)
+                    elif isinstance(value, FieldUpdatesContent):
+                        refs.extend([value.base, *(p.data for p in value.updates)])
+            refs.extend(edges)
+            for ref in refs:
+                if ref not in records:
+                    raise DataReferenceError(f"{data_id} references unknown data {ref}")
+            content_edges[data_id] = edges
+        DataRegistry._acyclic(content_edges, "content composition")
+        DataRegistry._acyclic(parent_edges, "part origin")
+
+        def known_noncollection(data_id: str) -> bool:
+            content = records[data_id].content
+            if isinstance(content, LiteralContent):
+                return type(content.value) is not list
+            if isinstance(content, KnownPartsContent):
+                return any(type(part.path[0]) is str for part in content.parts)
+            if isinstance(content, (WholeExceptContent, SubsetViewContent)):
+                return known_noncollection(content.base)
+            if isinstance(content, FieldUpdatesContent):
+                return (any(type(part.path[0]) is str for part in content.updates)
+                        or known_noncollection(content.base))
+            return False
+
+        for data_id, data in records.items():
+            if isinstance(data.content, MappedCollectionContent):
+                if known_noncollection(data.content.base):
+                    raise DataConflictError("mapped collection base is not a collection")
+                indices, opened = DataRegistry._collection_layout_data(records, data_id)
+                selectors = {member.selector for member in data.content.members}
+                if any(type(selector) is int and not opened and selector not in indices for selector in selectors):
+                    raise DataConflictError("mapped occurrence is outside its closed base")
+                if not opened and any(index not in selectors for index in indices
+                                      if not DataRegistry._whole_member_excluded(records, data.content.base, index)):
+                    raise DataConflictError("mapped collection omits a closed base occurrence")
+                if opened and not data.content.members:
+                    raise DataConflictError("open mapped collection needs a representative member")
+                for member in data.content.members:
+                    _validate_element_membership_values(records, data.content.base, member.element)
+                    base = data.content.base
+                    while isinstance(records[base].content, SubsetViewContent):
+                        base = records[base].content.base
+                    try:
+                        original = DataRegistry._locate_data(records, base, [member.selector], set())
+                    except DataReferenceError:
+                        original = None
+                    if original is not None and original != member.element:
+                        # Mapped bases legitimately have several candidate values
+                        # at the same selector; membership above checks that case.
+                        if not isinstance(records[base].content, MappedCollectionContent):
+                            raise DataConflictError("mapped occurrence points to a different source member")
+            if isinstance(data.content, SubsetViewContent) and known_noncollection(data.content.base):
+                raise DataConflictError("subset_view requires a collection, not a known object or scalar")
+            if data.origin.part_of is not None:
+                if records[data.origin.part_of].origin.part_of is not None:
+                    raise DataConflictError("part identity must use its canonical root and full path")
+                resolved = DataRegistry._locate_data(records, data.origin.part_of, data.origin.path, set())
+                if resolved != data_id:
+                    raise DataConflictError("part origin is not bound to its own data ID")
+            if isinstance(data.content, KnownPartsContent):
+                # Overlapping explicit paths must not contradict their declared
+                # enclosing object, a literal, or an exclusion view.
+                parts = data.content.parts
+                for outer in parts:
+                    for inner in parts:
+                        if len(outer.path) < len(inner.path) and _prefix(outer.path, inner.path):
+                            remaining = inner.path[len(outer.path):]
+                            DataRegistry._check_nested(records, outer.data, remaining, inner.data)
+
+    @staticmethod
+    def _check_nested(records: dict[str, Data], data_id: str, path: Path, expected: str) -> None:
+        content = records[data_id].content
+        if isinstance(content, KnownPartsContent) and content.parts_complete:
+            if not any(_prefix(p.path, path) or _prefix(path, p.path) for p in content.parts):
+                raise DataConflictError("nested path contradicts complete composition")
+        try:
+            actual = DataRegistry._locate_data(records, data_id, path, set())
+        except _MissingPart:
+            if isinstance(content, LiteralContent):
+                raise DataConflictError("cannot assert unregistered nested part identities through a literal")
+            return
+        except DataReferenceError as exc:
+            raise DataConflictError(f"nested path contradicts its enclosing content: {exc}") from exc
+        if actual != expected:
+            raise DataConflictError("overlapping paths refer to different data")
+
+    @staticmethod
+    def _acyclic(edges: dict[str, list[str]], label: str) -> None:
+        # Only structural containment is acyclic. Input/derived/possible links
+        # may be cyclic and are deliberately absent from this traversal.
+        states: dict[str, int] = {}
+        for root in edges:
+            if states.get(root) == 2:
+                continue
+            stack = [(root, False)]
+            while stack:
+                node, leave = stack.pop()
+                if leave:
+                    states[node] = 2
+                    continue
+                state = states.get(node, 0)
+                if state == 1:
+                    raise DataConflictError(f"cycle in {label}")
+                if state == 2:
+                    continue
+                states[node] = 1
+                stack.append((node, True))
+                stack.extend((child, False) for child in reversed(edges[node]))
+
+    def validate(self) -> None:
+        """Check shape and references, not the truth of supplied semantics."""
+        records = {
+            key: _Entry.model_validate(entry.model_dump(mode="python"))
+            for key, entry in self._records.items()
+        }
+        self._validate_records(records)
+
+    def to_dict(self) -> dict:
+        self.validate()
+        snapshot = _Snapshot(schema_version=SCHEMA_VERSION, namespace=self._namespace, records=[self._records[key] for key in sorted(self._records)])
+        return deepcopy(snapshot.model_dump(mode="python"))
+
+    def to_json(self, *, indent: int | None = 2) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=True, allow_nan=False, indent=indent)
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "DataRegistry":
+        snapshot = _Snapshot.model_validate(payload)
+        registry = cls(snapshot.namespace)
+        for entry in snapshot.records:
+            if entry.data.id in registry._records:
+                raise DataConflictError("duplicate data ID or identity in snapshot")
+            registry._records[entry.data.id] = entry.model_copy(deep=True)
+        registry.validate()
+        registry._rebuild_part_index()
+        return registry
+
+    @classmethod
+    def from_json(cls, text: str) -> "DataRegistry":
+        if type(text) is not str:
+            raise DataRegistryError("JSON input must be a string")
+
+        def unique_object(pairs: list[tuple[str, object]]) -> dict:
+            obj: dict = {}
+            for key, value in pairs:
+                if key in obj:
+                    raise DataRegistryError(f"duplicate JSON object key: {key!r}")
+                obj[key] = value
+            return obj
+
+        def invalid_constant(value: str) -> None:
+            raise DataRegistryError(f"non-JSON numeric constant: {value}")
+
+        payload = json.loads(text, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+        if type(payload) is not dict:
+            raise DataRegistryError("registry snapshot must be a JSON object")
+        return cls.from_dict(payload)
+
+
+def validate_data_records(data: list[Data | dict]) -> list[dict]:
+    """Check complete Data contents/references without allocation metadata.
+
+    This accepts arbitrary stable Data IDs. Only restore_registry additionally
+    verifies that those IDs were allocated from the declared identity keys.
+    """
+    _list_only(data)
+    parsed: dict[str, Data] = {}
+    for value in data:
+        item = Data.model_validate(value.model_dump(mode="python") if isinstance(value, Data) else value)
+        if item.id in parsed:
+            raise DataConflictError("duplicate data ID")
+        parsed[item.id] = item
+    DataRegistry._validate_data_values(parsed)
+    return [parsed[key].model_dump(mode="json") for key in sorted(parsed)]
+
+
+def validate_element_membership(
+    records: list[Data | dict] | dict[str, Data | dict], collection_id: str, element_id: str,
+) -> None:
+    """Check a candidate member using only Data relationships, never a loop log.
+
+    Subsets retain candidate membership without asserting the predicate held.
+    A member is one typed element/index below the collection, not an arbitrary
+    descendant, request dependency, or field with a numeric-looking name.
+    This does not verify the lexical scope selected by a transfer specification.
+    """
+    values = list(records.values()) if type(records) is dict else records
+    checked = validate_data_records(values)
+    parsed = {value["id"]: Data.model_validate(value) for value in checked}
+    if type(records) is dict and set(records) != set(parsed):
+        raise DataConflictError("Data mapping keys must match their IDs")
+    return _validate_element_membership_values(parsed, collection_id, element_id)
+
+
+def _validate_element_membership_values(parsed, collection_id, element_id):
+    """Membership on already checked records; avoids recursive snapshot validation."""
+    _TEXT.validate_python(collection_id, strict=True)
+    _TEXT.validate_python(element_id, strict=True)
+    if collection_id not in parsed or element_id not in parsed:
+        raise DataReferenceError("element membership references unknown Data")
+    content = parsed[element_id].content
+    views = [item.content for item in content.variants] if isinstance(content, LoopSummaryContent) else [content]
+    if any(isinstance(view, SelectionContent) and view.base == collection_id
+           and len(view.path) == 1 and (type(view.path[0]) is int or isinstance(view.path[0], ElementStep))
+           for view in views):
+        return
+
+    def selectors(data_id: str) -> list:
+        content = parsed[data_id].content
+        if isinstance(content, MappedCollectionContent):
+            return [member.selector for member in content.members]
+        if isinstance(content, (SubsetViewContent, WholeExceptContent)):
+            return selectors(content.base)
+        if isinstance(content, FieldUpdatesContent):
+            return [*selectors(content.base), *(part.path[0] for part in content.updates
+                                              if isinstance(part.path[0], ElementStep) or type(part.path[0]) is int)]
+        if isinstance(content, LiteralContent):
+            return list(range(len(content.value))) if type(content.value) is list else []
+        if isinstance(content, KnownPartsContent):
+            if any(type(part.path[0]) is str for part in content.parts):
+                return []
+            return [part.path[0] for part in content.parts
+                    if isinstance(part.path[0], ElementStep) or type(part.path[0]) is int]
+        return []
+
+    def resolved_members(data_id: str, path: Path) -> set[str]:
+        content = parsed[data_id].content
+        if isinstance(content, MappedCollectionContent):
+            return {value for member in content.members
+                    if isinstance(path[0], ElementStep) or member.selector == path[0]
+                    or isinstance(member.selector, ElementStep) for value in member.values}
+        try:
+            return {DataRegistry._locate_data(parsed, data_id, path, set())}
+        except DataReferenceError:
+            # A member whose fields were excluded/overlaid is a versioned view.
+            # Verify that view's explicit content and input relation, rather
+            # than accidentally accepting the unchanged original member.
+            content = parsed[data_id].content
+            expected: list[Content] = []
+            if isinstance(content, WholeExceptContent):
+                if any(_prefix(excluded, path) for excluded in content.excluded_parts):
+                    return set()
+                relative = [excluded[len(path):] for excluded in content.excluded_parts
+                            if _prefix(path, excluded)]
+                if relative:
+                    expected = [WholeExceptContent(base=base, excluded_parts=relative)
+                                for base in resolved_members(content.base, path)]
+            elif isinstance(content, FieldUpdatesContent):
+                descendants = [DataPart(path=update.path[len(path):], data=update.data)
+                               for update in content.updates if _prefix(path, update.path)]
+                if descendants:
+                    bases = resolved_members(content.base, path)
+                    expected = [FieldUpdatesContent(base=base, updates=descendants) for base in bases]
+                    if not bases:
+                        expected = [KnownPartsContent(parts=descendants, parts_complete=True)]
+            expected_origin = Origin(at=parsed[data_id].origin.at or f"data:{data_id}/content", inputs=[data_id])
+            return {candidate.id for candidate in parsed.values()
+                    if candidate.origin == expected_origin
+                    and any(_equal(candidate.content.model_dump(mode="python"), view.model_dump(mode="python"))
+                            for view in expected)}
+
+    base_id = collection_id
+    while isinstance(parsed[base_id].content, SubsetViewContent):
+        base_id = parsed[base_id].content.base
+    for selector in dict.fromkeys(selectors(base_id)):
+        if element_id in resolved_members(base_id, [selector]):
+            return
+    raise DataReferenceError("Data is not a direct candidate element of the collection")
+
+
+def is_definitely_empty_collection(
+    records: list[Data | dict] | dict[str, Data | dict], collection_id: str,
+) -> bool:
+    """Recognize a closed finite collection with no remaining members.
+
+    Share iteration's static layout and explicit whole-member exclusion rules.
+    No predicate is executed; opaque/open or untyped empty known_parts content
+    does not certify that iteration has no members.
+    """
+    values = list(records.values()) if type(records) is dict else records
+    checked = validate_data_records(values)
+    parsed = {value["id"]: Data.model_validate(value) for value in checked}
+    if type(records) is dict and set(records) != set(parsed):
+        raise DataConflictError("Data mapping keys must match their IDs")
+    _TEXT.validate_python(collection_id, strict=True)
+    if collection_id not in parsed:
+        raise DataReferenceError("empty collection check references unknown Data")
+    while isinstance(parsed[collection_id].content, SubsetViewContent):
+        collection_id = parsed[collection_id].content.base
+    try:
+        indices, open_members = DataRegistry._collection_layout_data(parsed, collection_id)
+    except DataReferenceError:
+        return False
+    return not open_members and all(DataRegistry._whole_member_excluded(parsed, collection_id, index)
+                                    for index in indices)
+
+
+def export_identity_index(registry: DataRegistry) -> dict:
+    """Export only namespace and allocation keys, never Data contents."""
+    if not isinstance(registry, DataRegistry):
+        raise DataRegistryError("registry must be a DataRegistry")
+    snapshot = registry.to_dict()
+    return _IdentityIndex(schema_version=SCHEMA_VERSION, namespace=snapshot["namespace"],
+                          identities={entry["data"]["id"]: entry["identity"]
+                                      for entry in snapshot["records"]}).model_dump(mode="json")
+
+
+def restore_registry(data: list[Data | dict], index: dict) -> DataRegistry:
+    """Restore a registry by joining checked contents with separate identities."""
+    checked = validate_data_records(data)
+    parsed = _IdentityIndex.model_validate(index)
+    if set(parsed.identities) != {item["id"] for item in checked}:
+        raise DataConflictError("identity index must cover the Data IDs exactly")
+    return DataRegistry.from_dict({
+        "schema_version": SCHEMA_VERSION, "namespace": parsed.namespace,
+        "records": [{"identity": parsed.identities[item["id"]].model_dump(mode="json"), "data": item}
+                    for item in checked],
+    })

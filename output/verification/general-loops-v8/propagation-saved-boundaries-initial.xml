@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="4.172" timestamp="2026-10-29T16:45:05.282774" hostname="xuss"><testcase classname="tests.propagation.annotation.test_sink_boundaries" name="test_direct_compiled_payload_rejects_missing_or_tampered_sink" time="0.015"><failure message="KeyError: 'edges'">def test_direct_compiled_payload_rejects_missing_or_tampered_sink():
+        from tests.propagation.annotation.helpers import material, valid_response
+        joint = valid_response(material())
+        cfg = {"blocks": {"entry": {"instructions": [{"id": "call", "inputs": [], "outputs": []}]}}}
+        value = {"locations": {"dst": location()},
+                 "ir_semantics": {"call": spec([{"effect": None, "atomic_ops": [delivery(inputs=[])]}])}}
+        value.update({key: joint[key] for key in ("task_ref", "realizations", "demands", "expressions")})
+        with pytest.raises(ValueError):
+            AnnotationPayload.model_validate(value)
+        value["sink_boundaries"] = [item.model_dump(mode="json") for item in derive_sink_boundaries(
+            value["locations"], value["ir_semantics"])]
+&gt;       validate_specs(cfg, value)
+
+tests\propagation\annotation\test_sink_boundaries.py:119: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cfg = {'blocks': {'entry': {'instructions': [{'id': 'call', 'inputs': [], 'outputs': []}]}}}
+annotation = AnnotationPayload(task_ref=TaskReference(schema_version='skillflow-task-reference-v3', task_schema_version='skillflow-...=0, body_event_index=None, scope=None, target='dst', sink_type='external_tool', exposure_level=2)], processing_gaps=[])
+
+    def validate_specs(cfg: dict[str, Any], annotation: Any) -&gt; None:
+        """Validate independent IRs together; retain prerequisite scope failures."""
+        if isinstance(annotation, dict):
+            from skillflow.propagation.contracts.profiles import AnnotationPayload
+            annotation = AnnotationPayload.model_validate(annotation)
+        locations, specs = annotation.locations, annotation.ir_semantics
+        instructions = {item["id"]: item for block in cfg["blocks"].values() for item in block["instructions"]}
+        from skillflow.propagation.contracts.limitations import check_processing_coverage, validate_processing_gaps
+        check_processing_coverage(cfg, annotation)
+        validate_processing_gaps(cfg, annotation.processing_gaps, locations)
+        diagnostics, identities = [], set()
+        for location_id, location in locations.items():
+            prefix = json_pointer("locations", location_id)
+            if not location_id.strip():
+                diagnostics.extend(structural_error("validate_specs", prefix, "location ID must not be blank").diagnostics)
+            identity = location.kind, location.name
+            if identity in identities:
+                diagnostics.extend(structural_error("validate_specs", prefix, "duplicate location identity").diagnostics)
+            identities.add(identity)
+            for index, ref in enumerate(location.operand_refs):
+                instruction = instructions.get(ref.instruction_id)
+                if instruction is None or ref.index &gt;= len(instruction.get(ref.side + "s", [])):
+                    diagnostics.extend(structural_error("validate_specs", prefix + f"/operand_refs/{index}",
+                        "location operand reference does not exist", current=ref.model_dump(mode="json")).diagnostics)
+        for ir_id, original in specs.items():
+            paths = _raw_event_paths(original) if isinstance(original, RawIRTransferSpec) else {}
+            try:
+                spec = flatten_raw_spec(original) if paths or isinstance(original, RawIRTransferSpec) else original
+                if spec.order != "fixed" and any(event.case is not None for _, _, event in iter_scoped_events(spec)):
+                    raise structural_error("case_order", "/order", "bounded call cases require fixed summary order")
+                case_groups, label_ids, group_scopes = {}, {}, {}
+                for e, b, event in iter_scoped_events(spec):
+                    if event.case is None:
+                        continue
+                    label = event.case
+                    scope = e if b is not None else None
+                    if label.group in group_scopes and group_scopes[label.group] != scope:
+                        raise structural_error("case_scope", "/events", "one case group cannot cross member scopes")
+                    group_scopes[label.group] = scope
+                    if label.id in label_ids and label_ids[label.id] != label:
+                        raise structural_error("case_identity", "/events", "one case identity must keep its condition and disposition")
+                    label_ids[label.id] = label
+                    case_groups.setdefault(label.group, set()).add(label.disposition)
+                if any("return" not in dispositions for dispositions in case_groups.values()):
+                    raise structural_error("case_result", "/events", "bounded call cases require at least one return candidate")
+                for _, _, event in iter_scoped_events(spec):
+                    if not set(event.requires_completion) &lt;= set(case_groups):
+                        raise structural_error("case_completion", "/events", "normal completion references an undefined case group")
+                if not isinstance(original, RawIRTransferSpec):
+                    validate_precedence(spec)
+                instruction = instructions[ir_id]
+                local_errors = []
+                block_id = next(block_id for block_id, block in cfg["blocks"].items()
+                                if any(item["id"] == ir_id for item in block["instructions"]))
+&gt;               incoming_blocks = {edge["source_block_id"] for edge in cfg["edges"] if edge["target_block_id"] == block_id}
+E               KeyError: 'edges'
+
+src\skillflow\propagation\contracts\specs.py:744: KeyError</failure></testcase><testcase classname="tests.propagation.annotation.test_security_runner" name="test_one_call_exact_input_resume_and_offline_replay" time="2.200"><failure message="assert 21 == 20">tmp_path = WindowsPath('C:/Users/24831/AppData/Local/Temp/pytest-of-24831/pytest-1270/test_one_call_exact_input_resu0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000261ECBB3200&gt;
+
+    def test_one_call_exact_input_resume_and_offline_replay(tmp_path, monkeypatch):
+        directory, source, _ = setup_run(tmp_path)
+        before = {p.name: p.read_bytes() for p in source.iterdir()}
+        client = FakeClient()
+        first = runner.run_annotation(directory, client=client)
+        assert first["status"] == "complete"
+&gt;       assert first["schema_version"] == 20
+E       assert 21 == 20
+
+tests\propagation\annotation\test_security_runner.py:42: AssertionError</failure></testcase></testsuite></testsuites>

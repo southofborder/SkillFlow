@@ -1,0 +1,107 @@
+# 文档导航
+
+
+当前通用循环与输出契约扩展见 [设计与边界](doe/general-loop-analysis.md)。GA4 与三个小 Skill 的线上结果见 [四轮报告](../output/verification/general-loops-v8-online-20261101/assessment.en.md)；后续材料复用精简见 [实现说明](doe/material-reuse.md)与[离线验收](doe/material-reuse-offline.zh.md)。
+
+- [文档引导式分析：七调用与程序组装](doe/document-guided-analysis.md)：三个隔离语义片段由程序组装标注，保留独立 Task、完整 CFG、局部未建模覆盖及统一源文审查；目的仅依据冻结 Skill。
+- [英文片段格式与例子](doe/document-guided-fragments-format.md)、[七调用离线验收](doe/document-guided-seven-call-validation.md)与[当前 Prompt 和程序组装样张](../examples/document-guided/index.html)。[八调用离线记录](doe/document-guided-eight-call-validation.md)、[前一阶段接通记录](doe/document-guided-prompt-steps-validation.md)和[更早离线记录](doe/document-guided-validation.md)保留其历史结论。
+
+- [Research and chat handoff](research-chat-handoff.md): current objective,
+  conversation decisions, implemented flow, latest evidence, unresolved research
+  questions and second-computer continuation without experiment dispatch.
+- [Handoff submission verification](research-handoff-verification.md): review of
+  the two research changes, exact offline regression scope and submission checks.
+- [Local-only material inventory](research-local-only-inventory.json): paths and
+  hashes of newer preparation not included in this Git submission; metadata is
+  not a transfer of the listed files or authorization to resume them.
+- [Cloud preparation handoff](cloud-research-handoff.md): earlier preparation
+  snapshot, preserved calibration failure and the boundary between offline
+  readiness and model authorization. Cloud creation is currently paused.
+- [Cloud preparation verification](cloud-verification.md): submission scope,
+  dependency checks and actual environment verification status.
+
+Source submission scope: the repository includes implementation, tests, tools,
+documentation, frozen regression inputs and the current comparison materials
+listed in [the cloud material audit](cloud-material-audit.md). Other local
+experiment links document the development record and still require the
+corresponding local directory. The cloud preparation is a verified
+point-in-time snapshot, not a full historical archive.
+
+当前 document-guided 主线为独立 source-only Task 与 flow 并行生成 → 完整 CFG → processing → 隔离的任务对应与 sensitivity 并行生成 → 程序组装 annotation → 统一源文审查及最多一轮依赖修复 → 确定性传播与 DOE。正常七次语义请求，最多两个 worker；普通读取和保存复用已验证材料。
+Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递规格、有限循环摘要及入口／出口事件记录；处理模式由标注声明，可能观察由程序编译。候选来源、可能依赖和部分顺序继续计算；明确未建模对象按依赖范围截断，独立分支仍可继续。DOE 接入任务保持反向需求、敏感范围追踪和每个 sink 的确定性对照。前端声明的正确性及完整性仍需源文审查；精确循环次数、未展开结构尾部及部分跨代关系保持未决。当前版本和保证边界见下列主规范，不将核对通过或传播完成解释为已证明语义等价。
+
+## Constraint analysis
+
+- [General constraint semantics and DOE integration v1](doe/constraint-semantics.md): four bounded constraint families, five-question semantic matrices, representation reuse, and separate baseline/preservation judgments.
+- [Constraint implementation reference](doe/constraint-implementation.md): exact declaration and result interfaces, current versions, shared candidate/validation gate, unsupported behavior, measured synthetic material sizes, and offline validation evidence.
+- [Constraint acceptance matrix](doe/constraint-acceptance.md): 44 independent semantic cases mapped to executable baseline counterparts, with separate preservation coverage and explicit limits. The mapping does not claim that all reduction expectations are supported.
+
+## 当前规范与验收
+
+- [Endpoint prompt online validation](doe/endpoint-prompt-validation.md): paired real request chains, first-response legality, actual structural corrections, receiver-demand assessment, token accounting, and zero-API replay.
+- [Endpoint demands and review evidence](doe/endpoint-prompt-tightening.md): offline follow-up with complete receiver-input examples, acquisition/demand separation, precise evidence diagnostics, and actual backward-demand regressions.
+- [Targeted prompt rework and first-response screening](doe/prompt-first-response.md): seven-section templates, exact rendered examples, v5 mechanical diagnostics, and eight isolated baseline/revised initial requests; no automatic formal-case rerun.
+
+- [Prompt restructuring and validation](doe/prompt-rebuild.md): the 3/5/6 semantic-call paths, compact annotation/review/correction prompts, English input projections, and measured cost and semantic comparisons.
+
+- [Structural correction and semantic review](architecture/structural-correction.md): restricted JSON normalization, original response receipts, unlimited production correction, one semantic repair budget, v5 diagnostic projection, and durable request-chain replay.
+
+- [全流程字段收紧与离线验收](architecture/field-tightening.md)：单一 IR 语义、统一证据、紧凑模型请求与 DOE 结果；逐项保留关系、三例离线对照及校验边界。
+
+- [Source → Task → declarations formal analysis chain v9](doe/joint-pipeline.md)：完整冻结 Skill → 独立 Task → 固定 Task 标注及四轴审查；已有 CFG 入口保留 3／5／6 次语义调用路径，一次修复预算，严格上游身份和零 API 重放。
+- [Sink 载荷需求绑定](doe/sink-payload-demand-binding.md)：规定参数与保存内容的功能终点需求、缺失 seed 审查、合成正反例及三例实际关系验收；不从 action 或上游 producer 自动补出载荷需求。
+- [Sensitive ranges and recipient-boundary comparison v4](doe/sensitivity.md): fixed-Task sensitivity, forward relations, per-seed demands, and all-sink comparison, with separate constraint checks and candidate preservation; unresolved gaps remain conservative.
+- [Sensitivity v1 offline review](../experiments/doe/runs/sensitivity-v1-20261011-231751/index.html): all 34 sinks, three explicitly authored declaration sets, preserved forward facts and task demands, and zero-API replay. [Assistant interpretation](../experiments/doe/runs/sensitivity-v1-20261011-231751/assistant-review.md) separates supported reductions, conservative retention and unknown sensitivity coverage.
+- [Task preservation and per-seed backward demand v4](doe/backward-demand.md): six positive properties, per-requirement realizations and gaps, exact raw-demand-to-seed traceability, and constraint coverage references without restriction seeds; no sink is filtered by action necessity.
+- [独立 Task v5 与原文依据](doe/task-evidence.md)：只从冻结 Skill 提取用途和要求，不再保存固定依据标签、外部请求或逐行表；保留真实引用、封存、隔离修订和版本绑定。
+- [新版审查两例探索性实测](../experiments/doe/runs/source-task-review-v1-20261015-live/assessment.assistant.md)：真实模型识别同一源行遗漏的禁止项和过宽需求；助手编写的合成参考案例与助手复核，未建立独立人工金标准，其他六例未运行。
+- [本轮改造与验证记录](doe/source-task-demand-verification.md)：已实现的阶段责任、分组工程测试、真实模型实验及保守能力边界；不合并重叠测试数量，不以结构通过替代语义验收。
+- [Task Evidence: three-case review](../experiments/doe/runs/task-evidence-v1-20261010-213606/index.html): 24 assistant-authored requirements with validated references and matching offline replays; not model responses or ground truth.
+- [DOE 目标与设计原则（基准 2026-10-06，协议更新 2026-10-15）](doe/SkillFlow-DOE目标与设计原则.md)：以覆盖所有非必要敏感数据暴露为总目标，将必要动作中的数据必要性区分作为重点贡献，固定传播与接收边界、已确认设计及后续工作。
+- [DOE 任务基准与用途切片](doe/SkillFlow-DOE任务基准与用途切片.md)：仅以冻结 Skill 声明用途为基准，保留功能要求及 sink 来源／用途关系；当前交接通过经校验的传播材料，早期接口与历史实验不迁移。
+- [DOE 离线切片与审查材料（2026-10-10）](doe/SkillFlow-DOE离线切片与审查材料.md)：保留的内部切片算法；独立准备和重放运行包装已退役，正式入口见联合分析链。
+- [DOE 三例离线审查总览](../experiments/doe/runs/slices-v1-20261010-165218/index.html)：直接审查 001、010、013 的 34 个 sink，链接事实、切片、规模和助手复核。
+- [架构与迁移验收](architecture/SkillFlow-架构与迁移验收.md)：graph／propagation／common 的职责和依赖、新入口、精确历史地址及严格续跑边界；[迁移总览](../experiments/migrations/layout-v1-20261002-215752/index.html)可直接打开三例 DOE 与审查报告。
+- [DOE 前收尾检查与阶段交接（2026-09-29）](history/skill-ir/SkillFlow-DOE前收尾检查与阶段交接.md)：本轮代码收紧、离线回归、历史保护和三个 DOE 基线入口。
+- [当前状态与旧代码清理（2026-09-15）](history/skill-ir/当前状态与旧代码清理-2026-09-15.md)：完成项、验证结果与后续边界。
+- [Skill-IR 使用说明](architecture/implementation.md)：生产入口、输入和配置。
+- [结构规范与验证边界](graph/Skill-IR结构规范与验证边界.md)：WF 条件和结构检查范围。
+- [受控语义回述与源文核对规范](graph/Skill-IR受控语义回述与源文核对规范.md)：当前唯一核对流程。
+- [IR 解释契约与逐项语义核对规范](graph/Skill-IR解释契约与逐项语义核对规范.md)：模型语义判断与程序证据检查的分工、可选保守依赖说明、反馈门槛和保证边界。
+- [CFG 构建语义反馈闭环](graph/CFG构建语义反馈闭环.md)：契约绑定、定向反馈、执行重试和离线重放。
+- [本地调用记录稳定性修复](graph/本地调用记录稳定性修复.md)：文件占用重试、完整暂存保留、保存错误分层与流式检查点节流，不增加模型调用。
+- [统一抽象运行时契约](propagation/SkillFlow-统一抽象运行时契约.md)：单一权威 EM 规则、默认可能行为与明确例外、处理模式及 DOE 契约绑定。
+- [Sink 边界与固定分级](propagation/SkillFlow-Sink边界与固定分级.md)：模型声明访问／留存性质，程序从真实交付与保存操作生成六类边界及固定等级；传播绑定实际数据，尚未求值部分由覆盖标明。
+- [Sink 标注收紧与可选参数](propagation/SkillFlow-Sink标注收紧与可选参数.md)：网络机制证据、原字段与 Boolean 出现条件、条件观察及共享请求绑定；DOE 仅增加成员／控制索引，不修改 Data。
+- [字段关系与观察编译](propagation/SkillFlow-字段关系与观察编译.md)：处理模式、程序生成观察、原字段选取、筛选与逐元素参数配对，及原始／编译材料的保证边界。
+- [联合标注三任务聚焦审查](propagation/SkillFlow-联合标注三任务聚焦审查.md)：聚焦审查范围、数据关系与观察／交付绑定；最多一次完整修复与独立复审。
+- [表示契约与一次标注修复](propagation/SkillFlow-表示契约与一次标注修复.md)：CFG 与传递规格职责、共享格式说明、显式任务失败和部分顺序。独立表示契约已退役。
+- [来源范围与工具返回通用修正](history/skill-ir/SkillFlow-来源范围与工具返回通用修正.md)：来源修正阶段的历史记录；当前默认行为以统一运行时契约为准。
+- [安全语义标注规范](propagation/Skill-IR安全语义标注规范.md)：固定 Task 后声明单一 IR 处理、需求与敏感语义，原始响应引用精确 Task 版本，程序编译观察与映射；独立 Task 及四轴审查以正式分析链为准。
+- [上下文写入与执行主体更新](history/skill-ir/Skill-IR上下文写入与执行主体更新.md)：字段更名、上下文写入和空效果语义的历史实施记录。
+- [操作粒度与有序效果更新](history/skill-ir/Skill-IR操作粒度与有序效果更新.md)：v2 历史实施记录，保留英文提示词、复合动作拆分和有序效果的原始验收。
+- [Data 数据结构与更新规则](propagation/SkillFlow-Data数据结构与更新规则.md)：v4 统一 Data、稳定身份、字段与元素关系、描述版本和严格快照。
+- [传播算法与 IR 传递规格](propagation/SkillFlow-传播算法与IR传递规格.md)：单一有序事件规格、确定性数据操作、前向求解、强弱更新、基础循环边界与离线重放。
+- [传播结构与函数树状说明](propagation/SkillFlow-传播结构与函数树状说明.md)：按人审顺序展开全部相关类型、子字段、编号和函数，区分模型规格、Data、程序记录与工程快照。
+- [结构收紧验收与后续冗余审查](history/skill-ir/SkillFlow-结构收紧验收与后续冗余审查.md)：上一阶段字段收紧的验收记录；其中可删除／可合并候选现已由下一项落实。
+- [DOE 输入收紧与三例复核](doe/SkillFlow-DOE输入收紧与三例复核.md)：当前分阶段交接与历史总包退役说明。
+- [传播记录结构与更新规则](propagation/SkillFlow-传播记录结构与更新规则.md)：紧凑记录、逐元素实例、分阶段组件及上游引用；保存逐 IR 完整入口／出口及数据操作与必要次序。
+- [v4 精简协议实施与七例复测](../experiments/graph/audit/runs/controlled-v4-seven-20260918/acceptance.md)：1264 项回归通过；4 例合法核对、3 例执行失败，包含逐例助手复核、历史对照与本地记录问题诊断。
+- [v3 七例历史验收](../experiments/graph/audit/runs/controlled-v3-seven-20260918/acceptance.md)：工程证据、五例合法与两例响应无效的实际结果，以及助手复核边界。
+- [形式化工程](../formal/README.md)：结构核心与完整事实域的不同证明范围。
+- [实际受控文本的事实保持](../formal/CONTROLLED_RETELLING.md)：Lean 打印、解析与恢复保证。
+- [F01 v2 历史实测验收](../experiments/graph/audit/runs/controlled-v2-f01-20260914T142804Z/acceptance.md)：当时契约下的五案例结果，不能替代当前版本实测。
+- [30 份语义评测集](../experiments/corpus/semantics_review/README.md)：冻结输入、外置标注、来源与 PDF 工具。
+- [近期相关工作核查](history/skill-ir/Skill静态审计与隐私相关工作核查-2026-09-15.md)：截至记录日期的文献调查，不是实现清单。
+
+## 方案与历史材料
+
+`PLAN.md`、`Plan1.md`、`IR-命名与CFG完整性校验方案.md`、`IR-数据流重构方案.md`
+记录早期实施方案；完成情况以当前规范和有日期的验收为准。
+`Skill文档理解数据集与PDF共同复核方案.md` 是语料和联合复核方案；
+`Skill-IR语义回溯F01示范与验收规范.md` 保留旧版示范身份，当前流程以受控回述与源文核对主规范为准。
+`核对执行重试与未决项复核说明.md` 记录 v2 诊断；其中关于多分支输入必须补足精确选值的意见，已由当前保守依赖契约取代，历史文字不作为现行修图要求。
+
+[旧 SFG/FCG 与 DOE 文档](history/legacy-sfg-doe/README.md)、
+[旧实验记录](../experiments/legacy_sfg_doe/README.md) 和 [论文草稿](../paper/README.md)
+仅用于追溯。历史文档中的旧模块路径不代表仍有这些实现，旧运行记录不会被重新解释。

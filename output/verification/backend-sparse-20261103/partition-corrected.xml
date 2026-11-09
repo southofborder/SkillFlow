@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="28" time="8.303" timestamp="2026-11-03T16:48:10.805674" hostname="xuss"><testcase classname="tests.propagation.test_partition_worklist" name="test_relation_row_key_does_not_union_correlated_fields" time="0.002" /><testcase classname="tests.propagation.test_partition_worklist" name="test_projected_exit_retains_public_output_but_drops_dead_seed_at_return" time="0.223" /><testcase classname="tests.propagation.test_partition_worklist" name="test_partitioned_nested_receivers_remain_paired_and_schedules_agree" time="0.362" /><testcase classname="tests.propagation.test_partition_worklist" name="test_unknown_branch_rows_do_not_mix_repeated_operand" time="0.102"><failure message="AssertionError: assert set() == {('a', 'a'), ('b', 'b')}&#10;  Extra items in the right set:&#10;  ('a', 'a')&#10;  ('b', 'b')&#10;  Use -v to get more diff">def test_unknown_branch_rows_do_not_mix_repeated_operand():
+        from tests.propagation.test_explicit_loops import fixture_annotation, literal, local, input_ref
+        def block(name, rows):
+            return {"block_id": name, "block_name": name, "instructions": rows}
+        cfg = {"entry_block_id": "entry", "blocks": {
+            "entry": block("entry", [instruction("start", [{"type": "literal", "literal_value": True}], opcode="dispatch")]),
+            "left": block("left", [instruction("left"), instruction("left_next", opcode="dispatch")]),
+            "right": block("right", [instruction("right"), instruction("right_next", opcode="dispatch")]),
+            "join": block("join", [instruction("read", outputs=["x"]),
+                instruction("twice", [operand("x")], ["both"]), instruction("return", [operand("both")], opcode="return")])},
+            "edges": [{"source_block_id": a, "target_block_id": b} for a, b in
+                      [("entry", "left"), ("entry", "right"), ("left", "join"), ("right", "join")]]}
+        plans = {
+            "left": (["context_write"], [(0, [{"op": "write", "target": "xloc", "mode": "replace", "input": literal("a")}])], []),
+            "right": (["context_write"], [(0, [{"op": "write", "target": "xloc", "mode": "replace", "input": literal("b")}])], []),
+            "read": (["context_read"], [(0, [{"op": "read", "location": "xloc", "output": "x"}])], [local("x")]),
+            "twice": (["transform"], [(0, [{"op": "compute", "inputs": [input_ref(), input_ref()],
+                 "dependencies": ["possible", "possible"], "output": "both"}])], [local("both")])}
+        cfg, annotation = fixture_annotation(cfg, plans, {"xloc": ("runtime_context", "x")})
+        result = propagate(cfg, annotation)
+        assert result.status == "complete", result.diagnostics
+        op = result.records.get("ir_twice").events[0].atomic_ops[0]
+        pairs = set()
+        for alternative in op.alternatives:
+            values = [content_options(result.registry, next(iter(slot)))[0]["value"] for slot in alternative.inputs]
+            pairs.add(tuple(values))
+&gt;       assert pairs == {("a", "a"), ("b", "b")}
+E       AssertionError: assert set() == {('a', 'a'), ('b', 'b')}
+E         Extra items in the right set:
+E         ('a', 'a')
+E         ('b', 'b')
+E         Use -v to get more diff
+
+tests\propagation\test_partition_worklist.py:68: AssertionError</failure></testcase><testcase classname="tests.propagation.test_partition_worklist" name="test_unrelated_branch_is_not_revisited_when_loop_families_grow" time="0.190" /><testcase classname="tests.propagation.test_explicit_loops" name="test_explicit_merge_member_response_accumulation_converges" time="0.228" /><testcase classname="tests.propagation.test_explicit_loops" name="test_known_empty_traversal_never_records_member_or_acquisition" time="0.129" /><testcase classname="tests.propagation.test_explicit_loops" name="test_explicit_loop_fifo_lifo_same_sealed_facts" time="0.287" /><testcase classname="tests.propagation.test_explicit_loops" name="test_boolean_guard_never_uses_python_truthiness_for_empty_array" time="0.119" /><testcase classname="tests.propagation.test_explicit_loops" name="test_nested_page_member_pairs_never_form_cross_recipient_payload_products" time="0.338" /><testcase classname="tests.propagation.test_explicit_loops" name="test_known_nonempty_exit_uses_post_write_state_and_keeps_prior_observation" time="0.180" /><testcase classname="tests.propagation.test_explicit_loops" name="test_nested_empty_member_views_skip_all_inner_effects" time="0.221" /><testcase classname="tests.propagation.test_explicit_loops" name="test_ancestor_field_update_never_reuses_empty_old_parent_for_guard" time="0.003" /><testcase classname="tests.propagation.test_explicit_loops" name="test_loop_resource_limit_is_not_reported_as_convergence" time="0.126" /><testcase classname="tests.propagation.test_explicit_loops" name="test_response_identity_includes_control_member_without_invented_request_payload[arguments0]" time="0.195" /><testcase classname="tests.propagation.test_explicit_loops" name="test_response_identity_includes_control_member_without_invented_request_payload[arguments1]" time="0.186" /><testcase classname="tests.propagation.test_explicit_loops" name="test_unsupported_typed_guard_does_not_stop_independent_sink_root" time="0.123" /><testcase classname="tests.propagation.test_explicit_loops" name="test_late_unresolved_input_withdraws_previous_block_out" time="0.135"><failure message="AssertionError: [{'code': 'execution_error', 'reason': 'DataConflictError: content changed; register a new processing result instead'}]&#10;assert 'execution_error' == 'incomplete'&#10;  - incomplete&#10;  + execution_error">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000011A96543C50&gt;
+
+    def test_late_unresolved_input_withdraws_previous_block_out(monkeypatch):
+        """A newly unavailable prerequisite cannot leave a cached successful OUT."""
+        from collections import Counter
+        from skillflow.propagation.interpreter import TransferInterpreter, UnsupportedLoopDomain
+        from skillflow.propagation.data import DataRegistry, LiteralContent
+        evaluate = TransferInterpreter.evaluate
+        counts = Counter()
+        registry = DataRegistry("late-prerequisite")
+        prerequisite = registry.register_source("ready", acquired_from="test:prerequisite")
+    
+        def late_failure(self, ir, spec, state):
+            counts[ir["id"]] += 1
+            if ir["id"] == "ir_fetch":
+                value = self.registry.get(prerequisite.id)
+                if isinstance(value.content, LiteralContent):
+                    raise UnsupportedLoopDomain("A later relation exposed an unsupported prerequisite")
+            result = evaluate(self, ir, spec, state)
+            if ir["id"] == "ir_append":
+                self.registry.register_source("ready", acquired_from="test:prerequisite", content=LiteralContent(value=True))
+            return result
+    
+        monkeypatch.setattr(TransferInterpreter, "evaluate", late_failure)
+        result = propagate(*explicit_loop_fixture(("once",)), initial_registry=registry)
+        assert counts["ir_append"] &gt;= 1  # A successful OUT really existed first.
+&gt;       assert result.status == "incomplete", result.diagnostics
+E       AssertionError: [{'code': 'execution_error', 'reason': 'DataConflictError: content changed; register a new processing result instead'}]
+E       assert 'execution_error' == 'incomplete'
+E         - incomplete
+E         + execution_error
+
+tests\propagation\test_explicit_loops.py:248: AssertionError</failure></testcase><testcase classname="tests.propagation.test_explicit_loops" name="test_operation_alternatives_cannot_invent_outputs_or_change_arity" time="0.162" /><testcase classname="tests.propagation.test_explicit_loops" name="test_cached_handle_created_by_a_remains_available_to_b_without_new_acquisition" time="1.189" /><testcase classname="tests.propagation.test_explicit_loops" name="test_two_header_merges_preserve_same_backedge_tuple_at_next_member" time="0.441" /><testcase classname="tests.propagation.test_explicit_loops" name="test_higher_generation_correlation_stops_locally_without_guessing_pairs" time="0.302" /><testcase classname="tests.propagation.test_explicit_loops" name="test_single_unresolved_value_only_requires_shared_historical_pairing[other_context0-True]" time="0.094" /><testcase classname="tests.propagation.test_explicit_loops" name="test_single_unresolved_value_only_requires_shared_historical_pairing[other_context1-True]" time="0.100" /><testcase classname="tests.propagation.test_explicit_loops" name="test_single_unresolved_value_only_requires_shared_historical_pairing[other_context2-True]" time="0.096" /><testcase classname="tests.propagation.test_explicit_loops" name="test_single_unresolved_value_only_requires_shared_historical_pairing[other_context3-False]" time="0.091" /><testcase classname="tests.propagation.test_explicit_loops" name="test_single_unresolved_value_only_requires_shared_historical_pairing[other_context4-False]" time="0.092" /><testcase classname="tests.propagation.test_explicit_loops" name="test_repeated_cursor_with_fixed_parameter_and_current_receiver_converges" time="0.459" /></testsuite></testsuites>
