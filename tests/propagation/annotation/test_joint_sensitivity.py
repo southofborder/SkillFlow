@@ -51,7 +51,7 @@ def test_single_joint_call_normalizes_inline_goals_and_expression():
     client = FakeClient(raw)
     compiled = annotate_skill(prepared["source"], prepared["cfg"], client=client, task_baseline=prepared["task"])
     assert len(client.prompts) == 1
-    assert compiled["task_ref"]["basis"] == "declared_skill"
+    assert "basis" not in compiled["task_ref"]
     targets = build_demand_target_index(prepared["cfg"], raw)
     goal = compiled["demands"][0]
     assert targets[target_key(goal["target"])]["kind"] == "local_output"
@@ -73,13 +73,13 @@ def test_each_is_a_range_template_and_preserves_string_index_distinction():
     assert parsed.model_dump(mode="json")["path"] == ["rows", {"kind": "each"}, "0", 0]
 
 
-def test_policy_evidence_allowed_only_for_sensitivity_not_task_or_expression():
+def test_retired_policy_input_and_evidence_are_rejected():
     with pytest.raises(TypeError):
         prepare_material(source_bundle(), graph(), policies={"organization.md": "Credentials."})
-    prepared = prepare_material(source_bundle(), graph(), user_request="Return the original result.")
+    prepared = prepare_material(source_bundle(), graph())
     raw = valid_raw_response(prepared)
     raw["ir_semantics"]["ir_filter"]["sensitivity"] = [declaration(evidences=[evidence("policy/organization.md")])]
-    with pytest.raises(ValueError, match="file is not frozen"):
+    with pytest.raises(ValueError, match="frozen Skill file"):
         compile_response(raw, prepared)
 
 
@@ -147,14 +147,14 @@ def test_scoped_declarations_never_mutate_input_or_fabricate_data():
     assert "data" not in extracted
 
 
-def test_joint_run_replays_same_frozen_user_request_policy_and_accepted_response(tmp_path):
+def test_joint_run_replays_same_source_and_rejects_retired_request_component(tmp_path):
     source = tmp_path / "skill"
     source.mkdir()
     (source / "SKILL.md").write_text(source_bundle()["files"][0]["content"], encoding="utf-8")
     analysis = tmp_path / "analysis.json"
     analysis.write_text(json.dumps({"cfg": graph()}), encoding="utf-8")
     directory = tmp_path / "run"
-    manifest = prepare_run(source, analysis, run_dir=directory, user_request="Preserve the original result.")
+    manifest = prepare_run(source, analysis, run_dir=directory)
     assert manifest["preparation_status"] == "ready", manifest.get("preparation_error")
     client = FakeClient()
     result = run_annotation(directory, client=client)
@@ -163,7 +163,8 @@ def test_joint_run_replays_same_frozen_user_request_policy_and_accepted_response
     replay = replay_run(directory)
     assert replay["task_ref"] == result["task_ref"] and replay["demands"] == result["demands"]
     loaded = load_annotation_run(directory)
-    assert loaded["material"]["user_request"] == "Preserve the original result."
+    assert "user_request" not in loaded["material"]
+    assert "basis" not in loaded["material"]["task"]
     context_path = directory / "inputs/user-request.json"
     context_path.write_text(json.dumps("Changed purpose."), encoding="utf-8")
     with pytest.raises(RunIdentityError):

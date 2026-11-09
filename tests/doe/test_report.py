@@ -25,7 +25,7 @@ def material():
     boundary = {"instruction_id": "ir_send", "event_index": 0, "op_index": 0,
                 "body_event_index": None, "scope": None, "target": "model",
                 "sink_type": "model_observe", "exposure_level": 2}
-    return {"schema_version": "skillflow-doe-material-v2", "task": {"basis": "declared_skill", "text": None},
+    return {"schema_version": "skillflow-doe-material-v3",
         "source": {"files": [{"path": "SKILL.md", "content": "容器含 access_token。\n正文应为 summary 原值。"}],
                    "inventory": [], "boundaries": {"binary_files": [], "uninterpreted_files": []}},
         "runtime_contract": {"version": "runtime-v1", "sha256": "0" * 64, "rules": [{"id": "EM01", "text": "static possible"}]},
@@ -100,7 +100,6 @@ def test_source_unregistered_fields_return_and_partial_order_remain_visible(mate
 def test_escape_arbitrary_source_identifiers_and_valid_local_anchors(material):
     hostile = '</pre><script>alert(1)</script><img src=x onerror=alert(2)>|`[x]'
     material["source"]["files"][0]["content"] = hostile
-    material["task"] = {"basis": "user_request", "text": hostile}
     material["shared_info"]["locations"]["model"]["name"] = hostile
     material["sinks"][0]["sink"]["id"] = hostile
     for rendered in (render_html(material), render_markdown(material)):

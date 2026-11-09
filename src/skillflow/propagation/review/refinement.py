@@ -37,8 +37,8 @@ from skillflow.propagation.review.runner import _files
 from skillflow.propagation.review.runner import prepare_candidate_run
 from skillflow.propagation.review.runner import run_review
 
-IDENTITY = "skill-ir-annotation-refinement-v10"
-FORMAT_VERSION = 10
+IDENTITY = "skill-ir-annotation-refinement-v12"
+FORMAT_VERSION = 12
 POLICY = {"max_semantic_repairs": 1, "max_semantic_stages": 4, "isolated_task_revision": True,
           "structural_corrections": "unlimited", "json_normalization": NORMALIZATION_VERSION,
           "automatic_resend_after_acceptance": False}
@@ -100,10 +100,10 @@ def refine_annotation(material, raw_annotation, *, review_client, repair_client,
             from skillflow.task.prompts import build_task_prompt
             from skillflow.task.services import validate_task_response
             from skillflow.propagation.material import prepare_material
-            tm=prepare_task_material(material["source"],user_request=material["user_request"])
+            tm=prepare_task_material(material["source"])
             revised=stage_response(build_task_prompt(tm,{"previous_task":material["task"],"objections":objections}),
                 task_repair_client or repair_client,lambda value:validate_task_response(value,tm))
-            material=prepare_material(material["source"],material["cfg"],task_baseline=revised,user_request=material["user_request"])
+            material=prepare_material(material["source"],material["cfg"],task_baseline=revised)
             result["task_revision"]={"status":"complete"}
             repair_prompt=annotation_prompt(material)
         else:
@@ -388,14 +388,14 @@ def _run_refinement(run_dir, *, review_client=None, repair_client=None,
                     if not (task_run/"manifest.json").exists():
                         if replay: raise RunIdentityError("Missing recorded source-only Task revision")
                         prepare_task_run(task_run,source_owner=resolve_material_owner(directory),
-                            user_request=material["user_request"],config=config,secrets=secrets,
+                            config=config,secrets=secrets,
                             revision={"previous_task":material["task"],"objections":objections})
                     # Reconstruct the source-only feedback and validate its exact identity.
                     from skillflow.task.runner import _verify as verify_task
                     from skillflow.task.material import validate_revision,prepare_task_material
                     task_manifest,_,_=verify_task(task_run,config=config,check_implementation=not read_only)
                     expected_revision=validate_revision({"previous_task":material["task"],"objections":objections},
-                        prepare_task_material(material["source"],user_request=material["user_request"]))
+                        prepare_task_material(material["source"]))
                     if task_manifest["revision_sha256"]!=canonical_sha256(expected_revision):
                         raise RunIdentityError("Task revision differs from source-only review objections")
                     stop("before_task_revision")
@@ -418,8 +418,7 @@ def _run_refinement(run_dir, *, review_client=None, repair_client=None,
                         if revised["status"]=="interrupted": raise KeyboardInterrupt(revised["reason"])
                         raise _TaskRevisionFailure()
                     from skillflow.propagation.material import prepare_material
-                    material=prepare_material(material["source"],material["cfg"],task_baseline=revised["task"],
-                                              user_request=material["user_request"])
+                    material=prepare_material(material["source"],material["cfg"],task_baseline=revised["task"])
                     stop("after_task_revision")
                 else:
                     review_material=prepare_review_material(material,raw)

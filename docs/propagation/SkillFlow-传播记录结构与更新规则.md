@@ -1,6 +1,11 @@
 # SkillFlow 传播记录结构与更新规则
 
-当前记录身份为 `skillflow-propagation-record-v11`，传播运行是 `skill-ir-propagation-v14`。联合标注 v13／运行 v16，Data 保持 v4。上游源文、CFG、规则和接受响应由明确运行引用关联，不复制进传播产物；当前完整版本见[字段收紧规范](../architecture/field-tightening.md)。旧格式不自动迁移。
+当前记录身份为 `skillflow-propagation-record-v16`，传播运行是 `skill-ir-propagation-v21`。联合标注 v21／运行 v21，Data 为 v6。上游源文、CFG、规则和接受响应由明确运行引用关联，不复制进传播产物；当前完整版本见[字段收紧规范](../architecture/field-tightening.md)。v15 记录／v20 运行的完整状态快照仍可严格只读加载；不迁移、重写或用新实现重放历史结果。
+
+显式循环的记录保留前驱与成员绑定、操作候选及有类型分支允许的后继。它们是程序生成的
+静态对应，不是模型填写的循环管理表或逐轮执行日志。循环结果引用封存的有限 Data 摘要；
+不同 occurrence 的获取可以拥有相同参数，但不能据此合并响应身份。读取完整性时核验
+实际分支操作数，不能只凭一个 not_reached 标签免除覆盖。
 
 传播算法和模型规格见 [传播算法与 IR 传递规格](SkillFlow-传播算法与IR传递规格.md)。本规范只说明程序算出的记录、分阶段保存与恢复方式。
 
@@ -56,7 +61,9 @@ instances[]                 候选实例，不是实际执行次数
 
 `FlowState` 内存形式为 `FlowLocation(kind,name) → frozenset[Data ID]`，JSON 使用 `bindings` 列表，每项为 `location` 和非空 `data_ids`。位置类别包括 result、runtime_context、storage、model_context、remote、tool、user、intermediate，同名跨类别不合并。
 
-完整入口／出口状态不是 IR 操作数列表，也不是当前动作使用了所有已知数据的证明。未展开内容登记 opaque Data；明确空值登记 literal。没有已记录绑定时省略位置，`get` 返回 None；空状态不证明不可达。尚未提交的 IR 记录与提交空状态不同。
+v16 入口／出口状态保存计算所需和审计所需的位置投影，不再声明完整历史环境。入口保留公开 IR 输入所需绑定，出口保留公开结果绑定；读写位置、后续活跃值以及成员关联需要的位置继续保留。事件中的真实输入／输出、候选配对、接收方、成员、yield 和 StateChange 独立保存，不因状态投影丢失。省略不再活跃的位置不是删除、空值或安全证明，也不能凭省略重新猜出绑定。
+
+状态快照不是当前动作使用了所有已知数据的证明。未展开内容登记 opaque Data；明确空值登记 literal。没有已记录绑定时省略位置，`get` 返回 None；空状态不证明不可达。尚未提交的 IR 记录与提交空状态不同。
 
 `StateChange` 保留 `location、before、after、update`。更新前后集合可为空，表示该位置没有绑定；这不是未知内容。update 为 strong、weak 或 delete。删除绑定不删除原 Data，也不会撤销过去的观察。
 
@@ -91,6 +98,8 @@ propagation/
 
 `PropagationRecords` 是内存记录容器。`records_dict()` 导出纯记录；`from_records(records, cfg=..., annotation=..., data_registry=..., initial_data=..., initial_state=...)` 用调用方明确提供的材料重建并校验。旧 `to_dict/from_dict/to_json/from_json` 快照封套已删除。公开 `load_propagation_materials(run_dir)` 返回校验后的 `PropagationMaterials` 内存组件，不提供再次序列化为总包的入口。
 
+当前求解器使用内部 `from_computation` / `put_computed` 路径接收已检查的图、编译标注和解释器生成记录；构造、每次写入、结束和保存不再反复重做全量验证。结束与保存仍检查 Data 引用、公开结果、覆盖、诊断和材料身份。公开构造、`put`、外部材料读取及显式离线 `validate()` 保留严格检查。内部所有权路径不是接受未经校验外部记录的替代入口，也不是跨运行缓存。
+
 最终 Data 与初始 Data 是不同描述版本，不能为去重而混为一份。原始种子与有效种子也保留区别。登记身份必须与最终 Data 对应；加载同时验证接受响应、编译结果、原始映射、请求链、记录及 sink 覆盖。
 
 ## 5. Sink 与参数
@@ -103,7 +112,7 @@ propagation/
 
 正式保存先验证阶段文件，最后提交 manifest。普通读取检查内容和上游身份；重新计算还要求实现身份一致。`run_propagation(annotation_run, run_dir=...)` 使用严格加载的标注，`replay_propagation(run_dir)` 零 API 重算并比较 data、records、sinks、覆盖及诊断。不能仅改摘要绕过接受响应或调用记录。
 
-Markdown 和 HTML 共用 `PropagationMaterials` 展示模型，默认显示数据、效果、参数、状态变化和边界。上游证据可以展开审计；这不会使记录变成执行日志。普通 return 仍从 CFG 输入保留返回身份，没有虚构输出或接收方。
+Markdown 和 HTML 共用 `PropagationMaterials` 展示模型，默认显示数据、效果、参数、保留的绑定变化和边界。报告把状态标为保留证据，不能把投影中省略的位置显示成已删除；真正的写入／删除以操作 StateChange 为依据。上游证据可以展开审计；这不会使记录变成执行日志。普通 return 仍从 CFG 输入保留返回身份，没有虚构输出或接收方。
 
 ## 7. 示例与验收
 

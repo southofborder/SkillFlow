@@ -21,14 +21,14 @@ def prepare_launch(executable, prompt_path, output_dir):
     raw.decode("utf-8")
     command = [str(executable), "exec", "--ignore-user-config", "--ignore-rules",
                "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
-               "--json", "--model", "gpt-6.1-sol", "-c", 'model_reasoning_effort="ultra"',
+               "--json", "--model", "gpt-6.1-sol", "-c", 'model_reasoning_effort="max"',
                "-c", 'model_provider="openai"', "-c", "project_doc_max_bytes=0",
                "--output-last-message", str(output / "last-message.txt"), "-"]
     return {"schema_version": SCHEMA, "transport": "proposed_fresh_codex_cli_stdin",
             "formal_approved": False, "command": command, "executable_sha256": sha256(executable),
             "stdin_file": str(prompt), "stdin_sha256": hashlib.sha256(raw).hexdigest(),
             "stdin_bytes": len(raw), "output_dir": str(output),
-            "runtime_expectation": {"model": "gpt-6.1-sol", "effort": "ultra", "provider": "openai"},
+            "runtime_expectation": {"model": "gpt-6.1-sol", "effort": "max", "provider": "openai"},
             "configuration_is_verified": False,
             "deviation": "A fresh CLI process replaces collaboration.spawn_agent(fork_turns=none); its harness differs. All arms would require the same newly preregistered path. No effort substitution is permitted."}
 

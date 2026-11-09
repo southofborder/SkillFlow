@@ -26,6 +26,21 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, revalidate_instances="always")
 
 
+class EachDemandStep(_Strict):
+    kind: Literal["each"]
+
+
+GoalPath = Annotated[list[StrictStr | Annotated[int, Field(strict=True, ge=0)] | EachDemandStep],
+                     BeforeValidator(_require_list)]
+
+
+def _check_goal_path(path):
+    # Each marker selects one collection level. Repeating the existing marker
+    # preserves the field/member coordinate frame; it does not introduce a
+    # second kind of demand or a model-authored iteration identity.
+    return path
+
+
 class RefExpression(_Strict):
     op: Literal["ref"]
     value: ValueRef
@@ -136,10 +151,12 @@ class RawDemandGoal(_Strict):
     requirement_id: Text
     target: CFGTarget
     preserve: DemandProperty
-    path: DemandPath = Field(default_factory=list)
+    path: GoalPath = Field(default_factory=list)
     expected: ValueRef | None = None
     expected_path: DemandPath = Field(default_factory=list)
     reason: Text
+
+    _member_path = field_validator("path")(_check_goal_path)
 
     @model_validator(mode="after")
     def expected_path_has_value(self):
@@ -184,10 +201,12 @@ class OperationTaskGoal(_Strict):
     requirement_id: Text
     target: Annotated[SelfTarget | InputTarget | OutputTarget, Field(discriminator="kind")]
     preserve: DemandProperty
-    path: DemandPath = Field(default_factory=list)
+    path: GoalPath = Field(default_factory=list)
     expected: ValueRef | None = None
     expected_path: DemandPath = Field(default_factory=list)
     reason: Text
+
+    _member_path = field_validator("path")(_check_goal_path)
 
     @model_validator(mode="after")
     def value_fields(self):

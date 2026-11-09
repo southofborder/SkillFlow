@@ -1,5 +1,14 @@
 # 文档导航
 
+Current offline backend work: [design](doe/backend-sparse-design.zh.md), [acceptance and bounded GA4 results](doe/backend-sparse-offline.zh.md), and [English computation contract](propagation/backend-computation-contract.md). Record v16 uses projected states; historical v15 remains read-only. Seven model calls are unchanged; the online controller and queue stay paused.
+
+当前通用循环与输出契约扩展见 [设计与边界](doe/general-loop-analysis.md)。GA4 与三个小 Skill 的线上结果见 [四轮报告](../output/verification/general-loops-v8-online-20261101/assessment.en.md)；后续材料复用精简见 [实现说明](doe/material-reuse.md)与[离线验收](doe/material-reuse-offline.zh.md)。
+
+当前新一轮工作见 [CFG／processing 对齐 v9](doe/cfg-processing-alignment.zh.md)：完整源码交付、二路分支／成员契约、普通写入默认覆盖及四例失败回归；正常仍为七调用。[离线验收](doe/cfg-processing-alignment-offline.zh.md) 已完成，后续四例真实运行按同一冻结版本验证。
+
+- [文档引导式分析：七调用与程序组装](doe/document-guided-analysis.md)：三个隔离语义片段由程序组装标注，保留独立 Task、完整 CFG、局部未建模覆盖及统一源文审查；目的仅依据冻结 Skill。
+- [英文片段格式与例子](doe/document-guided-fragments-format.md)、[七调用离线验收](doe/document-guided-seven-call-validation.md)与[当前 Prompt 和程序组装样张](../examples/document-guided/index.html)。[八调用离线记录](doe/document-guided-eight-call-validation.md)、[前一阶段接通记录](doe/document-guided-prompt-steps-validation.md)和[更早离线记录](doe/document-guided-validation.md)保留其历史结论。
+
 - [Research and chat handoff](research-chat-handoff.md): current objective,
   conversation decisions, implemented flow, latest evidence, unresolved research
   questions and second-computer continuation without experiment dispatch.
@@ -21,8 +30,8 @@ experiment links document the development record and still require the
 corresponding local directory. The cloud preparation is a verified
 point-in-time snapshot, not a full historical archive.
 
-当前实现主线为 Skill-IR → 结构校验 → 受控回述与源文核对 → 有界 CFG 反馈 → 独立 source-only Task 提取与封存 → 固定 Task 的需求／处理／敏感联合标注 → 四轴完整审查及最多一轮隔离 Task 修订或标注修复 → 确定性传播与 DOE。
-Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递规格、离线前向求解及入口／出口事件记录；处理模式由标注声明，可能观察由程序编译。正常核对直接判断具体差异；候选来源、可能依赖和部分顺序继续计算，确实无法完成必要判断时明确失败。当前版本和保证边界统一见下列主规范，不将核对通过或传播完成解释为已证明语义等价。DOE 已接入任务保持反向需求、敏感范围追踪和每个 sink 的确定性对照；前端声明的正确性及完整性仍需语义审查，一般生成数据反馈循环仍超出当前求解范围。
+当前 document-guided 主线为独立 source-only Task 与 flow 并行生成 → 完整 CFG → processing → 隔离的任务对应与 sensitivity 并行生成 → 程序组装 annotation → 统一源文审查及最多一轮依赖修复 → 确定性传播与 DOE。正常七次语义请求，最多两个 worker；普通读取和保存复用已验证材料。
+Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递规格、有限循环摘要及入口／出口事件记录；处理模式由标注声明，可能观察由程序编译。候选来源、可能依赖和部分顺序继续计算；明确未建模对象按依赖范围截断，独立分支仍可继续。DOE 接入任务保持反向需求、敏感范围追踪和每个 sink 的确定性对照。前端声明的正确性及完整性仍需源文审查；精确循环次数、未展开结构尾部及部分跨代关系保持未决。当前版本和保证边界见下列主规范，不将核对通过或传播完成解释为已证明语义等价。
 
 ## Constraint analysis
 
@@ -42,17 +51,17 @@ Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递
 
 - [全流程字段收紧与离线验收](architecture/field-tightening.md)：单一 IR 语义、统一证据、紧凑模型请求与 DOE 结果；逐项保留关系、三例离线对照及校验边界。
 
-- [Source → Task → declarations formal analysis chain v7](doe/joint-pipeline.md): independent Task extraction, fixed-Task annotation and four-axis review; three calls normally, five with annotation repair, six with isolated Task revision, at most one semantic repair, verified dependencies and zero-API replay.
+- [Source → Task → declarations formal analysis chain v9](doe/joint-pipeline.md)：完整冻结 Skill → 独立 Task → 固定 Task 标注及四轴审查；已有 CFG 入口保留 3／5／6 次语义调用路径，一次修复预算，严格上游身份和零 API 重放。
 - [Sink 载荷需求绑定](doe/sink-payload-demand-binding.md)：规定参数与保存内容的功能终点需求、缺失 seed 审查、合成正反例及三例实际关系验收；不从 action 或上游 producer 自动补出载荷需求。
 - [Sensitive ranges and recipient-boundary comparison v4](doe/sensitivity.md): fixed-Task sensitivity, forward relations, per-seed demands, and all-sink comparison, with separate constraint checks and candidate preservation; unresolved gaps remain conservative.
 - [Sensitivity v1 offline review](../experiments/doe/runs/sensitivity-v1-20261011-231751/index.html): all 34 sinks, three explicitly authored declaration sets, preserved forward facts and task demands, and zero-API replay. [Assistant interpretation](../experiments/doe/runs/sensitivity-v1-20261011-231751/assistant-review.md) separates supported reductions, conservative retention and unknown sensitivity coverage.
 - [Task preservation and per-seed backward demand v4](doe/backward-demand.md): six positive properties, per-requirement realizations and gaps, exact raw-demand-to-seed traceability, and constraint coverage references without restriction seeds; no sink is filtered by action necessity.
-- [独立 Task 与原文逐项登记 v3](doe/task-evidence.md)：source-only 提取、全部非空物理行处置、唯一任务释义、Task seal、隔离修订及精确版本引用；登记覆盖不证明语义完整。
+- [独立 Task v5 与原文依据](doe/task-evidence.md)：只从冻结 Skill 提取用途和要求，不再保存固定依据标签、外部请求或逐行表；保留真实引用、封存、隔离修订和版本绑定。
 - [新版审查两例探索性实测](../experiments/doe/runs/source-task-review-v1-20261015-live/assessment.assistant.md)：真实模型识别同一源行遗漏的禁止项和过宽需求；助手编写的合成参考案例与助手复核，未建立独立人工金标准，其他六例未运行。
 - [本轮改造与验证记录](doe/source-task-demand-verification.md)：已实现的阶段责任、分组工程测试、真实模型实验及保守能力边界；不合并重叠测试数量，不以结构通过替代语义验收。
 - [Task Evidence: three-case review](../experiments/doe/runs/task-evidence-v1-20261010-213606/index.html): 24 assistant-authored requirements with validated references and matching offline replays; not model responses or ground truth.
 - [DOE 目标与设计原则（基准 2026-10-06，协议更新 2026-10-15）](doe/SkillFlow-DOE目标与设计原则.md)：以覆盖所有非必要敏感数据暴露为总目标，将必要动作中的数据必要性区分作为重点贡献，固定传播与接收边界、已确认设计及后续工作。
-- [DOE 任务基准与用途切片（基准 2026-10-10，协议更新 2026-10-15）](doe/SkillFlow-DOE任务基准与用途切片.md)：明确用户任务／声明用途的默认、必须保持的功能要求及 sink 回溯与用途关联；三例说明及来源／载荷区别，现行交接通过经过校验的传播材料。
+- [DOE 任务基准与用途切片](doe/SkillFlow-DOE任务基准与用途切片.md)：仅以冻结 Skill 声明用途为基准，保留功能要求及 sink 来源／用途关系；当前交接通过经校验的传播材料，早期接口与历史实验不迁移。
 - [DOE 离线切片与审查材料（2026-10-10）](doe/SkillFlow-DOE离线切片与审查材料.md)：保留的内部切片算法；独立准备和重放运行包装已退役，正式入口见联合分析链。
 - [DOE 三例离线审查总览](../experiments/doe/runs/slices-v1-20261010-165218/index.html)：直接审查 001、010、013 的 34 个 sink，链接事实、切片、规模和助手复核。
 - [架构与迁移验收](architecture/SkillFlow-架构与迁移验收.md)：graph／propagation／common 的职责和依赖、新入口、精确历史地址及严格续跑边界；[迁移总览](../experiments/migrations/layout-v1-20261002-215752/index.html)可直接打开三例 DOE 与审查报告。
@@ -79,7 +88,7 @@ Data 与传播模块提供数据身份、字段覆盖、元素关系、IR 传递
 - [传播结构与函数树状说明](propagation/SkillFlow-传播结构与函数树状说明.md)：按人审顺序展开全部相关类型、子字段、编号和函数，区分模型规格、Data、程序记录与工程快照。
 - [结构收紧验收与后续冗余审查](history/skill-ir/SkillFlow-结构收紧验收与后续冗余审查.md)：上一阶段字段收紧的验收记录；其中可删除／可合并候选现已由下一项落实。
 - [DOE 输入收紧与三例复核](doe/SkillFlow-DOE输入收紧与三例复核.md)：当前分阶段交接与历史总包退役说明。
-- [传播记录结构与更新规则](propagation/SkillFlow-传播记录结构与更新规则.md)：紧凑记录、逐元素实例、分阶段组件及上游引用；保存逐 IR 完整入口／出口及数据操作与必要次序。
+- [传播记录结构与更新规则](propagation/SkillFlow-传播记录结构与更新规则.md)：紧凑记录、逐元素实例、分阶段组件及上游引用；保存逐 IR 计算与证据所需的入口／出口投影、数据操作与必要次序。
 - [v4 精简协议实施与七例复测](../experiments/graph/audit/runs/controlled-v4-seven-20260918/acceptance.md)：1264 项回归通过；4 例合法核对、3 例执行失败，包含逐例助手复核、历史对照与本地记录问题诊断。
 - [v3 七例历史验收](../experiments/graph/audit/runs/controlled-v3-seven-20260918/acceptance.md)：工程证据、五例合法与两例响应无效的实际结果，以及助手复核边界。
 - [形式化工程](../formal/README.md)：结构核心与完整事实域的不同证明范围。

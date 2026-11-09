@@ -30,11 +30,11 @@ def test_complete_payload_preserves_exact_source_and_raw_graph():
     assert payload["cfg"] == graph_before
     assert source == source_before and cfg == graph_before
     assert set(payload) == {
-        "source", "cfg", "runtime_contract", "user_request", "task",
+        "source", "cfg", "runtime_contract", "task",
     }
     assert "targets" not in payload
     assert payload["runtime_contract"] == runtime_contract()
-    assert SCHEMA_VERSION == "security-profile-v15"
+    assert SCHEMA_VERSION == "security-profile-v21"
 
 
 @pytest.mark.parametrize("extra", ["oracle", "old_audit", "propagated_data", "risk", "feedback"])
@@ -170,13 +170,12 @@ def test_every_label_needs_its_own_evidence():
         validate_compiled_response(with_specs(prepared, response), prepared)
 
 
-def test_empty_confirmed_not_applicable_requires_evidence():
+def test_empty_effects_do_not_require_redundant_inapplicability_evidence():
     prepared = material()
     response = valid_response(prepared)
     assert validate_compiled_response(response, prepared)["outcome"] == "completed"
     response["ir_semantics"]["ir_return"].pop("empty_effect_evidences")
-    with pytest.raises(ValueError, match="empty_effect_evidences"):
-        validate_compiled_response(response, prepared)
+    assert validate_compiled_response(response, prepared)["outcome"] == "completed"
 
 
 @pytest.mark.parametrize("old", [[], [{"instruction_id": "ir_read", "field": "effects", "reason": "未知"}]])
@@ -296,7 +295,7 @@ def test_prompt_explicitly_distinguishes_critical_semantic_boundaries():
         assert phrase in authoritative
     assert not re.search(r"[\u4e00-\u9fff]", INSTRUCTIONS)
     assert all(not re.search(r"[\u4e00-\u9fff]", rule["text"]) for rule in runtime_contract()["rules"])
-    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v7"
+    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v11"
 
 
 def test_source_and_execution_references_are_checked_at_their_location():

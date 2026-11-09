@@ -12,8 +12,7 @@ from .protocol import SCHEMA, sha256, write_json, prepare_protocol
 from .review import prepare_review_assignments, prepare_scoring_assignments
 
 ROOT = Path(__file__).resolve().parents[3]
-PREVIOUS = ROOT / "experiments/doe/runs/direct-baseline-v1-20261019-171200/prompts"
-NO_TASK = "No independent user task is supplied. Audit only relative to the Skill's declared purpose; author statements are not verified user authorization."
+PROMPTS = ROOT / "tools/doe/direct_prompts"
 REVIEW = """Independently review and return a complete corrected English answer to the
 original source-only static analysis task below. Preserve original-language
 source quotations. You receive no scores, gold reference or reviewer advice.
@@ -35,7 +34,9 @@ EXACT FIRST VISIBLE ANSWER
 
 def substitute(template, values):
     # Source braces and literal template strings must remain original evidence.
-    return re.sub(r"\{(user_request|source_bundle|original_task|original_answer)\}",
+    if "{user_request}" in template:
+        raise ValueError("Legacy independent-request templates are not supported")
+    return re.sub(r"\{(source_bundle|original_task|original_answer)\}",
                   lambda match: values[match[1]], template)
 
 
@@ -54,7 +55,7 @@ def render_direct(run_dir, case_id, method):
     run = Path(run_dir)
     template = (run / "prompts" / f"{method}.txt").read_text(encoding="utf-8")
     source = (run / "cases" / case_id / "source-bundle.txt").read_text(encoding="utf-8")
-    return substitute(template, {"user_request": NO_TASK, "source_bundle": source})
+    return substitute(template, {"source_bundle": source})
 
 
 def render_review(run_dir, case_id, method, original_answer):
@@ -80,7 +81,7 @@ def prepare_inputs(run_dir, corpus_root, *, screening_path=None):
     for index, item in enumerate(manifest["selected"] + manifest["reserves"], 1):
         case_id = f"real-{index:03d}"
         enriched = {**item, "case_id": case_id,
-                    "source_path": f"cases/{case_id}/source", "user_request": None, "fixtures": []}
+                    "source_path": f"cases/{case_id}/source", "fixtures": []}
         (selected if index <= 24 else reserves).append(enriched)
         source_template = run / "cases" / case_id / "reference.source-facts-draft.json"
         reference = run / "references" / f"{case_id}.json"
@@ -96,8 +97,10 @@ def prepare_inputs(run_dir, corpus_root, *, screening_path=None):
         "schema_version": SCHEMA, "grading_schema_version": "skillflow-real-comparison-grading-v2",
         "scope": "Human scoring records only; target answers have no required common output schema.",
         "requires_normalized_claims_receivers_reductions_and_chain_checks": True}, immutable=True)
-    for method, filename in (("audit", "direct-audit-final.txt"), ("chain", "full-chain-final.txt")):
-        _immutable_text(run / "prompts" / f"{method}.txt", (PREVIOUS / filename).read_text(encoding="utf-8"))
+    shared = (PROMPTS / "shared.txt").read_text(encoding="utf-8")
+    for method in ("audit", "chain"):
+        template = (PROMPTS / f"{method}.txt").read_text(encoding="utf-8")
+        _immutable_text(run / "prompts" / f"{method}.txt", template.replace("{shared_rules}", shared))
     _immutable_text(run / "prompts" / "review.txt", REVIEW)
     audit = (run / "prompts/audit.txt").read_text(encoding="utf-8")
     assumptions = audit.split("Shared abstract runtime assumptions", 1)[1].split("For each material conclusion", 1)[0]

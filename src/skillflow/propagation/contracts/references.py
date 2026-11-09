@@ -5,7 +5,7 @@ from copy import deepcopy
 import json
 from typing import Annotated, Literal
 
-from pydantic import Field, StrictStr, TypeAdapter
+from pydantic import Field, StrictStr, TypeAdapter, model_serializer
 from skillflow.common.source_evidence import json_pointer
 from skillflow.propagation.contracts.values import StrictSpec, Text, Index
 
@@ -57,6 +57,14 @@ class OperationTarget(StrictSpec):
     instruction_id: Text
     operation_path: ReferencePath
     slot: OperationSlot
+    phase: Literal["request", "response"] | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_phase(self, handler):
+        result = handler(self)
+        if self.phase is None:
+            result.pop("phase", None)
+        return result
 
 
 DemandTarget = CFGTarget | OperationTarget
@@ -147,7 +155,11 @@ def resolve_cfg_target(target, cfg):
             raise ValueError("CFG target path does not exist or uses the wrong key/index type")
     if cfg_target_from_path(cfg, parts) != data:
         raise ValueError("noncanonical CFG target: use an IR/block anchor or the real OperandRef")
-    result = {"domain": "cfg", "target": data, "pointer": json_pointer(*parts),
+    return _target_entry(cfg, data, parts, current)
+
+
+def _target_entry(cfg, target, parts, current):
+    result = {"domain": "cfg", "target": target, "pointer": json_pointer(*parts),
               "raw_path": parts, "kind": _kind(parts), "value": deepcopy(current)}
     if len(parts) >= 2 and parts[0] == "blocks":
         result["block_id"] = parts[1]
@@ -157,11 +169,21 @@ def resolve_cfg_target(target, cfg):
 
 
 def cfg_target_index(cfg):
-    """Ephemeral lookup only; neither model material nor a saved target table."""
+    """Index known positions once, without resolving each generated anchor again.
+
+    The walk already has the exact object and path. External references still
+    use resolve_cfg_target; an index owns independent copies of its values.
+    """
+    seen = set()
+    for block in cfg["blocks"].values():
+        for ir in block["instructions"]:
+            if ir["id"] in seen:
+                raise ValueError("target instruction does not exist uniquely: " + ir["id"])
+            seen.add(ir["id"])
     result = {}
     def walk(value, path):
         target = cfg_target_from_path(cfg, path)
-        result[target_key(target)] = resolve_cfg_target(target, cfg)
+        result[target_key(target)] = _target_entry(cfg, target, path, value)
         if isinstance(value, dict):
             for name in sorted(value):
                 walk(value[name], [*path, name])

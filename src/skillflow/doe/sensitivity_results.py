@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from skillflow.common.source_evidence import Text
 from skillflow.propagation.contracts.boundaries import SinkBoundary
@@ -75,6 +75,14 @@ class Diagnostic(Strict):
     instruction_id: Text | None
     operation_id: Text | None
     blocking: bool
+    affected_instruction_ids: list[Text] | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_legacy_scope(self, handler):
+        result = handler(self)
+        if self.affected_instruction_ids is None:
+            result.pop("affected_instruction_ids", None)
+        return result
 
 
 class SharedDerivations(Strict):
@@ -90,10 +98,18 @@ class Coverage(Strict):
     expected_sinks: Index
     sensitivity_basis: Literal["declared_ranges_only"]
     demand_status: Literal["complete", "partial"]
+    unresolved_boundaries: list[SinkBoundary] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def omit_empty_boundary_gaps(self, handler):
+        result = handler(self)
+        if not self.unresolved_boundaries:
+            result.pop("unresolved_boundaries", None)
+        return result
 
 
 class SensitivityResult(Strict):
-    schema_version: Literal["skillflow-sensitivity-review-v4"]
+    schema_version: Literal["skillflow-sensitivity-review-v6"]
     status: Literal["complete", "partial"]
     sinks: list[SinkReview]
     derivations: SharedDerivations

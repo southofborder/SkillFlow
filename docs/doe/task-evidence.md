@@ -1,99 +1,51 @@
-# 独立 Task 与原文逐项登记 v3
+# 独立 Task 与原文依据 v5
 
-当前协议（2026-10-15）先只根据完整冻结源文和可选独立用户任务建立 Task，再把固定 Task 交给标注阶段。模型负责解释语义；程序负责来源、行级登记、版本和引用的机械检查。行级覆盖、真实引用和封存校验不证明要求已经穷尽或语义正确。
+当前 Task 只依据完整冻结的 Skill 源包建立。它解释 Skill 声明的用途和要求，不引入独立用户请求，也不把 Skill 声明视为真实用户授权。来源固定，因此不再保存 `basis` 字段。
 
-## 来源隔离与唯一任务基准
+## 模型声明与来源隔离
 
-Task 提取输入只有完整可读 Skill 文件、独立用户任务和程序确定的 `basis`，不含 CFG、现有参数／载荷、标注、传播和 DOE。Skill 源文本身仍可能混合功能与实现；独立调用不能消除这种偏差。
-
-有独立用户任务时，以其为目的依据，并保留与目的相容的 Skill 精确限制；没有时相对 Skill 声明用途分析，不把声明视为真实用户授权。明确冲突保留双方证据、采用依据和理由；无法确定的歧义或冲突留在 `issues` 中。
+Task 提取和隔离修订不接收 CFG、当前载荷、标注、传播或 DOE。模型只返回：
 
 ```text
 CandidateTask
 ├─ purpose: text / evidences[]
 ├─ requirements[]: id / text / evidences[]
-├─ source_accounting[]
-│  ├─ file / start_line / end_line
-│  ├─ disposition / requirement_ids[] / issue_ids[]
-│  └─ reason
 └─ issues[]: id / kind / evidences[] / requirement_ids[] / resolution / reason
 ```
 
-Task 是唯一的要求释义，不再另写重复的限制文本清单，也不包含图绑定。按可以独立遗漏或放宽的义务组织要求，保留原值、条件、范围、次数、顺序、质量、副作用、禁止项及同元素关系；拆分后不能丢失这些关系。能力说明、示例和实现事实不自动构成必要性；步骤中的精确限制也不能被当作实现细节删除。真实完整原值要求必须保留。
+要求按可分别遗漏或放宽的义务组织，同时保留原值、条件、范围、次数、顺序、质量、副作用、禁止事项及同元素关系。能力说明、示例和当前实现事实不自动成为要求；实现步骤中的精确义务也不能被忽略。必要动作不豁免其全部载荷，真实整值要求也不能为了缩减结果而被缩小。
 
-## 物理行处置与来源校验
+源包内部的冲突保留双方证据、受影响要求和处理理由，未解决问题保留在 `issues`。Task 不含图绑定、demands 或敏感性声明。
 
-文件名使用 `skill/<真实相对路径>`，独立用户任务使用 `task/user-request.txt`。行号为从 1 开始的闭区间，统一用 `splitlines(keepends=True)` 保留 CRLF、LF 和无末尾换行。模型只给来源位置及理由，报告中的原文由程序读取。
+## 原文引用
 
-程序构造全部非空物理行全集，要求每一行恰好登记一次；连续且处置相同的行可以合并，范围内可以包含空行。同一行可以关联多个 requirement，一项 requirement 可以引用跨行、跨文件来源。处置类型为 `requirement / supporting_context / implementation_fact / capability / example / not_applicable / unresolved`。每项 requirement 和 issue 都必须出现在登记中；引用必须指向真实文件及范围。
+证据使用 `file / start_line / end_line / reason`。文件必须来自冻结的 `skill/<实际相对路径>`；行范围从 1 开始，包含两端。程序用同一物理行定义校验和提取原文，保留 LF、CRLF、无末尾换行及原语言。跨文件依据分别引用，不复制引文、段落 ID 或逐项摘要。
 
-这是一份物理覆盖账目，不能检验一行中的第二项语义限制是否漏掉。独立审查必须重新读取全部原文，不能把登记表当成完备性证明。
+不要求逐行登记。未引用的背景可以保留，未引用范围也不直接证明遗漏。模型仍须检查完整源文，审查可以用具体 finding 报告遗漏条件、禁止事项或错误解释。
 
-## 封存与下游接口
+## 封存与接口
 
-程序生成 `skillflow-task-v3`，添加 `basis / source_sha256 / user_request_sha256 / task_sha256`。`task_sha256` 绑定除自身外的完整内容，精确身份随用户任务和源文变化。`TaskReference` 是程序生成的版本引用。
+程序为 CandidateTask 添加 `schema_version / source_sha256 / task_sha256`。源文摘要绑定冻结输入，Task 摘要绑定除自身外的完整 Task；下游通过 `TaskReference` 引用该精确版本。没有用户请求正文、请求摘要或替代目的标志。
 
-标注输入显式接受固定 Task；原始响应只返回 `task_revision_id`，不能返回 Task 正文。编译响应保存 `task_ref` 与逐项 `realizations`。Task 由独立 Task run 拥有，下游清单引用该 owner；统一只读加载器解析成内存中的 `annotation["task"]`。提示词与报告中的展示是审计副本，不是另一份可编辑任务基准。
+| 材料 | 当前身份 |
+|---|---|
+| Task | `skillflow-task-v5` |
+| TaskReference | `skillflow-task-reference-v3` |
+| Task 输入材料 | `skillflow-task-material-v3` |
+| Task 提取／修订运行 | `skillflow-task-extraction-v3`，格式 3 |
 
-`skillflow.task` 提供 source-only material、提取／隔离修订、记录式 `prepare_task_run / run_task / load_task_run`。正式用户入口仍是 [完整分析链](joint-pipeline.md)。直接准备标注 run 必须提供已封存的 `task_run`；不得恢复旧的同次生成 Task 或历史总包兼容读取。
+`skillflow.task` 提供 `prepare_task_material(source)`、`extract_task(source, client=...)`、隔离修订，以及 `prepare_task_run / run_task / load_task_run / replay_task`。正式流程入口见[完整分析链](joint-pipeline.md)。旧字段、旧版本和已移除的输入参数直接拒绝；历史实验不迁移或回写。
 
-## Task 修订的隔离
+固定 Task 交给后续标注。模型响应只返回 `task_revision_id`，不重写 Task；编译响应保存 `task_ref`。图中对应、正向 demands 和受支持限制放在后续标注及 `realizations` 中。Task 由独立运行持有，下游引用其 owner；展示副本不是第二份可编辑任务基准。
 
-审查发现 Task 问题时，只向修订器提供旧 Task、原始完整材料及闭合的 objection：有限 `code`、原文 `source_spans` 和已有 `requirement_ids`。不透传 finding 的自由文本解释、建议、CFG、操作、sink、载荷、goals 或 DOE。修订器必须独立核实主张，返回完整替换 Task 和全部处置记录。
+## 隔离修订
 
-Task 版本改变后，旧标注和需求失效，重新生成整份标注；不机械迁移旧 requirement 绑定。新旧版本与完整审查意见都保留在审计记录。
+Task 问题只通过有限 `code`、原文 `source_spans` 和已有 `requirement_ids` 传给修订器。修订器读取完整源文和旧 Task，不接收审查自由文本、建议、CFG、操作、sink、载荷、demands 或 DOE。它须独立核查并返回完整替换 Task。
 
-## 验收边界
+Task 改变后，依赖它的标注和需求必须重新生成，不能机械迁移旧绑定。原版本和审查记录保留，继续遵守正式流程的语义修复预算。
 
-工程检查包括缺行／重复行、跨文件引用、同一行多要求、图字段注入、封存和版本错配、跨阶段泄漏及离线重放。合成样例明确标为人工声明，历史三例的原始输入和结果不变。
+## 保证边界
 
-语义检出率需要独立人工基准和真实模型评测；结构通过、登记齐全和模拟客户端运行成功均不能替代该实验。
+程序校验结构、精确来源、引用、封存身份、恢复和零调用重放。它不证明解释正确、要求穷尽、不可替代性、最小信息范围或不存在 DOE。真实 Skill 仍可能混合用途与实现；独立提取能隔离下游分析结果，不能消除原文自身的语义偏差。
 
-## 历史版本（已被上文替换）
-
-以下保存先前协议，便于解释历史实验；不作为当前接口或保证。旧的“同次生成 Task”、constraint/prohibit 正向 goal、仅 IR 清单审查和四调用分工均已由上文替换。
-
-<details><summary>展开历史规范</summary>
-
-# Task Evidence v2
-
-Task records the Skill-level purpose, required outcomes, conditions and restrictions. It is generated in the same joint response as processing, demands and sensitivity. It is not a per-IR necessity judgment or a separate extraction call.
-
-```text
-task
-├─ purpose: text / evidences
-└─ requirements[]
-   ├─ id / text
-   ├─ evidences[]: file / start_line / end_line / reason
-   └─ bindings[]: target / reason
-```
-
-The program adds `schema_version=skillflow-task-v2` and `basis=user_request|declared_skill`. An independent `user_request` establishes the purpose source; otherwise conclusions are relative to the declared Skill purpose, not proof of real user authorization. Purpose and every requirement need source evidence. Empty bindings remain explicit: they do not become usable demand seeds.
-
-## Source spans
-
-Readable files use `skill/<relative-path>`. An independent request has the evidence name `task/user-request.txt`; its text is stored once as `user_request`, not copied into the Skill source. No external policy input exists.
-
-All stages use inclusive one-based physical lines from `str.splitlines(keepends=True)`. Evidence may cross former paragraph boundaries. The same function validates, extracts and displays spans while preserving LF, CRLF and missing final newlines. Boolean, zero, inverted and out-of-range indexes are rejected. Cross-file support requires separate spans. The model does not repeat quotations, hashes or paragraph identifiers.
-
-Source-audit findings must collectively cover every nonblank physical line. This stricter reference-coverage check is specific to source audit, not a claim that Task annotations must turn all background text into requirements. Neither coverage nor a real quotation proves semantic support or completeness.
-
-## Direct graph correspondence
-
-```json
-{"instruction_id":"ir_calibrate","side":"input","index":0}
-```
-
-Other targets use an existing instruction or block identity plus a relative `path`, or a graph-root path. There is no persisted graph-address directory or generated target-name table. Root paths cannot tunnel into instructions or operands. String keys and integer indexes remain distinct.
-
-Task may correspond to metadata, constraints, a block or graph. `demands` has stricter capability checks: preserving a value requires a real value target, not the operand's name string or a whole IR. Ordinary return uses its real input and has no invented public output. A current oversized argument cannot become a requirement merely because it exists.
-
-## Formal use
-
-Use [pipeline](joint-pipeline.md) with optional `--request-file`. The former Task prepare/replay runner and baseline scheduler are retired. `prepare_task_review(materials, candidate, user_request=None)` remains an in-memory algorithm for controlled offline tests and report construction, using verified `PropagationMaterials`; it does not read an old standalone total package.
-
-The independent executable example is `python -m examples.doe.joint_analysis_demo`. It uses a synthetic calibration scenario and identifies its authored provenance. Historical three-case results remain unchanged and are not accepted as current model responses.
-
-**Source spans and target references are validated; semantic support and completeness are not proven.**
-
-</details>
+已保留的离线回归包括跨文件及多语言证据、同一行多项要求、冲突引用、旧字段和版本拒绝、篡改拒绝、接受后无重发恢复，以及只读加载与重放。模型语义效果须另外评估，不能由结构检查通过代替。

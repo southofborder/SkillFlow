@@ -23,7 +23,7 @@ from skillflow.common.source_evidence import _json_object
 from skillflow.propagation.annotation.config import annotation_config, annotation_public_config
 
 
-IDENTITY = "skillflow-joint-pipeline-pilot-v8"
+IDENTITY = "skillflow-joint-pipeline-pilot-v9"
 BASELINE = "experiments/propagation/runs/sink-tightening-v1-20261002-205045"
 RECEIPTS = "experiments/doe/inputs/sensitivity-v1"
 CASES = ("001", "010", "013")

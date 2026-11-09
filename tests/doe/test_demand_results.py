@@ -8,15 +8,14 @@ from skillflow.doe.demand_results import validate_result_shape
 
 def result():
     return {
-        "schema_version": "skillflow-demand-v4", "status": "complete",
+        "schema_version": "skillflow-demand-v7", "status": "complete",
         "goals": [{"id": "G1", "requirement_id": "R1", "target": {"instruction_id": "send", "side": "input", "index": 0},
                    "preserve": "value", "path": [], "expected": None, "expected_path": [],
                    "reason": "Preserve the specified original payload."}],
         "traceability": {"task_ref": {
-            "schema_version": "skillflow-task-reference-v1", "task_schema_version": "skillflow-task-v3",
-            "task_sha256": "1" * 64, "source_sha256": "2" * 64,
-            "user_request_sha256": None, "basis": "declared_skill"},
-            "requirements": [{"requirement_id": "R1", "source_accounting_indices": [0],
+            "schema_version": "skillflow-task-reference-v3", "task_schema_version": "skillflow-task-v5",
+            "task_sha256": "1" * 64, "source_sha256": "2" * 64},
+            "requirements": [{"requirement_id": "R1",
                 "seeds": [{"goal_id": "G1", "raw_pointer": "/demands/0", "derivation_ids": ["d1"]}]}]},
         "derivations": {"d1": {
             "node": {"kind": "op_input", "instruction_id": "send", "operation_id": "op_send",

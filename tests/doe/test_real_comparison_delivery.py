@@ -19,7 +19,7 @@ def test_original_multilingual_source_and_literal_markers_are_not_resubstituted(
     (case / "source-bundle.txt").write_text(source, encoding="utf8")
     prompts = tmp_path / "prompts"
     prompts.mkdir()
-    (prompts / "audit.txt").write_text("TASK:{user_request}\nSOURCE:{source_bundle}", encoding="utf8")
+    (prompts / "audit.txt").write_text("SOURCE:{source_bundle}", encoding="utf8")
     (prompts / "review.txt").write_text("{original_task}\nANSWER:{original_answer}", encoding="utf8")
     (tmp_path / "references").mkdir()
     (tmp_path / "references/C1.json").write_text('{"gold_secret":"DO_NOT_LEAK"}', encoding="utf8")
@@ -28,7 +28,7 @@ def test_original_multilingual_source_and_literal_markers_are_not_resubstituted(
     reviewed = render_review(tmp_path, "C1", "audit", answer)
     assert source in main and source in reviewed and answer in reviewed
     assert "DO_NOT_LEAK" not in main + reviewed
-    assert "No independent user task" in main
+    assert main == "SOURCE:" + source
 
 
 def test_timed_review_escapes_source_scripts_and_preserves_marker_literals(tmp_path):
@@ -65,7 +65,7 @@ def test_reference_confirmation_rejects_changed_quotes_and_pending_coverage(tmp_
     source.mkdir(parents=True)
     (source / "SKILL.md").write_bytes("用途\r\nKeep values.\r\n".encode("utf8"))
     evidence = [{"path": "SKILL.md", "start_line": 1, "end_line": 2, "quote": "用途\nKeep values."}]
-    ref = {"case_id": "C1", "user_request": None, "purpose_basis": "skill_declared_purpose_only",
+    ref = {"case_id": "C1", "purpose_basis": "skill_declared_purpose_only",
            "coverage_state": "complete_for_human_verification",
            "declared_purpose": [{"id": "P1", "evidence": evidence}], "required_behavior": [],
            "receiving_points": [{"id": "B1", "evidence": evidence}], "necessary_sensitive_uses": [],
@@ -121,7 +121,7 @@ def test_proposed_cli_stdin_is_exact_and_not_a_formal_dispatch(tmp_path, monkeyp
     prompt.write_bytes(raw)
     prepared = prepare_launch(executable, prompt, tmp_path / "probe")
     assert prepared["formal_approved"] is False
-    assert 'model_reasoning_effort="ultra"' in prepared["command"]
+    assert 'model_reasoning_effort="max"' in prepared["command"]
     assert "resume" not in prepared["command"] and "fork" not in prepared["command"]
     observed = {}
     class InertProcess:
@@ -167,3 +167,21 @@ def test_corpus_manifest_keeps_missing_roster_identity_and_original_version(tmp_
     assert len(manifest["entries"]) == 2
     assert manifest["entries"][1]["acquisition_status"] == "not_yet_attempted"
     assert manifest["entries"][0]["version_pin"] == "1.0.0"
+
+
+def test_max_runtime_is_consistent_across_experiment_entry_points(tmp_path):
+    from tools.doe import direct_baseline
+    from tools.doe.real_comparison import cli_adapter_v3, controlled_cli, controlled_cli_v4, execution
+    from tools.doe.real_comparison.protocol import policy
+    expected = {"model": "gpt-6.1-sol", "effort": "max", "provider": "openai"}
+    assert direct_baseline.EXPECTED_MODEL == expected["model"]
+    assert direct_baseline.EXPECTED_EFFORT == expected["effort"]
+    assert execution.EXPECTED == expected
+    assert {key: policy()["runtime"][key] for key in expected} == expected
+    for adapter in (cli_adapter_v3, controlled_cli_v4):
+        assert adapter.EXPECTED == expected
+    for adapter in (cli_adapter_v3, controlled_cli, controlled_cli_v4):
+        command = adapter.command(tmp_path / "inert.exe", tmp_path / "output")
+        assert 'model_reasoning_effort="max"' in command
+        assert 'model_reasoning_effort="ultra"' not in command
+        assert command[command.index("--model") + 1] == expected["model"]

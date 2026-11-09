@@ -27,7 +27,7 @@ from skillflow.propagation.contracts.constraints import validate_constraints
 
 
 def joint_source_files(material):
-    return task_source_files(material["source"], user_request=material["user_request"])
+    return task_source_files(material["source"])
 
 
 def _task(material):

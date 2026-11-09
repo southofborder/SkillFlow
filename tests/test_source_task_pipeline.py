@@ -38,17 +38,14 @@ class TaskClient:
         self.prompts.append(prompt)
         payload = json.JSONDecoder().raw_decode(prompt.split("COMPLETE_ORIGINAL_SOURCE\n\n", 1)[1])[0]
         rows = []
-        request = None
         for row in payload["source_files"]:
             content = "".join(row["lines"])
-            if row["file"] == "task/user-request.txt":
-                request = content
-            else:
-                rows.append({"path": row["file"][6:], "content": content,
-                             "sha256": hashlib.sha256(content.encode()).hexdigest()})
+            assert row["file"].startswith("skill/")
+            rows.append({"path": row["file"][6:], "content": content,
+                         "sha256": hashlib.sha256(content.encode()).hexdigest()})
         source = {"files": rows, "source_sha256": _digest([
             {key: row[key] for key in ("path", "sha256")} for row in rows])}
-        task = authored_task(source, user_request=request).model_dump(mode="json")
+        task = authored_task(source).model_dump(mode="json")
         candidate = {key: task[key] for key in CandidateTask.model_fields}
         if self.revised:
             candidate["requirements"][0]["text"] = "Preserve the requested original result and every source limitation."
@@ -70,7 +67,7 @@ class FirstIssue(ReviewClient):
         result = response_for(material)
         target = next(row for row in material["target_index"]
                       if row["kind"] == "task" and row["pointer"] == "/requirements/0")
-        span = {key: material["source_line_universe"][0][key] for key in ("file",)}
+        span = {"file": material["task"]["requirements"][0]["evidences"][0]["file"]}
         span.update(start_line=1, end_line=1)
         result["findings"] = [{"domain": "task", "target_ids": [target["id"]],
             "explanation": "人工故障注入：要求解释需要重新核对。",
@@ -78,7 +75,6 @@ class FirstIssue(ReviewClient):
             "suggestion": "重新读取源文核实要求，不使用当前载荷。",
             "task_objection": {"code": "condition_scope", "source_spans": [span],
                                "requirement_ids": [material["task"]["requirements"][0]["id"]]}}]
-        result["source_checks"][0].update(status="issue", finding_indexes=[0])
         result["requirement_checks"][0].update(status="issue", finding_indexes=[0])
         return result
 

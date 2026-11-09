@@ -28,8 +28,8 @@ class TaskReview:
     def index_dict(self) -> dict[str, Any]:
         return {
             "files": [{"file": name,
-                       "original_path": name[len("skill/"):] if name.startswith("skill/") else None,
-                       "origin": "skill" if name.startswith("skill/") else "user_request",
+                       "original_path": name[len("skill/"):],
+                       "origin": "skill",
                        "line_count": len(source_lines(text))}
                       for name, text in sorted(self.files.items())],
             "targets": deepcopy(self.targets),
@@ -51,17 +51,16 @@ def prepare_task_review(facts, task_annotation) -> TaskReview:
     if not isinstance(facts, PropagationMaterials):
         raise TypeError("Task review requires verified propagation materials")
     candidate = task_annotation if isinstance(task_annotation, CandidateTask) else _read_object(task_annotation)
-    user_request = facts.material["user_request"]
-    files = task_source_files(_checked_source(facts.source), user_request=user_request)
+    files = task_source_files(_checked_source(facts.source))
     if isinstance(task_annotation, Task) or isinstance(candidate, dict) and "task_sha256" in candidate:
         task = checked_task(task_annotation, source_files=files,
                             source_sha256=facts.source["source_sha256"])
     else:
         task = validate_task_candidate(candidate, source_files=files,
-            basis="user_request" if user_request is not None else "declared_skill",
             source_sha256=facts.source["source_sha256"])
     realizations = tuple(deepcopy(facts.annotation["compiled_annotation"]["realizations"]))
-    targets = {target_key(binding["target"]): resolve_cfg_target(binding["target"], facts.cfg)
+    cfg = facts.cfg
+    targets = {target_key(binding["target"]): resolve_cfg_target(binding["target"], cfg)
                for realization in realizations for binding in realization["bindings"]}
     return TaskReview(task=task, files=deepcopy(files), targets=deepcopy(targets),
-                      cfg=deepcopy(facts.cfg), boundaries=deepcopy(facts.source_metadata), realizations=realizations)
+                      cfg=deepcopy(cfg), boundaries=deepcopy(facts.source_metadata), realizations=realizations)

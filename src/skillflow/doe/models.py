@@ -10,18 +10,13 @@ from skillflow.graph.ir.cfg import CFGEdge
 from skillflow.graph.ir.instruction import IRInstruction
 from skillflow.propagation.contracts.boundaries import SinkBoundary
 from skillflow.propagation.contracts.profiles import Operator, Effect
-from skillflow.propagation.contracts.specs import LocationSpec, Precedence
+from skillflow.propagation.contracts.specs import CaseLabel, LocationSpec, Precedence
 from skillflow.propagation.data import Data
 from skillflow.propagation.models import AtomicOpRecord
 
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-
-class Task(Strict):
-    basis: Literal["user_request", "declared_skill"]
-    text: str | None
 
 
 class Position(Strict):
@@ -36,6 +31,17 @@ class Operation(Strict):
     position: Position
     effect: Effect | None
     record: AtomicOpRecord
+    case: CaseLabel | None = None
+    requires_completion: list[Text] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def optional_case(self, handler):
+        value = handler(self)
+        if self.case is None:
+            value.pop("case", None)
+        if not self.requires_completion:
+            value.pop("requires_completion", None)
+        return value
 
 
 class Block(Strict):
@@ -47,11 +53,11 @@ class Block(Strict):
 
 
 class Action(Strict):
-    operator: list[Operator]
+    operator: list[Operator] | None
 
     @model_validator(mode="after")
     def unique(self):
-        if len(set(self.operator)) != len(self.operator):
+        if self.operator is not None and len(set(self.operator)) != len(self.operator):
             raise ValueError("action labels must not repeat")
         return self
 
@@ -126,8 +132,7 @@ class SinkSlice(Strict):
 
 
 class DoeMaterial(Strict):
-    schema_version: Literal["skillflow-doe-material-v2"] = "skillflow-doe-material-v2"
-    task: Task
+    schema_version: Literal["skillflow-doe-material-v3"] = "skillflow-doe-material-v3"
     source: dict[str, JsonValue]
     runtime_contract: dict[str, JsonValue]
     shared_info: SharedInfo

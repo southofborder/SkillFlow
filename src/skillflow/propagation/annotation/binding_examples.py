@@ -66,8 +66,7 @@ def _fixture(name, lesson, source, instructions, specs):
                                      "instructions": instructions, "constraints": [], "data_source_kind": None}}}
     task_candidate = {"purpose": {"text": source, "evidences": [evidence()]},
             "requirements": [{"id": "R1", "text": source, "evidences": [evidence()]}],
-            "source_accounting": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
-                "disposition": "requirement", "requirement_ids": ["R1"], "issue_ids": [], "reason": "The complete source obligation of this independent synthetic example."}], "issues": []}
+             "issues": []}
     raw = {"outcome": "completed", "task_revision_id": "pending-example-material", "realizations": [],
            "demands": [], "expressions": [], "ir_semantics": specs, "locations": {}, "location_evidences": {}}
     return {"name": name, "lesson": lesson, "source": source, "cfg": graph, "annotation": raw, "task_candidate": task_candidate, "show": {}}
@@ -80,7 +79,7 @@ def example_material(example):
               "source_sha256": _digest([{"path": "SKILL.md", "sha256": digest}])}
     from skillflow.propagation.contracts.task import validate_task_candidate, task_source_files
     task = validate_task_candidate(example["task_candidate"], source_files=task_source_files(source),
-                                   source_sha256=source["source_sha256"], basis="declared_skill")
+                                   source_sha256=source["source_sha256"])
     return prepare_material(source, example["cfg"], task_baseline=task)
 
 

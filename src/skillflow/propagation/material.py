@@ -1,4 +1,4 @@
-"""Frozen source, graph, optional user request and one runtime contract."""
+"""Frozen source, graph, sealed Task and one runtime contract."""
 from __future__ import annotations
 from copy import deepcopy
 import json
@@ -12,26 +12,24 @@ from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
 from skillflow.propagation.contracts.references import cfg_instructions, resolve_cfg_target
 
 
-def prepare_material(source, cfg, *, task_baseline, user_request=None):
-    if user_request is not None and (type(user_request) is not str or not user_request.strip()):
-        raise ValueError("user_request must be nonempty text or null")
+def prepare_material(source, cfg, *, task_baseline):
     source = _checked_source(deepcopy(source))
     from skillflow.propagation.contracts.task import checked_task, task_source_files
-    task = checked_task(task_baseline, source_files=task_source_files(source, user_request=user_request),
+    task = checked_task(task_baseline, source_files=task_source_files(source),
                         source_sha256=source["source_sha256"])
     cfg = checked_cfg(cfg)
     if not cfg_instructions(cfg):
         raise ValueError("annotation requires at least one actual instruction")
     return {"version": SCHEMA_VERSION, "source": source, "cfg": cfg,
-            "runtime_contract": runtime_contract(), "user_request": user_request,
+            "runtime_contract": runtime_contract(),
             "task": task.model_dump(mode="json") if hasattr(task, "model_dump") else task}
 
 
 def checked_material(material):
-    if type(material) is not dict or set(material) != {"version", "source", "cfg", "runtime_contract", "user_request", "task"}:
+    if type(material) is not dict or set(material) != {"version", "source", "cfg", "runtime_contract", "task"}:
         raise ValueError("material must contain the exact current input fields")
     validate_runtime_contract(material["runtime_contract"])
-    prepared = prepare_material(material["source"], material["cfg"], task_baseline=material["task"], user_request=material["user_request"])
+    prepared = prepare_material(material["source"], material["cfg"], task_baseline=material["task"])
     if _digest(prepared) != _digest(material):
         raise ValueError("prepared material schema or runtime rules differ")
     return prepared
@@ -79,7 +77,7 @@ def model_material(material):
     return {"source": {"files": [{"file": path, "lines": source_lines(text)}
                                   for path, text in joint_source_files(prepared).items() if path.startswith("skill/")]},
             "cfg": prepared["cfg"], "runtime_contract": prepared["runtime_contract"],
-            "user_request": prepared["user_request"], "task": prepared["task"]}
+            "task": prepared["task"]}
 
 
 def compact_schema(schema):

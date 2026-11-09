@@ -40,7 +40,7 @@ def _operations(raw):
 
 def _blank_review(material):
     response = empty_response(material)
-    for axis in ("source_checks", "requirement_checks", "declaration_checks"):
+    for axis in ("requirement_checks", "declaration_checks"):
         for row in response[axis]:
             row["reason"] = "This injected check records inspection, not semantic proof."
     return response
@@ -66,9 +66,6 @@ def _restriction_fixture():
     positive = "Display the original caption and return that caption internally."
     candidate["purpose"]["text"] = positive
     candidate["requirements"][0]["text"] = positive
-    candidate["source_accounting"].append({"file": "skill/SKILL.md", "start_line": 2, "end_line": 2,
-        "disposition": "supporting_context", "requirement_ids": [], "issue_ids": [],
-        "reason": "This injected candidate incorrectly treats the private-field restriction as background."})
     raw = example["annotation"]
     raw["locations"] = {"board": {"kind": "user", "name": "stencil board", "operand_refs": [],
                                     "access_scope": "recipient", "retention": None}}
@@ -86,9 +83,6 @@ def _restriction_fixture():
 
 def _task_omission_review(prepared):
     response = _blank_review(prepared)
-    source_row = response["source_checks"][0]
-    source_row.update(status="issue", finding_indexes=[0],
-        reason="The second source line imposes an explicit exclusion that the sealed Task omits.")
     target = next(row for row in prepared["target_index"] if row["kind"] == "task" and row["pointer"] == "/requirements")
     span = {"file": "skill/SKILL.md", "start_line": 2, "end_line": 2}
     response["findings"] = [{"domain": "task", "target_ids": [target["id"]],

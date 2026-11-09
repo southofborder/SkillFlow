@@ -18,6 +18,7 @@ from skillflow.propagation.contracts.compatibility import INTERACTION_EFFECTS
 from skillflow.propagation.contracts.specs import ProcessingSpec
 from skillflow.propagation.contracts.specs import ReadOp
 from skillflow.propagation.contracts.specs import ReceiveOp
+from skillflow.propagation.contracts.specs import MergeOp
 from skillflow.propagation.contracts.specs import LocalRef
 from skillflow.propagation.contracts.specs import AlternativesRef
 from skillflow.propagation.contracts.specs import _validate_ref
@@ -36,7 +37,7 @@ from skillflow.propagation.material import checked_material
 from skillflow.propagation.contracts.profiles import RawAnnotationResponse
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
 
-COMPILER_VERSION = "skillflow-processing-compiler-v9"
+COMPILER_VERSION = "skillflow-processing-compiler-v12"
 
 
 class InternalCompilationError(RuntimeError):
@@ -64,7 +65,7 @@ def compile_response(raw, material):
     compiled.pop("task_revision_id")
     compiled.update(normalized)
     compiled["ir_semantics"] = {}
-    mapping = {"schema_version": "skillflow-processing-compilation-v9",
+    mapping = {"schema_version": "skillflow-processing-compilation-v12",
                "compiler_version": COMPILER_VERSION,
                "runtime_contract": runtime_contract_binding(material["runtime_contract"]),
                "events": [], "goals": goal_mapping(raw, normalized),
@@ -105,6 +106,7 @@ def compile_response(raw, material):
         output_events = []
         known = {}
         causal_edges = set()
+        active_case, active_requires = None, []
 
         def emit(target, event_path, ops, effect, original_event, raw_path, operation_range,
                  kind, mode, additional_evidence=None):
@@ -117,6 +119,10 @@ def compile_response(raw, material):
                 else:
                     evidences = [item for op in ops for item in op["evidences"]]
             event_value = {"effect": effect, "atomic_ops": deepcopy(ops)}
+            if active_case is not None:
+                event_value["case"] = active_case.model_dump(mode="json")
+            if active_requires:
+                event_value["requires_completion"] = list(active_requires)
             if effect is not None:
                 event_value["evidences"] = deepcopy(evidences)
             target.append(event_value)
@@ -126,7 +132,9 @@ def compile_response(raw, material):
                                       "kind": kind, "mode": mode})
 
         def processing(segment, target, event_path, raw_path, available):
-            if segment.mode == "model" and "llm" not in original["operator"]:
+            nonlocal active_case, active_requires
+            active_case, active_requires = segment.case, segment.requires_completion
+            if segment.mode == "model" and original.get("operator") is not None and "llm" not in original["operator"]:
                 raise structural_error("model_operator", json_pointer("ir_semantics", ir_id, "operator"),
                                        f"model processing requires llm operator: {ir_id}")
             segment_start = len(target)
@@ -179,6 +187,9 @@ def compile_response(raw, material):
             for event_index, event in enumerate(segment.events):
                 old_effect = event.effect
                 path = raw_path + ["events", event_index]
+                if not event.atomic_ops and event.case is not None:
+                    emit(target, event_path, [], None, event, path, [0, 0], "case_control", segment.mode)
+                    continue
                 pending = []
                 start = 0
                 def flush(end):
@@ -194,7 +205,7 @@ def compile_response(raw, material):
                 for position, op in enumerate(event.atomic_ops):
                     should_observe = segment.mode == "model" or (
                         segment.mode == "default" and op.op in TRANSFORM_OPERATIONS)
-                    if should_observe and not isinstance(op, (ReadOp, ReceiveOp)):
+                    if should_observe and not isinstance(op, (ReadOp, ReceiveOp, MergeOp)):
                         groups = {}
                         for use in value_uses(op):
                             value = external_reference(use.value)
@@ -214,7 +225,7 @@ def compile_response(raw, material):
                     if not pending:
                         start = position
                     pending.append(compiled_operation(op))
-                    if segment.mode != "local" and isinstance(op, (ReadOp, ReceiveOp)):
+                    if segment.mode != "local" and isinstance(op, (ReadOp, ReceiveOp, MergeOp)):
                         flush(position + 1)
                         observe([{"kind": "local", "name": op.output}], path, [position, position + 1])
                 flush(len(event.atomic_ops))
@@ -247,10 +258,21 @@ def compile_response(raw, material):
                 for body_position, segment in enumerate(event.body):
                     processing(segment, body, semantics_path(ir_id, "events", index, "body"),
                                raw_path + ["body", body_position], body_known)
-                output_events.append({"kind": "for_each", "collection": event.collection.model_dump(mode="json"),
+                loop = {"kind": "for_each", "collection": event.collection.model_dump(mode="json"),
                                       "item": event.item, "body": body,
                                       "sensitivity": [item.model_dump(mode="json") for item in event.sensitivity],
-                                      "evidences": [item.model_dump(mode="json") for item in event.evidences]})
+                                      "evidences": [item.model_dump(mode="json") for item in event.evidences]}
+                if event.completion_groups:
+                    loop["completion_groups"] = list(event.completion_groups)
+                if event.requires_completion:
+                    loop["requires_completion"] = list(event.requires_completion)
+                if event.output is not None:
+                    loop.update(output=event.output, **{"yield": event.yield_value.model_dump(mode="json")})
+                    known[event.output] = -1
+                    mapping["events"].append({"instruction_id": ir_id, "raw_path": raw_path,
+                        "raw_atomic_range": None, "compiled_path": semantics_path(ir_id, "events", index),
+                        "kind": "collection_result", "mode": None})
+                output_events.append(loop)
         result_spec = {"order": spec.order, "precedence": [],
             "sensitivity": [item.model_dump(mode="json") for item in spec.sensitivity],
             "events": output_events, "output_bindings": [item.model_dump(mode="json") for item in spec.output_bindings]}
@@ -264,7 +286,7 @@ def compile_response(raw, material):
             for before, after in sorted(causal_edges, key=lambda pair: (coordinate(pair[0]), coordinate(pair[1])))]
         result_spec.update(operator=deepcopy(original["operator"]),
                            operator_evidences=deepcopy(original["operator_evidences"]))
-        if not _has_effect(typed.events):
+        if not _has_effect(typed.events) and original.get("empty_effect_evidences") is not None:
             result_spec["empty_effect_evidences"] = deepcopy(original["empty_effect_evidences"])
         with _generated_artifact(f"IR semantics for {ir_id}"):
             compiled["ir_semantics"][ir_id] = IRSemantics.model_validate(result_spec).model_dump(mode="json")

@@ -1,5 +1,30 @@
 # SkillFlow
 
+SkillFlow 面向 Agent Skills 开展任务相关的静态数据最小化分析，也检查必要动作中携带的多余敏感数据。
+当前实现为 **interface-r4**，对应 2026-11-04 已验收并关闭的四例运行。
+现行流程、证据及操作边界统一见[当前版本说明](docs/current-version.md)。
+
+仓库入口为 `python -m tools.doe.document_guided_pilot`。正常路径使用七次语义请求和两个 worker：
+独立源文 Task、flow、CFG、processing、任务对应、sensitivity、源文审查。
+Task 仅依据完整冻结 Skill 的声明用途，不接收独立外部任务；程序组装相互隔离的语义片段，
+再执行确定性传播与 DOE。有限循环摘要及稀疏后端在已说明的限制内保留成员、候选、接收方和数据版本关系。
+
+GA4、001、010、013 四例均已关闭，生成 IR 全部完成传播，各自唯一一次零调用重放均匹配。
+**四例 DOE 仍全部为 partial，没有得到完整语义覆盖或已确认的 DOE 缩减结论。**
+离线验收是 591 个不同用例的最新 scoped 回执通过，不是一次全仓绿色运行；详见[关闭证据](docs/current-version.md#latest-closed-validation)。
+
+当前主工作树是 `main` 上的 `D:/projects/SkillFlow`。
+`D:/projects/SkillFlow-staged` 是另行登记的历史 staged 工作树，其代码不代表当前 interface-r4。
+冻结源文、原始回答、失败与历史报告继续保留。检出、安装和阅读文档不会自动启动分析，
+也不授权新模型／Skill 运行、续跑旧实验或追加重放；手动入口与授权边界见[当前版本说明](docs/current-version.md#manual-entry)。
+
+[当前版本](docs/current-version.md) · [文档导航](docs/README.md) · [English](README.md)
+
+## 历史 README 快照
+
+以下保留早期流程说明与引用。其中的“当前”字样、三调用流程、Task 版本、模型配置及命令示例均属历史。
+interface-r4 以顶部链接的当前版本说明为准；保留旧说明不构成执行授权。
+
 SkillFlow 面向 Agent Skills 开展任务相关的静态数据最小化分析。当前 **Skill-IR**
 已实现建图、受控回述与源文核对、有界反馈、安全与传播语义标注、聚焦审查及一次标注修复、确定性数据传播。
 

@@ -36,8 +36,8 @@ def exposure_key(unit):
 
 
 def validate_reference(reference):
-    if reference.get("user_request") is not None:
-        raise ValueError("An independent user task is outside this comparison")
+    if "user_request" in reference:
+        raise ValueError("Legacy independent-task fields are outside this Skill-only comparison")
     if reference.get("purpose_basis") != "skill_declared_purpose_only":
         raise ValueError("Reference must use declared-purpose-only auditing")
     if any(k not in reference or not isinstance(reference[k], list) for k in REFERENCE_FIELDS):

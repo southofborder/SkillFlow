@@ -9,7 +9,7 @@ from skillflow.propagation.contracts.task import (
     Task, TaskRepairObjection, checked_task, task_source_files,
 )
 
-MATERIAL_VERSION = "skillflow-task-material-v1"
+MATERIAL_VERSION = "skillflow-task-material-v3"
 
 
 class TaskRevision(BaseModel):
@@ -18,19 +18,18 @@ class TaskRevision(BaseModel):
     objections: list[TaskRepairObjection] = Field(min_length=1)
 
 
-def prepare_task_material(source, *, user_request=None):
+def prepare_task_material(source):
     source = _checked_source(deepcopy(source))
-    files = task_source_files(source, user_request=user_request)
-    return {"version": MATERIAL_VERSION, "source": source, "user_request": user_request,
-            "basis": "user_request" if "task/user-request.txt" in files else "declared_skill"}
+    task_source_files(source)
+    return {"version": MATERIAL_VERSION, "source": source}
 
 
 def checked_task_material(material):
-    if type(material) is not dict or set(material) != {"version", "source", "user_request", "basis"}:
+    if type(material) is not dict or set(material) != {"version", "source"}:
         raise ValueError("Task material only accepts exact source-only fields")
-    prepared = prepare_task_material(material["source"], user_request=material["user_request"])
+    prepared = prepare_task_material(material["source"])
     if prepared != material:
-        raise ValueError("Task material identity or purpose basis differs")
+        raise ValueError("Task material identity differs")
     return prepared
 
 
@@ -39,7 +38,7 @@ def validate_revision(revision, material):
         return None
     value = revision.model_dump(mode="json") if isinstance(revision, TaskRevision) else revision
     parsed = TaskRevision.model_validate(value)
-    files = task_source_files(material["source"], user_request=material["user_request"])
+    files = task_source_files(material["source"])
     old = checked_task(parsed.previous_task, source_files=files,
                        source_sha256=material["source"]["source_sha256"])
     ids = {x.id for x in old.requirements}
@@ -55,6 +54,6 @@ def validate_revision(revision, material):
 
 def model_task_material(material):
     material = checked_task_material(material)
-    files = task_source_files(material["source"], user_request=material["user_request"])
-    return {"basis": material["basis"], "source_files": [
+    files = task_source_files(material["source"])
+    return {"source_files": [
         {"file": file, "lines": source_lines(text)} for file, text in files.items()]}

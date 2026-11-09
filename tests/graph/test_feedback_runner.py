@@ -23,7 +23,7 @@ def answer(prompt, status="represented", *, kind="semantic", marker="current-dif
     data = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
     refs = [{"file": item["path"], "start_line": 1, "end_line": len(item["lines"])}
             for item in data["source_files"] if item["lines"]]
-    controlled = [u["id"] for u in data["controlled_units"]]
+    controlled = [u["id"] for u in data["controlled_facts"]]
     finding = {"id": marker, "kind": kind, "status": status, "source_requirement": "返回 ok。",
                "actual_representation": "工程协议测试记录，不是语义答案。", "reason": marker,
                "source_refs": refs, "controlled_refs": [{"unit_id": key} for key in controlled],
@@ -77,7 +77,7 @@ def test_initial_pass_and_offline_replay_with_no_api(material, monkeypatch):
     assert len(audits.prompts) == 1 and not extraction.prompts
     assert result["passed_cfg"] == result["last_valid_cfg"]
     assert result["representation_summary"] == {"represented_ids": ["current-difference"], "conservative_ids": []}
-    assert result["schema_version"] == 7 and result["identity"] == "skill-ir-semantic-feedback-v7"
+    assert result["schema_version"] == 8 and result["identity"] == "skill-ir-semantic-feedback-v8"
     def no_api(*args, **kwargs):
         pytest.fail("replay creates no online client")
     monkeypatch.setattr(runner, "RecordingClient", no_api)
@@ -149,7 +149,7 @@ def test_missing_essential_audit_contract_is_execution_error_without_retry(mater
     assert result["representation_summary"] == {"represented_ids": [], "conservative_ids": []}
 
 
-@pytest.mark.parametrize("version", [1, 2, 3, 6])
+@pytest.mark.parametrize("version", [1, 2, 3, 6, 7])
 def test_old_feedback_records_are_not_reinterpreted(material, version):
     directory = material[2]
     directory.mkdir()
@@ -170,7 +170,7 @@ def test_one_revision_is_full_candidate_reextraction_and_isolated(material):
     for prompt in audits.prompts:
         assert "current-difference" not in prompt and '"previous_cfg"' not in prompt
         data = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-        assert set(data) == {"source_files", "controlled_text", "controlled_units"}
+        assert set(data) == {"source_files", "controlled_facts"}
         sources.append(data["source_files"])
     assert sources[0] == sources[1]
     assert runner.replay_run(material[2]) == result
@@ -202,13 +202,12 @@ def test_all_background_is_not_semantic_pass(material):
     assert result["status"] == "semantic_failure" and result["passed_cfg"] is None
 
 
-@pytest.mark.parametrize("failure", ["json", "quote", "coverage", "unknown_id"])
+@pytest.mark.parametrize("failure", ["json", "quote", "unknown_id"])
 def test_invalid_audit_is_execution_error_not_revision_or_pass(material, failure):
     def invalid(prompt):
         value = answer(prompt)
         if failure == "json": return "broken JSON"
         if failure == "quote": value["findings"][0]["source_refs"][0]["quote"] = "nonexistent"
-        if failure == "coverage": value["findings"][0]["source_refs"].pop()
         if failure == "unknown_id": value["findings"][0]["controlled_refs"][0]["unit_id"] = "NO-SUCH-ID"
         return value
     source, seed, directory = material

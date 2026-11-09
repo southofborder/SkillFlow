@@ -1,5 +1,7 @@
 # SkillFlow 实现与使用说明
 
+当前从源文开始的完整分析使用[文档引导式八调用入口](../doe/document-guided-analysis.md)，运行命令为 `python -m tools.doe.document_guided_pilot prepare/run/replay`。本页后续保留构图、渲染及实验工具的独立接口说明；它们不代表新增环境确认或模型监控步骤。
+
 读取多文档 Skill，提取指令、基本块和连边，由确定性编译器分配编号并检查 CFG
 结构与引用。工具不执行 Skill 本身，也不将结构检查通过视为原文语义已被完整覆盖。
 

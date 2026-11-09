@@ -131,25 +131,22 @@ def valid_raw_response(material):
     return response
 
 
-def authored_task(source, *, user_request=None):
+def authored_task(source):
     """Explicit synthetic declaration for engineering fixtures, not model extraction."""
     from skillflow.propagation.contracts.task import task_source_files, validate_task_candidate
-    files = task_source_files(source, user_request=user_request)
-    primary = "task/user-request.txt" if user_request is not None else next(iter(files))
+    files = task_source_files(source)
+    primary = next(iter(files))
     evidence = {"file": primary, "start_line": 1, "end_line": len(files[primary].splitlines()),
                 "reason": "此人工工程样例声明保持原文结果；不作为真实模型语义表现。"}
     candidate = {"purpose": {"text": "Preserve the stated fixture result.", "evidences": [evidence]},
         "requirements": [{"id": "R001", "text": "Preserve the stated fixture result and limitations.", "evidences": [evidence]}],
-        "source_accounting": [{"file": name, "start_line": 1, "end_line": len(text.splitlines()),
-            "disposition": "requirement", "requirement_ids": ["R001"], "issue_ids": [],
-            "reason": "完整人工样例源文登记，不声称语义完备。"} for name,text in files.items() if text.strip()], "issues": []}
-    return validate_task_candidate(candidate, source_files=files, source_sha256=source["source_sha256"],
-                                   basis="user_request" if user_request is not None else "declared_skill")
+         "issues": []}
+    return validate_task_candidate(candidate, source_files=files, source_sha256=source["source_sha256"])
 
 
-def prepared_material(source, cfg, *, user_request=None, task_baseline=None, **kwargs):
-    return _prepare_material(source, cfg, user_request=user_request,
-        task_baseline=task_baseline or authored_task(source, user_request=user_request), **kwargs)
+def prepared_material(source, cfg, *, task_baseline=None, **kwargs):
+    return _prepare_material(source, cfg,
+        task_baseline=task_baseline or authored_task(source), **kwargs)
 
 
 prepare_material = prepared_material
@@ -212,7 +209,7 @@ def material_from_prompt(prompt):
 
 def material_from_model_payload(payload):
     """Rebuild checked fixture material, not a production wire compatibility path."""
-    source, task = [], payload["user_request"]
+    source = []
     for entry in payload["source"]["files"]:
         path, content = entry["file"], "".join(entry["lines"])
         if path.startswith("skill/"):
@@ -220,7 +217,7 @@ def material_from_model_payload(payload):
                            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
     bundle = {"files": source, "source_sha256": _digest([
         {key: item[key] for key in ("path", "sha256")} for item in source])}
-    return prepare_material(bundle, payload["cfg"], user_request=task, task_baseline=payload["task"])
+    return prepare_material(bundle, payload["cfg"], task_baseline=payload["task"])
 
 
 class FakeClient:
@@ -233,17 +230,14 @@ class FakeClient:
         if "COMPLETE_ORIGINAL_SOURCE\n\n" in prompt:
             # Explicitly authored test output, not a model-quality measurement.
             view = json.JSONDecoder().raw_decode(prompt.split("COMPLETE_ORIGINAL_SOURCE\n\n", 1)[1])[0]
-            source_rows, user_request = [], None
+            source_rows = []
             for entry in view["source_files"]:
                 text = "".join(entry["lines"])
-                if entry["file"] == "task/user-request.txt":
-                    user_request = text
-                else:
-                    source_rows.append({"path": entry["file"][6:], "content": text,
-                        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+                source_rows.append({"path": entry["file"][6:], "content": text,
+                    "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()})
             bundle = {"files": source_rows, "source_sha256": _digest([
                 {key: row[key] for key in ("path", "sha256")} for row in source_rows])}
-            task = authored_task(bundle, user_request=user_request).model_dump(mode="json")
+            task = authored_task(bundle).model_dump(mode="json")
             from skillflow.propagation.contracts.task import CandidateTask
             return {name: task[name] for name in CandidateTask.model_fields}
         material = material_from_prompt(prompt)
@@ -254,7 +248,7 @@ def material():
     return prepare_material(source_bundle(), graph())
 
 
-def authored_task_run(source, *, run_dir, user_request=None):
+def authored_task_run(source, *, run_dir):
     """Record one explicitly authored engineering baseline, without a remote model."""
     from pathlib import Path
     from skillflow.common.inputs.skill_package import load_skill_package
@@ -266,13 +260,13 @@ def authored_task_run(source, *, run_dir, user_request=None):
                 for item in package.readable_files()]
         source = {"files": rows, "source_sha256": _digest([
             {key: row[key] for key in ("path", "sha256")} for row in rows])}
-    baseline = authored_task(source, user_request=user_request).model_dump(mode="json")
+    baseline = authored_task(source).model_dump(mode="json")
     from skillflow.propagation.contracts.task import CandidateTask
     declaration = {name: baseline[name] for name in CandidateTask.model_fields}
     class AuthoredClient:
         def complete(self, prompt):
             return deepcopy(declaration)
-    prepare_task_run(run_dir, source, user_request=user_request)
+    prepare_task_run(run_dir, source)
     result = run_task(run_dir, client=AuthoredClient())
     assert result["status"] == "complete", result
     return Path(run_dir)
@@ -288,5 +282,5 @@ def authored_prepare_run(input, analysis, *, run_dir, task_run=None, **kwargs):
     if task_run is None:
         task_run = Path(run_dir).with_name(Path(run_dir).name + "-task")
         if not task_run.exists():
-            task_run = authored_task_run(input, run_dir=task_run, user_request=kwargs.get("user_request"))
+            task_run = authored_task_run(input, run_dir=task_run)
     return prepare(input, analysis, run_dir=run_dir, task_run=task_run, **kwargs)

@@ -1,11 +1,11 @@
 """Read-only component access for propagation consumers, without a JSON handoff."""
 from __future__ import annotations
 
-from copy import deepcopy
+from copy import copy, deepcopy
 
 from skillflow.common.recording import canonical_sha256
-from skillflow.propagation.data import DataRegistry
-from skillflow.propagation.facts import resolved_sink_boundaries, validate_propagation_facts, _normalized_cfg
+from skillflow.propagation.data import DataRegistry, export_identity_index
+from skillflow.propagation.facts import resolved_sink_boundaries, validate_propagation_facts, _normalized_cfg, _validate_outcome
 from skillflow.propagation.records import PropagationRecords, cfg_sha256
 
 
@@ -18,11 +18,15 @@ class PropagationMaterials:
     """
 
     def __init__(self, *, material, raw_annotation, compiled_annotation, mapping,
-                 source_metadata, solved, sinks, manifest=None, provenance=None):
+                 source_metadata, solved, sinks, manifest=None, provenance=None, wire_annotation=None,
+                 _registry_snapshot=None, _identity_index=None):
         self._annotation = deepcopy({"material": material, "task": material["task"], "raw_annotation": raw_annotation,
                                      "compiled_annotation": compiled_annotation, "mapping": mapping})
+        if wire_annotation is not None:
+            self._annotation["wire_annotation"] = deepcopy(wire_annotation)
         self._source_metadata = deepcopy(source_metadata)
-        self._data = solved.registry.to_dict()
+        self._data = deepcopy(_registry_snapshot) if _registry_snapshot is not None else solved.registry.to_dict()
+        self._identity_index = deepcopy(_identity_index) if _identity_index is not None else export_identity_index(solved.registry)
         self._records = solved.records.records_dict()
         self._sinks = deepcopy(sinks)
         self._status = solved.status
@@ -31,6 +35,12 @@ class PropagationMaterials:
         self._stats = deepcopy(solved.stats)
         self._manifest = deepcopy(manifest or {})
         self._provenance = deepcopy(provenance or {"kind": "hand_authored_specification"})
+
+    def _with_manifest(self, manifest):
+        """Attach publication identity to the same checked, privately owned facts."""
+        result = copy(self)
+        result._manifest = deepcopy(manifest)
+        return result
 
     @property
     def annotation(self): return deepcopy(self._annotation)
@@ -54,8 +64,9 @@ class PropagationMaterials:
     def locations(self): return deepcopy(self._annotation["compiled_annotation"]["locations"])
     @property
     def actions(self):
-        return {key: {"operator": deepcopy(value["operator"])}
-                for key, value in self._annotation["compiled_annotation"]["ir_semantics"].items()}
+        specs = self._annotation["compiled_annotation"]["ir_semantics"]
+        return {ir["id"]: {"operator": deepcopy(specs.get(ir["id"], {}).get("operator"))}
+                for block in self.cfg["blocks"].values() for ir in block["instructions"]}
     @property
     def data(self): return [deepcopy(entry["data"]) for entry in self._data["records"]]
     @property
@@ -71,11 +82,19 @@ class PropagationMaterials:
     @property
     def diagnostics(self): return deepcopy(self._diagnostics)
     @property
+    def processing_gaps(self): return deepcopy(self.compiled_annotation.get("processing_gaps", []))
+    @property
+    def boundary_coverage(self):
+        from skillflow.propagation.facts import declared_boundary_coverage
+        return declared_boundary_coverage(self.compiled_annotation, self.sinks, self.coverage)
+    @property
     def initial_data(self): return deepcopy(self._initial_data)
     @property
     def initial_state(self): return deepcopy(self._initial_state)
     @property
     def stats(self): return deepcopy(self._stats)
+    @property
+    def identity_index(self): return deepcopy(self._identity_index)
     @property
     def manifest(self): return deepcopy(self._manifest)
     @property
@@ -94,31 +113,63 @@ class PropagationMaterials:
 
 
 def materials_from_result(solved, *, material, raw_annotation, compiled_annotation, mapping,
-                          source_metadata=None, manifest=None, provenance=None):
-    """Validate authored/test or loaded components once; never create a model call."""
+                          source_metadata=None, manifest=None, provenance=None, wire_annotation=None,
+                          _validated_annotation=False, _registry_snapshot=None, _identity_index=None):
+    """Validate facts; raw callers also reconstruct annotation compilation.
+
+    ``_validated_annotation`` is private to the persisted-run loader, which has
+    already checked the bound manifest, inputs and compiled artifact hashes.
+    """
     from skillflow.propagation.material import checked_material
     from skillflow.propagation.annotation.services import compile_response, to_payload
-    material = checked_material(material)
-    raw, compiled, actual_mapping = compile_response(raw_annotation, material)
-    if any(canonical_sha256(actual) != canonical_sha256(supplied) for actual, supplied in
+    material = material if _validated_annotation else checked_material(material)
+    if _validated_annotation:
+        raw, compiled, actual_mapping = raw_annotation, compiled_annotation, mapping
+    elif wire_annotation is None:
+        raw, compiled, actual_mapping = compile_response(raw_annotation, material)
+    else:
+        from skillflow.document_guided.annotation_wire import compile_flat_response
+        _, raw, compiled, actual_mapping = compile_flat_response(wire_annotation, material)
+    if not _validated_annotation and any(canonical_sha256(actual) != canonical_sha256(supplied) for actual, supplied in
            ((raw, raw_annotation), (compiled, compiled_annotation), (actual_mapping, mapping))):
         raise ValueError("Propagation annotation or compilation differs from its source")
-    payload = to_payload(compiled)
-    if (cfg_sha256(solved.records.cfg) != cfg_sha256(_normalized_cfg(material["cfg"]))
+    # The persisted annotation owner has already validated the response and
+    # compilation. Project its accepted fields without reparsing that tree.
+    payload = ({name: compiled[name] for name in (
+        "ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")}
+        | ({"processing_gaps": compiled["processing_gaps"]} if compiled.get("processing_gaps") else {})
+        if _validated_annotation else to_payload(compiled))
+    if (canonical_sha256(solved.records.cfg) != canonical_sha256(_normalized_cfg(material["cfg"]))
             or canonical_sha256(solved.records.annotation) != canonical_sha256(payload)
             or canonical_sha256(solved.initial_data) != canonical_sha256(solved.records.initial_data)
             or canonical_sha256(solved.initial_state) != canonical_sha256(solved.records.initial_state)):
         raise ValueError("Propagation result differs from its bound source, annotation or seeds")
-    if canonical_sha256(solved.registry.to_dict()) != canonical_sha256(solved.records.data_registry.to_dict()):
+    computed = solved.records.computation_owned
+    snapshot = (_registry_snapshot if _registry_snapshot is not None else
+                solved.registry.snapshot_computed() if computed else solved.registry.to_dict())
+    record_snapshot = (snapshot if solved.registry is solved.records.data_registry else
+        solved.records.data_registry.snapshot_computed() if computed else solved.records.data_registry.to_dict())
+    if canonical_sha256(snapshot) != canonical_sha256(record_snapshot):
         raise ValueError("Propagation registry differs from the record registry")
-    solved.records.validate()
-    data = [entry["data"] for entry in solved.registry.to_dict()["records"]]
-    sinks = resolved_sink_boundaries(compiled["locations"], solved.records.records_dict())
-    outcome = validate_propagation_facts(cfg=material["cfg"], annotation=payload, data=data,
-        records=solved.records.records_dict(), sinks=sinks, status=solved.status,
-        coverage=solved.coverage, diagnostics=solved.diagnostics)
+    data = [entry["data"] for entry in snapshot["records"]]
+    sinks = resolved_sink_boundaries(compiled["locations"], solved.records._records, _checked_records=True)
+    if computed:
+        solved.records.check_references()
+        outcome = _validate_outcome(graph=solved.records.cfg, annotation=payload,
+            data={item["id"]: item for item in data}, records=solved.records._records, sinks=sinks,
+            status=solved.status, coverage=solved.coverage, diagnostics=solved.diagnostics)
+        identity_index = solved.registry.identity_index_computed()
+    else:
+        outcome = validate_propagation_facts(cfg=material["cfg"], annotation=payload, data=data,
+            records=solved.records.records_dict(), sinks=sinks, status=solved.status,
+            coverage=solved.coverage, diagnostics=solved.diagnostics,
+            _checked_data=[solved.registry.get(identity) for identity in solved.registry.data_ids()]
+                if _registry_snapshot is not None else None,
+            _checked_records=solved.records._records if _registry_snapshot is not None else None)
+        identity_index = _identity_index if _identity_index is not None else export_identity_index(solved.registry)
     result = PropagationMaterials(material=material, raw_annotation=raw, compiled_annotation=compiled,
         mapping=mapping, source_metadata=source_metadata or {}, solved=solved, sinks=sinks,
-        manifest=manifest, provenance=provenance)
+        manifest=manifest, provenance=provenance, wire_annotation=wire_annotation,
+        _registry_snapshot=snapshot, _identity_index=identity_index)
     result._diagnostics = outcome["diagnostics"]
     return result

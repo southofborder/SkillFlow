@@ -96,6 +96,16 @@ def _content_lines(value, labels):
     if form == "subset_view":
         return ["Filtered from " + label(content["base"]) + "; member content identity is retained, without asserting that all members are actually selected.",
                 "Symbolic condition (not evaluated): " + content["predicate"]]
+    if form == "mapped_collection":
+        lines = ["Mapped from " + label(content["base"]) + "; scope " + content["scope"] + ". "
+                 "The source supplies member order and cardinality, not all plaintext content. "
+                 "Each occurrence's values are alternative results, not additional members."]
+        for member in content["members"]:
+            lines.append(_path([member["selector"]]) + ": source " + label(member["element"]) +
+                         " → one of {" + ", ".join(label(identity) for identity in member["values"]) + "}")
+        if not content["members"]:
+            lines.append("No mapped members; consult the source collection's recorded cardinality.")
+        return lines
     raise ValueError("unsupported Data content form: " + str(form))
 
 
@@ -135,7 +145,21 @@ def _operation_view(identity, value):
             "effect": value["effect"], "op": record["op"], "label": OP_NAMES[record["op"]],
             "inputs": record["inputs"], "payload": payload_inputs(record), "payload_indices": payload_indices,
             "control_indices": controls, "outputs": record["outputs"], "endpoints": record["endpoints"],
-            "changes": record["changes"], "members": record.get("members", []), "raw": value}
+            "changes": record["changes"], "members": record.get("members", []),
+            "case": value.get("case"), "requires_completion": value.get("requires_completion", []),
+            "may_state": record.get("may_state", False), "raw": value}
+
+
+def _outcome_note(operation):
+    parts = []
+    if operation.get("case"):
+        case = operation["case"]
+        parts.append(f'Alternative {case["id"]} ({case["phase"]}, {case["disposition"]}): {case["condition"]}')
+    if operation.get("requires_completion"):
+        parts.append("Normal completion required: " + ", ".join(operation["requires_completion"]))
+    if operation.get("may_state"):
+        parts.append("Possible local state update; old and new candidates remain distinct. Exact occurrence count is unresolved.")
+    return "; ".join(parts)
 
 
 def _source_view(source):
@@ -178,7 +202,7 @@ def build_view(material, *, metrics=None):
             "orders": {identity: info.get("orders", {})[identity] for identity in item["usage_context"]["instructions"]
                        if identity in info.get("orders", {})},
             "diagnostics": context["diagnostics"], "partial_ir_ids": context["partial_ir_ids"], "raw": item})
-    return {"schema_version": wire["schema_version"], "task": wire["task"],
+    return {"schema_version": wire["schema_version"],
             "runtime_contract": wire["runtime_contract"], "notice": NOTICE,
             "source": _source_view(wire["source"]), "source_metadata": {
                 key: value for key, value in wire["source"].items() if key != "files"},
@@ -243,6 +267,8 @@ def _md_ops(view, operations):
     rows = ["| Operation position (zero-based) | Effect / operation | Actual payload inputs | Control slots | Outputs / state changes |", "|---|---|---|---|---|"]
     for operation in operations:
         out = _md_slots(view, operation["outputs"]) if operation["outputs"] else "No public local result"
+        if _outcome_note(operation):
+            out += "<br>" + _md(_outcome_note(operation))
         changes = [f'{_md(_location(change["location"]))}: {_md_ids(view, change["before"])} → {_md_ids(view, change["after"])} ({change["update"]})'
                    for change in operation["changes"]]
         controls = "; ".join(str(index) + ": {" + _md_ids(view, operation["inputs"][index]) + "}" for index in operation["control_indices"]) or "None"
@@ -254,14 +280,12 @@ def _md_ops(view, operations):
 def render_markdown(material, *, metrics=None):
     view = build_view(material, metrics=metrics)
     lines = ["# DOE offline sink review materials", "", view["notice"], "", "[Visual review](report.html)", "",
-             "Task basis: " + ("Independent user request" if view["task"]["basis"] == "user_request" else "Declared Skill purpose (not actual user authorization)") + ".", "",
+             "Task basis: " + "Declared Skill purpose (not actual user authorization)" + ".", "",
              "Runtime contract: " + _md(view["runtime_contract"]["version"]) + "; SHA-256: " + _md(view["runtime_contract"]["sha256"]) + ".", "",
              f'Actual sinks: {len(view["sinks"])}; Shared Data: {len(view["data"])}; Shared operations: {len(view["operations"])}.', "",
              "D short names are for readability; data cards retain complete Data IDs. Operation coordinates are zero-based. Parent wholes in origin tracing are not actual payload; control slots govern inclusion or observation and are not delivered plaintext.", ""]
     if _coverage_notice(view):
         lines += ["**" + _md(_coverage_notice(view)) + "**", ""]
-    if view["task"].get("text") is not None:
-        lines += ["Independent request text: ", "", "<pre>" + escape(view["task"]["text"]) + "</pre>", ""]
     if view["metrics"]:
         lines += ["## Material size", "", "| Metric | Actual size |", "|---|---|"]
         lines += ["| " + _md(name) + " | " + _md(value) + " |" for name, value in _metric_rows(view["metrics"])] + ["", "These are character/byte measurements, not model-tokenizer token counts.", ""]
@@ -353,6 +377,8 @@ def _h_ops(view, operations):
     for operation in operations:
         controls = "<br>".join("Slot " + str(index) + ": {" + _h_ids(view, operation["inputs"][index]) + "}" for index in operation["control_indices"]) or "None"
         outputs = _h_slots(view, operation["outputs"]) if operation["outputs"] else "No local output"
+        if _outcome_note(operation):
+            outputs += '<div class="change">' + escape(_outcome_note(operation)) + '</div>'
         changes = "".join('<div class="change">' + escape(_location(change["location"])) + ": " + _h_ids(view, change["before"]) + " → " + _h_ids(view, change["after"]) + " (" + change["update"] + ")</div>" for change in operation["changes"])
         endpoints = "<br>".join(escape(_location(endpoint)) for endpoint in operation["endpoints"]) or "None"
         members = ""
@@ -370,13 +396,11 @@ def render_html(material, *, metrics=None):
         '<style>body{margin:0;background:#f5f7fa;color:#172234;font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1440px;margin:auto;padding:28px}h1,h2,h3{line-height:1.3}a{color:#1559b8}code,pre{font-family:ui-monospace,Consolas,monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f5f8;border:1px solid #e1e6ef;padding:14px;border-radius:6px}article,.shared{background:white;border:1px solid #dce3ed;border-radius:10px;padding:22px;margin:22px 0}nav{display:flex;gap:10px;flex-wrap:wrap;margin:15px 0}.notice{padding:16px;background:#e9f1fb;border-left:4px solid #2369b5}.warning{padding:12px;background:#fff5da;border-left:4px solid #d19a20}.muted{color:#58697f}.tag{display:inline-block;border-radius:4px;padding:2px 7px;background:#eef2f7;margin-right:6px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{border:1px solid #dce3ed;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}th{background:#eef2f8}.table-wrap{overflow-x:auto}summary{cursor:pointer;font-weight:600}details{margin:12px 0}li{margin:5px 0}.change{border-top:1px dashed #ccd5e0;padding-top:5px;margin-top:5px}.exact-id{overflow-wrap:anywhere;font-size:12px;color:#58697f}.data-card{border-top:1px solid #dce3ed;padding:15px 0}.slot{white-space:normal}</style></head><body><main>',
         '<h1>DOE offline sink review materials</h1><p class="notice">' + escape(view["notice"]) + '</p>',
         '<p><a href="report.md">Markdown report</a></p>',
-        '<p>Task basis: <strong>' + ("Independent user request" if view["task"]["basis"] == "user_request" else "Declared Skill purpose") + '</strong>. The program records the basis without preemptively interpreting purpose or necessary scope.</p>',
+        '<p>Task basis: <strong>' + "Declared Skill purpose" + '</strong>. Analysis is relative to the declared Skill purpose; it does not establish actual user authorization.</p>',
         '<p>Runtime contract: <code>' + escape(view["runtime_contract"]["version"]) + '</code><br>SHA-256: <span class="exact-id">' + escape(view["runtime_contract"]["sha256"]) + '</span></p>',
         '<p>Actual sinks ' + str(len(view["sinks"])) + '; Shared Data ' + str(len(view["data"])) + '; Shared operations ' + str(len(view["operations"])) + '. D short names are for readability; data cards retain complete identities. Control slots are not delivered payload, and operation coordinates are zero-based.</p>']
     if _coverage_notice(view):
         output.append('<p class="warning">' + escape(_coverage_notice(view)) + '</p>')
-    if view["task"].get("text") is not None:
-        output.append('<details><summary>Independent user request text</summary><pre>' + escape(view["task"]["text"]) + '</pre></details>')
     if view["metrics"]:
         output.append('<details><summary>Actual character and byte sizes (not token counts)</summary><table><tbody>' + "".join("<tr><th>" + escape(name) + "</th><td>" + escape(str(value)) + "</td></tr>" for name, value in _metric_rows(view["metrics"])) + '</tbody></table></details>')
     output.append('<nav>' + "".join('<a class="tag" href="#' + sink["anchor"] + '">' + sink["label"] + ' · ' + sink["type_label"] + '</a>' for sink in view["sinks"]) + '<a class="tag" href="#shared-data">Shared Data</a><a class="tag" href="#full-source">Complete source</a></nav>')
@@ -393,7 +417,7 @@ def render_html(material, *, metrics=None):
             "".join('<li>' + _h_ids(view, [data["id"]]) + ': ' + escape('; '.join(data["lines"])) + '</li>' for data in sink["backward_data"]), '</ul>', _h_ops(view, sink["backward_operations"]),
             '<h3>3. Current and downstream use facts</h3><p class="muted">Only related production, consumption and return relationships are shown, without judging necessity. Persistent storage itself may be a task outcome.</p>']
         for ir in sink["usage_instructions"]:
-            output.append('<details><summary>' + escape(ir["id"] + ' / ' + ir["opcode"]) + '</summary><p>Operator: ' + escape(', '.join(ir["operator"]) or '[]') + '</p><p>Inputs: ' + escape('; '.join(ir["inputs"]) or 'None') + '<br>Outputs: ' + escape('; '.join(ir["outputs"]) or 'None') + '</p><ul>' + ''.join('<li>' + escape(constraint) + '</li>' for constraint in ir["constraints"]) + '</ul><a href="#' + ir["anchor"] + '">Complete IR fields</a></details>')
+            output.append('<details><summary>' + escape(ir["id"] + ' / ' + ir["opcode"]) + '</summary><p>Operator: ' + escape(('unknown' if ir["operator"] is None else ', '.join(ir["operator"]) or '[]')) + '</p><p>Inputs: ' + escape('; '.join(ir["inputs"]) or 'None') + '<br>Outputs: ' + escape('; '.join(ir["outputs"]) or 'None') + '</p><ul>' + ''.join('<li>' + escape(constraint) + '</li>' for constraint in ir["constraints"]) + '</ul><a href="#' + ir["anchor"] + '">Complete IR fields</a></details>')
         output.append(_h_ops(view, sink["usage_operations"]))
         output.append('<ul>' + ''.join('<li>' + escape(LINK_NAMES.get(link["kind"], link["kind"])) + ': ' + _h_entity(view, link["source"]) + ' → ' + _h_entity(view, link["target"]) + '; Data ' + _h_ids(view, link["data_ids"]) + ('; Result ' + escape(link["result"]) if link.get("result") else '') + '</li>' for link in sink["links"]) + '</ul>')
         output.append('<h3>4. Conditions, versions and ordering boundaries</h3>')

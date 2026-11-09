@@ -62,7 +62,9 @@ def build_view(review, *, metadata=None):
         for compact_item in sink["data_reviews"]:
             item = resolve_data_review(compact_item, sink, result["derivations"]["sensitivity"])
             counts[item["conclusion"]] += 1
-            rows.append({"id": item["id"], "value": item, "conclusion": CONCLUSIONS[item["conclusion"]],
+            label = ("Unresolved comparison because of analysis limitations" if item["limitations"]
+                     else CONCLUSIONS[item["conclusion"]])
+            rows.append({"id": item["id"], "value": item, "conclusion": label,
                 "declaration_anchor": _anchor("declaration", item["declaration_id"]),
                 "derivation_anchor": _anchor("sensitivity", item["derivation_id"]),
                 "demands": [{"id": identity, "anchor": _anchor("demand", identity)}
@@ -82,13 +84,8 @@ def build_view(review, *, metadata=None):
     trace_index = {r["requirement_id"]: r for r in demand.get("traceability", {}).get("requirements", [])}
     for requirement in task.get("requirements", []):
         req = requirement["id"]
-        trace = deepcopy(trace_index.get(req, {"requirement_id": req, "source_accounting_indices": [], "seeds": []}))
+        trace = deepcopy(trace_index.get(req, {"requirement_id": req, "seeds": []}))
         trace["requirement"] = deepcopy(requirement)
-        trace["source_accounting"] = []
-        for accounting_index in trace["source_accounting_indices"]:
-            row = deepcopy(task["source_accounting"][accounting_index])
-            row["quote"] = extract_source_lines(files[row["file"]], row["start_line"], row["end_line"]) if row["file"] in files else None
-            trace["source_accounting"].append(row)
         trace["realization"] = deepcopy(demand.get("coverage", {}).get("requirements", {}).get(req))
         goals = {g["id"]: g for g in demand.get("goals", [])}
         for seed in trace["seeds"]:

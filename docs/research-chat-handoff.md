@@ -1,5 +1,118 @@
 # SkillFlow research and conversation handoff
 
+Current status (2026-11-09): the main worktree contains the accepted interface-r4
+implementation and the completed November 4 four-case validation. Start with
+[Current version](current-version.md). All four generated graphs propagated and
+all four sole zero-call replays matched; DOE remains partial. Reports are in
+`output/verification/online-interface-r4-20261104/`. Its heartbeat is deleted;
+old v9 remains paused. The user now authorizes Git organization, commit and push,
+with no new model/Skill/experiment/replay runs and no import of the old external
+`SkillFlow-staged` code. The dated launch notes below are preserved history.
+Publication scope and the local historical-file inventory are documented in
+[Repository publication](repository-publication-20261109.md); a remote checkout
+of selected reports is not a complete replayable archive of all local runs.
+
+The user subsequently added the three usual small Skills to this active task:
+001 conditional-notification,010 catalog-query,013 source-fetch-with-fallback.
+Fresh directories and exact source hashes are in
+`output/verification/general-loops-v8-online-20261101/small-queue.json`.
+One queue supervisor will launch them sequentially after GA4 closes; consult
+queue-started.json/queue-live.json, never independently launch a queued case.
+Same High model/version/two workers and fresh generation, one zero-call replay
+per case, no history migration or answer imports. All four reports are pending.
+
+Current new authorization (2026-11-01): one fresh full GA4 general-loops v8 run,
+`experiments/doe/runs/document-guided-ga4-general-loops-high-v8-20261101-214322`,
+gpt-6.1-sol/high/openai, the same 16 frozen files, two workers, seven normal requests.
+Root is sole controller owner. Read its controller markers and
+`output/verification/general-loops-v8-online-20261101/continuation-state.json`.
+Do not start a duplicate, modify prompts/source during execution, run a probe,
+execute the Skill or resume a historical run. After closure perform one zero-call
+replay and source-grounded coverage/correctness/cost reporting. Current source
+SHA a157d545f4eef0cddd1f669047bce1999e053896e5ba66ea9270e63aaf5e607b differs
+from offline acceptance only in standalone graph-audit output guidance unused
+by the guided request sequence; focused prelaunch checks are recorded separately.
+The 2026-10-29 offline-only permission below is superseded for this one run only.
+
+
+当前工作（2026-10-29）：通用循环与输出契约精简 v8 的实现和离线验收已完成，去重后 3,893 项通过、1 项 Windows 符号链接权限跳过、无未解决测试失败。初批失败与复测逐项保留，不能称为一次全仓绿色运行。最终实现 SHA 为 `fa02488dc9d01435b747284e0fa8f27ef9f1bea834e07cb6ade83230fc325a5b`。正常七调用、两个 worker 和隔离保持；七份模拟答复完成传播、DOE 与零调用重放，另有失败重放和独立配对复核。本轮没有新的真实分析模型调用，未执行 Skill 或续跑旧实验。报告见 `docs/doe/general-loops-v8-offline.zh.md`，设计见 `docs/doe/general-loop-analysis.md`，验收目录为 `output/verification/general-loops-v8/`。精确累计数组、多代关联与全局资源边界仍保留；真实速度／准确性未测。旧 v7 的 664 个原始文件字节核对通过。后续真实新运行需要新的用户指令。下列真实运行状态均为封存历史。
+最新运行已关闭（2026-10-29）：`experiments/doe/runs/document-guided-ga4-compact-review-high-v7-20261029-101749`。
+北京时间 10:18:12 启动、12:29:55 主分析结束、12:55:45 控制器关闭；PID 6528 已退出（exec session 4868）。
+配置为 gpt-6.1-sol/high/openai、两个 worker、正常七请求。主分析耗时 7902.34070 秒，状态 failed，未生成 DOE。
+选用图为 106 blocks／262 IR；批处理游标递增 ir_214 形成数据生成回边，传播返回 unsupported_feedback，全部 262 IR 为 not_solved。
+DOE 随后报 `Demand collection output has no recorded member scope`，没有提交 doe-result.json。不得把零传播记录读成零暴露。
+选用 processing 有 197 modeled、59 源文 unmodeled、6 个结构纠正后隔离的 IR；复审仍有 3 条 processing 问题。
+两次审查均正常完成，实际提交 636534／768678 字符，输入容量已不是本轮阻断。
+17 次 CLI 启动＝7 正常＋5 共享修复＋5 结构纠正；公开 tokens 为 2184745（input 1802022，其中 cached 288768；output 382723）。
+外层传输重试 0、最终响应 usage 缺失 0；provider 内部 HTTP 次数未知。传播重放 matched；唯一一次全流程重放 failed，
+原始错误为 `Replayed guided decisions differ from saved results`，耗时 1549.34942 秒、0 新请求。失败重放收据保留，不另跑覆盖。
+详见本轮 `assessment.en.md`、`run-summary.json`、`metrics.json`、`replay-check.json`。完整源文与实现保持不变。
+实施与离线验收已完成；485 个去重案例覆盖，主批次的一处旧示例视图兼容问题已修正并单独复测通过。
+见 `docs/doe/compact-review-v7-offline.zh.md` 与 `output/verification/compact-review-v7/offline-acceptance.json`。
+实现 SHA `8a7dfb5f2c1dc4d03aa4778816aaa3cf4e0118d0ba373dcc70d35c780c687d78`；同一完整 16 文件源包，
+source SHA `3b6eef9f43262d96949e30fe0c39797fe680c578ac5e90bf367da15592445bbd`。新目录归档实现与 transport。
+新视图只从模型输入移除展开定位表与机械归属表；源文和语义材料保留。各生成阶段自查，不增加模型调用。
+明确审查请求失败允许合法候选进入诊断计算，仍标记未审查；不掩盖工程错误，不增加自动切片。
+本次单轮运行授权已用完，不再启动控制器、续跑、第二次重放或新增探针；后续修改或新运行依据新用户任务。
+读取本轮 controller-finished 与报告，不把历史阶段标记误当作仍在生成。总交接状态在 `output/verification/compact-review-v7/continuation-state.json`。
+下面 v5/v6 等记录是封存历史，不是当前运行进度。v6 于 2026-10-29 凌晨因审查输入超限结束，未执行传播/DOE，
+其原始失败重放保留，未续跑。
+
+当前真实运行（2026-10-28）：用户要求实施后新建一轮完整 GA4 运行，首先确认能否得到完整 DOE。
+该轮现已结束：北京时间 19:46:33 主分析结束（78 分 8.21 秒），19:54:15 完成重放和收尾，PID 已退出。
+最终 partial，未得到完整 DOE：126 IR 中 8 processed、2 unmodeled、116 blocked；已知 13 接收位置中
+5 resolved、8 unresolved；14 条比较全部因限制未建立 excess，不能读成安全。最终审查保留两个
+task-correspondence 语义错误（whole child response 和 summary whole input 被误当作全部必要）。
+17 次实际 CLI 请求＝7 正常＋6 共享修复＋4 结构纠正；公开用量 1757935 tokens，另有一条 CLI 内部
+timeout reconnect，未上报内部失败尝试用量未知，不能说完全无网络重连。重放 matched、0 新模型调用，
+实现 SHA 保持 27c96e...835d8。该目录 assessment.en.md、run-summary.json、outcome-audit.json 为交付证据；
+不续跑、不自动新增实验，后续修改须依据新的用户任务。
+唯一目录为 experiments/doe/runs/document-guided-ga4-seven-call-high-v5-20261028-182527，
+北京时间 18:28:25 启动，controller PID 38940；原 exec session 回执未保留于压缩交接，按文件和 PID 观察。
+使用 gpt-6.1-sol/high/openai、两个 worker、正常七请求、一次共享语义修复、每阶段一次结构纠正。
+完整冻结输入 16 files / 155170 bytes，source SHA 3b6eef9f43262d96949e30fe0c39797fe680c578ac5e90bf367da15592445bbd；
+实现 SHA 27c96eafa74c9c1f957df4116369198981f72833dd69d28b18ded84bf4c835d8，原实现和 transport 工具已归档。
+不要开第二个控制器、修改目标提示或代码、续跑旧轮、执行 Skill。继续时读取该轮 continuation-state.json、
+controller-started/finished、result.json 及实际本地进程，不用旧轮进度。控制器结束后自动汇总被动 metrics、
+尝试零调用 replay，再由 root 核对传播／需求／敏感性和接收边界覆盖，生成英文 assessment 与中文交付。
+没有新增模型环境确认或模型监控；本地 CLI help 和 renderer 路径检查均为零目标调用。
+
+当前实施（2026-10-28）：文档入口已转为七次语义请求与程序组装 annotation。
+processing、任务对应、敏感性各自产出带类型片段，不再调用模型重填整份标注；
+独立 Task、并行及末尾源文审查保留。新协议 run/step/annotation 为 v5，
+仅适用于新运行。局部未建模对象保留覆盖，停止相关 block OUT，独立分支继续；
+Task 全局语义缺口保持原有政策，不新增通用缓存／异常执行器。
+当前授权仅为实施和离线验收，真实模型调用为零；下面的八调用运行与失败保持历史身份。
+见 [当前设计](doe/document-guided-analysis.md)；验收结论在七调用离线报告中单列。
+
+2026-10-27 22:36 新运行：用户明确要求新建 GA4 八调用真实运行，使用 gpt-6.1-sol/high/openai。
+当前唯一目录为 `experiments/doe/runs/document-guided-ga4-eight-call-high-v4-20261027-223547/`；
+完整 16 文件源包与旧轮字节一致，Task/CFG/答案重新生成。此授权覆盖本次新运行及本地监控，
+不授权续跑旧实验。默认配置仍为 max；high 在 prepare 时封存，不可在 run/replay 改档。
+继续时先读该目录 `continuation-state.json` 与实际 controller/result 文件；不要启动第二个控制器。
+监控不请求模型，完整/局部/未知用量分开。该轮已于 23:42 结束：cannot_assess，无 accepted
+annotation、propagation 或 DOE。18 次 native 请求（8 正常 + 7 共享修复 + 3 结构纠正），
+无传输重试；分析墙钟 3956.43 秒，完整公开回执 1,525,001 tokens，18/18 用量完整。
+初始标注报告循环内共享客户端缓存写入能力限制；修订标注两份草稿仍不合法，最后为
+source-only sensitivity/expression evidence 继承错误，且诊断无具体 JSON pointer。
+末次部分复审还保留 .env 设置写入及 index 导入控制关系问题。零调用重放精确匹配，新增 native 0。
+详见该目录 assessment.en.md、run-summary.json 与 metrics.json。不要自动重试或改写本次失败。
+用户随后要求下一轮取消全局 cannot_assess 退出，并质疑当前工程复杂度；下一轮应要求交付
+可分析部分、将未知定位到局部，不能用强制填满替代诚实的不确定性。本轮结果保持冻结。
+
+2026-10-27 八调用收口：当前文档入口为 run/step/annotation v4，两个 worker 按依赖并行，
+一份 flow、一份完整 CFG、扁平完整 annotation、稀疏统一源文审查。Task、任务对应与敏感性
+隔离保持。为解决 GA4 的真实能力失败，单层 for_each 支持逐项 read/receive/call 及
+yield/output 映射集合；不支持共享写入、嵌套循环或通用异常执行。正式入口不需要
+confirm/preflight、profile 或 usage 回执，监控不调用模型。见
+[当前设计](doe/document-guided-analysis.md)。本次仅实施与离线验收，不新增线上运行。
+
+当前交接（2026-10-27）：目的依据仅为完整冻结 Skill，独立 Task 不接收外部任务；Skill 自身的用户交互、运行参数和输入仍参与分析。Task v5 删除固定依据标签与独立请求摘要，继续保留原文依据、冲突和版本身份。[文档引导式入口](doe/document-guided-analysis.md)采用继承短文档的独立请求，最终只有一份完整 CFG 和标注。本轮仅收口与离线验证，不继续旧实验或调用模型。
+
+Experiment configuration update (2026-10-26): newly prepared GPT-6.1 Sol experiments use `max` instead of `ultra`, in both SkillFlow and direct-analysis arms. Frozen requests, receipts, results and stopped runs retain their original effort; do not resume them with a changed configuration or relabel them as Max runs. The hash-pinned legacy CLI-v2 adapter remains unchanged for historical verification; current CLI-v3/controlled entry points use Max. This change does not authorize model calls or experiments.
+
+2026-10-24 的工作文档设计已由上述入口替换，业务分组和分批拼接不是当前流程。逐行 Task／审查表已经删除；真实文件与物理行引用仍严格校验。下面的日期性实验、提交及材料清单保留为历史交接记录，不代表当前运行状态或新增实验授权。
+
 Updated: 2026-10-21. This is a structured reconstruction of the research discussion
 and a read-only inspection of repository evidence, not a verbatim chat export,
 an experiment authorization, or a claim that every local file has been uploaded.
@@ -13,9 +126,9 @@ research pipeline is frozen for comparison: do not keep tuning prompts, redesign
 the protocol, acquire more evaluation inputs, or dispatch model calls merely to
 continue this handoff.
 
-The current user request authorizes review and submission of two tracked research
-files, the research/chat handoff, and a fast-forward of `codex/cloud-setup` into
-`main`. It excludes the modified billing files and does not authorize experiments.
+The 2026-10-21 submission request covered two tracked research files, this
+handoff and a fast-forward of `codex/cloud-setup` into `main`. That historical
+authorization excluded billing files and did not authorize experiments.
 The package version `0.1.0` is not a research snapshot identifier; record the exact
 Git revision with `git rev-parse HEAD`.
 
@@ -70,7 +183,7 @@ round of prompt additions based only on the three development cases.
 | Locations and sinks | Locations describe boundaries before Data is propagated. The program derives sink types and fixed exposure levels from operations and location properties. Level is boundary character, not sensitivity, authorization or risk. |
 | Source evidence | Use frozen files and physical line ranges; the program extracts exact text. Line coverage proves references, not semantic completeness. Old paragraph indexes are retired from the active interface. |
 | CFG evidence | Use real CFG identities and direct targets. A review target locates a candidate claim; it is not a CFG evidence address. CFG facts do not establish facts that exist only in the candidate or source. |
-| Task | Extract and seal it independently from source plus an optional user request. Later annotation references that exact Task. Do not reconstruct purpose from the current graph's payloads. |
+| Task | Extract and seal it only from the complete frozen Skill. Later annotation references that exact Task. No external purpose override or constant basis field remains; real runtime user inputs described by the Skill remain source semantics. Do not reconstruct purpose from the current graph's payloads. |
 | Realization | State how each requirement is expressed, partly expressed, retained, or unmapped. A correct requirement does not imply all applicable receiver parameters have demand declarations. |
 | Positive demands | Six properties: value, presence, cardinality, shape, truth and action. They are computational preservation starting points, not per-IR necessity scores. |
 | Receiver demand | Required delivery content belongs at the actual receiving input and field range. An action or shape demand, or an upstream build/selection demand, cannot silently stand in for recipient content. |
@@ -81,7 +194,7 @@ round of prompt additions based only on the three development cases.
 | Reduction | Only supported `exclude_field` candidates are currently considered. Preserve positive requirements and separately justify relevant constraint preservation; keep original violations visible. |
 | Review and repair | Independent four-axis review; one shared semantic repair budget. Task repair is isolated from graph/payload/free review text; annotation repair holds Task fixed. |
 | Structural correction | Mechanical validation and semantic review remain separate. Production structural corrections have no count cap. Restricted JSON normalization preserves the original response and receipt. Transport/truncation/identity/implementation failures are not infinite semantic correction loops. |
-| Language | Maintained prompts, synthetic examples, generated interpretations, diagnostics and new reports use English. Source text, user text, quotations and frozen historical artifacts retain their original language. |
+| Language | Prompts, model work documents, synthetic examples and diagnostics use English. User-facing design/verification reports for the current work use Chinese. Genuine source, runtime input examples, quotations and frozen historical artifacts retain their original language. |
 | Accounting | Record logical requests, structural corrections, HTTP attempts, usage and elapsed time separately. Unknown usage stays unknown. Reasoning/cache details must not be added again to totals that already include them. |
 
 The earlier idea of generating Task inside one joint response was superseded by
@@ -97,7 +210,7 @@ outputs, binds the actual upstream stage, and uses public verified loaders.
 ## 4. Current implemented flow and code ownership
 
 ```text
-Frozen Skill + optional user request
+Complete frozen Skill
     -> independent source-only Task extraction and seal
 Existing CFG + frozen Task + source + runtime contract
     -> joint annotation of processing, boundaries, demands,
@@ -137,23 +250,25 @@ entry points remain pipeline prepare/run/replay and the independent stages.
 This handoff deliberately does not provide a dispatch command: preparation or
 old recorded authorization is not permission to start an experiment now.
 
-Current interface versions, verified against the implementation reference:
+Current interface versions (2026-10-27; older experimental identities remain frozen):
 
 | Interface | Version |
 |---|---|
-| Task / Task reference | v3 / v1 |
+| Task / Task reference / extraction run | v5 / v3 / v3 |
 | Runtime contract | v7 |
-| Joint annotation profile | v15 |
+| Joint annotation profile | v17 |
 | Processing compiler / mapping | v9 / v9 |
-| Annotation run | v18 |
-| Review response / review run / refinement run | v7 / v11 / v10 |
-| Propagation run | v15 |
-| Demand / sensitivity result | v4 / v4 |
-| Formal DOE run / pipeline / three-case pilot | v5 / v7 / v8 |
+| Annotation run | v20 |
+| Review response / review run / refinement run | v8 / v13 / v12 |
+| Propagation run | v17 |
+| Demand / sensitivity result | v5 / v4 |
+| Formal DOE run / pipeline | v6 / v9 |
+| Document-guided run / step / annotation | v3 / v3 / v3 |
 | Structural correction protocol / Data | v5 / v4 |
 
 Some run identity strings retain the historical `skill-ir-` prefix. This does not
-restore an active `skill_ir` package. This handoff changes no business version.
+restore an active `skill_ir` package. No historical records are migrated or
+rehashed to claim these current identities.
 
 The four constraint families use five bounded forms: `forbid_information`,
 `only_if`, `at_most`, `requires_prior`, and `forbid_after`. They reuse Task evidence

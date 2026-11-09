@@ -19,7 +19,7 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 Status = Literal["complete", "incomplete", "unsupported_feedback", "resource_limit", "execution_error"]
-Coverage = Literal["processed", "not_reached", "not_solved", "unresolved_binding"]
+Coverage = Literal["processed", "not_reached", "not_solved", "unresolved_binding", "unmodeled", "blocked"]
 
 
 class _OperationPosition(_Strict):
@@ -44,7 +44,7 @@ class _Unsupported(_Strict):
 
 
 class _UnresolvedBinding(_Strict):
-    code: Literal["unresolved_binding"]
+    code: Literal["unresolved_binding", "unmodeled_processing", "unresolved_path"]
     reason: Text
     instruction_id: Text
 
@@ -110,6 +110,7 @@ def _validate_locations(locations, instructions):
 
 def _validate_records(records, instructions, data, declared):
     ids = {item.id for item in data}
+    data_index = {item.id: item for item in data}
     result_names = {operand["identifier"] for ir in instructions.values() for operand in ir["outputs"]}
 
     def data_refs(values):
@@ -119,6 +120,12 @@ def _validate_records(records, instructions, data, declared):
     def location(value):
         if value.kind == "result" and value.name not in result_names:
             raise ValueError("result location does not occur in the selected CFG")
+
+    def value_bindings(identity):
+        value = data_index[identity]
+        if value.content.form == "loop_summary":
+            return value.content.bindings
+        return value_bindings(value.origin.part_of) if value.origin.part_of else {}
 
     for ir_id, record in records.items():
         if any(record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"])) is None
@@ -132,9 +139,22 @@ def _validate_records(records, instructions, data, declared):
             for event in record.events:
                 if isinstance(event, ForEachRecord):
                     data_refs(event.collections)
+                    data_refs(event.outputs)
                     for collection in event.collections:
                         if not any(instance.collection == collection for instance in event.instances) and not is_definitely_empty_collection(data, collection):
                             raise ValueError("for_each cannot discard members of an unknown or nonempty collection")
+                    for output in event.outputs:
+                        content = data_index[output].content
+                        mappings = [variant.content for variant in content.variants] if content.form == "loop_summary" else [content]
+                        for mapping in mappings:
+                            if mapping.form != "mapped_collection" or mapping.base not in event.collections:
+                                raise ValueError("for_each output must be a mapped collection of its actual source")
+                            for member in mapping.members:
+                                actual = set().union(*(instance.yielded for instance in event.instances
+                                    if instance.collection == mapping.base and instance.element == member.element
+                                    and instance.selector == member.selector))
+                                if not set(member.values) <= actual:
+                                    raise ValueError("mapped collection output differs from its member yields")
                     body_shape = None
                     for instance in event.instances:
                         shape = [(child.effect, [(record_consumption_shape(op), len(op.outputs),
@@ -146,21 +166,27 @@ def _validate_records(records, instructions, data, declared):
                         if instance.collection not in event.collections:
                             raise ValueError("for_each instance collection is outside resolved candidates")
                         data_refs([instance.collection, instance.element])
+                        data_refs(instance.yielded)
                         validate_element_membership(data, instance.collection, instance.element)
                         for child in instance.body:
-                            if any(op.op in {"read", "receive", "write"} for op in child.atomic_ops):
-                                raise ValueError("for_each cannot contain shared-state interactions")
+                            if any(op.op == "write" and not op.may_state for op in child.atomic_ops):
+                                raise ValueError("for_each cannot contain shared-state writes")
                             yield child
                 else:
                     yield event
 
         for event in effect_events():
-            validate_event_operations(event.effect, [op.op for op in event.atomic_ops])
+            if event.atomic_ops or event.case is None or event.effect is not None:
+                validate_event_operations(event.effect, [op.op for op in event.atomic_ops])
             for op in event.atomic_ops:
+                if op.may_state and (op.op != "write" or event.case is None
+                        or any(endpoint.kind != "runtime_context" for endpoint in op.endpoints)
+                        or any(change.update != "weak" for change in op.changes)):
+                    raise ValueError("invalid bounded may state summary")
                 validate_record_consumption(op, data=data)
                 if op.when_input_index is not None and event.effect != "model_observe":
                     raise ValueError("conditional delivery must be a compiled model observation")
-                if len(op.outputs) != int(op.op not in {"deliver", "write"}):
+                if len(op.outputs) != int(op.op not in {"deliver", "write", "branch"}):
                     raise ValueError("recorded atomic output arity differs from the operation")
                 if ((op.op == "read" and op.inputs)
                         or (op.op == "write" and len(op.inputs) > 1)
@@ -169,6 +195,23 @@ def _validate_records(records, instructions, data, declared):
                     raise ValueError("recorded atomic input arity differs from the operation")
                 for binding in [*op.inputs, *op.outputs]:
                     data_refs(binding)
+                for alternative in op.alternatives:
+                    # Input tuples are simultaneous; output candidates inside
+                    # one slot remain alternatives. A merge changes use context
+                    # and therefore validates its output side only here.
+                    inputs = [] if op.op == "merge" else alternative.inputs
+                    scopes = {}
+                    for slot_index, slot in enumerate(inputs):
+                        for identity in slot:
+                            for scope, selector in value_bindings(identity).items():
+                                if scope in scopes and any(value != selector for index, value in scopes[scope] if index != slot_index):
+                                    raise ValueError("operation alternative mixes incompatible incoming/member tuple choices")
+                                scopes.setdefault(scope, []).append((slot_index, selector))
+                    for slot in [*inputs, *alternative.outputs]:
+                        for identity in slot:
+                            if any(scope in alternative.bindings and alternative.bindings[scope] != selector
+                                   for scope, selector in value_bindings(identity).items()):
+                                raise ValueError("operation alternative context contradicts its Data binding")
                 if len(op.endpoints) != int(op.op in INTERACTION_EFFECTS):
                     raise ValueError("recorded interaction endpoint arity differs")
                 validate_operation_boundary(op.op, event.effect, op.endpoints[0].kind if op.endpoints else None,
@@ -193,7 +236,7 @@ def _validate_records(records, instructions, data, declared):
                         raise ValueError("weak update cannot remove prior candidates")
 
 
-def resolved_sink_boundaries(locations, records) -> list[dict]:
+def resolved_sink_boundaries(locations, records, *, _checked_records=False) -> list[dict]:
     """Derive only boundaries whose operations have actual static records.
 
     Each coordinate identifies the existing operation, not a duplicate payload.
@@ -237,7 +280,7 @@ def resolved_sink_boundaries(locations, records) -> list[dict]:
             found[key] = item
 
     for ir_id in sorted(records):
-        record = IRFlowRecord.model_validate(records[ir_id])
+        record = records[ir_id] if _checked_records else IRFlowRecord.model_validate(records[ir_id])
         for event_index, event in enumerate(record.events):
             if isinstance(event, ForEachRecord):
                 for instance in event.instances:
@@ -277,15 +320,54 @@ def _validate_diagnostics(diagnostics, instructions, blocks, data_ids, records):
             raise ValueError("diagnostic operation refers to unknown IR")
 
 
+def declared_boundary_coverage(annotation, sinks, coverage):
+    """Keep declarations without an evaluated occurrence visible in reports."""
+    result = []
+    for boundary in annotation["sink_boundaries"]:
+        if boundary in sinks:
+            status, reason = "resolved", "An actual static operation record resolves this boundary."
+        elif coverage[boundary["instruction_id"]] == "processed":
+            status, reason = "no_occurrence", "The instruction was evaluated, but this boundary has no active occurrence (for example an empty member scope or false conditional observation)."
+        else:
+            status, reason = "unresolved", "No evaluated instruction record resolves this declared boundary; this is not an empty or safe payload."
+        result.append({"boundary": boundary, "status": status, "reason": reason})
+    return result
 
-def validate_propagation_facts(*, cfg, annotation, data, records, sinks, status, coverage, diagnostics):
+
+
+def validate_propagation_facts(*, cfg, annotation, data, records, sinks, status, coverage, diagnostics,
+                               _checked_data=None, _checked_records=None):
     """Check persisted components against one explicitly supplied upstream annotation."""
     if type(records) is not dict or type(sinks) is not list:
         raise ValueError("Propagation records must be an object and sinks must be a list")
     graph = _normalized_cfg(checked_cfg(cfg))
     payload = AnnotationPayload.model_validate(annotation)
-    data_values = [Data.model_validate(item) for item in validate_data_records(data)]
-    record_values = {key: IRFlowRecord.model_validate(value) for key, value in records.items()}
+    data_values = (_checked_data if _checked_data is not None else
+                   [Data.model_validate(item) for item in validate_data_records(data)])
+    record_values = (_checked_records if _checked_records is not None else
+                     {key: IRFlowRecord.model_validate(value) for key, value in records.items()})
+    instructions = _instructions(graph)
+    if set(record_values) - set(instructions):
+        raise ValueError("propagation record refers to an unknown IR")
+    from skillflow.propagation.contracts.limitations import check_processing_coverage
+    check_processing_coverage(graph, payload)
+    declared = _validate_locations(payload.locations, instructions)
+    _validate_records(record_values, instructions, data_values, declared)
+    checked_sinks = [SinkBoundary.model_validate(item).model_dump(mode="json") for item in sinks]
+    if checked_sinks != resolved_sink_boundaries(payload.locations, record_values, _checked_records=True):
+        raise ValueError("sink boundaries differ from recorded operations, targets or fixed levels")
+    return _validate_outcome(graph=graph, annotation=payload.model_dump(mode="json"),
+        data={item.id: item for item in data_values}, records=record_values, sinks=checked_sinks,
+        status=status, coverage=coverage, diagnostics=diagnostics)
+
+
+def _validate_outcome(*, graph, annotation, data, records, sinks, status, coverage, diagnostics):
+    """Check final coverage and references after their owning components passed.
+
+    Computed records use this small boundary check instead of reparsing the
+    registry, annotation and every event. The public validator above remains
+    the complete external/offline check.
+    """
     outcome = PropagationOutcome.model_validate({"status": status, "coverage": coverage, "diagnostics": diagnostics})
     result = outcome.model_dump(mode="json")
     for diagnostic in result["diagnostics"]:
@@ -295,29 +377,28 @@ def validate_propagation_facts(*, cfg, annotation, data, records, sinks, status,
                     position.pop(key, None)
     instructions = _instructions(graph)
     expected = set(instructions)
-    if set(payload.ir_semantics) != expected or set(outcome.coverage) != expected:
+    from skillflow.propagation.contracts.limitations import unmodeled_ids
+    if set(outcome.coverage) != expected:
         raise ValueError("annotation and coverage must cover all real IRs exactly")
-    if set(record_values) - expected:
+    if set(records) - expected:
         raise ValueError("propagation record refers to an unknown IR")
     processed = {ir for ir, state in outcome.coverage.items() if state == "processed"}
-    if set(record_values) != processed:
+    barriers = unmodeled_ids(annotation)
+    if processed & barriers or {ir for ir, state in outcome.coverage.items() if state == "unmodeled"} - barriers:
+        raise ValueError("Explicitly unmodeled IRs cannot have evaluated records or fabricated semantics")
+    if set(records) != processed:
         raise ValueError("records must match processed coverage exactly")
-    reachable = _reachable_instructions(graph)
+    from skillflow.propagation.loop_guards import admitted_instructions
+    reachable = admitted_instructions(graph, annotation, records, data)
     if any(ir not in reachable and state != "not_reached" for ir, state in outcome.coverage.items()):
         raise ValueError("coverage reachability differs from the selected CFG")
     if outcome.status == "complete" and processed != reachable:
         raise ValueError("complete propagation must process every reachable IR")
     if outcome.status == "unsupported_feedback" and processed:
         raise ValueError("unsupported feedback must not claim solved records")
-    declared = _validate_locations(payload.locations, instructions)
-    _validate_records(record_values, instructions, data_values, declared)
-    checked_sinks = [SinkBoundary.model_validate(item).model_dump(mode="json") for item in sinks]
-    if checked_sinks != resolved_sink_boundaries(payload.locations, record_values):
-        raise ValueError("sink boundaries differ from recorded operations, targets or fixed levels")
-    compiled_sinks = [item.model_dump(mode="json") for item in payload.sink_boundaries]
-    if any(item not in compiled_sinks for item in checked_sinks):
+    if any(item not in annotation["sink_boundaries"] for item in sinks):
         raise ValueError("recorded sink boundary is absent from the compiled annotation")
-    _validate_diagnostics(result["diagnostics"], instructions, graph["blocks"], {item.id for item in data_values}, record_values)
+    _validate_diagnostics(result["diagnostics"], instructions, graph["blocks"], set(data), records)
     codes = {item["code"] for item in result["diagnostics"]}
     if outcome.status == "complete" and codes - {"missing_part"}:
         raise ValueError("complete propagation contradicts a failure diagnostic")
@@ -326,6 +407,10 @@ def validate_propagation_facts(*, cfg, annotation, data, records, sinks, status,
     if outcome.status == "incomplete":
         missing = {ir for ir, state in outcome.coverage.items() if state == "unresolved_binding"}
         reported = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unresolved_binding"}
-        if not missing or missing != reported:
+        unmodeled = {ir for ir, state in outcome.coverage.items() if state == "unmodeled"}
+        unmodeled_reported = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unmodeled_processing"}
+        partial_paths = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unresolved_path"}
+        if (not (missing or unmodeled or partial_paths) or missing != reported or unmodeled != unmodeled_reported
+                or not unmodeled <= barriers):
             raise ValueError("incomplete coverage and unresolved binding diagnostics must agree")
     return result

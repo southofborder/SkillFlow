@@ -9,19 +9,18 @@ from skillflow.propagation.review.material import prepare_review_material, resol
 from skillflow.propagation.review.report import display_model, render_html, render_markdown
 from skillflow.propagation.review.services import validate_response
 from skillflow.propagation.review.prompts import INSTRUCTIONS
-from tests.propagation.annotation.helpers import material, valid_raw_response
+from tests.propagation.annotation.helpers import material, valid_raw_response, source_bundle
 from tests.propagation.review.test_core import one_issue, cannot_assess
 
 
 def joint_material():
     base = material()
-    enriched = prepare_material(base["source"], base["cfg"],
-        user_request="Return the selected value.\r\nDo not include credentials.\r\n")
+    enriched = prepare_material(source_bundle("原文说明。\r\n\r\nReturn the selected value.\r\nDo not include credentials.\r\n"), base["cfg"])
     return prepare_review_material(enriched, valid_raw_response(enriched))
 
 
 @pytest.mark.parametrize("file,first,last", [
-    ("skill/SKILL.md", 3, 4), ("task/user-request.txt", 1, 2)])
+    ("skill/SKILL.md", 3, 4), ("skill/SKILL.md", 1, 2)])
 def test_finding_and_failure_accept_the_same_source_spans(file, first, last):
     prepared = joint_material()
     evidence = {"file": file, "start_line": first, "end_line": last,
@@ -38,12 +37,12 @@ def test_finding_and_failure_accept_the_same_source_spans(file, first, last):
 
 
 @pytest.mark.parametrize("change", [
-    {"file": "policy/absent.txt"}, {"start_line": True}, {"start_line": 0},
+    {"file": "policy/absent.txt"}, {"file": "task/user-request.txt"}, {"start_line": True}, {"start_line": 0},
     {"start_line": 2, "end_line": 1}, {"end_line": 999}, {"quote": "forged"},
     {"basis": "source"}, {"ref_id": "src_001"}])
 def test_invalid_span_or_mixed_evidence_shapes_fail_both_branches(change):
     prepared = joint_material()
-    evidence = {"file": "task/user-request.txt", "start_line": 1, "end_line": 1,
+    evidence = {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
                 "reason": "An unverified semantic claim."} | change
     response = one_issue(prepared)
     response["findings"][0]["evidences"] = [evidence]
@@ -70,24 +69,24 @@ def test_span_display_shares_exact_excerpt_and_does_not_upgrade_wrong_interpreta
     prepared = joint_material()
     raw = one_issue(prepared)
     raw["findings"][0]["explanation"] = "Deliberately unsupported interpretation for reference-validation testing."
-    raw["findings"][0]["evidences"] = [{"file": "task/user-request.txt", "start_line": 1, "end_line": 2,
+    raw["findings"][0]["evidences"] = [{"file": "skill/SKILL.md", "start_line": 3, "end_line": 4,
                                        "reason": "A true span can accompany a wrong interpretation."}]
     response = validate_response(raw, prepared)
     result = {"status": "complete", "summary": "issues_found", "reason": "References validated.",
               "review": response.model_dump(mode="json")}
     before = deepcopy((result, prepared))
     model = display_model(result, prepared)
-    assert model["findings"][0]["evidence_display"][0]["excerpt"] == prepared["user_request"]
+    assert model["findings"][0]["evidence_display"][0]["excerpt"] == "Return the selected value.\r\nDo not include credentials.\r\n"
     for output in (render_html(model), render_markdown(model)):
-        assert "task/user-request.txt:1" in output.replace("\\", "")
+        assert "skill/SKILL.md:3" in output.replace("\\", "")
         assert "Return the selected value" in output
         assert "does not prove" in output
     assert (result, prepared) == before
 
 
 def test_prompt_reviews_joint_semantics_without_final_doe_or_minimality_verdict():
-    for boundary in ("Source checks", "Requirement checks", "Declaration checks", "IR checks",
-                     "Current payload", "indispensability", "start_line", "task/", "English"):
+    for boundary in ("Source inspection", "Requirement checks", "Declaration checks", "IR checks",
+                     "Current payload", "indispensability", "start_line", "skill/", "English"):
         assert boundary in INSTRUCTIONS
     assert "Do not generate replacement annotations" in INSTRUCTIONS
     assert "not automatically task requirements" in INSTRUCTIONS

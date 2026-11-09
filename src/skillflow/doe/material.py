@@ -50,6 +50,15 @@ def _data_refs(data):
         refs.add(content["base"])
     refs.update(item["data"] for item in content.get("parts", []))
     refs.update(item["data"] for item in content.get("updates", []))
+    for member in content.get("members", []):
+        refs.add(member["element"])
+        refs.update(member["values"])
+    if content.get("added"):
+        refs.add(content["added"])
+    for variant in content.get("variants", []):
+        refs.update(variant["inputs"])
+        refs.update(item["data"] for item in variant.get("dependencies", []))
+        refs.update(_data_refs({"content": variant["content"], "origin": {}}))
     return refs
 
 
@@ -60,6 +69,24 @@ def _operation_data(operation):
         refs.update(change["before"])
         refs.update(change["after"])
     return refs
+
+
+def payload_alternatives(record):
+    """Preserve paired candidate contexts while excluding control-only slots."""
+    return [{**deepcopy(row), "inputs": payload_inputs({**record, "inputs": row["inputs"]})}
+            for row in record.get("alternatives", [])]
+
+
+def _paired_request_inputs(delivery, receipt):
+    if payload_inputs(delivery) != receipt["inputs"]:
+        return False
+    sent = payload_alternatives(delivery)
+    received = receipt.get("alternatives", [])
+    if not sent and not received:
+        return True
+    def keys(rows):
+        return {canonical_sha256({"inputs": row["inputs"], "bindings": row["bindings"]}) for row in rows}
+    return keys(sent) == keys(received)
 
 
 def _location(location):
@@ -77,10 +104,21 @@ def _order_key(position):
 class _Index:
     def __init__(self, raw):
         self.raw, self.cfg = raw, raw.cfg
+        # Public material getters detach their component. Keep that owned view
+        # for this index lifetime instead of copying all facts for each lookup.
+        self.records, self.locations = raw.records, raw.locations
+        self.coverage, self.diagnostics, self.sinks = raw.coverage, raw.diagnostics, raw.sinks
         self.data = {item["id"]: deepcopy(item) for item in raw.data}
+        self.state_bindings = {}
+        for ir_id, record in self.records.items():
+            for side in ("entry", "exit"):
+                bindings = defaultdict(set)
+                for binding in record[side + "_state"]["bindings"]:
+                    bindings[_location(binding["location"])].update(binding["data_ids"])
+                self.state_bindings[(ir_id, side)] = dict(bindings)
         self.instructions, self.ir_block, self.ir_offset = {}, {}, {}
         self.operations, self.ir_operations, self.scopes = {}, defaultdict(list), {}
-        self.location_ids = {_location(value): key for key, value in raw.locations.items()}
+        self.location_ids = {_location(value): key for key, value in self.locations.items()}
         self.successors, self.predecessors = defaultdict(set), defaultdict(set)
         for edge in self.cfg["edges"]:
             source, target = edge["source_block_id"], edge["target_block_id"]
@@ -95,7 +133,7 @@ class _Index:
                 self.instructions[ir_id] = deepcopy(ir)
                 self.ir_block[ir_id], self.ir_offset[ir_id] = block_id, offset
         self.precedence = {}
-        for ir_id, record in raw.records.items():
+        for ir_id, record in self.records.items():
             relation = defaultdict(set)
             for item in record["precedence"]:
                 relation[_template(item["before"])].add(_template(item["after"]))
@@ -146,6 +184,9 @@ class _Index:
                         "body_event_index": body_index, "instance_index": instance_index}
             key = _id("op_", position)
             self.operations[key] = {"position": position, "effect": event["effect"], "record": deepcopy(record)}
+            for field in ("case", "requires_completion"):
+                if event.get(field):
+                    self.operations[key][field] = deepcopy(event[field])
             self.ir_operations[ir_id].append(key)
 
     def ir_may_before(self, source, target):
@@ -160,13 +201,25 @@ class _Index:
     def may_before(self, source, target):
         if source == target:
             return False
+        first, second = self.operations[source], self.operations[target]
+        case = first.get("case")
+        if case and case["disposition"] == "throw" and (
+                case["group"] in second.get("requires_completion", [])
+                or first["position"]["instruction_id"] != second["position"]["instruction_id"]):
+            return False
+        if (first.get("case") and second.get("case")
+                and first["case"]["group"] == second["case"]["group"]
+                and first["case"]["id"] != second["case"]["id"]
+                and first["position"]["instruction_id"] == second["position"]["instruction_id"]
+                and first["position"].get("instance_index") == second["position"].get("instance_index")):
+            return False
         a, b = self.operations[source]["position"], self.operations[target]["position"]
         if a["instruction_id"] != b["instruction_id"]:
             return self.ir_may_before(a["instruction_id"], b["instruction_id"])
         if (a["instance_index"] is not None and b["instance_index"] is not None
                 and a["event_index"] == b["event_index"] and a["instance_index"] != b["instance_index"]):
             return False
-        if self.raw.records[a["instruction_id"]]["order"] == "fixed":
+        if self.records[a["instruction_id"]]["order"] == "fixed":
             return _order_key(a) < _order_key(b)
         # In a partial order, permit a candidate only when the reverse is not required.
         return _template(a) not in self.precedence[a["instruction_id"]].get(_template(b), set())
@@ -179,12 +232,7 @@ class _Index:
         self.links[key] = link
 
     def _result_values(self, ir_id, side, name):
-        record = self.raw.records.get(ir_id)
-        if record is None:
-            return set()
-        return {data_id for binding in record[side + "_state"]["bindings"]
-                if binding["location"] == {"kind": "result", "name": name}
-                for data_id in binding["data_ids"]}
+        return set(self.state_bindings.get((ir_id, side), {}).get(("result", name), ()))
 
     def _value_links(self):
         for data_id, producers in self.producers.items():
@@ -226,16 +274,46 @@ class _Index:
         # Recover only an unambiguous, identical request binding at one existing scope.
         receipts = [key for key, value in self.operations.items() if value["record"]["op"] == "receive"]
         matches = {}
+        explicit = {}
+        from skillflow.propagation.contracts.specs import IRSemantics, operation_items
+        from skillflow.propagation.contracts.uses import request_pairs
+        # FactIndex also accepts authored pure-facts Components without an
+        # annotation. Formal loading requires the complete accepted annotation;
+        # its explicit call coordinates always take precedence. An absent
+        # declaration here retains only the conservative unique-binding rule.
+        for ir_id, spec in self.raw.annotation.get("compiled_annotation", {}).get("ir_semantics", {}).items():
+            if not any(op.get("request_id") is not None for event in spec["events"]
+                       for child in (event["body"] if event.get("kind") == "for_each" else [event])
+                       for op in child["atomic_ops"]):
+                continue
+            typed = IRSemantics.model_validate(spec)
+            declared = operation_items(typed)
+            for response, request in request_pairs(typed).items():
+                if getattr(declared[response], "request_id", None) is not None:
+                    explicit[(ir_id, response)] = request
         for receipt in receipts:
             operation = self.operations[receipt]
             pos, record = operation["position"], operation["record"]
+            declared_request = explicit.get((pos["instruction_id"], _template(pos)))
+            if declared_request is not None:
+                choices = [key for key in self.ir_operations[pos["instruction_id"]]
+                    if _template(self.operations[key]["position"]) == declared_request
+                    and self.operations[key]["position"]["instance_index"] == pos["instance_index"]]
+                if len(choices) != 1:
+                    raise ValueError("Explicit call request has no unique recorded occurrence")
+                prior = self.operations[choices[0]]
+                if (prior["record"]["endpoints"] != record["endpoints"]
+                        or not _paired_request_inputs(prior["record"], record)):
+                    raise ValueError("Explicit call request/response recorded bindings differ")
+                matches[receipt] = choices[0]
+                continue
             choices = []
             for delivery in self.ir_operations[pos["instruction_id"]]:
                 prior = self.operations[delivery]
                 if (prior["record"]["op"] == "deliver" and prior["effect"] != "model_observe"
                         and prior["position"]["instance_index"] == pos["instance_index"]
                         and prior["record"]["endpoints"] == record["endpoints"]
-                        and payload_inputs(prior["record"]) == record["inputs"] and self.may_before(delivery, receipt)):
+                        and _paired_request_inputs(prior["record"], record) and self.may_before(delivery, receipt)):
                     choices.append(delivery)
             if len(choices) == 1:
                 matches[receipt] = choices[0]
@@ -283,8 +361,9 @@ class _Index:
             for endpoint in op["endpoints"]:
                 location = _location(endpoint)
                 for definition in state.get(location, set()):
-                    stored = {data_id for change in self.operations[definition]["record"]["changes"]
-                              if _location(change["location"]) == location for data_id in change["after"]}
+                    if not self.may_before(definition, op_id):
+                        continue
+                    stored = self.written_values(definition, location)
                     common = stored & values
                     if common:
                         links.add((definition, op_id, tuple(sorted(common))))
@@ -296,10 +375,10 @@ class _Index:
             for ir in self.cfg["blocks"][block_id]["instructions"]:
                 ir_id = ir["id"]
                 self.entry_writes[ir_id] = merge([state])
-                if ir_id not in self.raw.records:
+                if ir_id not in self.records:
                     continue
                 operations = self.ir_operations[ir_id]
-                if self.raw.records[ir_id]["order"] == "partial":
+                if self.records[ir_id]["order"] == "partial":
                     base = merge([state])
 
                     def visible_at(read_id=None):
@@ -307,6 +386,12 @@ class _Index:
                         barriers = defaultdict(set)
                         for key in candidates:
                             guaranteed = read_id is None or _template(self.operations[read_id]["position"]) in self.precedence[ir_id].get(_template(self.operations[key]["position"]), set())
+                            case = self.operations[key].get("case")
+                            if case and (read_id is None or self.operations[read_id].get("case") != case):
+                                # An alternative write is not a definite barrier
+                                # outside its own candidate, even when its local
+                                # operation is a strong replacement.
+                                guaranteed = False
                             if guaranteed:
                                 for change in self.operations[key]["record"]["changes"]:
                                     if change["update"] in {"strong", "delete"}:
@@ -317,7 +402,9 @@ class _Index:
                                 loc = _location(change["location"])
                                 if not change["after"]:
                                     continue
-                                overwritten = any(other != key and _template(self.operations[other]["position"]) in self.precedence[ir_id].get(_template(self.operations[key]["position"]), set()) for other in barriers[loc])
+                                overwritten = any(other != key and self.may_before(key, other)
+                                    and _template(self.operations[other]["position"]) in self.precedence[ir_id].get(_template(self.operations[key]["position"]), set())
+                                    for other in barriers[loc])
                                 if not overwritten:
                                     visible.setdefault(loc, set()).add(key)
                         return visible
@@ -328,7 +415,12 @@ class _Index:
                 else:
                     for op_id in operations:
                         reads(op_id, state)
-                        writes(op_id, state)
+                        writes(op_id, state, weak=bool(self.operations[op_id].get("case")))
+                # Prefix records remain available, but a throwing invocation
+                # does not provide a definition to the normal continuation.
+                state = {location: {key for key in definitions
+                                    if self.operations[key].get("case", {}).get("disposition") != "throw"}
+                         for location, definitions in state.items()}
             changed = block_id not in reached or state != out.get(block_id)
             out[block_id], reached = state, reached | {block_id}
             if changed:
@@ -338,6 +430,17 @@ class _Index:
                         queued.add(next_block)
         for source, target, data_ids in sorted(links):
             self.add_link("saved_read", source, target, data_ids)
+
+    def written_values(self, operation_id, location):
+        """Values defined by a write, excluding unchanged weak-state members."""
+        record = self.operations[operation_id]["record"]
+        values = {value for change in record["changes"]
+                  if _location(change["location"]) == location for value in change["after"]}
+        if record.get("may_state"):
+            # Supported may-state operations are replacements. Their after set
+            # is old union new; only the actual payload belongs to this write.
+            values.intersection_update(_ids(payload_inputs(record)))
+        return values
 
     def data_closure(self, seeds):
         return self._closure(set(seeds), {key: _data_refs(value) for key, value in self.data.items()})
@@ -411,7 +514,7 @@ class _Index:
                              and op["position"]["event_index"] == value["event_index"]
                              and op["position"]["instance_index"] == value["instance_index"]
                              for op_id, op in self.operations.items() if op_id in backward_ops | usage_ops)]
-        diagnostics = [deepcopy(item) for item in self.raw.diagnostics
+        diagnostics = [deepcopy(item) for item in self.diagnostics
                        if item.get("instruction_id") in selected_irs
                        or any(block in context_blocks for block in item.get("blocks", []))
                        or "instruction_id" not in item and "blocks" not in item]
@@ -420,7 +523,7 @@ class _Index:
                 "usage_context": {"instructions": sorted(usage_irs), "operations": self.sort_ops(usage_ops), "links": sorted(usage_links)},
                 "context": {"blocks": sorted(context_blocks), "edge_indices": [], "scope_ids": sorted(scope_ids),
                             "diagnostics": diagnostics,
-                            "partial_ir_ids": sorted(key for key in selected_irs if self.raw.records.get(key, {}).get("order") == "partial")}}
+                            "partial_ir_ids": sorted(key for key in selected_irs if self.records.get(key, {}).get("order") == "partial")}}
 
     def sort_ops(self, keys):
         return sorted(keys, key=lambda key: (self.operations[key]["position"]["instruction_id"],
@@ -437,9 +540,8 @@ def _read_materials(value):
 def prepare_doe_material(facts) -> DoeMaterial:
     """Build factual material without executing Skills, calling models, or adding Data."""
     raw = _read_materials(facts)
-    user_request = raw.material["user_request"]
     index = _Index(raw)
-    slices = [index.slice(boundary) for boundary in raw.sinks]
+    slices = [index.slice(boundary) for boundary in index.sinks]
     selected_blocks = set().union(*(set(item["context"]["blocks"]) for item in slices)) if slices else {index.cfg["entry_block_id"]}
     selected_irs = {ir["id"] for block in selected_blocks for ir in index.cfg["blocks"][block]["instructions"]}
     # Definition closure keeps identifiers in selected IRs meaningful without the full CFG.
@@ -475,14 +577,14 @@ def prepare_doe_material(facts) -> DoeMaterial:
     data_ids = index.data_closure(data_ids)
     if not data_ids <= index.data.keys():
         raise ValueError("Sink relation references missing Data")
-    location_ids = {boundary["target"] for boundary in raw.sinks}
+    location_ids = {boundary["target"] for boundary in index.sinks}
     for key in op_ids:
         for location in index.operations[key]["record"]["endpoints"]:
             location_ids.add(index.location_ids[_location(location)])
         for change in index.operations[key]["record"]["changes"]:
             location_ids.add(index.location_ids[_location(change["location"])])
     for location_id in location_ids:
-        for ref in raw.locations[location_id]["operand_refs"]:
+        for ref in index.locations[location_id]["operand_refs"]:
             block = index.ir_block[ref["instruction_id"]]
             selected_blocks.add(block)
             selected_irs.update(ir["id"] for ir in index.cfg["blocks"][block]["instructions"])
@@ -496,13 +598,14 @@ def prepare_doe_material(facts) -> DoeMaterial:
               "constraints": value.get("constraints", []), "data_source_kind": value.get("data_source_kind")}
               for key, value in index.cfg["blocks"].items() if key in selected_blocks}
     contract = raw.runtime_contract
-    material = {"schema_version": "skillflow-doe-material-v2", "task": {"basis": "declared_skill" if user_request is None else "user_request", "text": user_request},
+    actions = raw.actions
+    material = {"schema_version": "skillflow-doe-material-v3",
                 "source": deepcopy(raw.source), "runtime_contract": {**contract, "sha256": runtime_contract_binding(contract)["sha256"]},
                 "shared_info": {"entry_block_id": index.cfg["entry_block_id"], "instructions": {key: index.instructions[key] for key in sorted(selected_irs)},
                  "blocks": blocks, "edges": edges, "constraints": index.cfg.get("constraints", []), "declared_context_keys": index.cfg.get("declared_context_keys", []),
                  "data": {key: index.data[key] for key in sorted(data_ids)}, "operations": {key: index.operations[key] for key in index.sort_ops(op_ids)},
-                 "locations": {key: raw.locations[key] for key in sorted(location_ids)}, "actions": {key: raw.actions[key] for key in sorted(selected_irs)},
-                 "orders": {key: {field: raw.records[key][field] for field in ("order", "precedence")} for key in sorted(selected_irs) if key in raw.records},
+                 "locations": {key: index.locations[key] for key in sorted(location_ids)}, "actions": {key: actions[key] for key in sorted(selected_irs)},
+                 "orders": {key: {field: index.records[key][field] for field in ("order", "precedence")} for key in sorted(selected_irs) if key in index.records},
                  "scopes": {key: index.scopes[key] for key in sorted(scope_ids)}, "links": {key: index.links[key] for key in sorted(link_ids)}}, "sinks": slices}
     return validate_doe_material(material)
 
@@ -522,10 +625,6 @@ def validate_doe_material(raw, *, facts=None) -> DoeMaterial:
     checked_contract = validate_runtime_contract({key: contract[key] for key in ("version", "rules")})
     if contract["sha256"] != runtime_contract_binding(checked_contract)["sha256"]:
         raise ValueError("runtime contract digest mismatch")
-    task = value["task"]
-    if (task["basis"] == "declared_skill" and task["text"] is not None
-            or task["basis"] == "user_request" and (task["text"] is None or not task["text"].strip())):
-        raise ValueError("task basis and original text disagree")
     validate_data_records(list(shared["data"].values()))
     instructions, operations, data = shared["instructions"], shared["operations"], shared["data"]
     if set(shared["actions"]) != set(instructions) or not set(shared["orders"]) <= instructions.keys():

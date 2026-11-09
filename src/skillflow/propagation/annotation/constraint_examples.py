@@ -28,7 +28,6 @@ def constraint_example():
     task["requirements"][0]["text"] = "Submit the unchanged label to the device interface."
     task["requirements"].append({"id": "R2", "text": "Do not deliver diagnostic_note to the device interface.",
                                  "evidences": [evidence()]})
-    task["source_accounting"][0]["requirement_ids"] = ["R1", "R2"]
     raw = example["annotation"]
     raw["locations"] = {"interface": {"kind": "tool", "name": "device interface", "operand_refs": [],
                                      "access_scope": "recipient", "retention": None}}

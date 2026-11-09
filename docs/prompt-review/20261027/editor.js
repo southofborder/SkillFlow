@@ -1,0 +1,30 @@
+
+'use strict';
+const data=window.SKILLFLOW_PROMPT_REVIEW, storageKey='skillflow-prompt-review-20261027-skill-only-v2';
+let drafts={}, changedOnly=false;
+try{drafts=JSON.parse(localStorage.getItem(storageKey)||'{}')}catch(e){}
+const byId=new Map(data.blocks.map(b=>[b.id,b]));
+const stage=document.getElementById('stage'),search=document.getElementById('search');
+function elem(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
+function anchor(label,url){const e=elem('a',label);e.href=url;e.target='_blank';return e}
+function changed(b){const d=drafts[b.id];return !!d&&(d.english!==b.english||d.chinese!==b.chinese||!!d.note)}
+function save(){try{localStorage.setItem(storageKey,JSON.stringify(drafts));document.getElementById('saved').textContent='已暂存在本浏览器；请导出保存'}catch(e){document.getElementById('saved').textContent='浏览器无法暂存，请及时导出'}updateStatus()}
+function updateStatus(){document.getElementById('status').textContent=data.blocks.filter(changed).length+' 段已修改 / '+data.blocks.length+' 段'}
+stage.append(new Option('全部固定指令','all'));
+for(const s of data.stages){stage.append(new Option(s.title,s.id));const c=elem('div',undefined,'stage-card');const b=elem('button',s.title);b.onclick=()=>{stage.value=s.id;filter();document.getElementById('editingTitle').scrollIntoView({behavior:'smooth'})};c.append(b,elem('div',s.status,'meta'),elem('div',s.description,'meta'));document.getElementById('stages').append(c)}
+for(const r of data.requests){const tr=elem('tr');tr.append(elem('td',r.number+'. '+r.label),elem('td',r.characters.toLocaleString()),elem('td',r.usage.total_tokens.toLocaleString()),elem('td',Math.round(r.seconds/60*10)/10+' 分钟'));const td=elem('td');td.append(anchor('完整发送文本',r.actual),document.createTextNode(' · '),anchor('核心 Prompt',r.core),document.createTextNode(' · '),anchor('收据',r.receipt));tr.append(td);document.getElementById('calls').append(tr)}
+for(const f of data.formats){const p=elem('p');p.append(anchor(f.title+'：格式',f.text),document.createTextNode(' · '),anchor('完整 JSON Schema',f.schema));document.getElementById('formats').append(p)}
+for(const f of data.examples||[]){document.getElementById('examples').append(anchor(f.title,f.path),document.createTextNode(' '))}
+const cards=new Map();
+for(const b of data.blocks){const d=drafts[b.id]||{english:b.english,chinese:b.chinese,note:''};const card=elem('details',undefined,'block');card.open=true;card.dataset.id=b.id;card.append(elem('summary',b.id+' · '+b.title));const meta=elem('div',undefined,'meta');meta.append(anchor(b.source_file,b.source_link),document.createTextNode(' · '+b.symbol));card.append(meta);const tags=elem('div');for(const s of b.stages)tags.append(elem('span',data.stages.find(x=>x.id===s)?.title||s,'tag'));card.append(tags);const grid=elem('div',undefined,'grid');const inputs={};for(const [key,label] of [['english','英文原文／修改稿'],['chinese','中文对照／修改稿']]){const col=elem('div');col.append(elem('div',label,'col-title'));const t=elem('textarea');t.value=d[key];t.rows=Math.min(30,Math.max(5,d[key].split('\n').length+Math.ceil(d[key].length/105)));t.spellcheck=false;col.append(t);grid.append(col);inputs[key]=t}card.append(grid);const note=elem('textarea',undefined,'comment');note.value=d.note||'';note.placeholder='人工备注：保留、删除、合并、改写，或需要确认的问题';card.append(note);const actions=elem('div',undefined,'actions');actions.append(elem('small',b.english.length.toLocaleString()+' 个英文字符；中文只用于审阅'));const reset=elem('button','恢复本段原文');reset.onclick=()=>{inputs.english.value=b.english;inputs.chinese.value=b.chinese;note.value='';delete drafts[b.id];card.classList.remove('changed');save()};actions.append(reset);card.append(actions);function update(){drafts[b.id]={english:inputs.english.value,chinese:inputs.chinese.value,note:note.value};card.classList.toggle('changed',changed(b));save()}for(const t of [inputs.english,inputs.chinese,note])t.addEventListener('input',update);card.classList.toggle('changed',changed(b));cards.set(b.id,card);document.getElementById('blocks').append(card)}
+function filter(){const q=search.value.trim().toLowerCase();for(const b of data.blocks){const d=drafts[b.id]||b;const matchStage=stage.value==='all'||b.stages.includes(stage.value);const hay=[b.id,b.title,b.source_file,b.symbol,d.english,d.chinese,d.note||''].join('\n').toLowerCase();cards.get(b.id).classList.toggle('hide',!matchStage||(q&&!hay.includes(q))||(changedOnly&&!changed(b)))}updateStatus()}
+stage.onchange=filter;search.oninput=filter;document.getElementById('onlyChanges').onclick=e=>{changedOnly=!changedOnly;e.target.textContent=changedOnly?'显示全部内容':'只看已修改';filter()};
+function download(name,text,type){const u=URL.createObjectURL(new Blob([text],{type}));const a=anchor('',u);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+function exportRows(){return data.blocks.map(b=>({...b,...(drafts[b.id]||{}),original_english:b.english,original_chinese:b.chinese,changed:changed(b)}))}
+document.getElementById('export').onclick=()=>download('skillflow-prompt-edits-20261027.json',JSON.stringify({purpose:'Human review draft, not applied to production',exported_at:new Date().toISOString(),source_manifest:'manifest.json',blocks:exportRows()},null,2),'application/json;charset=utf-8');
+document.getElementById('exportText').onclick=()=>download('skillflow-prompts-bilingual-edited.txt',exportRows().map(b=>`${b.id} ${b.title}\n来源：${b.source_file} :: ${b.symbol}\n\n[ENGLISH]\n${b.english}\n\n[中文对照]\n${b.chinese}\n\n[人工备注]\n${b.note||''}\n\n${'='.repeat(70)}`).join('\n\n'),'text/plain;charset=utf-8');
+updateStatus();
+
+// Previous manual edits remain available, but cannot silently restore retired input fields.
+const previousDraft=localStorage.getItem('skillflow-prompt-review-20261027-v1');
+if(previousDraft&&previousDraft!=='{}'){const b=elem('button','导出修改前的旧稿草稿');b.onclick=()=>download('skillflow-prior-prompt-drafts.json',previousDraft,'application/json;charset=utf-8');document.querySelector('.toolbar').append(b);}

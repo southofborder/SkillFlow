@@ -10,18 +10,21 @@ from tools.doe.direct_assessment import packets, aggregate, final_packets
 from tools.doe.direct_results import measurements
 
 
-def test_freeze_resume_checks_current_source_and_request(tmp_path):
+def test_freeze_resume_checks_current_source_and_rejects_legacy_request(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "SKILL.md").write_text("Preserve the original value.\n", encoding="utf-8")
     run = tmp_path / "run"
-    first = _freeze_case(source, run, "case", ["SKILL.md"], "Return the value unchanged.")
-    assert _freeze_case(source, run, "case", ["SKILL.md"], "Return the value unchanged.") == first
-    with pytest.raises(ValueError, match="request differs"):
-        _freeze_case(source, run, "case", ["SKILL.md"], "Return a summary.")
+    first = _freeze_case(source, run, "case", ["SKILL.md"])
+    assert _freeze_case(source, run, "case", ["SKILL.md"]) == first
+    legacy = run / "cases/case/user_request.txt"
+    legacy.write_text("Return a summary.", encoding="utf-8")
+    with pytest.raises(ValueError, match="Legacy independent-request"):
+        _freeze_case(source, run, "case", ["SKILL.md"])
+    legacy.unlink()
     (source / "SKILL.md").write_text("Rewrite the value.\n", encoding="utf-8")
     with pytest.raises(ValueError, match="source"):
-        _freeze_case(source, run, "case", ["SKILL.md"], "Return the value unchanged.")
+        _freeze_case(source, run, "case", ["SKILL.md"])
 
 
 def test_independent_review_embeds_exact_answer_and_deliverable(tmp_path):

@@ -19,7 +19,7 @@ def answer(prompt):
     payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
     source_refs = [{"file": item["path"], "start_line": 1,
                     "end_line": len(item["lines"])} for item in payload["source_files"] if item["lines"]]
-    controlled = [u["id"] for u in payload["controlled_units"]]
+    controlled = [u["id"] for u in payload["controlled_facts"]]
     return {"schema_version": 6, "outcome": "completed", "contract_version": CONTRACT_VERSION,
             "findings": [{"id": "finding_1", "kind": "semantic", "status": "represented",
              "source_requirement": "仅用于执行协议测试的原文引用，不是语义答案。",
@@ -62,7 +62,7 @@ def no_network(*args, **kwargs):
 
 def test_prepare_bound_inputs_and_single_task_inventory(prepared):
     manifest = runner.verify_run(prepared, live=True)
-    assert manifest["schema_version"] == 7
+    assert manifest["schema_version"] == 8
     assert all(manifest[key] == value for key, value in contract_binding().items())
     assert manifest["planned_logical_calls"] == 5
     assert [c["case_id"] for c in manifest["cases"]] == list(runner.CASE_IDS)
@@ -86,7 +86,7 @@ def test_exactly_five_calls_isolated_payload_and_offline_replay(prepared, monkey
     assert len(factory.prompts) == result["recorded_logical_calls"] == 5
     assert result["execution_status"] == "complete", result["stages"]
     assert set(result["stages"]) == set(runner.CASE_IDS)
-    allowed = {"source_files", "controlled_text", "controlled_units"}
+    allowed = {"source_files", "controlled_facts"}
     for prompt in factory.prompts:
         payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
         assert set(payload) == allowed
@@ -229,7 +229,7 @@ def test_seven_suite_uses_independent_frozen_sources_and_exactly_seven_calls(tmp
     for case, prompt in zip(manifest["cases"], factory.prompts, strict=True):
         payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
         source = runner.read_json(directory / "inputs" / case["case_id"] / "source.json")
-        assert [{"path": item["path"], "content": "".join(line["text"] for line in item["lines"])}
+        assert [{"path": item["path"], "content": "".join(line[1] for line in item["lines"])}
                 for item in payload["source_files"]] == [
             {key: item[key] for key in ("path", "content")} for item in source["files"]]
         assert not {"oracle_key", "case_id", "selection", "previous_audit", "graph"}.intersection(payload)
@@ -240,7 +240,7 @@ def test_seven_suite_uses_independent_frozen_sources_and_exactly_seven_calls(tmp
     report = (directory / "report.md").read_text(encoding="utf-8")
     assert "Represented items" in report and CONTRACT_VERSION in report
     assert "七类检查记录" not in report and "Exact preservation" not in report
-    assert result["schema_version"] == 7
+    assert result["schema_version"] == 8
     summary = result["stages"]["c01"]["result"]["representation_summary"]
     assert summary == {"represented_ids": ["finding_1"], "conservative_ids": []}
 

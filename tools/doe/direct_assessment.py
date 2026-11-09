@@ -47,7 +47,9 @@ def packets(run: Path) -> dict:
     for case, candidates in grouped.items():
         case_root = run / "cases" / case
         blind_root = run / "blind" / case
-        for name in ("source_bundle.txt", "user_request.txt"):
+        if (case_root / "user_request.txt").exists():
+            raise ValueError("Legacy independent-request cases cannot enter Skill-only assessment")
+        for name in ("source_bundle.txt",):
             origin = case_root / name
             if origin.exists():
                 target = blind_root / name
@@ -185,7 +187,7 @@ def final_packets(run: Path) -> dict:
         source = run / "blind" / case
         target = run / "blind-final" / case
         target.mkdir(parents=True, exist_ok=True)
-        for name in ("source_bundle.txt", "user_request.txt", "shared_rules.txt", "reference-a.json", "reference-b.json"):
+        for name in ("source_bundle.txt", "shared_rules.txt", "reference-a.json", "reference-b.json"):
             path = source / name
             if path.exists():
                 dest = target / name

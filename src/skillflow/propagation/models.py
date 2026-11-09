@@ -25,6 +25,8 @@ from pydantic import (
 from skillflow.propagation.contracts.profiles import Effect
 from skillflow.propagation.contracts.specs import Precedence
 from skillflow.propagation.contracts.specs import SpecPath
+from skillflow.propagation.contracts.specs import CaseLabel
+from skillflow.propagation.data.models import ElementStep
 
 
 Text = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
@@ -154,6 +156,7 @@ AtomicOperation = Literal[
     "read", "receive", "deliver", "write", "select_part", "exclude_parts",
     "update_fields", "build", "compute",
     "filter_items",
+    "merge", "member", "branch", "append",
 ]
 
 
@@ -176,19 +179,56 @@ class BuildMemberRecord(StrictRecord):
     when_input_index: Annotated[int, Field(strict=True, ge=0)] | None
 
 
+class OperationAlternative(StrictRecord):
+    inputs: StrictList[CandidateIDs]
+    outputs: StrictList[CandidateIDs] = Field(default_factory=list)
+    bindings: dict[str, str] = Field(default_factory=dict)
+    branch_targets: StrictList[Text] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def serialize_route(self, handler):
+        value = handler(self)
+        if not self.branch_targets:
+            value.pop("branch_targets", None)
+        return value
+
+    @field_serializer("inputs", "outputs", when_used="json")
+    def serialize_slots(self, values):
+        return [sorted(ids) for ids in values]
+
+
 class AtomicOpRecord(StrictRecord):
     op: AtomicOperation
-    inputs: StrictList[DataIDs] = Field(default_factory=list)
+    inputs: StrictList[CandidateIDs] = Field(default_factory=list)
     outputs: StrictList[DataIDs] = Field(default_factory=list)
     endpoints: StrictList[FlowLocation] = Field(default_factory=list)
     changes: StrictList[StateChange] = Field(default_factory=list)
     members: StrictList[BuildMemberRecord] | None = None
     when_input_index: Annotated[int, Field(strict=True, ge=0)] | None = None
+    may_state: bool = False
+    alternatives: StrictList[OperationAlternative] = Field(default_factory=list)
+    branch_targets: StrictList[Text] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_consumption(self):
         from skillflow.propagation.conditions import validate_record_consumption
         validate_record_consumption(self)
+        if self.op != "merge" and any(not values for values in self.inputs):
+            raise ValueError("only merge may have an unavailable predecessor input slot")
+        for alternative in self.alternatives:
+            if len(alternative.inputs) != len(self.inputs) or len(alternative.outputs) != len(self.outputs):
+                raise ValueError("operation alternative slot arity must match the recorded operation")
+            if self.op != "merge" and any(not values for values in alternative.inputs):
+                raise ValueError("only merge alternatives may have unavailable predecessor slots")
+            if any(not values <= allowed for values, allowed in zip(alternative.inputs, self.inputs)):
+                raise ValueError("operation alternative input must belong to its recorded input slot")
+            if any(not values <= allowed for values, allowed in zip(alternative.outputs, self.outputs)):
+                raise ValueError("operation alternative output must belong to its recorded output slot")
+            if not set(alternative.branch_targets) <= set(self.branch_targets):
+                raise ValueError("operation alternative route must belong to the recorded branch targets")
+        if self.alternatives and any(set().union(*(alternative.outputs[index] for alternative in self.alternatives)) != values
+                for index, values in enumerate(self.outputs)):
+            raise ValueError("operation alternatives must account for every recorded output")
         return self
 
     @model_serializer(mode="wrap")
@@ -198,6 +238,12 @@ class AtomicOpRecord(StrictRecord):
             data.pop("members", None)
         if self.when_input_index is None:
             data.pop("when_input_index", None)
+        if not self.may_state:
+            data.pop("may_state", None)
+        if not self.alternatives:
+            data.pop("alternatives", None)
+        if not self.branch_targets:
+            data.pop("branch_targets", None)
         return data
 
     @field_serializer("inputs", "outputs", when_used="json")
@@ -209,6 +255,17 @@ class AtomicOpRecord(StrictRecord):
 class EffectEvent(StrictRecord):
     effect: Effect | None
     atomic_ops: StrictList[AtomicOpRecord] = Field(default_factory=list)
+    case: CaseLabel | None = None
+    requires_completion: StrictList[Text] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def optional_case(self, handler):
+        value = handler(self)
+        if self.case is None:
+            value.pop("case", None)
+        if not self.requires_completion:
+            value.pop("requires_completion", None)
+        return value
 
 
 class ForEachInstance(StrictRecord):
@@ -217,6 +274,21 @@ class ForEachInstance(StrictRecord):
     collection: Text
     element: Text
     body: StrictList[EffectEvent]
+    selector: Annotated[int, Field(strict=True, ge=0)] | ElementStep | None = None
+    yielded: CandidateIDs = frozenset()
+
+    @model_serializer(mode="wrap")
+    def optional_collection_fields(self, handler):
+        result = handler(self)
+        if self.selector is None:
+            result.pop("selector", None)
+        if not self.yielded:
+            result.pop("yielded", None)
+        return result
+
+    @field_serializer("yielded", when_used="json")
+    def serialize_yield(self, values):
+        return sorted(values)
 
 
 class ForEachRecord(StrictRecord):
@@ -225,6 +297,23 @@ class ForEachRecord(StrictRecord):
     kind: Literal["for_each"]
     collections: DataIDs
     instances: StrictList[ForEachInstance]
+    outputs: CandidateIDs = frozenset()
+    completion_groups: StrictList[Text] = Field(default_factory=list)
+    requires_completion: StrictList[Text] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def optional_outputs(self, handler):
+        result = handler(self)
+        if not self.outputs:
+            result.pop("outputs", None)
+        for key in ("completion_groups", "requires_completion"):
+            if not getattr(self, key):
+                result.pop(key, None)
+        return result
+
+    @field_serializer("outputs", when_used="json")
+    def serialize_outputs(self, values):
+        return sorted(values)
 
     @field_serializer("collections", when_used="json")
     def serialize_collections(self, values: frozenset[str]) -> list[str]:
@@ -232,7 +321,7 @@ class ForEachRecord(StrictRecord):
 
 
 class IRFlowRecord(StrictRecord):
-    """Complete IR states and per-spec events, never iteration logs.
+    """Computation/evidence state projections and per-spec events, not iteration logs.
 
     Null-effect events retain computations or tool acquisition without inventing
     security effects. Empty effects do not imply equal entry and exit states.

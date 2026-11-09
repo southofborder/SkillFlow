@@ -200,8 +200,7 @@ def review_reference(material, *, adverse=False):
     """Complete assistant-authored review; never included in a live request."""
     accepted = {"status": "accepted", "reason": "The declared relation is supported by this fixture's source and current representation.", "finding_indexes": []}
     response = {"outcome": "completed",
-        "source_checks": [{"file": item["file"], "start_line": item["line"], "end_line": item["line"], **deepcopy(accepted)}
-                          for item in material["source_line_universe"]],
+
         "requirement_checks": [{"requirement_id": item["id"], **deepcopy(accepted)} for item in material["task"]["requirements"]],
         "declaration_checks": [{"raw_pointer": item["raw_pointer"], **deepcopy(accepted)} for item in material["declaration_index"]],
         "reviewed_ir_ids": [item["id"] for block in material["cfg"]["blocks"].values() for item in block["instructions"]], "findings": []}

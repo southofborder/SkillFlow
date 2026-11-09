@@ -233,7 +233,7 @@ def _annotation(root, annotation, selection, graph, source, snapshot, binding):
             if binding != expected_binding or read_json(root / "source-binding.json") != binding:
                 raise ValueError("Source binding differs from verified stage snapshots")
             saved_material = load_prepared_material(directory)
-            material = prepare_material(source, graph, user_request=saved_material["user_request"], task_baseline=saved_material["task"])
+            material = prepare_material(source, graph, task_baseline=saved_material["task"])
             if (read_json(directory / "inputs/cfg.json") != graph
                     or saved_material != material
                     or manifest["material_sha256"] != canonical_sha256(material)
@@ -346,7 +346,6 @@ def load_case(run_dir: Path, case: dict, result: dict, skills_dir: Path, *, rend
         "validation": annotation.get("validation", {}), "source_binding": result["source_binding"],
         "source_validation": {"zip": zip_check, "snapshot": snapshot is not None},
         "runtime_contract": material["runtime_contract"] if material else None,
-        "user_request": material["user_request"] if material else None,
         "boundaries": boundaries,
         "scheduler_error": result.get("scheduler_error"),
         "png_file": f"ir-IPP/{basename}.png", "svg_file": f"render/{basename}.svg",

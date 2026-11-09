@@ -71,7 +71,7 @@ def test_partial_order_is_loadable_without_generic_unresolved(tmp_path):
 
 
 @pytest.mark.parametrize("name", [
-    "inputs/package/SKILL.md", "inputs/runtime-contract.json", "inputs/user-request.json", "inputs/cfg.json", "inputs/prompt.txt",
+    "inputs/package/SKILL.md", "inputs/runtime-contract.json", "inputs/cfg.json", "inputs/prompt.txt",
     "audit/raw-annotation.json", "audit/compiled-response.json", "audit/compilation-map.json",
     "audit/location-evidences.json",
     "validation.json", "result.json", "manifest.json",

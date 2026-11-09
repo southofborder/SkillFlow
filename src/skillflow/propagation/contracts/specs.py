@@ -83,6 +83,14 @@ class ReceiveOp(AtomicSpec):
     location: Text
     inputs: list[ValueRef]
     output: Text
+    request_id: Text | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_request_id(self, handler):
+        result = handler(self)
+        if self.request_id is None:
+            result.pop("request_id", None)
+        return result
 
 
 class DeliverOp(AtomicSpec):
@@ -90,12 +98,15 @@ class DeliverOp(AtomicSpec):
     inputs: list[ValueRef]
     target: Text
     when: ValueRef | None = None
+    request_id: Text | None = None
 
     @model_serializer(mode="wrap")
     def omit_absent_condition(self, handler):
         result = handler(self)
         if self.when is None:
             result.pop("when", None)
+        if self.request_id is None:
+            result.pop("request_id", None)
         return result
 
 
@@ -105,6 +116,16 @@ class RawDeliverOp(AtomicSpec):
     inputs: list[ValueRef]
     target: Text
     demands: list[OperationTaskGoal] = Field(default_factory=list)
+    request_id: Text | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_request_id(self, handler):
+        result = handler(self)
+        if self.request_id is None:
+            result.pop("request_id", None)
+        if not result.get("demands"):
+            result.pop("demands", None)
+        return result
 
 
 class WriteOp(AtomicSpec):
@@ -112,6 +133,14 @@ class WriteOp(AtomicSpec):
     target: Text
     mode: Literal["replace", "append", "delete"]
     input: ValueRef | None = None
+    may: bool = False
+
+    @model_serializer(mode="wrap")
+    def optional_summary(self, handler):
+        value = handler(self)
+        if not self.may:
+            value.pop("may", None)
+        return value
 
     @model_validator(mode="after")
     def write_operand(self) -> "WriteOp":
@@ -200,9 +229,49 @@ class FilterItemsOp(AtomicSpec):
     output: Text
 
 
+class MergeIncoming(StrictSpec):
+    predecessor: Text
+    value: ValueRef
+
+
+class MergeOp(AtomicSpec):
+    """An incoming-edge selection, never a simultaneous computation."""
+    op: Literal["merge"]
+    incoming: Annotated[list[MergeIncoming], Field(min_length=1)]
+    output: Text
+
+    @model_validator(mode="after")
+    def unique_predecessors(self):
+        if len({item.predecessor for item in self.incoming}) != len(self.incoming):
+            raise ValueError("merge repeats an incoming predecessor")
+        return self
+
+
+class MemberOp(AtomicSpec):
+    op: Literal["member"]
+    input: ValueRef
+    output: Text
+
+
+class BranchOp(AtomicSpec):
+    op: Literal["branch"]
+    input: ValueRef
+    predicate: Literal["truthy", "nonempty", "empty", "has_member"]
+    true_target: Text
+    false_target: Text
+
+
+class AppendOp(AtomicSpec):
+    op: Literal["append"]
+    input: ValueRef
+    value: ValueRef
+    mode: Literal["item", "items"]
+    output: Text
+
+
 AtomicOp = Annotated[
     ReadOp | ReceiveOp | DeliverOp | WriteOp | SelectPartOp | ExcludePartsOp
-    | UpdateFieldsOp | BuildOp | ComputeOp | FilterItemsOp,
+    | UpdateFieldsOp | BuildOp | ComputeOp | FilterItemsOp | MergeOp | MemberOp | BranchOp | AppendOp,
     Field(discriminator="op"),
 ]
 
@@ -244,9 +313,26 @@ class RawFilterItemsOp(FilterItemsOp):
     expression: OperationExpression | None = None
 
 
+class RawMergeOp(MergeOp):
+    demands: list[OperationTaskGoal] = Field(default_factory=list)
+
+
+class RawMemberOp(MemberOp):
+    demands: list[OperationTaskGoal] = Field(default_factory=list)
+
+
+class RawBranchOp(BranchOp):
+    demands: list[OperationTaskGoal] = Field(default_factory=list)
+
+
+class RawAppendOp(AppendOp):
+    demands: list[OperationTaskGoal] = Field(default_factory=list)
+
+
 RawAtomicOp = Annotated[
     RawReadOp | RawReceiveOp | RawDeliverOp | RawWriteOp | RawSelectPartOp | RawExcludePartsOp
-    | RawUpdateFieldsOp | RawBuildOp | RawComputeOp | RawFilterItemsOp,
+    | RawUpdateFieldsOp | RawBuildOp | RawComputeOp | RawFilterItemsOp
+    | RawMergeOp | RawMemberOp | RawBranchOp | RawAppendOp,
     Field(discriminator="op"),
 ]
 
@@ -256,13 +342,27 @@ def compiled_operation(operation):
     return {key: item for key, item in value.items() if key not in {"demands", "expression"}}
 
 
+class CaseLabel(StrictSpec):
+    """A source-supported call outcome, not a measured execution trace."""
+    group: Text
+    id: Text
+    name: Text
+    phase: Literal["normal", "pre_request_error", "post_request_error", "local_error"]
+    disposition: Literal["return", "throw"]
+    condition: Text
+
+
 class EffectSpec(StrictSpec):
     effect: Effect | None
+    case: CaseLabel | None = None
+    requires_completion: list[Text] = Field(default_factory=list)
     evidences: list[SpecEvidence] = Field(default_factory=list)
-    atomic_ops: Annotated[list[AtomicOp], Field(min_length=1)]
+    atomic_ops: list[AtomicOp]
 
     @model_validator(mode="after")
     def occurrence_evidence(self):
+        if not self.atomic_ops and (self.effect is not None or self.case is None):
+            raise ValueError("empty event requires an explicit null-effect case carrier")
         if self.effect is not None and not self.evidences:
             raise ValueError("each nonempty effect occurrence requires its own evidence")
         if self.effect is None and self.evidences:
@@ -272,6 +372,10 @@ class EffectSpec(StrictSpec):
     @model_serializer(mode="wrap")
     def omit_null_effect_evidence(self, handler):
         result = handler(self)
+        if self.case is None:
+            result.pop("case", None)
+        if not self.requires_completion:
+            result.pop("requires_completion", None)
         if self.effect is None:
             result.pop("evidences", None)
         return result
@@ -279,15 +383,26 @@ class EffectSpec(StrictSpec):
 
 class RawEffectSpec(EffectSpec):
     effect: RawEffect | None
-    atomic_ops: Annotated[list[RawAtomicOp], Field(min_length=1)]
+    atomic_ops: list[RawAtomicOp]
 
 
 class ProcessingSpec(StrictSpec):
     kind: Literal["processing"]
     mode: Literal["model", "local", "default"]
-    events: Annotated[list[RawEffectSpec], Field(min_length=1)]
+    events: list[RawEffectSpec]
     returns: list[ValueRef] = Field(default_factory=list)
     evidences: Evidences
+    case: CaseLabel | None = None
+    requires_completion: list[Text] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def optional_case(self, handler):
+        result = handler(self)
+        if self.case is None:
+            result.pop("case", None)
+        if not self.requires_completion:
+            result.pop("requires_completion", None)
+        return result
 
     @model_validator(mode="after")
     def explicit_local_boundary(self):
@@ -298,6 +413,8 @@ class ProcessingSpec(StrictSpec):
                 raise ValueError("local processing requires explicit returns, possibly empty")
             # Source/CFG mechanism categories are checked against the frozen
             # typed registry by the annotation service, never by ID spelling.
+        if not self.events and not self.returns:
+            raise ValueError("processing requires operations or explicit returned content")
         return self
 
 
@@ -308,6 +425,30 @@ class RawForEachSpec(StrictSpec):
     item: Text
     body: Annotated[list[ProcessingSpec], Field(min_length=1)]
     evidences: Evidences
+    yield_value: ValueRef | None = Field(default=None, alias="yield")
+    output: Text | None = None
+    completion_groups: list[Text] = Field(default_factory=list)
+    requires_completion: list[Text] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def collection_output(self):
+        if (self.yield_value is None) != (self.output is None):
+            raise ValueError("for_each yield and output must be supplied together")
+        return self
+
+    @model_serializer(mode="wrap")
+    def collection_fields(self, handler):
+        result = handler(self)
+        for key in ("completion_groups", "requires_completion"):
+            if not getattr(self, key):
+                result.pop(key, None)
+        result.pop("yield_value", None)
+        if self.yield_value is not None:
+            result["yield"] = self.yield_value.model_dump(mode="json")
+        else:
+            result.pop("yield", None)
+            result.pop("output", None)
+        return result
 
 
 class ForEachSpec(StrictSpec):
@@ -317,6 +458,30 @@ class ForEachSpec(StrictSpec):
     item: Text
     body: Annotated[list[EffectSpec], Field(min_length=1)]
     evidences: Evidences
+    yield_value: ValueRef | None = Field(default=None, alias="yield")
+    output: Text | None = None
+    completion_groups: list[Text] = Field(default_factory=list)
+    requires_completion: list[Text] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def collection_output(self):
+        if (self.yield_value is None) != (self.output is None):
+            raise ValueError("for_each yield and output must be supplied together")
+        return self
+
+    @model_serializer(mode="wrap")
+    def collection_fields(self, handler):
+        result = handler(self)
+        for key in ("completion_groups", "requires_completion"):
+            if not getattr(self, key):
+                result.pop(key, None)
+        result.pop("yield_value", None)
+        if self.yield_value is not None:
+            result["yield"] = self.yield_value.model_dump(mode="json")
+        else:
+            result.pop("yield", None)
+            result.pop("output", None)
+        return result
 
 
 class OutputBinding(StrictSpec):
@@ -365,23 +530,18 @@ def _has_effect(events):
 
 
 class ActionSemantics(StrictSpec):
-    operator: list[Operator]
-    operator_evidences: Annotated[list[OperatorEvidence], Field(min_length=1)]
+    operator: list[Operator] | None = None
+    operator_evidences: list[OperatorEvidence] = Field(default_factory=list)
     empty_effect_evidences: Evidences | None = None
 
     @model_validator(mode="after")
     def supported_action_labels(self):
-        if len(self.operator) != len(set(self.operator)):
+        if self.operator is not None and len(self.operator) != len(set(self.operator)):
             raise ValueError("operator: duplicate labels")
-        expected = set(self.operator) if self.operator else {None}
+        expected = set(self.operator) if self.operator else ({None} if self.operator == [] else set())
         supplied = {item.value for item in self.operator_evidences}
         if supplied != expected:
             raise ValueError("operator evidence must cover exactly the actual labels or confirmed empty list")
-        has_effect = _has_effect(self.events)
-        if has_effect and "empty_effect_evidences" in self.model_fields_set:
-            raise ValueError("empty-effect evidence is forbidden when any event has an effect")
-        if not has_effect and self.empty_effect_evidences is None:
-            raise ValueError("an IR without nonempty effects requires empty_effect_evidences")
         return self
 
     @model_serializer(mode="wrap")
@@ -422,6 +582,7 @@ def flatten_raw_spec(spec: RawIRTransferSpec) -> IRTransferSpec:
     def extend_segment(segment, target, outer=None):
         start = len(target)
         target.extend(EffectSpec(effect=child.effect, evidences=child.evidences,
+                                case=segment.case, requires_completion=segment.requires_completion,
                                 atomic_ops=[compiled_operation(op) for op in child.atomic_ops]) for child in segment.events)
         positions = [(e if outer is None else outer, None if outer is None else e, o)
                      for e in range(start, len(target)) for o in range(len(target[e].atomic_ops))]
@@ -434,8 +595,10 @@ def flatten_raw_spec(spec: RawIRTransferSpec) -> IRTransferSpec:
             for processing in event.body:
                 extend_segment(processing, body, outer=len(events))
             events.append(ForEachSpec(kind="for_each", collection=event.collection, item=event.item,
+                                     completion_groups=event.completion_groups, requires_completion=event.requires_completion,
                                      body=body, sensitivity=event.sensitivity,
-                                     evidences=event.evidences))
+                                      evidences=event.evidences, **({"yield": event.yield_value,
+                                      "output": event.output} if event.output is not None else {})))
     def coordinate(key):
         return (key[0], -1 if key[1] is None else key[1], key[2])
     precedence = [Precedence(before=position_value(before), after=position_value(after))
@@ -531,8 +694,9 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
         annotation = AnnotationPayload.model_validate(annotation)
     locations, specs = annotation.locations, annotation.ir_semantics
     instructions = {item["id"]: item for block in cfg["blocks"].values() for item in block["instructions"]}
-    if set(specs) != set(instructions):
-        raise structural_error("validate_specs", "/ir_semantics", "IR semantics coverage must match every actual IR")
+    from skillflow.propagation.contracts.limitations import check_processing_coverage, validate_processing_gaps
+    check_processing_coverage(cfg, annotation)
+    validate_processing_gaps(cfg, annotation.processing_gaps, locations)
     diagnostics, identities = [], set()
     for location_id, location in locations.items():
         prefix = json_pointer("locations", location_id)
@@ -551,17 +715,54 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
         paths = _raw_event_paths(original) if isinstance(original, RawIRTransferSpec) else {}
         try:
             spec = flatten_raw_spec(original) if paths or isinstance(original, RawIRTransferSpec) else original
+            if spec.order != "fixed" and any(event.case is not None for _, _, event in iter_scoped_events(spec)):
+                raise structural_error("case_order", "/order", "bounded call cases require fixed summary order")
+            case_groups, label_ids, group_scopes = {}, {}, {}
+            for e, b, event in iter_scoped_events(spec):
+                if event.case is None:
+                    continue
+                label = event.case
+                scope = e if b is not None else None
+                if label.group in group_scopes and group_scopes[label.group] != scope:
+                    raise structural_error("case_scope", "/events", "one case group cannot cross member scopes")
+                group_scopes[label.group] = scope
+                if label.id in label_ids and label_ids[label.id] != label:
+                    raise structural_error("case_identity", "/events", "one case identity must keep its condition and disposition")
+                label_ids[label.id] = label
+                case_groups.setdefault(label.group, set()).add(label.disposition)
+            if any("return" not in dispositions for dispositions in case_groups.values()):
+                raise structural_error("case_result", "/events", "bounded call cases require at least one return candidate")
+            for _, _, event in iter_scoped_events(spec):
+                if not set(event.requires_completion) <= set(case_groups):
+                    raise structural_error("case_completion", "/events", "normal completion references an undefined case group")
             if not isinstance(original, RawIRTransferSpec):
                 validate_precedence(spec)
             instruction = instructions[ir_id]
             local_errors = []
+            block_id = next(block_id for block_id, block in cfg["blocks"].items()
+                            if any(item["id"] == ir_id for item in block["instructions"]))
+            incoming_blocks = {edge["source_block_id"] for edge in cfg.get("edges", []) if edge["target_block_id"] == block_id}
+            outgoing_blocks = {edge["target_block_id"] for edge in cfg.get("edges", []) if edge["source_block_id"] == block_id}
             for e, b, event in iter_scoped_events(spec):
                 event_path = f"/events/{e}" + (f"/body/{b}" if b is not None else "")
                 try:
                     with validation_at(event_path):
-                        validate_event_operations(event.effect, [operation.op for operation in event.atomic_ops])
+                        if event.atomic_ops or event.case is None or event.effect is not None:
+                            validate_event_operations(event.effect, [operation.op for operation in event.atomic_ops])
                 except StructuralValidationError as error:
                     local_errors.extend(error.diagnostics)
+                for index, operation in enumerate(event.atomic_ops):
+                    path = event_path + f"/atomic_ops/{index}"
+                    if isinstance(operation, MergeOp) and not {item.predecessor for item in operation.incoming} <= incoming_blocks:
+                        local_errors.extend(structural_error("merge_predecessor", path + "/incoming",
+                            "merge predecessor must be an actual incoming CFG block").diagnostics)
+                    if isinstance(operation, BranchOp):
+                        if {operation.true_target, operation.false_target} != outgoing_blocks:
+                            local_errors.extend(structural_error("branch_targets", path,
+                                "typed branch targets must cover exactly the outgoing CFG successors").diagnostics)
+                        if cfg["blocks"][block_id]["instructions"][-1]["id"] != ir_id:
+                            local_errors.extend(structural_error("branch_position", path,
+                                "typed branch belongs to the block terminator").diagnostics)
             bindings = [item.output_index for item in spec.output_bindings]
             if sorted(bindings) != list(range(len(instruction.get("outputs", [])))):
                 local_errors.extend(structural_error("validate_specs", "/output_bindings",
@@ -625,6 +826,11 @@ def _validate_scope(events, instruction, locations, *, uncertain, external=None,
             if in_foreach:
                 diagnostics.extend(structural_error("validate_scope", event_path, "nested for_each is not supported").diagnostics)
             positions.append((count, event, None, event_path))
+            if event.output is not None:
+                if event.output in definitions:
+                    diagnostics.extend(structural_error("validate_scope", event_path + "/output",
+                        "duplicate for_each output local: " + event.output).diagnostics)
+                definitions[event.output] = count
             count += 1
         else:
             for op_index, operation in enumerate(event.atomic_ops):
@@ -656,11 +862,23 @@ def _validate_scope(events, instruction, locations, *, uncertain, external=None,
             if len(diagnostics) == before:
                 outer = {name: -1 for name, at in definitions.items() if at < position}
                 outer[event.item] = -1
-                check("", _validate_scope, event.body, instruction, locations, uncertain=uncertain,
+                inner = check("", _validate_scope, event.body, instruction, locations, uncertain=uncertain,
                       external=outer, in_foreach=True, path_prefix=path + "/body")
+                if inner is not None and event.yield_value is not None:
+                    check(path + "/yield", _validate_ref, event.yield_value, instruction,
+                          inner[0], inner[1], uncertain=False)
             continue
-        if in_foreach and isinstance(operation, (ReadOp, ReceiveOp, WriteOp)):
-            diagnostics.extend(structural_error("validate_scope", path, "for_each body must not read, receive, or write shared state").diagnostics)
+        if isinstance(operation, WriteOp) and operation.may:
+            location = locations.get(operation.target)
+            if (event.case is None or operation.mode != "replace" or location is None
+                    or location.kind != "runtime_context" or location.access_scope != "task"):
+                diagnostics.extend(structural_error("state_summary", path,
+                    "may writes require an explicit call case and a task-local runtime-context replace").diagnostics)
+        if in_foreach and isinstance(operation, WriteOp) and not operation.may:
+            diagnostics.extend(structural_error("validate_scope", path, "for_each body must not write shared state").diagnostics)
+        if event.case is not None and event.case.phase == "pre_request_error" and event.effect in {"net_send", "net_receive"}:
+            diagnostics.extend(structural_error("case_phase", path,
+                "a pre-request failure cannot contain a network delivery or response").diagnostics)
         effect = event.effect
         location_id = getattr(operation, "location", getattr(operation, "target", None))
         if location_id is not None and location_id not in locations:
@@ -804,6 +1022,13 @@ def structural_precedence(spec):
                     for key in operations:
                         if key[0] == e and key[1] is not None:
                             edges.add((origin, key))
+            if event.output is not None:
+                producers = [key for key in operations if key[0] == e and key[1] is not None]
+                for key, operation in operations.items():
+                    if key[0] == e:
+                        continue
+                    if any(event.output in _local_names(ref) for ref in value_refs(operation)):
+                        edges.update((producer, key) for producer in producers)
     return edges
 
 

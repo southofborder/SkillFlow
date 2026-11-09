@@ -1,5 +1,7 @@
 # Approved fresh CLI engineering transport v2
 
+Historical CLI-v2 profile: its Ultra configuration and implementation hashes are preserved. Newly prepared experiments use Max through the current CLI-v3/controlled adapters; this document is not a new-run configuration.
+
 This is a separate, versioned adapter. Existing v1 Python modules, protocol,
 material seals, evaluation rules, original stopped collaboration calibration and
 successful one-request feasibility probe are preserved. The effective

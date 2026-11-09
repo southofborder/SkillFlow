@@ -12,8 +12,6 @@ from skillflow.task.runner import load_task_run
 
 def _checked_baseline(path, case):
     task = load_task_run(path)["task"]
-    if task["basis"] != "declared_skill":
-        raise ValueError("These corpus drivers require a declared-Skill Task baseline; use the main analysis pipeline for an independent user task")
     expected = case.get("source_sha256")
     address = case.get("package_path", case.get("input"))
     if expected is None and address is not None:

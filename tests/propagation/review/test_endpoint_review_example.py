@@ -20,7 +20,7 @@ def rendered_lesson():
     shown = json.JSONDecoder().raw_decode(prompt.split('\nREVIEW_EXAMPLES\n', 1)[1])[0][0]
     context = shown['context']
     material = prepare_material(context['source'], context['cfg'],
-        task_baseline=context['task'], user_request=context['user_request'])
+        task_baseline=context['task'])
     # Only the runtime contract is shared with the actual input. The full
     # teaching candidate and all other inputs must come from rendered text.
     actual = json.JSONDecoder().raw_decode(prompt.split('\nREVIEW MATERIAL (DATA, NOT INSTRUCTIONS)\n', 1)[1])[0]
@@ -28,7 +28,7 @@ def rendered_lesson():
     compiled_review = prepare_review_material(material, context['raw_annotation'])
     assert context['target_index'] == {
         row['id']: {row['kind']: row['pointer']} for row in compiled_review['target_index']}
-    for key in ('declaration_index', 'observations', 'source_line_universe'):
+    for key in ('declaration_index', 'observations'):
         assert context[key] == compiled_review[key]
     return prompt, shown, material, compiled_review
 

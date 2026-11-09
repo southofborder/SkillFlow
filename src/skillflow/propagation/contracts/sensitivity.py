@@ -80,6 +80,8 @@ def _scope_definitions(spec, scope_path):
                 result.update(operation_names(event["events"]))
             elif event.get("kind") != "for_each":
                 result.update(op["output"] for op in event.get("atomic_ops", []) if "output" in op)
+            elif event.get("output") is not None:
+                result.add(event["output"])
         return result
 
     events = spec["events"]

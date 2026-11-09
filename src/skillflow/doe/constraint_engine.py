@@ -27,7 +27,7 @@ def _template(info):
 class ConstraintEngine:
     def __init__(self, engine, *, max_states=20000):
         self.engine, self.max_states = engine, max_states
-        self.cfg, self.data = engine.facts.cfg, engine.index.data
+        self.cfg, self.data = engine.index.cfg, engine.index.data
         self.booleans = BooleanFacts(engine, max_options=max_states)
         self.constraints = {}
         self.incomplete_scope = set()
@@ -47,13 +47,26 @@ class ConstraintEngine:
         self.edges = defaultdict(list)
         for number, edge in enumerate(self.cfg["edges"]):
             self.edges[edge["source_block_id"]].append((number, edge))
+        self.typed_targets = {}
+        from skillflow.propagation.loop_guards import guard_values
+        for block, body in self.cfg["blocks"].items():
+            targets = {edge["target_block_id"] for _, edge in self.edges[block]}
+            for instruction in body["instructions"]:
+                for key in self.by_ir[instruction["id"]]:
+                    info = self.engine.ops[key]
+                    if info["spec"]["op"] == "branch":
+                        spec = info["spec"]
+                        truths = guard_values(self.data, info["record"]["inputs"][0], spec["predicate"])
+                        targets &= {spec["true_target"] if truth else spec["false_target"] for truth in truths}
+                        self.typed_targets[block] = targets
         self._reachable = set()
         pending = [self.cfg["entry_block_id"]]
         while pending:
             block = pending.pop()
             if block not in self._reachable:
                 self._reachable.add(block)
-                pending.extend(edge["target_block_id"] for _, edge in self.edges[block])
+                pending.extend(edge["target_block_id"] for _, edge in self.edges[block]
+                               if block not in self.typed_targets or edge["target_block_id"] in self.typed_targets[block])
 
     def complete_scope(self, constraint_id):
         if self._checks is None:
@@ -127,9 +140,6 @@ class ConstraintEngine:
         return {key for key in self._reference_ops(refs) if self._scope_match(self.engine.ops[key], constraint["scope"])}
 
     def _validate_scope(self, identity, constraint):
-        if sum(isinstance(step, dict) for step in constraint.get("path", [])) > 1:
-            self._uncheckable = True
-            self._reasons.add("Nested collection quantification is outside the supported original-content fragment.")
         refs = [*(constraint.get("events", []) or []), *constraint.get("before", []),
                 *constraint.get("after", []), *constraint.get("triggers", [])]
         # Reference validation is repeated defensively for authored offline
@@ -140,10 +150,18 @@ class ConstraintEngine:
                 self._reasons.add("An event reference has no validated graph or raw-operation target.")
         for block in self._reachable:
             for ir in self.cfg["blocks"][block]["instructions"]:
-                if self.engine.facts.coverage.get(ir["id"]) != "processed":
+                if self.engine.index.coverage.get(ir["id"]) != "processed":
                     self.incomplete_scope.add(identity)
                     self._reasons.add("A task-entry-reachable instruction lacks complete propagation facts.")
         scope = constraint["scope"]
+        if constraint["kind"] in {"at_most", "requires_prior", "forbid_after"}:
+            selected_irs = {self.engine.ops[key]["position"]["instruction_id"]
+                            for key in self.resolve_operations(constraint)}
+            if any(info["record"].get("may_state") and info.get("scope") is not None
+                   and info["position"]["instruction_id"] in selected_irs
+                   for info in self.engine.ops.values()):
+                self._uncheckable = True
+                self._reasons.add("A member call has possible local state changes; exact cross-member state order and hit/create counts are not solved.")
         if scope["kind"] == "element":
             raw_ir = self.engine.raw["ir_semantics"].get(scope["instruction_id"], {})
             try:
@@ -152,7 +170,7 @@ class ConstraintEngine:
                     raise KeyError("not a member scope")
             except (KeyError, IndexError, TypeError):
                 self.incomplete_scope.add(identity)
-                self._reasons.add("The declared element scope has no existing single-level for_each.")
+                self._reasons.add("The declared element constraint scope must reference an existing compact for_each event; explicit CFG iteration scopes are not constraint scope references.")
             if any("operation_path" not in ref for ref in refs):
                 self._uncheckable = True
                 self._reasons.add("Per-element event occurrences require operation bindings, not a whole instruction.")
@@ -304,6 +322,36 @@ class ConstraintEngine:
     def _schedule(self, constraint, ir, initial, structural, *, outer=None, instance=None):
         spec = self.engine.compiled["ir_semantics"][ir]
         atoms, dependencies = self._dependencies(spec, outer)
+        events = spec["events"] if outer is None else spec["events"][outer]["body"]
+        groups = defaultdict(dict)
+        for event in events:
+            if event.get("case"):
+                case = event["case"]
+                groups[case["group"]][case["id"]] = case
+        def case_key(group, identity):
+            return "@call-case:" + repr((ir, outer, instance, group, identity))
+        def throws(cube, selected=None):
+            return any(case["disposition"] == "throw" and cube.get(case_key(group, identity), False)
+                       for group, choices in groups.items() if selected is None or group in selected
+                       for identity, case in choices.items())
+        def choices(event, cube):
+            if throws(cube, event.get("requires_completion", [])):
+                return [(False, cube)]
+            case = event.get("case")
+            if not case:
+                return [(True, cube)]
+            group = case["group"]
+            key = case_key(group, case["id"])
+            if key in cube:
+                return [(cube[key], cube)]
+            # Candidate conditions remain source-supported possibilities. One
+            # invocation/member selects exactly one alternative, never all.
+            result = []
+            for selected in groups[group]:
+                facts = dict(cube)
+                facts.update({case_key(group, identity): identity == selected for identity in groups[group]})
+                result.append((selected == case["id"], facts))
+            return result
         lookup = {}
         for key in self.by_ir[ir]:
             pos = self.engine.ops[key]["position"]
@@ -323,26 +371,30 @@ class ConstraintEngine:
             visited.add(identity)
             self._tick()
             if len(done) == len(atoms):
-                outcomes.append((monitor, cube, trace))
+                if not throws(cube):
+                    outcomes.append((monitor, cube, trace))
                 continue
             ready = [atom for atom in atoms if atom not in done and dependencies[atom] <= done]
             if not ready:
                 self._uncheckable = True
                 self._reasons.add("The local precedence relation has no complete supported arrangement.")
             for atom in ready:
-                if atom[1] == -1:
-                    following = self._foreach(constraint, ir, atom[0], (monitor, cube, trace), structural)
-                elif atom not in lookup:
-                    self.incomplete_scope.add(self._identity)
-                    self._reasons.add("A declared primitive operation has no indexed propagation record.")
-                    following = [(monitor, cube, trace)]
-                else:
-                    following = self._operation(constraint, lookup[atom], (monitor, cube, trace), structural)
-                pending.extend((done | {atom}, *state) for state in following)
+                for enabled, facts in choices(events[atom[0]], cube):
+                    if not enabled:
+                        following = [(monitor, facts, trace)]
+                    elif atom[1] == -1:
+                        following = self._foreach(constraint, ir, atom[0], (monitor, facts, trace), structural)
+                    elif atom not in lookup:
+                        self.incomplete_scope.add(self._identity)
+                        self._reasons.add("A declared primitive operation has no indexed propagation record.")
+                        following = [(monitor, facts, trace)]
+                    else:
+                        following = self._operation(constraint, lookup[atom], (monitor, facts, trace), structural)
+                    pending.extend((done | {atom}, *state) for state in following)
         return outcomes
 
     def _foreach(self, constraint, ir, event, initial, structural):
-        record = self.engine.facts.records[ir]["events"][event]
+        record = self.engine.index.records[ir]["events"][event]
         instances = record.get("instances", [])
         relevant = [key for key in self.resolve_operations(constraint)
                     if self.engine.ops[key]["position"]["instruction_id"] == ir
@@ -360,30 +412,56 @@ class ConstraintEngine:
             for number in range(len(instances)):
                 self._schedule(constraint, ir, (0, dict(initial[1]), initial[2]), structural, outer=event, instance=number)
             return [initial]
-        sizes = {collection_size(self.data, identity) for identity in record["collections"]}
-        if None in sizes:
-            if relevant and constraint["kind"] == "at_most":
-                self._uncheckable = True
-                self._reasons.add("Unknown collection multiplicity prevents an exact task-wide occurrence bound.")
-                sizes.discard(None)
-                sizes.update((0, constraint["limit"] + 1))
-            else:
-                sizes.discard(None)
-                sizes.update((0, 1))
         outcomes = []
-        for size in sizes:
-            states = [initial]
-            for _ in range(size):
-                next_states = []
-                for state in states:
-                    for number in range(len(instances)):
-                        next_states.extend(self._schedule(constraint, ir, state, structural, outer=event, instance=number))
-                states = self._unique(next_states)
-                if not states:
-                    self.incomplete_scope.add(self._identity)
-                    self._reasons.add("The collection has no complete indexed member-body arrangement.")
-                    break
-            outcomes.extend(states)
+        for collection in record["collections"]:
+            size = collection_size(self.data, collection)
+            numbers = [number for number, row in enumerate(instances)
+                       if row.get("collection") == collection or
+                       ("collection" not in row and len(record["collections"]) == 1)]
+            unknown = size is None
+            if unknown:
+                if relevant and constraint["kind"] == "at_most":
+                    self._uncheckable = True
+                    self._reasons.add("Unknown collection multiplicity prevents an exact task-wide occurrence bound.")
+                    sizes = (0, constraint["limit"] + 1)
+                else:
+                    sizes = (0, 1)
+            else:
+                sizes = (size,)
+            for count in sizes:
+                by_position = defaultdict(list)
+                for number in numbers:
+                    selector = instances[number].get("selector")
+                    if type(selector) is int:
+                        by_position[selector].append(number)
+                if not unknown and set(by_position) == set(range(count)):
+                    layers = [by_position[position] for position in range(count)]
+                elif not unknown and len(numbers) == count and all("selector" not in instances[n] for n in numbers):
+                    # Legacy authored test facts omit selectors but already list
+                    # one distinct occurrence per position in source order.
+                    layers = [[number] for number in numbers]
+                else:
+                    layers = [numbers] * count
+                    if not unknown and count:
+                        self._uncheckable = True
+                        self._reasons.add("Known collection positions lack a complete occurrence mapping; exact member scheduling is unresolved.")
+                states = [initial]
+                for layer in layers:
+                    next_states = []
+                    for state in states:
+                        if unknown:
+                            case_prefix = "@call-case:" + repr((ir, event))[:-1] + ","
+                            state = (state[0], {key: value for key, value in state[1].items()
+                                              if not key.startswith(case_prefix)}, state[2])
+                        for number in layer:
+                            next_states.extend(self._schedule(constraint, ir, state, structural, outer=event, instance=number))
+                    states = self._unique(next_states)
+                    if not states:
+                        if not layer:
+                            self.incomplete_scope.add(self._identity)
+                            self._reasons.add("The collection has no complete indexed member-body arrangement.")
+                        break
+                outcomes.extend(states)
         return self._unique(outcomes)
 
     @staticmethod
@@ -396,6 +474,9 @@ class ConstraintEngine:
     def _edge_states(self, number, edge, cube, structural):
         if structural:
             return [dict(cube)]
+        if (edge["source_block_id"] in self.typed_targets
+                and edge["target_block_id"] not in self.typed_targets[edge["source_block_id"]]):
+            return []
         located = None
         for target in ({"path": ["edges", number]}, {"path": ["edges", number, "condition_text"]}):
             located = self.booleans.location(target)
@@ -430,6 +511,10 @@ class ConstraintEngine:
                         pending.append((target, 0, monitor, {} if cyclic else facts, trace))
                 continue
             ir = instructions[offset]["id"]
+            if self.engine.index.coverage.get(ir) != "processed":
+                self.incomplete_scope.add(self._identity)
+                self._reasons.add("An unevaluated instruction stops this path; no empty event sequence is substituted.")
+                continue
             states = self._event(constraint, monitor, cube, trace, instruction=ir, structural=structural)
             for state in states:
                 for result in self._schedule(constraint, ir, state, structural):
@@ -518,7 +603,7 @@ class ConstraintEngine:
     def _cardinality_dependent(self, constraint):
         """A task count through members needs the collection's baseline value."""
         return (constraint["kind"] == "at_most" and constraint["scope"]["kind"] == "task"
-                and (any(self.engine.ops[key].get("scope") is not None
+                and (bool(self.typed_targets) or any(self.engine.ops[key].get("scope") is not None
                          for key in self.resolve_operations(constraint))
                      or any("body" in ref.get("operation_path", [])
                             for ref in constraint["events"])))

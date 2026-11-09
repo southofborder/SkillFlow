@@ -49,7 +49,7 @@ from skillflow.common.audit_execution import AUDIT_RETRY_POLICY
 from skillflow.common.audit_execution import RetryingAuditClient
 from skillflow.common.audit_execution import retry_delay_ms
 
-IDENTITY = "skill-ir-semantic-feedback-v7"
+IDENTITY = "skill-ir-semantic-feedback-v8"
 CONFIG_KEYS = {"endpoint", "model", "reasoning_effort", "timeout_ms", "max_retries",
                "retry_base_ms", "retry_max_backoff_ms", "response_format"}
 
@@ -108,7 +108,7 @@ def _prepare(source, directory, initial_analysis, limits, config, writer, render
     files = {path.relative_to(directory).as_posix(): sha_file(path)
              for path in sorted((directory / "inputs").rglob("*")) if path.is_file()}
     manifest = _seal({
-        "schema_version": 7, "identity": IDENTITY, "run_id": directory.name, **contract_binding(),
+        "schema_version": 8, "identity": IDENTITY, "run_id": directory.name, **contract_binding(),
         "created_at": now(), "limits": limits.model_dump(), "config": config,
         "implementation": implementation_provenance(), "renderer": _printer_identity(renderer),
         "source_sha256": source_bundle["source_sha256"], "initial_analysis": initial,
@@ -124,8 +124,8 @@ def _prepare(source, directory, initial_analysis, limits, config, writer, render
 
 def _verify(directory, source, initial_analysis, limits, config, renderer, replay):
     manifest = read_json(directory / "manifest.json")
-    if manifest.get("schema_version") != 7 or manifest.get("identity") != IDENTITY:
-        raise RunIdentityError("Unsupported feedback run version; single-audit records are not feedback runs")
+    if manifest.get("schema_version") != 8 or manifest.get("identity") != IDENTITY:
+        raise RunIdentityError("Unsupported feedback run version; historical records are not migrated")
     unsigned = deepcopy(manifest)
     digest = unsigned.pop("manifest_sha256", None)
     if canonical_sha256(unsigned) != digest:
@@ -343,7 +343,7 @@ def _run(directory, manifest, *, extraction_factory, audit_factory, writer, rend
     runtime = _Runtime(directory, writer, replay, stop_event or Event(), progress)
     runtime.config = manifest["config"]
     limits = FeedbackLimits.model_validate(manifest["limits"])
-    result = {"schema_version": 7, "identity": IDENTITY, "run_id": manifest["run_id"], **contract_binding(),
+    result = {"schema_version": 8, "identity": IDENTITY, "run_id": manifest["run_id"], **contract_binding(),
               "representation_summary": {"represented_ids": [], "conservative_ids": []},
               "status": "interrupted", "reason": "Review has not started.", "rounds": [], "counts": {},
               "limits": {**manifest["limits"], "logical_call_bounds": manifest["logical_call_bounds"],
@@ -498,7 +498,7 @@ def refine_skill(source, *, run_dir, initial_analysis=None, max_semantic_revisio
 def replay_run(run_dir, *, renderer=None):
     """Reparse/compile/print/check saved calls without creating a network client."""
     manifest = read_json(Path(run_dir) / "manifest.json")
-    if manifest.get("identity") != IDENTITY or manifest.get("schema_version") != 7:
+    if manifest.get("identity") != IDENTITY or manifest.get("schema_version") != 8:
         raise RunIdentityError("Unsupported feedback run version")
     return refine_skill(None, run_dir=run_dir, config=manifest["config"], replay=True,
                         renderer=renderer, **manifest["limits"])

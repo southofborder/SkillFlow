@@ -451,7 +451,8 @@ def test_snapshot_round_trip_restores_identity_refinement_and_reuse():
     b = source(registry)
     part = registry.register_part(b.id, ["amount"])
     document = registry.to_dict()
-    assert document["schema_version"] == "skillflow-data-v4"
+    from skillflow.propagation.data.registry import SCHEMA_VERSION
+    assert document["schema_version"] == SCHEMA_VERSION
     for restored in [DataRegistry.from_dict(document), DataRegistry.from_json(registry.to_json())]:
         restored.validate()
         assert restored.to_dict() == document

@@ -40,7 +40,7 @@ def humans(tmp_path, monkeypatch):
     source.write_text("Return the approved summary.\nThe caller is unspecified.\n", encoding="utf-8")
     evidence = [{"path": "SKILL.md", "start_line": 1, "end_line": 1, "quote": "Return the approved summary."}]
     reference = {"case_id": "case-01", "source_sha256": "fictional-source", "state": "approved",
-                 "coverage_state": "complete_for_human_verification", "purpose_basis": "skill_declared_purpose_only", "user_request": None,
+                 "coverage_state": "complete_for_human_verification", "purpose_basis": "skill_declared_purpose_only",
                  "declared_purpose": [{"id": "P1", "evidence": evidence}], "required_behavior": [],
                  "receiving_points": [{"id": "B1", "evidence": evidence}], "necessary_sensitive_uses": [],
                  "supported_excesses": [], "unknowns": [], "preservation_checks": [],

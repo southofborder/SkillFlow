@@ -9,7 +9,7 @@ def test_synthetic_example_preserves_original_field_demand(monkeypatch):
         raise AssertionError("offline example must not contact a model")
     monkeypatch.setattr(socket.socket, "connect", no_network)
     material, raw, facts, result = build_example()
-    assert material["user_request"] is None
+    assert "user_request" not in material
     assert raw["demands"][0]["target"] == {
         "instruction_id": "ir_sample_return", "side": "input", "index": 0}
     assert raw["demands"][0]["preserve"] == "value"

@@ -1,13 +1,11 @@
-"""Source-only task baseline, physical source accounting, and sealed identity.
+"""Source-only task baseline, physical evidence spans, and sealed identity.
 
 Checks establish representation and provenance, never completeness, semantic
 support, minimality, or compliance with a natural-language obligation.
 """
 from __future__ import annotations
 
-from collections import Counter
 from copy import deepcopy
-import hashlib
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -15,13 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from skillflow.common.inputs.snapshot import _member_path
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.source_evidence import (
-    Digest, Text, _json_object, _require_json, extract_source_lines, nonempty_source_lines,
+    Digest, Text, _json_object, _require_json, extract_source_lines,
 )
 from skillflow.common.validation import structural_error, schema_error
 from skillflow.propagation.contracts.references import CFGTarget
 
-TASK_SCHEMA_VERSION = "skillflow-task-v3"
-TaskBasis = Literal["user_request", "declared_skill"]
+TASK_SCHEMA_VERSION = "skillflow-task-v5"
 
 
 class _Strict(BaseModel):
@@ -35,6 +32,8 @@ class TaskSourceSpan(_Strict):
 
     @model_validator(mode="after")
     def ordered_lines(self):
+        if not self.file.startswith("skill/"):
+            raise ValueError("Task evidence must reference a frozen Skill file")
         if self.end_line < self.start_line:
             raise ValueError("source end_line precedes start_line")
         return self
@@ -78,25 +77,6 @@ class TaskRequirement(_Strict):
         return self
 
 
-class SourceAccounting(TaskSourceSpan):
-    disposition: Literal["requirement", "supporting_context", "implementation_fact",
-                         "capability", "example", "not_applicable", "unresolved"]
-    requirement_ids: list[Text]
-    issue_ids: list[Text]
-    reason: Text
-
-    @model_validator(mode="after")
-    def references_and_disposition(self):
-        for values in (self.requirement_ids, self.issue_ids):
-            if len(values) != len(set(values)):
-                raise ValueError("duplicate source-accounting references")
-        if self.disposition == "requirement" and not self.requirement_ids:
-            raise ValueError("requirement disposition requires requirement_ids")
-        if self.disposition == "unresolved" and not self.issue_ids:
-            raise ValueError("unresolved disposition requires issue_ids")
-        return self
-
-
 class TaskIssue(_Strict):
     id: Text
     kind: Literal["conflict", "ambiguity"]
@@ -116,7 +96,6 @@ class TaskIssue(_Strict):
 class CandidateTask(_Strict):
     purpose: TaskPurpose
     requirements: list[TaskRequirement] = Field(min_length=1)
-    source_accounting: list[SourceAccounting] = Field(min_length=1)
     issues: list[TaskIssue]
 
     @model_validator(mode="after")
@@ -129,33 +108,27 @@ class CandidateTask(_Strict):
 
 
 class Task(CandidateTask):
-    schema_version: Literal["skillflow-task-v3"] = TASK_SCHEMA_VERSION
-    basis: TaskBasis
+    schema_version: Literal["skillflow-task-v5"] = TASK_SCHEMA_VERSION
     source_sha256: Digest
-    user_request_sha256: Digest | None
     task_sha256: Digest
 
     @model_validator(mode="after")
     def sealed_identity(self):
-        if (self.basis == "user_request") != (self.user_request_sha256 is not None):
-            raise ValueError("Task basis and user-request identity differ")
         if canonical_sha256(self.model_dump(mode="json", exclude={"task_sha256"})) != self.task_sha256:
             raise ValueError("Task sealed identity differs")
         return self
 
 
 class TaskReference(_Strict):
-    schema_version: Literal["skillflow-task-reference-v1"] = "skillflow-task-reference-v1"
-    task_schema_version: Literal["skillflow-task-v3"] = TASK_SCHEMA_VERSION
+    schema_version: Literal["skillflow-task-reference-v3"] = "skillflow-task-reference-v3"
+    task_schema_version: Literal["skillflow-task-v5"] = TASK_SCHEMA_VERSION
     task_sha256: Digest
     source_sha256: Digest
-    user_request_sha256: Digest | None
-    basis: TaskBasis
 
 
 TaskRepairCode = Literal[
     "missing_requirement", "unsupported_requirement", "broadened_requirement",
-    "condition_scope", "atomicity", "conflict_resolution", "source_disposition",
+    "condition_scope", "atomicity", "conflict_resolution",
 ]
 
 
@@ -173,7 +146,7 @@ class TaskRepairObjection(_Strict):
         return self
 
 
-def task_source_files(source: dict[str, Any], *, user_request: str | None = None) -> dict[str, str]:
+def task_source_files(source: dict[str, Any]) -> dict[str, str]:
     """Namespace readable frozen members without changing paths or contents."""
     if not isinstance(source, dict) or not isinstance(source.get("files"), list):
         raise ValueError("source must contain its readable file list")
@@ -190,15 +163,7 @@ def task_source_files(source: dict[str, Any], *, user_request: str | None = None
         result[name] = entry["content"]
     if not result:
         raise ValueError("source must contain at least one readable file")
-    if user_request is not None:
-        if type(user_request) is not str or not user_request.strip():
-            raise ValueError("user task must be nonempty text when provided")
-        result["task/user-request.txt"] = user_request
     return result
-
-
-def user_request_digest(text):
-    return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def build_task_target_index(cfg):
@@ -232,15 +197,12 @@ def _candidate(value):
         raise schema_error(error, candidate=value, schema=CandidateTask.model_json_schema()) from error
 
 
-def validate_task_candidate(candidate, *, source_files, basis, source_sha256=None) -> Task:
-    """Validate physical accounting and seal, without interpreting requirements."""
+def validate_task_candidate(candidate, *, source_files, source_sha256=None) -> Task:
+    """Validate physical evidence and seal, without interpreting requirements."""
     parsed = _candidate(candidate)
-    has_request = "task/user-request.txt" in source_files
-    if basis not in ("user_request", "declared_skill") or has_request != (basis == "user_request"):
-        raise ValueError("task basis differs from the supplied source identity")
-    if has_request and not any(x.file == "task/user-request.txt" for x in parsed.purpose.evidences):
-        raise structural_error("task_purpose_evidence", "/purpose/evidences", "user-task purpose must cite the supplied user task")
-    requirement_ids, issue_ids = {x.id for x in parsed.requirements}, {x.id for x in parsed.issues}
+    if not source_files or any(not name.startswith("skill/") for name in source_files):
+        raise ValueError("Task evidence only accepts frozen Skill source files")
+    requirement_ids = {x.id for x in parsed.requirements}
     for index, claim in enumerate([parsed.purpose, *parsed.requirements]):
         prefix = "/purpose" if index == 0 else f"/requirements/{index - 1}"
         for number, evidence in enumerate(claim.evidences):
@@ -250,37 +212,8 @@ def validate_task_candidate(candidate, *, source_files, basis, source_sha256=Non
             raise structural_error("requirement_reference", f"/issues/{index}/requirement_ids", "unknown Task requirement")
         for number, evidence in enumerate(issue.evidences):
             _check_span(evidence, source_files, f"/issues/{index}/evidences/{number}")
-    expected, coverage = nonempty_source_lines(source_files), Counter()
-    accounted_requirements, accounted_issues = set(), set()
-    for index, entry in enumerate(parsed.source_accounting):
-        pointer = f"/source_accounting/{index}"
-        _check_span(entry, source_files, pointer)
-        if not set(entry.requirement_ids) <= requirement_ids or not set(entry.issue_ids) <= issue_ids:
-            raise structural_error("source_accounting_reference", pointer, "unknown requirement or issue")
-        accounted_requirements.update(entry.requirement_ids)
-        accounted_issues.update(entry.issue_ids)
-        for number in range(entry.start_line, entry.end_line + 1):
-            if (entry.file, number) in expected:
-                coverage[(entry.file, number)] += 1
-    missing = sorted(expected - set(coverage))
-    repeated = sorted(key for key, count in coverage.items() if count != 1)
-    if missing or repeated:
-        raise structural_error("source_accounting_coverage", "/source_accounting",
-                               f"nonempty physical line coverage differs: missing={missing}, repeated={repeated}")
-    if accounted_requirements != requirement_ids or accounted_issues != issue_ids:
-        raise structural_error("source_accounting_claim_coverage", "/source_accounting",
-                               "every requirement and issue must occur in source accounting")
-    for index, requirement in enumerate(parsed.requirements):
-        for evidence in requirement.evidences:
-            if not any(requirement.id in row.requirement_ids and row.file == evidence.file
-                       and row.start_line <= evidence.end_line and evidence.start_line <= row.end_line
-                       for row in parsed.source_accounting):
-                raise structural_error("source_accounting_evidence", f"/requirements/{index}/evidences",
-                                       "requirement evidence has no corresponding accounting entry")
-    payload = {"schema_version": TASK_SCHEMA_VERSION, "basis": basis,
-               "source_sha256": source_sha256 or canonical_sha256({k: v for k, v in source_files.items()
-                                                                   if k != "task/user-request.txt"}),
-               "user_request_sha256": user_request_digest(source_files.get("task/user-request.txt")),
+    payload = {"schema_version": TASK_SCHEMA_VERSION,
+               "source_sha256": source_sha256 or canonical_sha256(source_files),
                **deepcopy(parsed.model_dump(mode="json"))}
     return Task.model_validate({**payload, "task_sha256": canonical_sha256(payload)})
 
@@ -292,14 +225,13 @@ def checked_task(task, *, source_files=None, source_sha256=None) -> Task:
         raise ValueError("Task source identity differs")
     if source_files is not None:
         candidate = {name: value[name] for name in CandidateTask.model_fields}
-        verified = validate_task_candidate(candidate, source_files=source_files, basis=parsed.basis,
+        verified = validate_task_candidate(candidate, source_files=source_files,
                                            source_sha256=source_sha256 or parsed.source_sha256)
         if verified != parsed:
-            raise ValueError("Task evidence or request identity differs")
+            raise ValueError("Task evidence or source identity differs")
     return parsed
 
 
 def task_reference(task):
     task = checked_task(task)
-    return TaskReference(task_sha256=task.task_sha256, source_sha256=task.source_sha256,
-                         user_request_sha256=task.user_request_sha256, basis=task.basis).model_dump(mode="json")
+    return TaskReference(task_sha256=task.task_sha256, source_sha256=task.source_sha256).model_dump(mode="json")

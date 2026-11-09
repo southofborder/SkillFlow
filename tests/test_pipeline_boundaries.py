@@ -77,11 +77,11 @@ def test_valid_foreign_doe_is_rejected_by_selected_propagation_binding(tmp_path,
         pipeline.run_analysis(waiting, client_factory=forbidden, review_client_factory=forbidden)
 
 
-def test_prepared_child_with_other_task_is_rejected(tmp_path, monkeypatch):
+def test_prepared_child_with_retired_request_input_is_rejected(tmp_path, monkeypatch):
     from tests.propagation.annotation.test_security_runner import setup_run
     _unused, source, graph = setup_run(tmp_path)
     directory = tmp_path / "pipeline"
-    pipeline.prepare_analysis_run(source, graph, run_dir=directory, user_request="The intended user task.")
+    pipeline.prepare_analysis_run(source, graph, run_dir=directory)
     original = annotation_runner.prepare_run
     def substitute(input, analysis, **kwargs):
         kwargs["user_request"] = "A different, independently supplied user task."
@@ -89,7 +89,7 @@ def test_prepared_child_with_other_task_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(annotation_runner, "prepare_run", substitute)
     result = pipeline.run_analysis(directory, client_factory=injected_factory(Annotation()),
                                    review_client_factory=forbidden)
-    assert result["status"] == "failed" and result["annotation"]["status"] == "input_error"
+    assert result["status"] == "failed" and "user_request" in json.dumps(result), result
     assert not (directory / "annotation/calls").exists()
 
 

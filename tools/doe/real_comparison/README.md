@@ -1,5 +1,7 @@
 # Real Skill same-model comparison
 
+Experiment configuration update (2026-10-26): newly prepared GPT-6.1 Sol experiments use `max` instead of `ultra`, in both SkillFlow and direct-analysis arms. Frozen requests, receipts, results and stopped runs retain their original effort; do not resume them with a changed configuration or relabel them as Max runs. The hash-pinned legacy CLI-v2 adapter remains unchanged for historical verification; current CLI-v3/controlled entry points use Max. This change does not authorize model calls or experiments.
+
 This isolated driver implements the preregistered ClawHub comparison. It does
 not install or execute downloaded Skills. It does not dispatch a model by itself,
 and it never treats an assistant draft as a human confirmation.
@@ -125,7 +127,7 @@ historical records; this maintained workflow adds the subsequent correction path
 
 ## Target requests and known transport limitation
 
-The required runtime is `gpt-6.1-sol / ultra / openai`, using fresh
+The required runtime for newly prepared experiments is `gpt-6.1-sol / max / openai`, using fresh
 `fork_turns="none"` children for every semantic request. Production core prompts
 are left unchanged. API-only configuration is empty and explicitly nonbinding
 for the injected mailbox. The experiment verifies actual child receipts instead.
@@ -149,7 +151,7 @@ That interface accepts literal message arguments rather than a file argument.
 Manual embedding caused one disclosed calibration source change; that failed
 attempt was stopped and preserved, and its answer is not a conformant result.
 
-The older PATH CLI (`0.121`) does not support the required `ultra` setting. A
+The historical feasibility run required `ultra`, which the older PATH CLI (`0.121`) did not support. A
 separate application-bundled CLI (`0.163.0-alpha.10.2`) was subsequently tested in
 one explicitly authorized feasibility request. Its exact stdin delivery matched
 all **62,084 UTF-8 bytes** of the saved prompt. The receipt verified

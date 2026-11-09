@@ -1,7 +1,10 @@
-"""Build and verify the isolated source-only direct-baseline corpus.
+"""Archived v1 independent-task corpus constructor and byte verifier.
 
 This module contains synthetic source material and its catalog, not references,
 target prompts, or model outputs. Category metadata stays outside source packages.
+Its independent tasks are historical benchmark inputs, not current Skill-only
+pipeline inputs. Current experiment preparation rejects this catalog; do not
+silently move its old tasks into Skill source or relabel old results.
 """
 from __future__ import annotations
 

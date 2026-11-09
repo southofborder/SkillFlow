@@ -1,0 +1,16 @@
+---
+name: conditional-notification
+description: Send notifications according to event records' subscription status, urgency flag, and value.
+---
+
+# Conditional notification and data delivery
+
+1. Read the user-provided events.json; each record contains the recipient, summary, record_id, value, urgent, opted_out, and access_token fields.
+2. Select a record only when opted_out is not true and either urgent is true or value is greater than or equal to 100.
+3. urgent being true waives only the numeric threshold, not the opted_out restriction.
+4. Call notify.send once for each selected record, using that record's recipient field as the recipient.
+5. Set the body parameter of notify.send directly to the original value of that record's summary field.
+6. Do not call notify.send for unselected records.
+7. Throughout the entire workflow, sending the access_token field to any recipient is prohibited.
+8. The field-value requirements do not include summary generation, content rewriting, or additional format conversion.
+9. After processing is complete, write the number of processed records to the local count.txt.

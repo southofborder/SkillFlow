@@ -22,17 +22,17 @@ def goal_material():
 def task_issue(prepared):
     result = empty_response(prepared)
     target = next(item for item in prepared["target_index"] if item["kind"] == "task" and item["pointer"] == "/requirements")
-    span = {key: result["source_checks"][0][key] for key in ("file", "start_line", "end_line")}
+    span = {key: prepared["task"]["requirements"][0]["evidences"][0][key]
+            for key in ("file", "start_line", "end_line")}
     result["findings"] = [{"domain": "task", "target_ids": [target["id"]],
         "explanation": "人工错误样例：原文义务遗漏，需独立重读源文核实。",
         "suggestion": "从原始材料重新提取该范围，不能以当前载荷扩大任务。",
         "evidences": [{**span, "reason": "原文义务证据，不包含实现反馈。"}],
         "task_objection": {"code": "missing_requirement", "source_spans": [span], "requirement_ids": []}}]
-    result["source_checks"][0].update(status="issue", finding_indexes=[0])
     return result
 
 
-@pytest.mark.parametrize("axis", ["source_checks", "requirement_checks", "declaration_checks", "reviewed_ir_ids"])
+@pytest.mark.parametrize("axis", ["requirement_checks", "declaration_checks", "reviewed_ir_ids"])
 def test_each_axis_rejects_omissions_duplicates_and_unknown_positions(axis):
     prepared = goal_material()
     for mode in ("missing", "duplicate", "unknown"):
@@ -41,8 +41,6 @@ def test_each_axis_rejects_omissions_duplicates_and_unknown_positions(axis):
             response[axis].pop()
         elif mode == "duplicate":
             response[axis].append(deepcopy(response[axis][0]))
-        elif axis == "source_checks":
-            response[axis][0]["file"] = "skill/nonexistent.md"
         elif axis == "requirement_checks":
             response[axis][0]["requirement_id"] = "missing"
         elif axis == "declaration_checks":
@@ -53,32 +51,44 @@ def test_each_axis_rejects_omissions_duplicates_and_unknown_positions(axis):
             validate_response(response, prepared)
 
 
-def test_source_grouping_is_independent_from_extractor_ranges():
-    prepared = prepare_review_material(*fixture())
-    response = empty_response(prepared)
-    check = {"status": "accepted", "reason": "分别核对该物理行中的全部义务。", "finding_indexes": []}
-    response["source_checks"] = [{"file": row["file"], "start_line": row["line"],
-                                  "end_line": row["line"], **check}
-                                 for row in prepared["source_line_universe"]]
-    assert len(response["source_checks"]) > len(prepared["task"]["source_accounting"])
-    assert validate_response(response, prepared).source_checks
+def test_source_omission_uses_real_evidence_without_a_per_line_table_or_fake_requirement():
+    prepared = goal_material()
+    response = task_issue(prepared)
+    assert "source_line_universe" not in prepared
+    accepted = validate_response(response, prepared)
+    assert "source_checks" not in accepted.model_dump()
+    assert accepted.findings[0].task_objection.requirement_ids == []
+    assert all(check.status == "accepted" for check in accepted.requirement_checks)
+    for field in ("source_checks", "source_line_universe"):
+        mutated = deepcopy(response)
+        mutated[field] = []
+        with pytest.raises(ValueError):
+            validate_response(mutated, prepared)
+    altered = deepcopy(prepared)
+    altered["source_line_universe"] = []
+    with pytest.raises(ValueError):
+        checked_review_material(altered)
+    prompt = build_prompt(prepared)
+    assert "source_checks" not in prompt and "source_accounting" not in prompt
+    assert "exact source evidence and a real Task parent target" in prompt
 
 
 def test_concrete_conclusions_link_findings_and_normalization_resolves_positions():
     prepared = goal_material()
     response = task_issue(prepared)
+    response["requirement_checks"][0].update(status="issue", finding_indexes=[0])
     accepted = validate_response(response, prepared)
-    assert accepted.source_checks[0].finding_ids == ["F001"]
-    assert "finding_indexes" not in accepted.source_checks[0].model_dump()
+    assert accepted.requirement_checks[0].finding_ids == ["F001"]
+    assert "finding_indexes" not in accepted.requirement_checks[0].model_dump()
     assert task_objections(accepted) == [response["findings"][0]["task_objection"]]
     normalized = accepted.model_dump(mode="json")
     assert validate_response(normalized, prepared, normalized=True) == accepted
     for indexes in ([], [10]):
         mutated = deepcopy(response)
-        mutated["source_checks"][0]["finding_indexes"] = indexes
+        mutated["requirement_checks"][0]["finding_indexes"] = indexes
         with pytest.raises(ValueError):
             validate_response(mutated, prepared)
-    normalized["source_checks"][0]["finding_ids"] = ["F999"]
+    normalized["requirement_checks"][0]["finding_ids"] = ["F999"]
     with pytest.raises(ValueError):
         validate_response(normalized, prepared, normalized=True)
 
@@ -94,11 +104,11 @@ def test_task_objection_rejects_free_text_or_downstream_context(injection):
 
 def test_task_findings_cannot_be_routed_without_source_anchor_or_with_cfg_evidence():
     prepared = goal_material()
-    for mutation in ("unlinked", "cfg_evidence", "annotation_target", "unknown_requirement", "unknown_span"):
+    for mutation in ("missing_evidence", "cfg_evidence", "annotation_target", "unknown_requirement", "unknown_span"):
         response = task_issue(prepared)
         finding = response["findings"][0]
-        if mutation == "unlinked":
-            response["source_checks"][0].update(status="accepted", finding_indexes=[])
+        if mutation == "missing_evidence":
+            finding["evidences"] = []
         elif mutation == "cfg_evidence":
             finding["evidences"] = [{"target": {"instruction_id": "ir_coordinate", "path": []}, "reason": "不能转为Task修订依据。"}]
         elif mutation == "annotation_target":
@@ -139,3 +149,26 @@ def test_goal_projection_preserves_operation_slots_paths_and_original_seed_ident
     prepared["declaration_index"][0]["resolved_target"]["ref"]["index"] = 99
     with pytest.raises(ValueError):
         checked_review_material(prepared)
+
+
+@pytest.mark.parametrize("normalized", [False, True])
+def test_existing_task_objection_requires_matching_requirement_check(normalized):
+    prepared = goal_material()
+    response = task_issue(prepared)
+    requirement = prepared["task"]["requirements"][0]["id"]
+    response["findings"][0]["task_objection"].update(
+        code="unsupported_requirement", requirement_ids=[requirement])
+    with pytest.raises(ValueError, match="linked issue checks"):
+        validate_response(response, prepared)
+    for row in response["requirement_checks"]:
+        if row["requirement_id"] == requirement:
+            row.update(status="issue", finding_indexes=[0])
+    accepted = validate_response(response, prepared)
+    if normalized:
+        response = accepted.model_dump(mode="json")
+    for row in response["requirement_checks"]:
+        if row["requirement_id"] == requirement:
+            row.update(status="accepted")
+            row["finding_ids" if normalized else "finding_indexes"] = []
+    with pytest.raises(ValueError, match="linked issue checks"):
+        validate_response(response, prepared, normalized=normalized)

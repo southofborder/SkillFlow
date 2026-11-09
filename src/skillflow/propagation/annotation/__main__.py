@@ -16,7 +16,6 @@ def main(argv=None):
     prepare.add_argument("--run-dir", type=Path, required=True)
     prepare.add_argument("--task-run", type=Path, required=True, help="Completed independent source-only Task extraction run")
     prepare.add_argument("--env-file", type=Path, help="Read only public configuration for identity binding; no API calls")
-    prepare.add_argument("--request-file", type=Path, help="Optional independent user-request text")
     run = sub.add_parser("run", help="Run or resume annotation with unlimited structural correction; semantic review is separate")
     run.add_argument("--run-dir", type=Path, required=True)
     run.add_argument("--env-file", type=Path)
@@ -34,8 +33,7 @@ def main(argv=None):
         public = annotation_public_config(config)
         secrets = (config.api_key,) if config.api_key else ()
         if args.command == "prepare":
-            manifest = prepare_run(args.input, args.analysis, run_dir=args.run_dir, config=public, secrets=secrets, task_run=args.task_run,
-                user_request=None if args.request_file is None else args.request_file.read_bytes().decode("utf-8-sig"))
+            manifest = prepare_run(args.input, args.analysis, run_dir=args.run_dir, config=public, secrets=secrets, task_run=args.task_run)
             print(f"{manifest['preparation_status']}; {args.run_dir.resolve()}")
             return 0 if manifest["preparation_status"] == "ready" else 1
         from skillflow.common.recording import streaming_factory

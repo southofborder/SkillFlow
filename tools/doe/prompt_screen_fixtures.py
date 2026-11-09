@@ -71,11 +71,9 @@ def fixture(name, stage, source, requirements, instructions, specs, *, locations
                "source_sha256": _digest([{"path": "SKILL.md", "sha256": digest}])}
     task_candidate = {"purpose": {"text": " ".join(requirements), "evidences": [ev()]},
         "requirements": [{"id": f"R{i+1}", "text": text, "evidences": [ev()]} for i, text in enumerate(requirements)],
-        "source_accounting": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1, "disposition": "requirement",
-            "requirement_ids": [f"R{i+1}" for i in range(len(requirements))], "issue_ids": [],
-            "reason": "This synthetic source states the obligations preserved by the offline Task fixture."}], "issues": []}
+         "issues": []}
     task = validate_task_candidate(task_candidate, source_files=task_source_files(sources),
-                                   source_sha256=sources["source_sha256"], basis="declared_skill")
+                                   source_sha256=sources["source_sha256"])
     material = prepare_material(sources, cfg, task_baseline=task)
     gaps = gaps or {}
     raw = {"outcome": "completed", "task_revision_id": material["task"]["task_sha256"], "realizations": [],
@@ -204,7 +202,7 @@ def screen_fixtures():
 def review_reference(material, *, adverse=False):
     """An offline response fixture, never supplied in a review request."""
     check={"status":"accepted","reason":"The supplied relation agrees with this synthetic source.","finding_indexes":[]}
-    response={"outcome":"completed","source_checks":[{"file":r["file"],"start_line":r["line"],"end_line":r["line"],**deepcopy(check)} for r in material["source_line_universe"]],
+    response={"outcome":"completed",
         "requirement_checks":[{"requirement_id":r["id"],**deepcopy(check)} for r in material["task"]["requirements"]],
         "declaration_checks":[{"raw_pointer":r["raw_pointer"],**deepcopy(check)} for r in material["declaration_index"]],
         "reviewed_ir_ids":[i["id"] for b in material["cfg"]["blocks"].values() for i in b["instructions"]],"findings":[]}

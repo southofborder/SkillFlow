@@ -18,7 +18,7 @@ EFFECT_BOUNDARIES = {
     "net_send": {"remote"}, "net_receive": {"remote"},
     "model_observe": {"model_context"}, "user_output": {"user"},
 }
-TRANSFORM_OPERATIONS = {"select_part", "exclude_parts", "update_fields", "build", "compute", "filter_items"}
+TRANSFORM_OPERATIONS = {"select_part", "exclude_parts", "update_fields", "build", "compute", "filter_items", "merge", "member", "append"}
 
 
 def validate_event_operations(effect: str | None, operations: list[str]) -> None:
@@ -44,6 +44,8 @@ def validate_operation_boundary(
         if operation == "compute":
             if dependencies is not None and any(value != "possible" for value in dependencies):
                 raise structural_error("validate_operation_boundary", "", "effect-free compute only permits possible dependencies")
+        elif operation in {"merge", "member", "branch", "append"}:
+            pass
         elif not (operation in {"receive", "deliver"} and boundary_kind == "tool"):
             raise structural_error("validate_operation_boundary", "", "effect-free event only permits possible compute or receive/deliver with tool")
     elif operation in INTERACTION_EFFECTS and effect not in INTERACTION_EFFECTS[operation]:

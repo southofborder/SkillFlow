@@ -14,7 +14,7 @@ from tools.doe.real_comparison.protocol import prepare_protocol, policy, write_j
 def reference():
     return {
         "case_id": "C01", "source_sha256": "source", "state": "assistant_draft",
-        "purpose_basis": "skill_declared_purpose_only", "user_request": None,
+        "purpose_basis": "skill_declared_purpose_only",
         "declared_purpose": [{"id": "P1", "evidence": [{"file": "SKILL.md", "lines": [1, 2]}]}],
         "required_behavior": [], "receiving_points": [{"id": "B1", "evidence": ["SKILL.md:4"]}],
         "necessary_sensitive_uses": [], "supported_excesses": [], "unknowns": [],
@@ -24,7 +24,7 @@ def reference():
 
 def test_policy_immutability_and_no_task(tmp_path):
     freeze = prepare_protocol(tmp_path)
-    assert policy()["user_request"] is None
+    assert "user_request" not in policy()
     assert policy()["workflows"]["primary"] == 216
     assert prepare_protocol(tmp_path) == freeze
     (tmp_path / "rubric.md").write_text("changed", encoding="utf-8")
@@ -36,7 +36,7 @@ def test_reference_drafts_are_not_empty_templates_or_task_suggestions():
     validate_reference(reference())
     value = reference()
     value["user_request"] = "Send a different result"
-    with pytest.raises(ValueError, match="user task"):
+    with pytest.raises(ValueError, match="independent-task"):
         validate_reference(value)
     value = reference()
     value["declared_purpose"] = []

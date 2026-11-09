@@ -172,8 +172,49 @@ class LiteralContent(StrictRecord):
         return value
 
 
-Content = Annotated[
-    OpaqueContent | KnownPartsContent | WholeExceptContent | FieldUpdatesContent | SubsetViewContent | LiteralContent,
+class MappedMember(StrictRecord):
+    """One source occurrence and its alternative yielded values, not extra rows."""
+
+    selector: Annotated[int, Field(strict=True, ge=0)] | ElementStep
+    element: Text
+    values: Annotated[_StrictList[Text], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def distinct_values(self):
+        _require_unique(self.values, "mapped member values")
+        return self
+
+
+class MappedCollectionContent(StrictRecord):
+    """Member-preserving map. The base supplies structure, never copied content."""
+
+    form: Literal["mapped_collection"] = "mapped_collection"
+    base: Text
+    scope: Text
+    members: _StrictList[MappedMember] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def distinct_occurrences(self):
+        _require_unique([(member.selector, member.element) for member in self.members], "mapped collection members")
+        return self
+
+
+class SelectionContent(StrictRecord):
+    """A symbolic projection; unlike part identity it does not concatenate history."""
+    form: Literal["selection"] = "selection"
+    base: Text
+    path: _StrictList[PathStep]
+
+
+class AccumulatedCollectionContent(StrictRecord):
+    form: Literal["accumulated_collection"] = "accumulated_collection"
+    base: Text
+    added: Text
+    mode: Literal["item", "items"]
+
+
+BaseContent = Annotated[
+    OpaqueContent | KnownPartsContent | WholeExceptContent | FieldUpdatesContent | SubsetViewContent | LiteralContent | MappedCollectionContent,
     Field(discriminator="form"),
 ]
 
@@ -181,6 +222,31 @@ Content = Annotated[
 class Dependency(StrictRecord):
     data: Text
     relation: Literal["derived", "possible"]
+
+
+class LoopVariant(StrictRecord):
+    inputs: _StrictList[Text]
+    content: Annotated[
+        OpaqueContent | KnownPartsContent | WholeExceptContent | FieldUpdatesContent
+        | SubsetViewContent | LiteralContent | MappedCollectionContent
+        | SelectionContent | AccumulatedCollectionContent, Field(discriminator="form")]
+    dependencies: _StrictList[Dependency] = Field(default_factory=list)
+    acquired_from: Text | None = None
+
+
+class LoopSummaryContent(StrictRecord):
+    """Finite relation templates, not literal recursive containment or unrolling."""
+    form: Literal["loop_summary"] = "loop_summary"
+    scope: Text
+    producer: Text
+    variants: _StrictList[LoopVariant] = Field(default_factory=list)
+    bindings: dict[str, str] = Field(default_factory=dict)
+
+
+Content = Annotated[
+    OpaqueContent | KnownPartsContent | WholeExceptContent | FieldUpdatesContent
+    | SubsetViewContent | LiteralContent | MappedCollectionContent | SelectionContent
+    | AccumulatedCollectionContent | LoopSummaryContent, Field(discriminator="form")]
 
 
 class Origin(StrictRecord):

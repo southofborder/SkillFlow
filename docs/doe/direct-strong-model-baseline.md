@@ -1,5 +1,7 @@
 # Direct strong-model replacement experiment
 
+Experiment configuration update (2026-10-26): newly prepared GPT-6.1 Sol experiments use `max` instead of `ultra`, in both SkillFlow and direct-analysis arms. Frozen requests, receipts, results and stopped runs retain their original effort; do not resume them with a changed configuration or relabel them as Max runs. The hash-pinned legacy CLI-v2 adapter remains unchanged for historical verification; current CLI-v3/controlled entry points use Max. This change does not authorize model calls or experiments.
+
 This experiment tests whether one carefully specified source-only request can
 produce (a) a usable task-related sensitive-data minimization audit and (b) a
 semantically complete, cross-checkable analysis chain. It deliberately does not
@@ -59,7 +61,7 @@ between single samples does not establish that the reminder caused a change.
 Each trial uses a new collaboration subagent with `fork_turns="none"`, without
 model or effort override. It receives the entire saved prompt as its message;
 it is told not to use tools, read files, search, delegate, message or request a
-follow-up. The expected runtime configuration is `gpt-6.1-sol / ultra` and is
+follow-up. The expected runtime configuration is `gpt-6.1-sol / max` and is
 checked against each trial's own local receipt.
 
 This is protocol isolation, not a hard filesystem/tool sandbox. Base

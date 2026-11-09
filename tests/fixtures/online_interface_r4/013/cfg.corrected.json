@@ -1,0 +1,793 @@
+{
+  "cfg": {
+    "entry_block_id": "block_001",
+    "constraints": [
+      "Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow (skill/SKILL.md:15). This is a workflow restriction, not an additional executed guard.",
+      "The first fast response, retry response, and archive response are distinct producers. Each success return consumes only its own successful response's unchanged body (skill/SKILL.md:13).",
+      "archive has three possible incoming predecessors: absent FAST_KEY, non-transient first failure, or failed retry. All preserve the original source_id; no fast failure value or credential becomes an archive argument (skill/SKILL.md:9-12).",
+      "Execute at most two fast.fetch calls and at most one archive.fetch call on any path. Retry fast.fetch exactly once only after a transient first failure (skill/SKILL.md:10-12).",
+      "Every specified return follows an append to the same local status.txt resource. The append outputs denote alternative post-states, not replacement writes or separately owned files (skill/SKILL.md:16)."
+    ],
+    "blocks": {
+      "block_001": {
+        "block_id": "block_001",
+        "block_name": "read_source_id",
+        "instructions": [
+          {
+            "id": "ir_001",
+            "opcode": "acquire_source_id",
+            "inputs": [
+              {
+                "type": "context_key",
+                "identifier": "source_id",
+                "semantic_name": "source_id"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "source_id"
+              }
+            ],
+            "constraints": [],
+            "metadata": {
+              "script_content": "1. Read source_id from the user's request and read FAST_KEY from the environment.\n"
+            },
+            "draft_instruction_id": "instruction_0001"
+          },
+          {
+            "id": "ir_002",
+            "opcode": "dispatch",
+            "inputs": [],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {},
+            "draft_instruction_id": "instruction_0002"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "context"
+      },
+      "block_002": {
+        "block_id": "block_002",
+        "block_name": "read_fast_key",
+        "instructions": [
+          {
+            "id": "ir_003",
+            "opcode": "read_environment_binding",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "environment.FAST_KEY",
+                "semantic_name": "environment.FAST_KEY"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "fast_key_binding"
+              }
+            ],
+            "constraints": [
+              "Preserve whether FAST_KEY is present and its actual value when present; do not invent a default value."
+            ],
+            "metadata": {
+              "script_content": "1. Read source_id from the user's request and read FAST_KEY from the environment.\n"
+            },
+            "draft_instruction_id": "instruction_0003"
+          },
+          {
+            "id": "ir_004",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "fast_key_binding"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {
+              "predicate": "binding_is_present",
+              "true_target": "fast_first",
+              "false_target": "archive",
+              "script_content": "2. If FAST_KEY is present, try fast.fetch first with source_id and FAST_KEY; if it is absent, go directly to archive.fetch without calling fast.fetch.\n"
+            },
+            "draft_instruction_id": "instruction_0004"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_003": {
+        "block_id": "block_003",
+        "block_name": "fast_first",
+        "instructions": [
+          {
+            "id": "ir_005",
+            "opcode": "call_fast_fetch",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "fast.fetch",
+                "semantic_name": "fast.fetch"
+              },
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "source_id"
+              },
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "fast_key_binding"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "fast_first_outcome"
+              }
+            ],
+            "constraints": [
+              "Call fast.fetch with source_id and the present FAST_KEY value.",
+              "The external_resource identifies the recipient and is not a tool argument.",
+              "Preserve this attempt's actual successful response or failure outcome."
+            ],
+            "metadata": {
+              "script_content": "2. If FAST_KEY is present, try fast.fetch first with source_id and FAST_KEY; if it is absent, go directly to archive.fetch without calling fast.fetch.\n3. Retry fast.fetch exactly once only when its first attempt fails with a transient error; do not retry a non-transient first failure.\n"
+            },
+            "draft_instruction_id": "instruction_0005"
+          },
+          {
+            "id": "ir_006",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "fast_first_outcome"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {
+              "predicate": "tool_succeeded",
+              "true_target": "return_fast_first",
+              "false_target": "classify_first_failure",
+              "script_content": "3. Retry fast.fetch exactly once only when its first attempt fails with a transient error; do not retry a non-transient first failure.\n4. After a non-transient first failure or any failed retry of fast.fetch, call archive.fetch with source_id.\n5. Call archive.fetch at most once and pass source_id as its only argument.\n6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n"
+            },
+            "draft_instruction_id": "instruction_0006"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_004": {
+        "block_id": "block_004",
+        "block_name": "classify_first_failure",
+        "instructions": [
+          {
+            "id": "ir_007",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "fast_first_outcome"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "This block is reached only after the first fast.fetch attempt fails.",
+              "Classify the actual first failure; the source does not define transient-error classification."
+            ],
+            "metadata": {
+              "predicate": "failure_is_transient",
+              "true_target": "fast_retry",
+              "false_target": "archive",
+              "script_content": "3. Retry fast.fetch exactly once only when its first attempt fails with a transient error; do not retry a non-transient first failure.\n4. After a non-transient first failure or any failed retry of fast.fetch, call archive.fetch with source_id.\n"
+            },
+            "draft_instruction_id": "instruction_0007"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_005": {
+        "block_id": "block_005",
+        "block_name": "fast_retry",
+        "instructions": [
+          {
+            "id": "ir_008",
+            "opcode": "call_fast_fetch",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "fast.fetch",
+                "semantic_name": "fast.fetch"
+              },
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "source_id"
+              },
+              {
+                "type": "result",
+                "identifier": "result_002",
+                "semantic_name": "fast_key_binding"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "fast_retry_outcome"
+              }
+            ],
+            "constraints": [
+              "Perform exactly one retry after a transient first failure, using source_id and the present FAST_KEY value.",
+              "The external_resource identifies the recipient and is not a tool argument.",
+              "Preserve the retry's actual successful response or failure outcome as a distinct version."
+            ],
+            "metadata": {
+              "script_content": "2. If FAST_KEY is present, try fast.fetch first with source_id and FAST_KEY; if it is absent, go directly to archive.fetch without calling fast.fetch.\n3. Retry fast.fetch exactly once only when its first attempt fails with a transient error; do not retry a non-transient first failure.\n4. After a non-transient first failure or any failed retry of fast.fetch, call archive.fetch with source_id.\n"
+            },
+            "draft_instruction_id": "instruction_0008"
+          },
+          {
+            "id": "ir_009",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "fast_retry_outcome"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {
+              "predicate": "tool_succeeded",
+              "true_target": "return_fast_retry",
+              "false_target": "archive",
+              "script_content": "4. After a non-transient first failure or any failed retry of fast.fetch, call archive.fetch with source_id.\n5. Call archive.fetch at most once and pass source_id as its only argument.\n6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n"
+            },
+            "draft_instruction_id": "instruction_0009"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_006": {
+        "block_id": "block_006",
+        "block_name": "archive",
+        "instructions": [
+          {
+            "id": "ir_010",
+            "opcode": "call_archive_fetch",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "archive.fetch",
+                "semantic_name": "archive.fetch"
+              },
+              {
+                "type": "result",
+                "identifier": "result_001",
+                "semantic_name": "source_id"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "archive_outcome"
+              }
+            ],
+            "constraints": [
+              "Call archive.fetch once on each path reaching this block, with source_id as its only argument.",
+              "The external_resource identifies the recipient and is not a tool argument.",
+              "Do not pass FAST_KEY or fast_key_binding to this recipient.",
+              "Preserve the archive call's actual successful response or failure outcome."
+            ],
+            "metadata": {
+              "script_content": "2. If FAST_KEY is present, try fast.fetch first with source_id and FAST_KEY; if it is absent, go directly to archive.fetch without calling fast.fetch.\n3. Retry fast.fetch exactly once only when its first attempt fails with a transient error; do not retry a non-transient first failure.\n4. After a non-transient first failure or any failed retry of fast.fetch, call archive.fetch with source_id.\n5. Call archive.fetch at most once and pass source_id as its only argument.\n6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n8. Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow.\n"
+            },
+            "draft_instruction_id": "instruction_0010"
+          },
+          {
+            "id": "ir_011",
+            "opcode": "dispatch",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "archive_outcome"
+              }
+            ],
+            "outputs": [],
+            "constraints": [],
+            "metadata": {
+              "predicate": "tool_succeeded",
+              "true_target": "return_archive_success",
+              "false_target": "return_archive_failure",
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n"
+            },
+            "draft_instruction_id": "instruction_0011"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": "external"
+      },
+      "block_007": {
+        "block_id": "block_007",
+        "block_name": "return_fast_first",
+        "instructions": [
+          {
+            "id": "ir_012",
+            "opcode": "extract_successful_response_body",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "fast_first_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "fast_first_body"
+              }
+            ],
+            "constraints": [
+              "Select the body value of the first fast.fetch response without transformation."
+            ],
+            "metadata": {
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n"
+            },
+            "draft_instruction_id": "instruction_0012"
+          },
+          {
+            "id": "ir_013",
+            "opcode": "derive_final_status",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_003",
+                "semantic_name": "fast_first_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "fast_first_final_status"
+              }
+            ],
+            "constraints": [
+              "Represent the final successful status; its concrete representation is unspecified."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0013"
+          },
+          {
+            "id": "ir_014",
+            "opcode": "append_final_status",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "local.status.txt",
+                "semantic_name": "local.status.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_007",
+                "semantic_name": "fast_first_final_status"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Append the final status to local status.txt, preserving existing content."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0014"
+          },
+          {
+            "id": "ir_015",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_006",
+                "semantic_name": "fast_first_body"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Return this successful response's body unchanged after the status append; make no further fetch calls."
+            ],
+            "metadata": {
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n8. Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow.\n9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0015"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_008": {
+        "block_id": "block_008",
+        "block_name": "return_fast_retry",
+        "instructions": [
+          {
+            "id": "ir_016",
+            "opcode": "extract_successful_response_body",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "fast_retry_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "fast_retry_body"
+              }
+            ],
+            "constraints": [
+              "Select the body value of the retry response without transformation."
+            ],
+            "metadata": {
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n"
+            },
+            "draft_instruction_id": "instruction_0016"
+          },
+          {
+            "id": "ir_017",
+            "opcode": "derive_final_status",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_004",
+                "semantic_name": "fast_retry_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_010",
+                "semantic_name": "fast_retry_final_status"
+              }
+            ],
+            "constraints": [
+              "Represent the final successful status; its concrete representation is unspecified."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0017"
+          },
+          {
+            "id": "ir_018",
+            "opcode": "append_final_status",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "local.status.txt",
+                "semantic_name": "local.status.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_010",
+                "semantic_name": "fast_retry_final_status"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Append the final status to local status.txt, preserving existing content."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0018"
+          },
+          {
+            "id": "ir_019",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_009",
+                "semantic_name": "fast_retry_body"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Return the retry response's body unchanged after the status append; make no further fetch calls."
+            ],
+            "metadata": {
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n8. Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow.\n9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0019"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_009": {
+        "block_id": "block_009",
+        "block_name": "return_archive_success",
+        "instructions": [
+          {
+            "id": "ir_020",
+            "opcode": "extract_successful_response_body",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "archive_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_012",
+                "semantic_name": "archive_body"
+              }
+            ],
+            "constraints": [
+              "Select the body value of the successful archive response without transformation."
+            ],
+            "metadata": {
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n"
+            },
+            "draft_instruction_id": "instruction_0020"
+          },
+          {
+            "id": "ir_021",
+            "opcode": "derive_final_status",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "archive_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_013",
+                "semantic_name": "archive_success_final_status"
+              }
+            ],
+            "constraints": [
+              "Represent the final successful status; its concrete representation is unspecified."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0021"
+          },
+          {
+            "id": "ir_022",
+            "opcode": "append_final_status",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "local.status.txt",
+                "semantic_name": "local.status.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_013",
+                "semantic_name": "archive_success_final_status"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Append the final status to local status.txt, preserving existing content."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0022"
+          },
+          {
+            "id": "ir_023",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_012",
+                "semantic_name": "archive_body"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Return the archive response's body unchanged after the status append; make no further fetch calls."
+            ],
+            "metadata": {
+              "script_content": "6. On either tool's success, return that successful response's body value unchanged and make no further fetch calls.\n7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n8. Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow.\n9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0023"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      },
+      "block_010": {
+        "block_id": "block_010",
+        "block_name": "return_archive_failure",
+        "instructions": [
+          {
+            "id": "ir_024",
+            "opcode": "extract_archive_error",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "archive_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_015",
+                "semantic_name": "archive_error"
+              }
+            ],
+            "constraints": [
+              "Select the error from the actual failed archive call."
+            ],
+            "metadata": {
+              "script_content": "7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n"
+            },
+            "draft_instruction_id": "instruction_0024"
+          },
+          {
+            "id": "ir_025",
+            "opcode": "derive_final_status",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_005",
+                "semantic_name": "archive_outcome"
+              }
+            ],
+            "outputs": [
+              {
+                "type": "result",
+                "identifier": "result_016",
+                "semantic_name": "archive_failure_final_status"
+              }
+            ],
+            "constraints": [
+              "Represent the final failure status; its concrete representation is unspecified."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0025"
+          },
+          {
+            "id": "ir_026",
+            "opcode": "append_final_status",
+            "inputs": [
+              {
+                "type": "external_resource",
+                "identifier": "local.status.txt",
+                "semantic_name": "local.status.txt"
+              },
+              {
+                "type": "result",
+                "identifier": "result_016",
+                "semantic_name": "archive_failure_final_status"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Append the final status to local status.txt, preserving existing content."
+            ],
+            "metadata": {
+              "script_content": "9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0026"
+          },
+          {
+            "id": "ir_027",
+            "opcode": "return",
+            "inputs": [
+              {
+                "type": "result",
+                "identifier": "result_015",
+                "semantic_name": "archive_error"
+              }
+            ],
+            "outputs": [],
+            "constraints": [
+              "Return the archive call's error after the status append; do not retry archive.fetch."
+            ],
+            "metadata": {
+              "script_content": "7. If archive.fetch fails, stop and return its error; do not retry archive.fetch.\n8. Never pass FAST_KEY to archive.fetch or diagnostic output anywhere in this workflow.\n9. Before returning from every success or failure path, append the final status to local status.txt.\n"
+            },
+            "draft_instruction_id": "instruction_0027"
+          }
+        ],
+        "constraints": [],
+        "data_source_kind": null
+      }
+    },
+    "edges": [
+      {
+        "source_block_id": "block_001",
+        "target_block_id": "block_002",
+        "condition_text": null
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_003",
+        "condition_text": "FAST_KEY is present"
+      },
+      {
+        "source_block_id": "block_002",
+        "target_block_id": "block_006",
+        "condition_text": "FAST_KEY is absent"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_007",
+        "condition_text": "First fast.fetch attempt succeeds"
+      },
+      {
+        "source_block_id": "block_003",
+        "target_block_id": "block_004",
+        "condition_text": "First fast.fetch attempt fails"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_005",
+        "condition_text": "First failure is transient"
+      },
+      {
+        "source_block_id": "block_004",
+        "target_block_id": "block_006",
+        "condition_text": "First failure is non-transient"
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_008",
+        "condition_text": "Retry succeeds"
+      },
+      {
+        "source_block_id": "block_005",
+        "target_block_id": "block_006",
+        "condition_text": "Retry fails"
+      },
+      {
+        "source_block_id": "block_006",
+        "target_block_id": "block_009",
+        "condition_text": "archive.fetch succeeds"
+      },
+      {
+        "source_block_id": "block_006",
+        "target_block_id": "block_010",
+        "condition_text": "archive.fetch fails"
+      }
+    ],
+    "declared_context_keys": [
+      "source_id"
+    ]
+  }
+}

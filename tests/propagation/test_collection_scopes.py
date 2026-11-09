@@ -104,7 +104,11 @@ def test_unknown_collection_has_one_scoped_member_and_keeps_field_pairing():
     _, _, result, source_ids = solve(None)
     assert result.status == "complete", result.diagnostics
     record = result.records.get("ir_process")
-    assert record.entry_state == record.exit_state
+    collection = FlowLocation(kind="result", name="items")
+    assert record.entry_state.get(collection) == frozenset(source_ids)
+    # The terminal projected state drops a collection with no future reader;
+    # the scope and each actual delivery retain their original Data versions.
+    assert record.exit_state.get(collection) is None
     scope = record.events[0]
     assert isinstance(scope, ForEachRecord) and len(scope.instances) == 1
     assert scope.collections == frozenset(source_ids)
@@ -113,6 +117,7 @@ def test_unknown_collection_has_one_scoped_member_and_keeps_field_pairing():
     member = result.registry.get(instance.element)
     assert member.origin.part_of == instance.collection
     send = instance.body[-1].atomic_ops[0]
+    assert not any(operation.changes for event in instance.body for operation in event.atomic_ops)
     recipient, payload, repeated = [next(iter(ids)) for ids in send.inputs]
     assert recipient == repeated != payload
     assert result.registry.resolve_part(instance.element, ["recipient"]).id == recipient
@@ -156,7 +161,10 @@ def test_empty_collection_has_no_fabricated_member_or_delivery():
     record = result.records.get("ir_process")
     assert record.events[0].instances == []
     assert record.events[0].collections == frozenset(sources)
-    assert record.entry_state == record.exit_state
+    collection = FlowLocation(kind="result", name="items")
+    assert record.entry_state.get(collection) == frozenset(sources)
+    assert record.exit_state.get(collection) is None
+    assert record.events[0].outputs == frozenset()
 
 
 @pytest.mark.parametrize("filtered", [False, True])
@@ -309,17 +317,16 @@ def test_member_scope_cannot_escape_as_public_output():
         propagate(cfg, annotation)
 
 
-def test_filter_result_feedback_is_still_rejected_before_solving():
+def test_filter_result_feedback_uses_finite_member_relations():
     cfg, annotation = fixture(filtered=True)
     cfg["blocks"]["main"]["instructions"][-1]["opcode"] = "dispatch"
     cfg["edges"].append({"source_block_id": "main", "target_block_id": "source"})
     annotation["ir_semantics"]["ir_process"]["events"].append({"effect": "context_write", "evidences": [deepcopy(EVIDENCE)], "atomic_ops": [
         operation("write", target="collection", mode="replace", input=local("selected"))]})
     result = propagate(cfg, annotation)
-    assert result.status == "unsupported_feedback"
-    assert result.stats["block_evaluations"] == 0
-    assert any(position.get("op_index") == 0 for diagnostic in result.diagnostics
-               for position in diagnostic.get("operations", []))
+    assert result.status == "complete", result.diagnostics
+    assert 0 < result.stats["block_evaluations"] < 50
+    assert result.stats["loop_families"] > 0
 
 
 def test_full_collection_scope_input_can_seed_a_context_operand():

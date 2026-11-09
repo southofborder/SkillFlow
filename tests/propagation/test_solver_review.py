@@ -126,5 +126,8 @@ def test_loop_feedback_tracks_context_input_at_entry_not_after_same_ir_reset():
         (2,[{'op':'write','target':'ctx','mode':'replace','input':local('next')}])],[local('next')])}
     cfg,annotation=annotate(cfg,plans,{'ctx':('runtime_context','ctx')})
     result=propagate(cfg,annotation)
-    assert result.status=='unsupported_feedback',result.diagnostics
-    assert result.stats['block_evaluations']==0
+    assert result.status=='complete',result.diagnostics
+    assert 0 < result.stats['block_evaluations'] < 20
+    consumed = result.records.get('ir_act').events[1].atomic_ops[0].inputs[0]
+    assert any(result.registry.get(identity).origin.acquired_from == 'runtime_context:ctx' for identity in consumed)
+    assert all(result.registry.get(identity).content.model_dump(mode='json') != {'form':'literal','value':'reset'} for identity in consumed)

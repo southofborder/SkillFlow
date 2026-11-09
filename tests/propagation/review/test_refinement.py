@@ -131,12 +131,11 @@ def test_pure_service_stops_after_one_full_repair_and_isolates_rereview():
     assert "review_response" not in final and final["raw_annotation"] == raw
 
 
-def test_repair_freezes_the_original_independent_request_once(tmp_path):
+def test_repair_references_original_source_only_material_once(tmp_path):
     from tests.propagation.annotation.helpers import prepare_material
     upstream, source, analysis = setup_run(tmp_path)
     original = load_prepared_material(upstream)
-    material = prepare_material(original["source"], original["cfg"],
-        user_request="Return only the requested original value.")
+    material = prepare_material(original["source"], original["cfg"])
     raw = valid_raw_response(material)
     directory = tmp_path / "task-policy-refinement"
     refinement.prepare_refinement_run(source, analysis, material, raw, run_dir=directory,
@@ -150,7 +149,7 @@ def test_repair_freezes_the_original_independent_request_once(tmp_path):
     assert read_json(directory / "repair/manifest.json")["upstream"]["path"] == ".."
     assert not (directory / "repair/inputs/semantic-context.json").exists()
     assert not (directory / "repair/inputs/user-request.json").exists()
-    assert material_from_prompt(review.prompts[-1])["user_request"] == material["user_request"]
+    assert "user_request" not in material_from_prompt(review.prompts[-1])
     assert refinement.replay_refinement(directory) == result
 
 
@@ -265,12 +264,11 @@ def test_refinement_report_links_resolve(tmp_path):
             assert (folder / href).is_file(), href
 
 
-def test_request_span_finding_roundtrip_repair_and_independent_rereview(tmp_path):
+def test_source_span_finding_roundtrip_repair_and_independent_rereview(tmp_path):
     from tests.propagation.annotation.helpers import prepare_material
     upstream, source, analysis = setup_run(tmp_path)
     base = load_prepared_material(upstream)
-    material = prepare_material(base["source"], base["cfg"],
-        user_request="Return the selected original value.")
+    material = prepare_material(base["source"], base["cfg"])
     raw = valid_raw_response(material)
     directory = tmp_path / "span-refinement"
     refinement.prepare_refinement_run(source, analysis, material, raw, run_dir=directory,
@@ -281,8 +279,8 @@ def test_request_span_finding_roundtrip_repair_and_independent_rereview(tmp_path
             response = super().complete(prompt)
             if response["findings"]:
                 response["findings"][0]["evidences"] = [
-                    {"file": "task/user-request.txt", "start_line": 1, "end_line": 1,
-                     "reason": "The user request specifies preservation of the selected original value."}]
+                    {"file": "skill/SKILL.md", "start_line": 3, "end_line": 4,
+                     "reason": "The original Skill specifies the selected result and its restriction."}]
             return response
 
     review, repair = SpanReview(["issue", "ok"]), Repair(raw)
@@ -290,12 +288,12 @@ def test_request_span_finding_roundtrip_repair_and_independent_rereview(tmp_path
     assert result["status"] == "review_passed", result
     assert not (directory / "repair/inputs/repair-context.json").exists()
     context = load_repair_context(directory / "repair")
-    assert "task/user-request.txt" in json.dumps(context)
+    assert "skill/SKILL.md" in json.dumps(context)
     final = material_from_prompt(review.prompts[-1])
     assert "review_response" not in final and "repair_context" not in final
-    assert final["user_request"] == material["user_request"]
+    assert "user_request" not in final
     html = (directory / "initial-review/report.html").read_text(encoding="utf-8")
-    assert "Return the selected original value." in html
+    assert "读取配置" in html
     assert refinement.load_refinement_run(directory)["result"] == result
     assert refinement.replay_refinement(directory) == result
 

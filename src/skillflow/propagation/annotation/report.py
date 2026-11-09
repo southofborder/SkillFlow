@@ -95,14 +95,14 @@ def render_report(result, material=None, *, call_root=""):
             for instruction in block["instructions"]:
                 profile = result["ir_semantics"].get(instruction["id"])
                 partial = result.get("ir_semantics", {}).get(instruction["id"], {}).get("order") == "partial"
-                values = ([", ".join(profile["operator"]) or "[]"]
+                values = (["unknown" if profile["operator"] is None else ", ".join(profile["operator"]) or "[]"]
                           + [_effect_steps(profile, partial)]) if profile else ["Not accepted"] * 2
                 lines.append("| " + " | ".join(_cell(x) for x in [instruction["id"], instruction["opcode"], *values]) + " |")
             lines.append("")
     task = material.get("task") if material is not None else None
     if task is not None:
-        lines.extend(["## Independent Task basis and demand realization", "",
-                      f"Purpose basis: `{task['basis']}`; Task revision: `{task['task_sha256']}`.", "", _cell(task["purpose"]["text"]), "",
+        lines.extend(["## Independent Task and demand realization", "",
+                      f"Task revision: `{task['task_sha256']}`.", "", _cell(task["purpose"]["text"]), "",
                       f"Task requirements: {len(task['requirements'])}; Positive preservation goals: {len(result.get('demands', []))}; Expressions: {len(result.get('expressions', []))}.", "",
                       "Task comes from the independent source stage; annotation references that revision only. Expression states below do not prove requirements are satisfied, demands are minimal or semantics are complete.", ""])
         lines.extend(["| Requirement | Expression status | Remaining limitations |", "| --- | --- | --- |"])

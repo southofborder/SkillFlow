@@ -759,7 +759,7 @@ def select_cases(corpus_root: Path | str, screening_path: Path | str | None = No
                 "constraints": {"max_per_near_fork_group": 1, "max_per_source_cluster": max_per_cluster, "min_selected_source_clusters": min_clusters},
                 "screening_report_sha256": _sha(path.read_bytes()), "skipped": skipped,
                 "pending_source_reviews": missing_reviews, "errors": errors, "automatic_relaxation": False,
-                "user_request": None, "fixtures": [], "human_reference_status": "pending_two_independent_human_confirmations",
+                "fixtures": [], "human_reference_status": "pending_two_independent_human_confirmations",
                 "formal_target_model_calls": 0}
     if write:
         _save(Path(output_dir) / "selection-manifest.json" if output_dir else root / "selection" / "selection-manifest.json", manifest)
@@ -772,7 +772,7 @@ def _reference_template(case_id: str, item: dict, source_hash: str) -> dict:
             "state": "assistant_draft", "human_verified": False,
             "reference_status": "pending_independent_human_reference",
             "reference_identity": "Human-verification template; not a gold answer or an assistant verdict.",
-            "user_request": None, "purpose_basis": "skill_declared_purpose_only",
+            "purpose_basis": "skill_declared_purpose_only",
             "authorization_limit": "Author declarations do not establish actual user authorization.",
             "declared_purpose": [], "required_behavior": [], "implementation_choices": [],
             "necessary_sensitive_uses": [], "supported_excesses": [], "unknowns": [],
@@ -858,7 +858,7 @@ def prepare_reference_packets(corpus_root: Path | str, selection_manifest: dict 
                            "source_tree_scope": "Included original source members; proven registry metadata is excluded from the common view.",
                            "source_sha256": native_source_sha256(inv["texts"]),
                            "files": [f for f in inv["files"] if f["kind"] != "registry_generated_metadata"],
-                           "user_request": None, "fixtures": [], "excluded_registry_metadata": [f for f in inv["files"] if f["kind"] == "registry_generated_metadata"]}
+                           "fixtures": [], "excluded_registry_metadata": [f for f in inv["files"] if f["kind"] == "registry_generated_metadata"]}
         _immutable(case / "source-manifest.json", _json(source_manifest))
         _immutable(case / "reference.template.json", _json(_reference_template(case_id, item, _sha(bundle))))
         _immutable(case / "reference.source-facts-draft.json", _json(source_facts_reference_draft(case_id, item, inv["texts"], reviews.get(item["canonical_id"]), inv["files"])))

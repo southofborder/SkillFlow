@@ -21,8 +21,8 @@ from skillflow.common.json_normalization import NORMALIZATION_VERSION
 from skillflow.propagation.annotation.config import annotation_config, PUBLIC_CONFIG_FIELDS
 
 
-IDENTITY = "skillflow-analysis-run-v7"
-FORMAT_VERSION = 7
+IDENTITY = "skillflow-analysis-run-v9"
+FORMAT_VERSION = 9
 POLICY = {"structural_corrections": "unlimited", "max_repairs": 1, "reextract_cfg": False,
           "json_normalization": NORMALIZATION_VERSION,
           "review": True, "source_only_task": True, "diagnostic_analysis_on_review_failure": True,
@@ -76,7 +76,7 @@ def _safe_output(directory, source, analysis):
             raise ValueError("Pipeline output cannot overwrite frozen inputs or deliveries")
 
 
-def prepare_analysis_run(input, analysis, *, run_dir, config=None, user_request=None, secrets=()):
+def prepare_analysis_run(input, analysis, *, run_dir, config=None, secrets=()):
     """Freeze source/CFG once; prepare a genuinely source-only first call."""
     from skillflow.common.inputs.snapshot import freeze_input, read_snapshot
     from skillflow.graph.validation import checked_cfg
@@ -84,8 +84,6 @@ def prepare_analysis_run(input, analysis, *, run_dir, config=None, user_request=
     from skillflow.task.runner import prepare_task_run
     directory, source, graph = _directory(run_dir), _directory(input), _directory(analysis)
     public, writer = _config(config), ArtifactWriter(tuple(secrets))
-    if user_request is not None and (type(user_request) is not str or not user_request.strip()):
-        raise ValueError("user_request must be nonempty text or null")
     if (directory / "manifest.json").is_file():
         with exclusive_run(directory):
             manifest = _verify(directory, config=public, recompute=True)
@@ -94,14 +92,14 @@ def prepare_analysis_run(input, analysis, *, run_dir, config=None, user_request=
                     or (directory / "task/manifest.json").exists()):
                 raise PipelineIdentityError("Prepare requires a new pipeline directory")
             supplied = {"input": str(source), "analysis": str(graph),
-                        "user_request_sha256": canonical_sha256(user_request), "config": public}
+                        "config": public}
             if any(canonical_sha256(supplied[key]) != canonical_sha256(request[key]) for key in supplied):
                 raise PipelineIdentityError("Interrupted Task preparation has different inputs")
             _ensure_task_preparation(directory, manifest, secrets=secrets, allow_recovery=True)
             return manifest
     _safe_output(directory, source, graph)
     request = {"input": str(source), "analysis": str(graph), "analysis_sha256": sha_file(graph),
-               "user_request_sha256": canonical_sha256(user_request), "config": public,
+               "config": public,
                "implementation": implementation_provenance()}
     if writer.clean(request) != request:
         raise ValueError("A credential overlaps pipeline preparation")
@@ -124,7 +122,7 @@ def prepare_analysis_run(input, analysis, *, run_dir, config=None, user_request=
             if not (directory / "inputs/snapshot.json").exists():
                 freeze_input(source, directory, writer)
             _, frozen, metadata = read_snapshot(directory)
-            for name,value in (("cfg.json",cfg),("runtime-contract.json",runtime_contract()),("user-request.json",user_request)):
+            for name,value in (("cfg.json",cfg),("runtime-contract.json",runtime_contract())):
                 target = directory / "inputs" / name
                 if target.exists():
                     import json
@@ -144,7 +142,7 @@ def prepare_analysis_run(input, analysis, *, run_dir, config=None, user_request=
             "files":files,"upstream":None})
         writer.json(directory/"manifest.json",manifest)
         if status == "ready":
-            prepare_task_run(directory/"task",source_owner=directory,user_request=user_request,config=public,secrets=secrets,
+            prepare_task_run(directory/"task",source_owner=directory,config=public,secrets=secrets,
                              resume_preparation=True)
     return manifest
 
@@ -197,17 +195,12 @@ def _ensure_task_preparation(directory, manifest, *, secrets=(), allow_recovery=
     from skillflow.task.runner import prepare_task_run, verify_task_prepared
     target = directory / "task"
     request = _unseal(_read(directory / "preparing.json"))
-    # This value is frozen orchestration input, not a second interpretation of Task.
-    import json
-    user_request = json.loads((directory / "inputs/user-request.json").read_bytes().decode("utf-8"))
-    if canonical_sha256(user_request) != request["user_request_sha256"]:
-        raise PipelineIdentityError("Frozen user request differs from pipeline preparation")
     _, source, _metadata = read_snapshot(directory)
-    expected = prepare_task_material(source, user_request=user_request)
+    expected = prepare_task_material(source)
     if not (target / "manifest.json").is_file():
         if not allow_recovery:
             raise PipelineIdentityError("Task preparation is incomplete; resume prepare or run from frozen inputs")
-        prepare_task_run(target, source_owner=directory, user_request=user_request,
+        prepare_task_run(target, source_owner=directory,
                          config=manifest["config"], secrets=secrets, resume_preparation=True)
     prepared = verify_task_prepared(target, config=manifest["config"])
     if (canonical_sha256(prepared["source_owner"]) != canonical_sha256(make_run_reference(target,directory))
@@ -260,7 +253,7 @@ def _selected(directory, original, refinement):
     if refinement["selected"] not in {"original", "repair"}:
         raise PipelineIdentityError("Unknown selected annotation stage")
     selected = original if name == "annotation" else load_annotation_run(directory / name)
-    if any(selected["material"][key] != original["material"][key] for key in ("source","cfg","user_request","runtime_contract")):
+    if any(selected["material"][key] != original["material"][key] for key in ("source","cfg","runtime_contract")):
         raise PipelineIdentityError("Selected annotation changed frozen source, CFG or request")
     receipt = {"path": name, "manifest_sha256": selected["manifest"]["manifest_sha256"],
                "raw_sha256": canonical_sha256(selected["raw_annotation"])}

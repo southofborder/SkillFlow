@@ -16,7 +16,7 @@ def fixture():
         "demand_refs": ["DD1"], "constraint_refs": [], "reduction": None}
     signal = {"data_id": "D-A", "label": "credential <script>", "property": "value", "path": ["secret"],
         "excluded_paths": [], "relation": "possible", "declaration_id": "S1", "parents": [], "rules": ["explicit_declaration"]}
-    result = {"schema_version": "skillflow-sensitivity-review-v4", "status": "complete", "sinks": [
+    result = {"schema_version": "skillflow-sensitivity-review-v6", "status": "complete", "sinks": [
         {"id": "sink-A", "boundary": {"target": "<img>"}, "actual_payload": [["D-A"], ["D-A"]],
          "related_requirements": ["R1"], "data_reviews": [item], "limitations": []},
         {"id": "sink-B", "boundary": {}, "actual_payload": [], "related_requirements": [],

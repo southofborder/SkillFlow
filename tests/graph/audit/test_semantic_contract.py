@@ -414,4 +414,4 @@ def test_prompt_shares_contract_without_private_inputs_or_second_graph(reviewed_
     assert "这是可定位的表示缺口" not in instructions
     for secret in ("private_expected", "private_raw_graph", "private_judgment", "private_label"):
         assert secret not in prompt
-    assert json.loads(payload)["controlled_text"] == document["text"]
+    assert [item["value"] for item in json.loads(payload)["controlled_facts"]] == [unit["text"] for unit in document["units"]]

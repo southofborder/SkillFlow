@@ -70,7 +70,7 @@ def svg():
 
 
 def export(tmp_path, cases=None):
-    material = {"schema_version": 8, "identity": "skill-ir-full-pipeline-delivery-v8", "profile_schema_version": "security-profile-v15", "run_id": "offline-fixture", "cases": cases if cases is not None else [case()]}
+    material = {"schema_version": site.EXPORT_FORMAT_VERSION, "identity": site.EXPORT_IDENTITY, "profile_schema_version": site.SCHEMA_VERSION, "run_id": "offline-fixture", "cases": cases if cases is not None else [case()]}
     # Failed authored fixtures carry no successful semantic payload.
     for entry in material["cases"]:
         if entry["annotation_status"] != "complete":
@@ -335,17 +335,16 @@ def test_source_range_display_uses_frozen_physical_lines_and_preserves_endings(t
     assert "source?.units" not in text
 
 
-def test_source_display_keeps_skill_and_user_request_namespaces_distinct(tmp_path):
+def test_source_display_preserves_skill_path_without_retired_request_namespace(tmp_path):
     executable = shutil.which("node")
     if executable is None:
         pytest.skip("Node unavailable for offline source resolution")
     text = site.TEMPLATE.read_text(encoding="utf-8")
     functions = "function sourceFiles(" + text.split("function sourceFiles(", 1)[1].split("\nfunction appendLocationDeclarations(", 1)[0]
-    value = {"source": {"files": [{"path": "task/user-request.txt", "content": "Skill file\r\nsecond"}]},
-             "user_request": "User request\r\nsecond"}
+    value = {"source": {"files": [{"path": "task/user-request.txt", "content": "Skill file\r\nsecond"}]}}
     code = functions + "\nconst c=" + json.dumps(value) + ";\n"
     code += 'if(evidenceText({file:"skill/task/user-request.txt",start_line:1,end_line:1},c)!=="Skill file\\r\\n")throw Error("skill");\n'
-    code += 'if(evidenceText({file:"task/user-request.txt",start_line:1,end_line:1},c)!=="User request\\r\\n")throw Error("task");\n'
+    code += 'if(sourceFiles(c).some(f=>f.path==="task/user-request.txt"))throw Error("retired namespace");\n'
     script = tmp_path / "source-resolution.js"
     script.write_text(code, encoding="utf-8")
     result = subprocess.run([executable, str(script)], capture_output=True, text=True)

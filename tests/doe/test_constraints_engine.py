@@ -145,7 +145,8 @@ class World:
             expressions=self.expressions, nodes=self.nodes, locals=self.locals, elements=self.elements,
             definitions=self.definitions, node_at=self.node_at,
             annotation={"mapping": {"events": self.mapping}},
-            index=SimpleNamespace(data=self.data, instructions=self.instructions, links=self.links))
+            index=SimpleNamespace(cfg=facts.cfg, records=facts.records, coverage=facts.coverage,
+                data=self.data, instructions=self.instructions, links=self.links))
 
 
 def bounded(events, limit=1, scope=None, **extra):

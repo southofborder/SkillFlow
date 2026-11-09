@@ -6,6 +6,7 @@ import json
 
 from skillflow.graph.extraction.candidate import IRAnalysisCandidate
 from skillflow.common.inputs.skill_package import SkillPackage
+from skillflow.common.abstraction import BOUNDARY_GRANULARITY
 
 
 _INSTRUCTIONS = """You analyze one complete Skill package and return exactly one JSON object.
@@ -36,10 +37,11 @@ not new fields in this extraction schema. Do not invent source-level operations
 for implicit model observation inferred only from an execution model. Do not
 invent an order that the source does not support.
 
-Treat code files and code blocks as black-box operations. Do not split internal
-loops, local variables, or internal control flow. Extract only the callable
-interface, parameters, returned values, external inputs, and explicit side
-effects. For a code behavior, preserve the original code body in
+Keep pure local code calculations opaque. Expose source-supported conditions
+that change acquisition, delivery, saving, returned content or state versions;
+do not hide those conditions inside a single indivisible black-box operation.
+Keep ordinary internal variables and implementation-only details abstract.
+For a code behavior, preserve the original code body in
 metadata.script_content whenever it is available.
 
 Do not create execution instructions for licenses, changelogs, history, examples,
@@ -462,6 +464,7 @@ def build_whole_skill_prompt(package: SkillPackage) -> str:
 
     sections = [
         _INSTRUCTIONS,
+        BOUNDARY_GRANULARITY,
         "Candidate JSON Schema:",
         json.dumps(
             IRAnalysisCandidate.model_json_schema(), ensure_ascii=False, indent=2

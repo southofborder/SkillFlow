@@ -15,6 +15,7 @@ CONTRACT_NOTICE = (
     'These records describe static possible behavior under the shared abstract runtime contract, not execution logs. '
     'complete means only that solving finished under the contract, not that the model actually observed this content. '
     'Default observations and explicit exceptions jointly constrain analysis. Fixed ordering or absence of a contract citation does not establish an observed runtime fact.'
+    ' Entry and exit states retain computation and audit evidence, rather than complete historical environments. An omitted binding does not establish deletion or an empty value.'
 )
 
 
@@ -33,8 +34,19 @@ def _json(value):
 def _changes(record):
     states = [{(b['location']['kind'], b['location']['name']): b['data_ids'] for b in record[key]['bindings']}
               for key in ('entry_state', 'exit_state')]
-    return [{'location': {'kind': k[0], 'name': k[1]}, 'before': states[0].get(k, []), 'after': states[1].get(k, [])}
-            for k in sorted(set(states[0]) | set(states[1])) if states[0].get(k) != states[1].get(k)]
+    # Liveness projection can omit an old binding without deleting it. Only
+    # explicit write evidence can establish removal from a location.
+    changes = {k: {'location': {'kind': k[0], 'name': k[1]},
+                   'before': states[0].get(k, []), 'after': states[1][k]}
+               for k in sorted(states[1]) if states[0].get(k) != states[1][k]}
+    for event in record['events']:
+        children = [child for instance in event.get('instances', []) for child in instance['body']] if event.get('kind') == 'for_each' else [event]
+        for child in children:
+            for operation in child['atomic_ops']:
+                for change in operation['changes']:
+                    key = (change['location']['kind'], change['location']['name'])
+                    changes[key] = {name: change[name] for name in ('location', 'before', 'after')}
+    return [changes[key] for key in sorted(changes)]
 
 
 def _location(value):
@@ -135,6 +147,7 @@ def build_view(facts):
                          'output_bindings': spec['output_bindings'] if spec is not None else None})
     from skillflow.propagation.contracts.runtime_contract import runtime_contract_binding
     return {**{key: getattr(facts, key) for key in ('status', 'source', 'locations', 'coverage', 'diagnostics')},
+            'processing_gaps': facts.processing_gaps, 'boundary_coverage': facts.boundary_coverage,
             'runtime_contract': runtime_contract_binding(facts.runtime_contract),
             'data': sorted(facts.data, key=lambda d: d['id']), 'labels': labels, 'rows': rows, 'audit': audit,
             'boundary_rows': boundary_rows, 'sink_boundaries': facts.sinks,
@@ -181,10 +194,10 @@ def render_markdown(facts, *, facts_prefix='', material_href=None):
     if not view['boundary_rows']:
         lines.append('| — | — | — | — | — | No delivery or storage operation has a record; this does not establish absence of exposure |')
     lines.append('')
-    lines += detail('Complete source', view['source']) + detail('Coverage and diagnostics', {key: view[key] for key in ('coverage', 'diagnostics')})
+    lines += detail('Complete source', view['source']) + detail('Coverage and diagnostics', {key: view[key] for key in ('coverage', 'diagnostics', 'processing_gaps', 'boundary_coverage')})
     for row in view['rows']:
         lines += [f"## {cell(row['id'])} · {cell(row['ir']['opcode'])}", '',
-                  f"Block: {cell(row['block'])}; Operator: {cell(', '.join(row['action']['operator']) or '[]')}.", '',
+                  f"Block: {cell(row['block'])}; Operator: {cell(('unknown' if row['action']['operator'] is None else ', '.join(row['action']['operator']) or '[]'))}.", '',
                   'IR inputs: ' + cell(_operands(row['ir'].get('inputs', []))), '', 'IR outputs: ' + cell(_operands(row['ir'].get('outputs', []))), '']
         if row['record']['order'] == 'partial':
             lines += ['**Partial order: possible permutations are joined subject to required precedence; table positions do not imply a unique execution order.**', '']
@@ -214,9 +227,9 @@ def render_markdown(facts, *, facts_prefix='', material_href=None):
                                            + str(member['when_input_index'])) + ' | — | ' + cell(member['presence']) + ' |')
         if not row['stages']:
             lines.append('| — | No effect event | — | — | — | Entry/exit states and result bindings remain available |')
-        lines += ['', 'Entry/exit changes: ', '']
-        lines += [f"- `{cell(_location(c['location']))}`: {ids(c['before'])} → {ids(c['after'])}" for c in row['changes']] or ['- Location bindings are unchanged; this does not imply absence of observation or sending.']
-        lines += ['', *detail('Complete entry and exit states', {k: row['record'][k] for k in ('entry_state', 'exit_state')})]
+        lines += ['', 'Retained binding and explicit write changes: ', '']
+        lines += [f"- `{cell(_location(c['location']))}`: {ids(c['before'])} → {ids(c['after'])}" for c in row['changes']] or ['- No retained binding change is shown; this does not imply absence of observation, sending or omitted historical bindings.']
+        lines += ['', *detail('Retained entry and exit evidence', {k: row['record'][k] for k in ('entry_state', 'exit_state')})]
         if audit is not None:
             lines += detail('Original annotation audit: IR semantics, step arguments, output bindings and evidence',
                             {'ir_semantics': row['ir_semantics'], 'steps': [s['spec'] for s in row['stages']], 'output_bindings': row['output_bindings']})
@@ -262,7 +275,7 @@ def render_html(facts, *, facts_prefix='', material_href=None):
             f"<p>IR record coverage: {len(view['rows'])} / {view['ir_total']}.</p>",
             '<p>' + ' · '.join('<a href="' + escape(facts_prefix + name + '.json', quote=True) + '">' + label + '</a>' for name, label in [('data', 'Data'), ('records', 'Operation records'), ('sinks', 'Sink list')]) + '</p>',
             '<p>Select a D label to view its data version. Argument indexes belong to atomic operations, not original IR operands. Control slots determine member inclusion or observation and are not delivered payload. Candidate sets do not imply simultaneous occurrence; possible dependencies do not imply complete plaintext inclusion. This stage makes no risk, necessity or DOE judgment. Read scope, model observation, explicit selection and actual arguments are reviewed separately; tool boundaries do not imply networking.</p>',
-            details('Complete source', pre(view['source']), 'source'), details('Coverage and diagnostics', pre({k: view[k] for k in ('coverage', 'diagnostics')}))]
+            details('Complete source', pre(view['source']), 'source'), details('Coverage and diagnostics', pre({k: view[k] for k in ('coverage', 'diagnostics', 'processing_gaps', 'boundary_coverage')}))]
     if material_href is not None:
         body.append('<p><a href="' + escape(material_href, quote=True) + '">Frozen runtime contract text</a>'
                     ' (runtime_contract); Expand the audit section below for individual evidence.</p>')
@@ -287,7 +300,7 @@ def render_html(facts, *, facts_prefix='', material_href=None):
         ir, action = row['ir'], row['action']
         body += ['<section><h2>' + escape(row['id'] + ' · ' + ir['opcode']) + '</h2><p class="muted">Block ' + escape(row['block']) + '</p>',
                  '<p><b>IR inputs: </b>' + escape(_operands(ir.get('inputs', []))) + '<br><b>IR outputs: </b>' + escape(_operands(ir.get('outputs', []))) + '</p>',
-                 '<p><b>Operator: </b>' + escape(', '.join(action['operator']) or '[]') + '</p>']
+                 '<p><b>Operator: </b>' + escape(('unknown' if action['operator'] is None else ', '.join(action['operator']) or '[]')) + '</p>']
         if row['record']['order'] == 'partial':
             body.append('<p class="notice">Partial order: possible permutations are joined subject to required precedence; table positions do not imply a unique execution order.</p>')
         body.append(details('Order and required precedence', pre({key: row['record'][key] for key in ('order', 'precedence')})))
@@ -318,16 +331,16 @@ def render_html(facts, *, facts_prefix='', material_href=None):
             if audit is not None:
                 audits.append(details(stage['position'] + ' · ' + op['op'] + ': Arguments and evidence', pre(_parameters(stage['spec'])) + evidence(stage['spec']['evidences']) + pre(stage['spec'])))
         if not row['stages']:
-            body.append('<tr><td colspan="6">No effect events; public result locations and complete IN / OUT states remain available. Empty effects do not imply an empty operation.</td></tr>')
-        body += ['</tbody></table><h3>IN / OUT differences</h3>']
+            body.append('<tr><td colspan="6">No effect events; public result locations and retained IN / OUT evidence remain available. Empty effects do not imply an empty operation.</td></tr>')
+        body += ['</tbody></table><h3>Retained binding and explicit write changes</h3>']
         if row['changes']:
             body.append('<table><tr><th>Position</th><th>Entry</th><th>Exit</th></tr>')
             for c in row['changes']:
                 body.append('<tr><td>' + escape(_location(c['location'])) + '</td><td>' + ids(c['before']) + '</td><td>' + ids(c['after']) + '</td></tr>')
             body.append('</table>')
         else:
-            body.append('<p class="muted">Location bindings are unchanged; this does not imply absence of observation or sending.</p>')
-        body.append(details('Complete entry and exit states', pre({k: row['record'][k] for k in ('entry_state', 'exit_state')})))
+            body.append('<p class="muted">No retained binding change is shown; this does not imply absence of observation, sending or omitted historical bindings.</p>')
+        body.append(details('Retained entry and exit evidence', pre({k: row['record'][k] for k in ('entry_state', 'exit_state')})))
         if audit is not None:
             inner = [*audits, details('Public IR output bindings and evidence', pre(row['output_bindings']))]
             semantics = row['ir_semantics']

@@ -37,8 +37,7 @@ def propagation_run(tmp_path, monkeypatch):
     analysis = tmp_path / "analysis.json"
     analysis.write_text(json.dumps({"cfg": graph()}), encoding="utf-8")
     directory = tmp_path / "annotation"
-    prepare_run(package, analysis, run_dir=directory,
-        user_request="Preserve the stated result and restrictions.")
+    prepare_run(package, analysis, run_dir=directory)
     material = load_prepared_material(directory)
     raw = valid_raw_response(material)
     segment = raw["ir_semantics"]["ir_read"]["events"][0]
@@ -75,9 +74,9 @@ def test_one_solve_and_one_result_with_joint_projection(propagation_run, tmp_pat
     directory = tmp_path / "doe"
     loaded = runner.run_doe(propagation_run, run_dir=directory)
     assert calls == [1]
-    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v5"
+    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v7"
     assert loaded["manifest"]["policy"]["candidate_origin"] == "model_annotation"
-    assert loaded["annotation"]["task"]["basis"] == "user_request"
+    assert "basis" not in loaded["annotation"]["task"]
     assert loaded["result"]["coverage"]["declarations"] == 1
     assert len(loaded["result"]["constraints"]["checks"]) == 1
     assert all(row["status"] == "satisfied" for row in loaded["result"]["constraints"]["checks"].values())

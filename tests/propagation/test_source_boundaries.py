@@ -149,8 +149,10 @@ def test_local_scan_and_model_processing_keep_different_observation_versions(obs
                 if event.effect == "model_observe" for operation in event.atomic_ops]
     assert observed == [[frozenset([whole if observe_whole else selected])]]
     assert solved.records.get("ir_send").events[0].atomic_ops[0].inputs == [frozenset([selected])]
-    # A source whole can remain registered and in state without automatic observation.
-    assert whole in solved.records.get("ir_acquire").exit_state.get(FlowLocation(kind="runtime_context", name="customer-document"))
+    # A dead state binding is omitted; the actual whole and its observation
+    # version remain in the registry and operation evidence.
+    assert solved.records.get("ir_acquire").exit_state.get(FlowLocation(kind="runtime_context", name="customer-document")) is None
+    assert solved.registry.get(whole).id == whole
     assert [event.effect for event in solved.records.get("ir_acquire").events] == effects
 
 
@@ -222,11 +224,13 @@ def test_tool_receipt_stable_retry_and_context_feedback_share_value_location_res
     cfg, annotation = annotation_for(cfg, plans, {"catalog": ("tool", "catalog.lookup"), "query-slot": ("runtime_context", "request-cache")})
     annotation["locations"]["query-slot"]["operand_refs"] = [{"instruction_id": "ir_query", "side": "input", "index": 0}]
     fifo, lifo = propagate(cfg, annotation), propagate(cfg, annotation, schedule="lifo")
-    assert fifo.status == lifo.status == ("unsupported_feedback" if feedback else "complete")
+    assert fifo.status == lifo.status == "complete"
     assert fifo.records.records_dict() == lifo.records.records_dict()
     assert fifo.registry.to_dict() == lifo.registry.to_dict()
     assert len(fifo.initial_data["records"]) == 1
     assert fifo.initial_data["records"][0]["data"]["origin"]["acquired_from"] == "runtime_context:request-cache"
+    assert fifo.stats["loop_families"] == 1
+    assert fifo.stats["loop_relation_facts"] == (2 if feedback else 1)
     if not feedback:
         assert len(fifo.registry) == 2 and fifo.stats["block_evaluations"] < 10
 

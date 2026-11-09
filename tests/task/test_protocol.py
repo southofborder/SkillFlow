@@ -1,4 +1,4 @@
-"""The protocol validates provenance/coverage, not model semantic accuracy."""
+"""The compact protocol validates provenance and references, not model semantic accuracy."""
 from copy import deepcopy
 import hashlib
 import json
@@ -8,9 +8,10 @@ import pytest
 
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.semantic_failure import SemanticFailure
+from skillflow.common.source_evidence import extract_source_lines
 from skillflow.common.validation import StructuralValidationError
 from skillflow.propagation.contracts.task import (
-    CandidateTask, TaskRepairObjection, checked_task, task_reference,
+    CandidateTask, TaskReference, TaskRepairObjection, checked_task, task_reference,
     validate_task_candidate, task_source_files,
 )
 from skillflow.task.material import prepare_task_material, validate_revision
@@ -36,19 +37,14 @@ def candidate():
             "requirements": [
                 {"id": "R1", "text": "返回 label 原值。", "evidences": [span()]},
                 {"id": "R2", "text": "禁止发送 serial。", "evidences": [span()]}],
-            "source_accounting": [
-                {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
-                 "disposition": "requirement", "requirement_ids": ["R1", "R2"], "issue_ids": [], "reason": "同一行包含两项可独立遗漏的义务。"},
-                {"file": "skill/SKILL.md", "start_line": 3, "end_line": 3,
-                 "disposition": "capability", "requirement_ids": [], "issue_ids": [], "reason": "能力描述不自动形成要求。"}],
             "issues": []}
 
 
-def seal(value=None, src=None, request=None):
+def seal(value=None, src=None):
     src = source() if src is None else src
     return validate_task_candidate(candidate() if value is None else value,
-        source_files=task_source_files(src, user_request=request),
-        basis="declared_skill" if request is None else "user_request", source_sha256=src["source_sha256"])
+        source_files=task_source_files(src),
+        source_sha256=src["source_sha256"])
 
 
 class Client:
@@ -70,8 +66,14 @@ def inventory(directory):
 
 def test_same_physical_line_supports_independent_requirements_and_no_graph_binding():
     task = seal()
-    assert task.source_accounting[0].requirement_ids == ["R1", "R2"]
-    assert task.schema_version == "skillflow-task-v3"
+    assert task.requirements[0].evidences == task.requirements[1].evidences
+    assert "source_accounting" not in task.model_dump()
+    assert task.schema_version == "skillflow-task-v5"
+    assert task_reference(task)["schema_version"] == "skillflow-task-reference-v3"
+    assert "basis" not in task.model_dump()
+    assert "basis" not in task_reference(task)
+    assert "user_request_sha256" not in task.model_dump()
+    assert "user_request_sha256" not in task_reference(task)
     assert "bindings" not in task.requirements[0].model_dump()
     assert checked_task(task) == task
     assert task_reference(task)["task_sha256"] == task.task_sha256
@@ -82,19 +84,49 @@ def test_same_physical_line_supports_independent_requirements_and_no_graph_bindi
             seal(bad)
 
 
-@pytest.mark.parametrize("mutation", ["missing", "repeated", "unknown_requirement", "unknown_issue", "missing_requirement_reference"])
-def test_physical_accounting_missing_duplicate_and_dangling_references_rejected(mutation):
+@pytest.mark.parametrize("legacy", [[], [{"file": "skill/SKILL.md", "start_line": 1,
+    "end_line": 1, "disposition": "requirement", "requirement_ids": ["R1"],
+    "issue_ids": [], "reason": "A retired line-accounting entry."}]])
+def test_retired_source_accounting_is_strictly_rejected(legacy):
+    bad = {**candidate(), "source_accounting": legacy}
+    with pytest.raises(StructuralValidationError, match="source_accounting"):
+        seal(bad)
+
+
+def test_unreferenced_context_does_not_require_duplicate_model_registration():
+    task = seal()
+    assert all(e.end_line == 1 for requirement in task.requirements for e in requirement.evidences)
+    assert set(CandidateTask.model_fields) == {"purpose", "requirements", "issues"}
+    prompt = build_task_prompt(prepare_task_material(source()))
+    assert "Tool can send JSON." in prompt
+    assert "source_accounting" not in prompt
+    assert "every nonempty" not in prompt
+    assert "prohibitions" in prompt
+
+
+@pytest.mark.parametrize("mutation", ["unknown_requirement", "duplicate_issue", "unknown_file", "invalid_span"])
+def test_issue_references_and_source_spans_remain_checked(mutation):
     bad = candidate()
-    if mutation == "missing":
-        bad["source_accounting"].pop()
-    elif mutation == "repeated":
-        bad["source_accounting"].append(deepcopy(bad["source_accounting"][0]))
-    elif mutation == "unknown_requirement":
-        bad["source_accounting"][0]["requirement_ids"].append("R404")
-    elif mutation == "unknown_issue":
-        bad["source_accounting"][0]["issue_ids"].append("I404")
+    issue = {"id": "I1", "kind": "ambiguity", "evidences": [span()],
+             "requirement_ids": ["R1"], "resolution": "unresolved", "reason": "Unresolved interpretation."}
+    bad["issues"] = [issue]
+    if mutation == "unknown_requirement":
+        issue["requirement_ids"] = ["R404"]
+    elif mutation == "duplicate_issue":
+        bad["issues"].append(deepcopy(issue))
+    elif mutation == "unknown_file":
+        issue["evidences"][0]["file"] = "skill/missing.md"
     else:
-        bad["source_accounting"][0]["requirement_ids"].remove("R2")
+        issue["evidences"][0]["end_line"] = 100
+    with pytest.raises(StructuralValidationError):
+        seal(bad)
+
+
+@pytest.mark.parametrize("field,value", [("start_line", True), ("start_line", 0),
+    ("start_line", 3), ("end_line", 99), ("file", "skill/missing.md")])
+def test_requirement_spans_remain_strict(field, value):
+    bad = candidate()
+    bad["requirements"][0]["evidences"][0][field] = value
     with pytest.raises(StructuralValidationError):
         seal(bad)
 
@@ -103,9 +135,7 @@ def test_ranges_can_include_blank_lines_and_requirements_can_have_cross_file_evi
     src = source({"SKILL.md": "Return label.\n\nNever send serial.\n", "reference/rules.md": "Keep label unchanged.\n"})
     value = candidate()
     value["requirements"][0]["evidences"].append(span("skill/reference/rules.md"))
-    value["source_accounting"] = [
-        {**value["source_accounting"][0], "end_line": 3},
-        {**value["source_accounting"][0], "file": "skill/reference/rules.md", "requirement_ids": ["R1"]}]
+    value["requirements"][1]["evidences"] = [span(start=1, end=3)]
     assert seal(value, src).requirements[0].evidences[1].file == "skill/reference/rules.md"
 
 
@@ -117,22 +147,62 @@ def test_unsupported_interpretation_can_still_be_structurally_valid():
     assert "semantically_valid" not in task.model_dump()
 
 
-def test_task_and_request_identity_tampering_rejected():
+def test_task_and_source_identity_tampering_rejected():
     task = seal().model_dump(mode="json")
     task["requirements"][0]["text"] = "已篡改"
     with pytest.raises(ValueError, match="sealed identity"):
         checked_task(task)
     with pytest.raises(ValueError, match="source identity"):
         checked_task(seal(), source_sha256="0" * 64)
+
+
+def test_retired_request_material_basis_and_identity_fields_are_rejected():
+    from skillflow.task.material import checked_task_material
+    material = prepare_task_material(source())
+    assert set(material) == {"version", "source"}
+    assert material["version"] == "skillflow-task-material-v3"
+    with pytest.raises(ValueError, match="source-only fields"):
+        checked_task_material({**material, "user_request": None})
+    with pytest.raises(ValueError, match="source-only fields"):
+        checked_task_material({**material, "basis": "declared_skill"})
+    for field, value in (("basis", "user_request"), ("basis", "declared_skill"), ("user_request_sha256", None)):
+        task = seal().model_dump(mode="json")
+        task[field] = value
+        task["task_sha256"] = canonical_sha256({k: v for k, v in task.items() if k != "task_sha256"})
+        with pytest.raises(ValueError):
+            checked_task(task)
+    for field, value in (("basis", "declared_skill"), ("user_request_sha256", None)):
+        with pytest.raises(ValueError):
+            TaskReference.model_validate({**task_reference(seal()), field: value})
+
+
+@pytest.mark.parametrize("retired_request", [None, "Return label.", "", False])
+def test_retired_user_request_argument_is_rejected_before_calls_or_files(tmp_path, retired_request):
+    from skillflow.task.services import revise_task
+    client = Client(candidate())
+    for call in (
+        lambda: task_source_files(source(), user_request=retired_request),
+        lambda: prepare_task_material(source(), user_request=retired_request),
+        lambda: extract_task(source(), client=client, user_request=retired_request),
+        lambda: revise_task(source(), previous_task=seal(), objections=[], client=client, user_request=retired_request),
+        lambda: prepare_task_run(tmp_path / "task", source(), user_request=retired_request),
+    ):
+        with pytest.raises(TypeError, match="user_request"):
+            call()
+    assert client.prompts == []
+    assert not (tmp_path / "task").exists()
+
+
+def test_retired_task_namespace_and_non_skill_purpose_are_rejected():
     value = candidate()
     value["purpose"]["evidences"] = [span("task/user-request.txt")]
-    value["source_accounting"].append({**value["source_accounting"][0], "file": "task/user-request.txt"})
-    with pytest.raises(StructuralValidationError, match="purpose must cite"):
-        seal(request="Return label.")
-    task = seal(value, request="Return label.")
-    assert task.user_request_sha256 == hashlib.sha256(b"Return label.").hexdigest()
-    with pytest.raises(ValueError, match="request identity"):
-        checked_task(task, source_files=task_source_files(source(), user_request="Return summary."))
+    with pytest.raises(StructuralValidationError, match="frozen Skill file"):
+        seal(value)
+    files = {**task_source_files(source()), "task/user-request.txt": "Return label."}
+    with pytest.raises(ValueError, match="only accepts frozen Skill"):
+        validate_task_candidate(candidate(), source_files=files)
+    with pytest.raises(TypeError, match="basis"):
+        validate_task_candidate(candidate(), source_files=task_source_files(source()), basis="user_request")
 
 
 def test_source_material_closed_and_revision_rejects_free_text_graph_and_payload():
@@ -146,19 +216,20 @@ def test_source_material_closed_and_revision_rejects_free_text_graph_and_payload
             TaskRepairObjection.model_validate({**objection, key: "review free text"})
         with pytest.raises(ValueError):
             validate_revision({**revision, key: {}}, material)
-    with pytest.raises(ValueError):
-        TaskRepairObjection.model_validate({**objection, "code": "arbitrary_instructions"})
+    for code in ("arbitrary_instructions", "source_disposition"):
+        with pytest.raises(ValueError):
+            TaskRepairObjection.model_validate({**objection, "code": code})
     with pytest.raises(ValueError):
         TaskRepairObjection.model_validate({**objection, "source_spans": [span()]})
     prompt = build_task_prompt(material, revision)
     assert "COMPLETE_ORIGINAL_SOURCE" in prompt and "ISOLATED_REVISION_DATA" in prompt
     data = json.JSONDecoder().raw_decode(prompt.split("COMPLETE_ORIGINAL_SOURCE\n\n", 1)[1])[0]
-    assert set(data) == {"basis", "source_files"}
+    assert set(data) == {"source_files"}
 
 
-def test_structural_correction_does_not_turn_missing_coverage_into_accepted_task():
+def test_structural_correction_preserves_source_reference_validation():
     bad = candidate()
-    bad["source_accounting"].pop()
+    bad["requirements"][0]["evidences"][0]["end_line"] = 100
     client = Client(bad, candidate())
     result = extract_task(source(), client=client)
     assert len(client.prompts) == 2
@@ -186,6 +257,8 @@ def test_durable_task_owner_readonly_replay_and_tamper_detection(tmp_path):
     assert load_task_run(directory) == result
     assert inventory(directory) == before
     assert run_task(directory, client=Client())["task"] == result["task"]
+    assert run_task(directory, replay=True)["task"] == result["task"]
+    assert "source_accounting" not in (directory / "report.md").read_text(encoding="utf-8")
     changed = json.loads((directory / "task.json").read_text(encoding="utf-8"))
     changed["requirements"][0]["text"] = "被修改的解释"
     (directory / "task.json").write_text(json.dumps(changed), encoding="utf-8")
@@ -261,7 +334,9 @@ def test_saved_task_and_result_compare_json_types_not_python_equality(tmp_path, 
     if target == "task":
         value["requirements"][0]["evidences"][0]["start_line"] = True
     else:
-        value["counts"]["logical_calls"] = True
+        # Counts are passive observer data. Program-owned decision fields still
+        # compare JSON types exactly, even where Python considers 3 == 3.0.
+        value["schema_version"] = float(value["schema_version"])
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(TaskRunIdentityError):
         load_task_run(directory)
@@ -300,3 +375,48 @@ def test_readonly_loading_does_not_require_current_producer_equality(tmp_path, m
     assert inventory(directory) == before
     with pytest.raises(TaskRunIdentityError, match="implementation differs"):
         run_task(directory, client=Client())
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
+def test_physical_evidence_preserves_original_multilingual_text(ending):
+    text = "返回原字段。" + (ending or "\n") + "\n" + "Do not disclose the credential." + ending
+    src = source({"SKILL.md": text})
+    value = candidate()
+    value["requirements"][0]["evidences"] = [span(start=1, end=3)]
+    task = seal(value, src)
+    evidence = task.requirements[0].evidences[0]
+    assert extract_source_lines(text, evidence.start_line, evidence.end_line) == text
+    material = prepare_task_material(src)
+    prompt_data = json.JSONDecoder().raw_decode(
+        build_task_prompt(material).split("COMPLETE_ORIGINAL_SOURCE\n\n", 1)[1])[0]
+    assert "".join(prompt_data["source_files"][0]["lines"]) == text
+
+
+@pytest.mark.parametrize("task_version,reference_version", [("skillflow-task-v3", "skillflow-task-reference-v1"),
+    ("skillflow-task-v4", "skillflow-task-reference-v2")])
+def test_old_task_and_reference_versions_are_not_reinterpreted(task_version, reference_version):
+    value = seal().model_dump(mode="json")
+    value["schema_version"] = task_version
+    value.pop("task_sha256")
+    value["task_sha256"] = canonical_sha256(value)
+    with pytest.raises(ValueError):
+        checked_task(value)
+    reference = task_reference(seal())
+    reference["schema_version"] = reference_version
+    with pytest.raises(ValueError):
+        TaskReference.model_validate(reference)
+
+
+@pytest.mark.parametrize("run_version", [1, 2])
+def test_old_task_run_identity_rejected_without_call(tmp_path, run_version):
+    directory = tmp_path / "task"
+    prepare_task_run(directory, source())
+    path = directory / "manifest.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value.pop("manifest_sha256")
+    value.update(identity=f"skillflow-task-extraction-v{run_version}", schema_version=run_version)
+    path.write_text(json.dumps({**value, "manifest_sha256": canonical_sha256(value)}), encoding="utf-8")
+    client = Client(candidate())
+    with pytest.raises(TaskRunIdentityError, match="protocol"):
+        run_task(directory, client=client)
+    assert client.prompts == []

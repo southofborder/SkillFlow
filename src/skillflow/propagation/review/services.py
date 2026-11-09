@@ -136,7 +136,7 @@ def validate_response(raw: Any, material: dict[str, Any], *, normalized=False) -
     payload = response.model_dump(mode="json")
     payload["findings"] = [{**finding, "id": f"F{index + 1:03d}"}
                            for index, finding in enumerate(payload["findings"])]
-    for axis in ("source_checks", "requirement_checks", "declaration_checks"):
+    for axis in ("requirement_checks", "declaration_checks"):
         for check in payload[axis]:
             check["finding_ids"] = [f"F{index + 1:03d}" for index in check.pop("finding_indexes")]
     return ReviewResponse.model_validate(payload)
@@ -144,25 +144,6 @@ def validate_response(raw: Any, material: dict[str, Any], *, normalized=False) -
 
 def _check_axes(response, material, diagnostics, *, normalized):
     """Exact mechanical accounting cannot establish the correctness of a check."""
-    from skillflow.propagation.contracts.joint import joint_source_files
-    files = joint_source_files(material)
-    expected = {(item["file"], item["line"]) for item in material["source_line_universe"]}
-    seen = set()
-    for index, check in enumerate(response.source_checks):
-        path = f"/source_checks/{index}"
-        try:
-            validate_source_ref({key: getattr(check, key) for key in ("file", "start_line", "end_line")}, files)
-            covered = {(check.file, line) for line in range(check.start_line, check.end_line + 1)} & expected
-            if not covered:
-                raise ValueError("source check must cover at least one nonempty original line")
-            if covered & seen:
-                raise ValueError("source checks overlap at nonempty original lines")
-            seen |= covered
-        except ValueError as error:
-            diagnostics.append({"code": "review_source_coverage", "path": path, "message": str(error)})
-    if seen != expected:
-        diagnostics.append({"code": "review_source_coverage", "path": "/source_checks",
-                            "message": f"unreviewed nonempty source lines: {sorted(expected - seen)}"})
     for axis, key, required in (
             ("requirement_checks", "requirement_id", {item["id"] for item in material["task"]["requirements"]}),
             ("declaration_checks", "raw_pointer", {item["raw_pointer"] for item in material["declaration_index"]})):
@@ -172,24 +153,28 @@ def _check_axes(response, material, diagnostics, *, normalized):
             diagnostics.append({"code": "review_axis_coverage", "path": "/" + axis, "message": str(error),
                                 "context": {"required": sorted(required)}})
     allowed = {finding.id for finding in response.findings} if normalized else set(range(len(response.findings)))
-    referenced = set()
-    for axis in ("source_checks", "requirement_checks", "declaration_checks"):
+    for axis in ("requirement_checks", "declaration_checks"):
         for index, check in enumerate(getattr(response, axis)):
             links = check.finding_ids if normalized else check.finding_indexes
-            referenced.update(links)
             if not set(links) <= allowed:
                 diagnostics.append({"code": "review_finding_link", "path": f"/{axis}/{index}",
                                     "message": "check references a nonexistent finding"})
-    # Task findings must be anchored by a source or requirement check; plain IR
-    # accounting can never justify a source-to-Task correction.
-    task_links = {link for axis in ("source_checks", "requirement_checks")
-                  for check in getattr(response, axis)
-                  for link in (check.finding_ids if normalized else check.finding_indexes)}
+    # Missing requirements have no existing row. Existing requirement objections
+    # must still agree with their explicit checks; deleting the source table
+    # does not permit a simultaneous issue and an unlinked accepted conclusion.
+    known = {row["id"] for row in material["task"]["requirements"]}
     for index, finding in enumerate(response.findings):
+        if finding.domain != "task":
+            continue
         link = finding.id if normalized else index
-        if finding.domain == "task" and link not in task_links:
-            diagnostics.append({"code": "review_task_finding_link", "path": f"/findings/{index}",
-                                "message": "task finding requires an issue source or requirement check"})
+        linked = {check.requirement_id for check in response.requirement_checks
+                  if link in (check.finding_ids if normalized else check.finding_indexes)}
+        missing = (set(finding.task_objection.requirement_ids) & known) - linked
+        if missing:
+            diagnostics.append({"code": "review_task_finding_link",
+                "path": f"/findings/{index}/task_objection/requirement_ids",
+                "message": "Existing requirement objections require linked issue checks",
+                "context": {"requirement_ids": sorted(missing)}})
 
 
 def resolve_findings(response: ReviewResponse, material: dict[str, Any]) -> list[dict[str, Any]]:

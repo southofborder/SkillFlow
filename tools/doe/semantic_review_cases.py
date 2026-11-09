@@ -60,9 +60,7 @@ def _base(source, requirement="Return the notice title unchanged.", *, whole=Fal
             "data_source_kind": None, "instructions": [first, ret]}}}
     task = {"purpose": {"text": requirement, "evidences": [_evidence()]},
         "requirements": [{"id": "R1", "text": requirement, "evidences": [_evidence()]}],
-        "source_accounting": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
-            "disposition": "requirement", "requirement_ids": ["R1"], "issue_ids": [],
-            "reason": "The authored reference uses the required outcome stated in this span."}], "issues": []}
+         "issues": []}
     first_spec = _semantics([operation], "notice_value") if operation else _semantics()
     if whole:
         first_spec["output_bindings"] = [{"output_index": 0, "value": {"kind": "input", "index": 0}, "evidences": [_evidence()]}]
@@ -80,7 +78,7 @@ def _prepare(case):
     source = {"files": [{"path": "SKILL.md", "content": text, "sha256": sha}],
               "source_sha256": _digest([{"path": "SKILL.md", "sha256": sha}])}
     task = validate_task_candidate(case["task_candidate"], source_files=task_source_files(source),
-                                   source_sha256=source["source_sha256"], basis="declared_skill")
+                                   source_sha256=source["source_sha256"])
     annotation = deepcopy(case["annotation"])
     annotation["task_revision_id"] = task.task_sha256
     material = prepare_material(source, case["cfg"], task_baseline=task)
@@ -136,7 +134,6 @@ def evaluation_cases():
     recipient["task_candidate"]["requirements"][0]["text"] = "Deliver to the support recipient only."
     recipient["task_candidate"]["requirements"].append({"id": "R2", "text": "The delivered content is notice.title unchanged.",
                                                        "evidences": [_evidence()]})
-    recipient["task_candidate"]["source_accounting"][0]["requirement_ids"].append("R2")
     recipient["annotation"]["realizations"].append({"requirement_id": "R2", "status": "expressed", "bindings": [], "gaps": []})
     recipient["annotation"]["locations"] = {"public_feed": {"kind": "user", "name": "public feed",
         "operand_refs": [], "access_scope": "public", "retention": None}}

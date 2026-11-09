@@ -14,7 +14,7 @@ from pathlib import Path
 from skillflow.common.artifacts import ArtifactWriter
 
 SUMMARY_LABELS = {"issues_found": "Material issues found", "no_material_issue": "No material issue reported"}
-NOTICE = ("This semantic review does not rewrite the sealed Task, annotation or propagation facts. Accounting coverage of source, Task, demand/constraint declarations and IR does not prove semantic completeness; "
+NOTICE = ("This semantic review does not rewrite the sealed Task, annotation or propagation facts. Source inspection and recorded Task, demand/constraint and IR checks do not prove semantic completeness; "
           "no reported issue does not prove correct interpretation, minimal demands or absence of DOE.")
 
 
@@ -44,7 +44,7 @@ def display_model(result, material):
     return {"status": result["status"], "summary": SUMMARY_LABELS.get(result.get("summary"), "Review incomplete"),
             "failure": failure, "reason": result["reason"], "reviewed_ir_ids": review.get("reviewed_ir_ids", []),
             "findings": findings, "resolved": result.get("resolved_findings", []),
-            "checks": {key: deepcopy(review.get(key, [])) for key in ("source_checks", "requirement_checks", "declaration_checks")},
+            "checks": {key: deepcopy(review.get(key, [])) for key in ("requirement_checks", "declaration_checks")},
             "declarations": material.get("declaration_index", []), "task": material.get("task"),
             "crosswalk": crosswalk,
             "targets": material.get("target_index", {}), "observations": material.get("observations", []),
@@ -104,7 +104,7 @@ def render_markdown(model):
               "Request, JSON normalization and structural correction counts: " + _md(_json(model["counts"])), "",
               (("Request chain: [chain.json](calls/review/chain.json); " if model["response_chain"] else "Request chain not started; ")
                + "Targets: [targets.json](inputs/targets.json); Observations: [observations.json](inputs/observations.json)."),
-              "", "### Four-axis records and program-resolved targets", "", fence + "json", resolved, fence, ""]
+              "", "### Requirement/declaration checks and program-resolved targets", "", fence + "json", resolved, fence, ""]
     if model["accepted_call"]:
         lines += [f"Accepted call: [call.json]({model['accepted_call']}/call.json) · "
                   f"[Original response]({model['accepted_call']}/response.json) · "

@@ -30,12 +30,8 @@ def fixture():
 
 
 def empty_response(prepared):
-    rows = prepared["source_line_universe"]
-    files = sorted({row["file"] for row in rows})
-    check = {"status": "accepted", "reason": "人工工程样例完整核对登记，不证明语义完整。", "finding_indexes": []}
-    return {"outcome": "completed", "source_checks": [
-        {"file": file, "start_line": min(row["line"] for row in rows if row["file"] == file),
-         "end_line": max(row["line"] for row in rows if row["file"] == file), **check} for file in files],
+    check = {"status": "accepted", "reason": "Injected reference checks do not establish semantic completeness.", "finding_indexes": []}
+    return {"outcome": "completed",
         "requirement_checks": [{"requirement_id": row["id"], **check} for row in prepared["task"]["requirements"]],
         "declaration_checks": [{"raw_pointer": row["raw_pointer"], **check} for row in prepared["declaration_index"]],
         "reviewed_ir_ids": [ir["id"] for block in prepared["cfg"]["blocks"].values() for ir in block["instructions"]], "findings": []}
@@ -57,7 +53,7 @@ def test_material_is_complete_and_contains_only_declared_review_inputs():
     original, raw = fixture()
     originals = deepcopy((original, raw))
     prepared = prepare_review_material(original, raw)
-    assert set(prepared) == set(original) | {"schema_version", "raw_annotation", "observations", "target_index", "declaration_index", "source_line_universe"}
+    assert set(prepared) == set(original) | {"schema_version", "raw_annotation", "observations", "target_index", "declaration_index"}
     assert prepared["source"] == original["source"]
     assert prepared["cfg"] == original["cfg"]
     assert prepared["runtime_contract"] == original["runtime_contract"]

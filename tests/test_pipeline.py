@@ -102,7 +102,7 @@ def test_all_four_stages_normalize_without_model_correction_and_freeze_audit(tmp
     assert len(list(directory.rglob('snapshot.json'))) == 1
     assert len(list(directory.rglob('cfg.json'))) == 1
     assert len(list(directory.rglob('runtime-contract.json'))) == 1
-    assert len(list(directory.rglob('user-request.json'))) == 1
+    assert not list(directory.rglob('user-request.json'))
     for relative in ('refinement', 'refinement/initial-review', 'refinement/final-review'):
         assert not (directory / relative / 'inputs/candidate.json').exists()
     from skillflow.propagation.annotation.requests import load_repair_context
@@ -219,18 +219,19 @@ def test_all_stages_correct_structure_beyond_previous_caps_and_replay(tmp_path):
         load_propagation_materials(directory / "propagation")
 
 
-def test_user_request_is_frozen_through_repair_and_doe(tmp_path):
+def test_skill_only_context_is_preserved_through_repair_and_doe(tmp_path):
     from skillflow.doe.formal_runner import load_doe_run
-    directory = prepared(tmp_path, user_request="Return the requested value only.")
+    directory = prepared(tmp_path)
     first, review, repair = Annotation(), SequenceReview(["issue", "ok"]), Annotation()
     result = pipeline.run_analysis(directory, client_factory=injected_factory(first),
         review_client_factory=injected_factory(review), repair_client_factory=injected_factory(repair))
     assert result["doe"] is not None, result
     for prompt in [*first.prompts, *review.prompts, *repair.prompts]:
-        assert "Return the requested value only." in prompt
+        assert "user_request" not in prompt
     checked = load_doe_run(directory / 'doe')['annotation']
-    assert checked['task']['basis'] == 'user_request'
-    assert checked['material']['user_request'] == 'Return the requested value only.'
+    assert 'basis' not in checked['task']
+    assert 'user_request' not in checked['material']
+    assert checked['task']['requirements']
     assert not (directory / 'doe/audit/annotation.json').exists()
 
 

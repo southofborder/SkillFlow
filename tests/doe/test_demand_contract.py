@@ -31,10 +31,8 @@ def task():
     from skillflow.propagation.contracts.task import validate_task_candidate
     return validate_task_candidate({"purpose": {"text": "Filter and notify.", "evidences": [span()]},
         "requirements": [{"id": "R1", "text": "Send each selected summary unchanged.", "evidences": [span()]}],
-        "source_accounting": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
-            "disposition": "requirement", "requirement_ids": ["R1"], "issue_ids": [],
-            "reason": "独立契约测试的来源登记。"}], "issues": []},
-        source_files={"skill/SKILL.md": "Filter and notify.\r\n"}, basis="declared_skill")
+         "issues": []},
+        source_files={"skill/SKILL.md": "Filter and notify.\r\n"})
 
 
 def goal(index):

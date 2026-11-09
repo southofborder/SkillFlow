@@ -21,7 +21,7 @@ def test_annotation_source_has_one_byte_owner_and_no_aggregate_material(tmp_path
     assert (directory / "inputs/package/SKILL.md").is_file()
     assert (directory / "inputs/cfg.json").is_file()
     assert (directory / "inputs/runtime-contract.json").is_file()
-    assert json.loads((directory / "inputs/user-request.json").read_text(encoding="utf-8")) is None
+    assert not (directory / "inputs/user-request.json").exists()
     result = annotation_runner.run_annotation(directory, client=FakeClient())
     assert result["status"] == "complete"
     saved = json.loads((directory / "result.json").read_text(encoding="utf-8"))

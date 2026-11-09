@@ -10,7 +10,7 @@ from skillflow.common.recording import canonical_sha256, implementation_provenan
 from skillflow.common.runs import exclusive_run
 from skillflow.common.source_evidence import _require_json
 from skillflow.common.upstream import checked_run_path, make_run_reference, resolve_run_reference
-from skillflow.propagation.data import DataRegistry, export_identity_index, restore_registry
+from skillflow.propagation.data import DataRegistry, restore_registry
 from skillflow.propagation.annotation.loading import load_annotation_run
 from skillflow.propagation.annotation.runner import verify_prepared
 from skillflow.propagation.annotation.services import to_payload
@@ -18,11 +18,13 @@ from skillflow.propagation.contracts.profiles import SCHEMA_VERSION as PROFILE_V
 from skillflow.propagation.loading import materials_from_result
 from skillflow.propagation.facts import _normalized_cfg
 from skillflow.propagation.models import FlowState
-from skillflow.propagation.records import PropagationRecords, SCHEMA_VERSION as RECORD_VERSION
+from skillflow.propagation.records import PropagationRecords, SCHEMA_VERSION as RECORD_VERSION, LEGACY_SCHEMA_VERSION
 from skillflow.propagation.report import write_reports
 
-IDENTITY = "skill-ir-propagation-v15"
-FORMAT_VERSION = 15
+IDENTITY = "skill-ir-propagation-v21"
+FORMAT_VERSION = 21
+_READABLE_VERSIONS = ((IDENTITY, FORMAT_VERSION, RECORD_VERSION),
+                      ("skill-ir-propagation-v20", 20, LEGACY_SCHEMA_VERSION))
 POLICY = {"offline": True, "model_calls": 0, "execute_skill": False}
 ARTIFACTS = frozenset({"data.json", "records.json", "sinks.json", "audit/requested-data.json",
     "audit/requested-state.json", "audit/initial-data.json", "audit/initial-state.json",
@@ -71,10 +73,12 @@ def _task_provenance(loaded):
     return {"kind": kind, "task_sha256": loaded["material"]["task"]["task_sha256"]}
 
 
-def _components(loaded, solved, *, manifest=None):
+def _components(loaded, solved, *, manifest=None, _registry_snapshot=None, _identity_index=None):
     return materials_from_result(solved, material=loaded["material"], raw_annotation=loaded["raw_annotation"],
         compiled_annotation=loaded["compiled_annotation"], mapping=loaded["mapping"],
+        wire_annotation=loaded.get("wire_annotation"), _validated_annotation=True,
         source_metadata=loaded["source_metadata"], manifest=manifest,
+        _registry_snapshot=_registry_snapshot, _identity_index=_identity_index,
         provenance={"kind": "model_annotation", "task_provenance": _task_provenance(loaded),
                     "accepted_response_sha256": loaded["upstream_identity"]["accepted_response_sha256"]})
 
@@ -83,7 +87,7 @@ def _artifacts(facts, requested_data, requested_state):
     return {"data.json": facts.data, "records.json": facts.records, "sinks.json": facts.sinks,
         "audit/requested-data.json": requested_data, "audit/requested-state.json": requested_state,
         "audit/initial-data.json": facts.initial_data, "audit/initial-state.json": facts.initial_state,
-        "audit/data-identities.json": export_identity_index(facts.registry), "audit/stats.json": facts.stats}
+        "audit/data-identities.json": facts.identity_index, "audit/stats.json": facts.stats}
 
 
 def _output_path(origin, run_dir):
@@ -98,7 +102,7 @@ def _output_path(origin, run_dir):
 
 
 def save_propagation_run(run_dir, *, annotation_run, solved, requested_data=None, requested_state=None,
-                         writer=None, before_commit=None):
+                         writer=None, before_commit=None, _loaded_annotation=None):
     """Commit validated components, keeping annotation and call-chain ownership upstream.
 
     An interrupted save has a preparation marker but no committed manifest. The
@@ -106,7 +110,7 @@ def save_propagation_run(run_dir, *, annotation_run, solved, requested_data=None
     """
     origin = checked_run_path(annotation_run)
     directory = _output_path(origin, run_dir)
-    loaded = load_annotation_run(origin)
+    loaded = _loaded_annotation if _loaded_annotation is not None else load_annotation_run(origin)
     facts = _components(loaded, solved)
     values = _artifacts(facts, requested_data, requested_state)
     writer = writer or ArtifactWriter(())
@@ -141,8 +145,11 @@ def save_propagation_run(run_dir, *, annotation_run, solved, requested_data=None
         write_reports(directory, facts, writer, annotation_run=origin)
         if before_commit is not None:
             before_commit()
-        if make_run_reference(directory, origin) != upstream or load_annotation_run(origin)["upstream_identity"] != loaded["upstream_identity"]:
+        if make_run_reference(directory, origin) != upstream:
             raise ValueError("Annotation input changed during propagation save")
+        _check_annotation_unchanged(origin, loaded["manifest"],
+            loaded["upstream_identity"]["accepted_response_sha256"],
+            upstream_identity=loaded["upstream_identity"])
         for name, value in values.items():
             if canonical_sha256(_read(directory / name)) != canonical_sha256(value):
                 raise ValueError("Saved propagation artifact changed before commit: " + name)
@@ -155,15 +162,21 @@ def save_propagation_run(run_dir, *, annotation_run, solved, requested_data=None
         manifest["manifest_sha256"] = canonical_sha256(manifest)
         writer.json(checked_run_path(directory / "manifest.json"), manifest)
         marker.unlink()
-    return _components(loaded, solved, manifest=manifest)
+    return facts._with_manifest(manifest)
 
 
 def run_propagation(annotation_run, *, run_dir, seed_data=None, initial_state=None):
     """Calculate using the current implementation and a checked accepted annotation."""
     origin = checked_run_path(annotation_run)
     _output_path(origin, run_dir)
-    verified = verify_prepared(origin, replay=True)
+    from skillflow.document_guided.online import ANNOTATION_IDENTITY
+    guided = _read(origin / "manifest.json").get("identity") == ANNOTATION_IDENTITY
+    verified = None if guided else verify_prepared(origin, replay=True)
     loaded = load_annotation_run(origin)
+    if guided:
+        verified = loaded["manifest"]
+        if verified["implementation"] != implementation_provenance():
+            raise ValueError("Document-guided recomputation requires its original implementation")
     if verified != loaded["manifest"] or verified["preparation_status"] != "ready":
         raise ValueError("Annotation changed or its preparation is incomplete")
     if isinstance(seed_data, (str, Path)):
@@ -176,19 +189,46 @@ def run_propagation(annotation_run, *, run_dir, seed_data=None, initial_state=No
     state = None if initial_state is None else FlowState.model_validate(initial_state).model_dump(mode="json")
     solved = _calculate(loaded["material"]["cfg"], to_payload(loaded["compiled_annotation"]), seed, state)
     def unchanged():
-        if verify_prepared(origin, replay=True) != verified:
+        if not guided and verify_prepared(origin, replay=True) != verified:
             raise ValueError("Annotation changed while calculating propagation")
     return save_propagation_run(run_dir, annotation_run=origin, solved=solved,
-        requested_data=seed, requested_state=state, before_commit=unchanged)
+        requested_data=seed, requested_state=state, before_commit=unchanged, _loaded_annotation=loaded)
+
+
+def _check_annotation_unchanged(origin, manifest, accepted_response_sha256, *, upstream_identity=None):
+    from skillflow.document_guided.online import ANNOTATION_IDENTITY, check_annotation_unchanged
+    if manifest.get("identity") == ANNOTATION_IDENTITY:
+        check_annotation_unchanged(origin, manifest)
+        filename = "wire-annotation.json" if (origin / "audit/wire-annotation.json").is_file() else "raw-annotation.json"
+        if canonical_sha256(_read(origin / "audit" / filename)) != accepted_response_sha256:
+            raise ValueError("Propagation accepted annotation identity differs")
+    else:
+        loaded = load_annotation_run(origin)
+        if (loaded["manifest"] != manifest
+                or loaded["upstream_identity"]["accepted_response_sha256"] != accepted_response_sha256
+                or (upstream_identity is not None and loaded["upstream_identity"] != upstream_identity)):
+            raise ValueError("Annotation input changed during propagation save")
+
+
+def check_propagation_unchanged(run_dir, manifest):
+    """Verify an already loaded input before publication, without rebuilding facts."""
+    directory = checked_run_path(run_dir)
+    if _read(directory / "manifest.json") != manifest:
+        raise ValueError("Propagation manifest changed during calculation")
+    for name, digest in manifest["artifacts"].items():
+        if sha_file(checked_run_path(directory / name)) != digest:
+            raise ValueError("Propagation artifact digest mismatch: " + name)
+    origin = resolve_run_reference(directory, manifest["upstream"])
+    _check_annotation_unchanged(origin, _read(origin / "manifest.json"), manifest["accepted_response_sha256"])
 
 
 def _load_run(run_dir):
     directory = checked_run_path(run_dir)
     manifest = _read(directory / "manifest.json")
     if (type(manifest) is not dict or set(manifest) != MANIFEST_FIELDS
-            or type(manifest.get("schema_version")) is not int or manifest["schema_version"] != FORMAT_VERSION
-            or manifest.get("identity") != IDENTITY or manifest.get("profile_schema_version") != PROFILE_VERSION
-            or manifest.get("records_schema_version") != RECORD_VERSION):
+            or type(manifest.get("schema_version")) is not int
+            or (manifest.get("identity"), manifest.get("schema_version"), manifest.get("records_schema_version")) not in _READABLE_VERSIONS
+            or manifest.get("profile_schema_version") != PROFILE_VERSION):
         raise ValueError("Unsupported propagation run version or manifest fields")
     if canonical_sha256({k: v for k, v in manifest.items() if k != "manifest_sha256"}) != manifest["manifest_sha256"]:
         raise ValueError("Propagation manifest digest mismatch")
@@ -209,20 +249,33 @@ def _load_run(run_dir):
         if sha_file(target) != digest:
             raise ValueError("Propagation artifact digest mismatch: " + name)
         values[name] = _read(target)
+    if values["audit/initial-data.json"] is None or values["audit/initial-state.json"] is None:
+        raise ValueError("Propagation initial data and state must be explicit checked snapshots")
     for name in ("requested-data", "initial-data"):
         if values[f"audit/{name}.json"] is not None:
             DataRegistry.from_dict(values[f"audit/{name}.json"])
+    checked_states = {}
     for name in ("requested-state", "initial-state"):
         if values[f"audit/{name}.json"] is not None:
-            FlowState.model_validate(values[f"audit/{name}.json"])
+            checked_states[name] = FlowState.model_validate(values[f"audit/{name}.json"])
     registry = restore_registry(values["data.json"], values["audit/data-identities.json"])
     records = PropagationRecords.from_records(values["records.json"], cfg=_normalized_cfg(loaded["material"]["cfg"]),
         annotation=to_payload(loaded["compiled_annotation"]), data_registry=registry,
-        initial_data=values["audit/initial-data.json"], initial_state=values["audit/initial-state.json"])
+        initial_data=values["audit/initial-data.json"], initial_state=checked_states["initial-state"],
+        _validated_inputs=True)
     from skillflow.propagation.solver import PropagationResult
     solved = PropagationResult(manifest["status"], registry, records, manifest["coverage"], manifest["diagnostics"],
         values["audit/stats.json"], values["audit/initial-data.json"], values["audit/initial-state.json"])
-    facts = _components(loaded, solved, manifest=manifest)
+    raw_index = values["audit/data-identities.json"]
+    identity_index = {"schema_version": raw_index["schema_version"], "namespace": raw_index["namespace"],
+        "identities": {identity: {"kind": row["kind"], "key": None, "parent_id": None, "path": None, **row}
+                       for identity, row in sorted(raw_index["identities"].items())}}
+    snapshot = {"schema_version": identity_index["schema_version"], "namespace": identity_index["namespace"],
+        "records": [{"data": registry.get(identity).model_dump(mode="python"),
+                     "identity": identity_index["identities"][identity]}
+                    for identity in sorted(registry.data_ids())]}
+    facts = _components(loaded, solved, manifest=manifest,
+                        _registry_snapshot=snapshot, _identity_index=identity_index)
     if canonical_sha256(facts.sinks) != canonical_sha256(values["sinks.json"]):
         raise ValueError("Saved sink inventory differs from evaluated records")
     if canonical_sha256(facts.diagnostics) != canonical_sha256(manifest["diagnostics"]):
@@ -244,12 +297,15 @@ def replay_propagation(run_dir):
     directory = checked_run_path(run_dir)
     with exclusive_run(directory):
         saved, values, origin = _load_run(directory)
+        if saved.manifest["identity"] != IDENTITY:
+            raise ValueError("Historical propagation versions are read-only; replay does not migrate their records")
         if saved.manifest["implementation"] != implementation_provenance():
             raise ValueError("Propagation implementation identity changed")
         solved = _calculate(saved.cfg, to_payload(saved.compiled_annotation),
             values["audit/requested-data.json"], values["audit/requested-state.json"])
         rebuilt = materials_from_result(solved, material=saved.material, raw_annotation=saved.raw_annotation,
-            compiled_annotation=saved.compiled_annotation, mapping=saved.mapping, source_metadata=saved.source_metadata)
+            compiled_annotation=saved.compiled_annotation, mapping=saved.mapping, source_metadata=saved.source_metadata,
+            wire_annotation=saved.annotation.get("wire_annotation"))
         actual = _artifacts(rebuilt, values["audit/requested-data.json"], values["audit/requested-state.json"])
         differences = [{"material": name, "saved_sha256": canonical_sha256(values[name]),
                         "replayed_sha256": canonical_sha256(value)}

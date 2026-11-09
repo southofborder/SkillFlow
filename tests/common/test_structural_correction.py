@@ -10,6 +10,7 @@ from skillflow.common.recording import injected_factory, read_json
 from skillflow.common.semantic_failure import SemanticFailure
 from skillflow.common.structural_correction import (
     ResponseChain, ResponseChainError, correction_prompt, chain_counts, correct_response,
+    StructuralCorrectionLimitReached,
 )
 from skillflow.common.validation import structural_error
 from skillflow.propagation.annotation.config import annotation_config
@@ -170,3 +171,40 @@ def test_lazy_credentials_are_loaded_before_prompt_is_written_or_sent(tmp_path):
     assert not client.prompts
     assert not (tmp_path / "calls/annotation/a001/prompt.txt").exists()
     assert all(b"Frozen task" not in path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+
+
+def test_opt_in_limit_records_two_invalid_calls_and_replays_terminal_failure(tmp_path):
+    client = Script([{"bad": 1}, {"bad": 2}, {"ok": True}])
+    chain = run(tmp_path, client, max_corrections=1)
+    with pytest.raises(StructuralCorrectionLimitReached):
+        chain.run()
+    assert len(client.prompts) == 2
+    assert not (tmp_path / "calls/annotation/a003").exists()
+    assert chain.snapshot()["max_corrections"] == 1
+    assert [row["status"] for row in chain.attempts] == ["structural_invalid", "structural_invalid"]
+    for kwargs in ({"replay": True, "read_only": True}, {}):
+        resumed = run(tmp_path, max_corrections=1, **kwargs)
+        with pytest.raises(StructuralCorrectionLimitReached):
+            resumed.run()
+        assert resumed.snapshot() == chain.snapshot()
+    with pytest.raises(ResponseChainError):
+        run(tmp_path, max_corrections=2)
+    with pytest.raises(ResponseChainError):
+        run(tmp_path)
+
+
+def test_opt_in_limit_accepts_one_correction_without_changing_legacy_shape(tmp_path):
+    client = Script([{"bad": True}, {"ok": True}])
+    chain = run(tmp_path / "bounded", client, max_corrections=1)
+    assert chain.run() == {"validated": True}
+    replay = run(tmp_path / "bounded", replay=True, read_only=True, max_corrections=1)
+    assert replay.run() == chain.value
+    legacy = run(tmp_path / "legacy", Script([{"bad": 1}, {"bad": 2}, {"ok": True}]))
+    assert legacy.run() == {"validated": True}
+    assert "max_corrections" not in legacy.snapshot()
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.5, "1"])
+def test_invalid_correction_limit_fails_before_dispatch(tmp_path, value):
+    with pytest.raises(ValueError, match="max_corrections"):
+        run(tmp_path, max_corrections=value)

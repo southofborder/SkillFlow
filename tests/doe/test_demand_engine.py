@@ -353,7 +353,7 @@ def test_exclusion_paths_translate_between_container_and_member_frames():
     assert all(row["excluded_paths"] == [["secret"]] for row in sink_demands(result))
 
 
-def test_nested_element_path_is_conservatively_retained_instead_of_flattened():
+def test_nested_element_path_retains_field_prefix_without_promoting_collection():
     def change(prepared, raw, ev):
         set_operator(raw, prepared, "ir_filter", ["llm"])
         raw["locations"]["notify"] = {"kind": "tool", "name": "notify", "operand_refs": [],
@@ -369,9 +369,10 @@ def test_nested_element_path_is_conservatively_retained_instead_of_flattened():
     engine, result = solve(values, cand)
     rows = [row for row in input_demands(engine, result, "select_part")
             if engine.ops[row["node"]["operation_id"]]["scope"] is None]
-    assert any(row["conservative"] and row["property"] == "value" and row["path"] == ["rows"] and not row["each"] for row in rows)
+    assert any(not row["conservative"] and row["property"] == "value"
+               and row["path"] == ["rows", {"kind": "each"}, "summary"] and not row["each"] for row in rows)
     assert not any(row["each"] and row["path"] == ["rows", "summary"] for row in rows)
-    assert any(d["code"] == "nested_collection_scope" and not d["blocking"] for d in result["diagnostics"])
+    assert not any(d["code"] == "nested_collection_scope" for d in result["diagnostics"])
 
 
 def test_boolean_expression_rejects_count_without_truthiness_conversion():

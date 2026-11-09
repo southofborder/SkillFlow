@@ -34,7 +34,8 @@ from skillflow.propagation.conditions import guard_truths
 from skillflow.propagation.conditions import payload_input_indices
 from skillflow.propagation.conditions import validate_record_consumption
 
-SCHEMA_VERSION = "skillflow-propagation-record-v11"
+SCHEMA_VERSION = "skillflow-propagation-record-v16"
+LEGACY_SCHEMA_VERSION = "skillflow-propagation-record-v15"
 
 
 class PropagationRecordError(ValueError):
@@ -77,7 +78,9 @@ def _annotation_payload(annotation: AnnotationPayload | dict) -> dict:
 
 def _validate_annotation(annotation: dict, expected: set[str]) -> None:
     actual = set(annotation["ir_semantics"])
-    if actual != expected:
+    from skillflow.propagation.contracts.limitations import unmodeled_ids
+    unmodeled = unmodeled_ids(annotation)
+    if actual & unmodeled or actual | unmodeled != expected:
         raise PropagationRecordError(
             f"profile coverage mismatch: missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}"
         )
@@ -139,6 +142,51 @@ class PropagationRecords:
             if binding.data_ids - seed_ids:
                 raise PropagationRecordError("initial state has an unknown seed Data reference")
         self._records: dict[str, IRFlowRecord] = {}
+        self._computation_owned = False
+
+    @classmethod
+    def from_computation(
+        cls, cfg: dict, annotation: dict, data_registry: DataRegistry, *,
+        profile_schema_version: str, annotation_cfg_sha256: str,
+        initial_data: DataRegistry | dict | None = None,
+        initial_state: FlowState | None = None,
+    ) -> "PropagationRecords":
+        """Own already checked solver inputs without repeating whole validation.
+
+        This is an internal producer boundary. External records and callers use
+        the checked constructor and ``put``. The solver supplies its normalized
+        graph, compiled annotation and computation-owned registry; finalization
+        checks references, while ``validate`` remains the explicit full audit.
+        """
+        if profile_schema_version != PROFILE_SCHEMA_VERSION:
+            raise PropagationRecordError("requires explicit " + PROFILE_SCHEMA_VERSION + " annotation identity")
+        if type(cfg) is not dict or type(annotation) is not dict or not isinstance(data_registry, DataRegistry):
+            raise PropagationRecordError("computed records require checked graph, annotation and registry inputs")
+        if annotation_cfg_sha256 != _digest(cfg):
+            raise PropagationRecordError("annotation CFG identity does not match the selected graph")
+        store = cls.__new__(cls)
+        store._cfg, store._annotation = deepcopy(cfg), deepcopy(annotation)
+        store._annotation_cfg_sha256 = annotation_cfg_sha256
+        store._instructions = {ir["id"]: ir for block in store._cfg["blocks"].values()
+                               for ir in block.get("instructions", [])}
+        store._result_ids = {operand["identifier"] for ir in store._instructions.values()
+                             for operand in ir.get("outputs", [])}
+        store._data_registry = data_registry
+        seed = (initial_data.snapshot_computed() if isinstance(initial_data, DataRegistry)
+                else initial_data if initial_data is not None else data_registry.snapshot_computed())
+        store._initial_data = deepcopy(seed)
+        if initial_state is not None and not isinstance(initial_state, FlowState):
+            raise PropagationRecordError("computed initial state must be a checked FlowState")
+        store._initial_state = (initial_state if initial_state is not None else FlowState()).model_copy(deep=True)
+        store._records = {}
+        store._computation_owned = True
+        store.check_references()
+        return store
+
+    @property
+    def computation_owned(self) -> bool:
+        """Whether the records were assembled through the internal solver path."""
+        return self._computation_owned
 
     @property
     def data_registry(self) -> DataRegistry:
@@ -168,7 +216,9 @@ class PropagationRecords:
     @property
     def is_complete(self) -> bool:
         """Record coverage only; does not resolve effects or certify semantics."""
-        return set(self._records) == set(self._instructions)
+        from skillflow.propagation.loop_guards import admitted_instructions
+        expected = admitted_instructions(self._cfg, self._annotation, self._records, self._data_registry)
+        return set(self._records) == expected
 
     def __len__(self) -> int:
         return len(self._records)
@@ -210,11 +260,16 @@ class PropagationRecords:
             expected_effect = spec["effect"]
             if event.effect != expected_effect:
                 raise PropagationRecordError(f"event position/label mismatch at {ir_id}/{position}")
+            if ((event.case.model_dump(mode="json") if event.case else None) != spec.get("case")
+                    or event.requires_completion != spec.get("requires_completion", [])):
+                raise PropagationRecordError("call case or completion condition differs from specification")
             if len(event.atomic_ops) != len(spec["atomic_ops"]):
                 raise PropagationRecordError(f"atomic operation coverage mismatch at {ir_id}/{position}")
             for op_index, (operation, op_spec) in enumerate(zip(event.atomic_ops, spec["atomic_ops"])):
                 if operation.op != op_spec["op"]:
                     raise PropagationRecordError(f"atomic operation identity mismatch at {ir_id}/{position}/{op_index}")
+                if operation.may_state != op_spec.get("may", False):
+                    raise PropagationRecordError("state summary differs from the declared may write")
                 validate_record_consumption(operation, self._data_registry)
                 if operation.op == "build":
                     if len(operation.members) != len(op_spec["parts"]):
@@ -263,7 +318,10 @@ class PropagationRecords:
                 if not isinstance(event, ForEachRecord):
                     raise PropagationRecordError(f"for_each record required at {ir_id}/{event_index}")
                 check_data(event.collections)
-                collection_data = [entry["data"] for entry in self._data_registry.to_dict()["records"]]
+                if (event.completion_groups != spec.get("completion_groups", [])
+                        or event.requires_completion != spec.get("requires_completion", [])):
+                    raise PropagationRecordError("collection completion condition differs from specification")
+                collection_data = [self._data_registry.get(identity) for identity in data_ids]
                 represented = {instance.collection for instance in event.instances}
                 if not represented <= event.collections:
                     raise PropagationRecordError("for_each instance collection is absent from scope candidates")
@@ -285,7 +343,7 @@ class PropagationRecords:
                         raise PropagationRecordError("for_each body event coverage mismatch")
                     for body_index, (body_event, body_spec) in enumerate(zip(instance.body, spec["body"])):
                         validate_effect(body_event, body_spec, f"{event_index}/body/{body_index}")
-                        if any(op.changes for op in body_event.atomic_ops):
+                        if any(op.changes and not op.may_state for op in body_event.atomic_ops):
                             raise PropagationRecordError("for_each body must not modify shared state")
             else:
                 validate_effect(event, spec, str(event_index))
@@ -296,9 +354,78 @@ class PropagationRecords:
         if not isinstance(record, IRFlowRecord):
             raise PropagationRecordError("record must be an IRFlowRecord")
         candidate = IRFlowRecord.model_validate(record.model_dump(mode="python"))
-        data = self._data_registry.to_dict()
-        self._validate_record(ir_id, candidate, {entry["data"]["id"] for entry in data["records"]})
+        self._validate_record(ir_id, candidate, set(self._data_registry.data_ids()))
         self._records[ir_id] = candidate.model_copy(deep=True)
+
+    def put_computed(self, ir_id: str, record: IRFlowRecord) -> None:
+        """Detach an interpreter-produced record without reparsing its events."""
+        if not self._computation_owned:
+            raise PropagationRecordError("computed records require the internal computation owner")
+        self._require_ir(ir_id)
+        if not isinstance(record, IRFlowRecord):
+            raise PropagationRecordError("record must be an IRFlowRecord")
+        self._records[ir_id] = record.model_copy(deep=True)
+
+    def check_references(self, require_complete: bool = False) -> None:
+        """Check final coordinates and Data references, without whole revalidation.
+
+        Projected state snapshots must retain their actual referenced values;
+        absence never creates a guessed binding. Atomic evidence is independent
+        of state liveness and is checked even when its result is no longer live.
+        """
+        if type(require_complete) is not bool:
+            raise PropagationRecordError("require_complete must be a bool")
+        ids = set(self._data_registry.data_ids())
+
+        def data_refs(values):
+            missing = set(values) - ids
+            if missing:
+                raise PropagationRecordError("unknown Data reference: " + repr(sorted(missing)))
+
+        def state_refs(state):
+            for binding in state.bindings:
+                self._check_location(binding.location)
+                data_refs(binding.data_ids)
+
+        seed_ids = {entry["data"]["id"] for entry in self._initial_data["records"]}
+        if seed_ids - ids:
+            raise PropagationRecordError("final registry lost seed Data identities")
+        state_refs(self._initial_state)
+        if any(binding.data_ids - seed_ids for binding in self._initial_state.bindings):
+            raise PropagationRecordError("initial state has an unknown seed Data reference")
+        for ir_id, record in self._records.items():
+            self._require_ir(ir_id)
+            state_refs(record.entry_state)
+            state_refs(record.exit_state)
+            for operand in self._instructions[ir_id].get("outputs", []):
+                if record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"])) is None:
+                    raise PropagationRecordError("processed IR is missing a public output binding in its exit state")
+            events = []
+            for event in record.events:
+                if isinstance(event, ForEachRecord):
+                    data_refs(event.collections)
+                    data_refs(event.outputs)
+                    for instance in event.instances:
+                        data_refs((instance.collection, instance.element))
+                        data_refs(instance.yielded)
+                        events.extend(instance.body)
+                else:
+                    events.append(event)
+            for event in events:
+                for operation in event.atomic_ops:
+                    for values in [*operation.inputs, *operation.outputs]:
+                        data_refs(values)
+                    for alternative in operation.alternatives:
+                        for values in [*alternative.inputs, *alternative.outputs]:
+                            data_refs(values)
+                    for location in operation.endpoints:
+                        self._check_location(location)
+                    for change in operation.changes:
+                        self._check_location(change.location)
+                        data_refs(change.before)
+                        data_refs(change.after)
+        if require_complete and not self.is_complete:
+            raise PropagationRecordError(f"incomplete IR coverage: {sorted(set(self._instructions) - set(self._records))}")
 
     def get(self, ir_id: str) -> IRFlowRecord:
         """Return a detached record; an unsubmitted record raises KeyError."""
@@ -324,7 +451,8 @@ class PropagationRecords:
         }
 
     @classmethod
-    def from_records(cls, records, *, cfg, annotation, data_registry, initial_data, initial_state):
+    def from_records(cls, records, *, cfg, annotation, data_registry, initial_data, initial_state,
+                     _validated_inputs=False):
         """Restore pure records after the owning run verified artifact identities.
 
         This method validates material relationships. It does not manufacture
@@ -333,10 +461,21 @@ class PropagationRecords:
         if type(records) is not dict:
             raise PropagationRecordError("records must be an IR-to-record object")
         _require_json(records, "")
-        store = cls(cfg, annotation, data_registry, profile_schema_version=PROFILE_SCHEMA_VERSION,
-                    annotation_cfg_sha256=cfg_sha256(cfg), initial_data=initial_data,
-                    initial_state=FlowState.model_validate(initial_state))
+        state = initial_state if _validated_inputs and isinstance(initial_state, FlowState) else FlowState.model_validate(initial_state)
+        if _validated_inputs:
+            # The run loader owns the checked annotation and restored registry.
+            # This flag does not bypass validation of any imported IR record.
+            store = cls.from_computation(cfg, annotation, data_registry,
+                profile_schema_version=PROFILE_SCHEMA_VERSION, annotation_cfg_sha256=_digest(cfg),
+                initial_data=initial_data, initial_state=state)
+            store._computation_owned = False
+        else:
+            store = cls(cfg, annotation, data_registry, profile_schema_version=PROFILE_SCHEMA_VERSION,
+                        annotation_cfg_sha256=cfg_sha256(cfg), initial_data=initial_data,
+                        initial_state=state)
+        data_ids = set(data_registry.data_ids())
         for ir_id, record in records.items():
-            store.put(ir_id, IRFlowRecord.model_validate(record))
-        store.validate()
+            candidate = IRFlowRecord.model_validate(record)
+            store._validate_record(ir_id, candidate, data_ids)
+            store._records[ir_id] = candidate
         return store

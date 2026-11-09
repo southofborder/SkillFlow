@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator, model_serializer
 
 from skillflow.propagation.contracts.evidence import Operator, OPERATORS, Effect, EFFECTS, Evidences
 from skillflow.propagation.contracts.specs import IRSemantics, RawIRSemantics, LocationSpec
@@ -10,13 +10,21 @@ from skillflow.propagation.contracts.boundaries import SinkBoundary
 from skillflow.propagation.contracts.task import TaskReference
 from skillflow.propagation.contracts.realizations import TaskRealization
 from skillflow.propagation.contracts.demand import DemandGoal, RawDemandGoal, DemandSupplement, RawDemandSupplement
+from skillflow.propagation.contracts.limitations import ProcessingGap
 
 Text = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
-SCHEMA_VERSION = "security-profile-v15"
+SCHEMA_VERSION = "security-profile-v21"
 
 
 class StrictRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    @model_serializer(mode="wrap")
+    def omit_empty_processing_gaps(self, handler):
+        result = handler(self)
+        if not result.get("processing_gaps"):
+            result.pop("processing_gaps", None)
+        return result
 
 
 class AnnotationPayload(StrictRecord):
@@ -27,6 +35,7 @@ class AnnotationPayload(StrictRecord):
     ir_semantics: dict[Text, IRSemantics]
     locations: dict[Text, LocationSpec]
     sink_boundaries: list[SinkBoundary]
+    processing_gaps: list[ProcessingGap] = Field(default_factory=list)
 
 
 class AnnotationResponse(AnnotationPayload):
@@ -49,6 +58,7 @@ class RawAnnotationResponse(StrictRecord):
     ir_semantics: dict[Text, RawIRSemantics]
     locations: dict[Text, LocationSpec]
     location_evidences: dict[Text, Evidences]
+    processing_gaps: list[ProcessingGap] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def complete_location_evidence(self):

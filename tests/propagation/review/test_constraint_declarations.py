@@ -20,7 +20,7 @@ from tests.propagation.review.test_core import empty_response as base_empty_resp
 
 def empty_response(prepared):
     response = base_empty_response(prepared)
-    for axis in ("source_checks", "requirement_checks", "declaration_checks"):
+    for axis in ("requirement_checks", "declaration_checks"):
         for check in response[axis]:
             check["reason"] = "This fixture records inspection without proving semantic correctness."
     return response

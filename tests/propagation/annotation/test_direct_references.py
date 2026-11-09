@@ -84,21 +84,32 @@ def test_top_level_model_expression_cannot_predict_raw_operation_coordinate():
         })
 
 
-def test_joint_material_has_one_request_and_no_registry_or_representation_material():
+def test_joint_material_has_source_only_purpose_and_rejects_retired_request():
     request = "Preserve the original selection.\r\nDo not add recipients."
-    material = prepare_material(source_bundle(), graph(), user_request=request)
+    material = prepare_material(source_bundle(), graph())
     sent = model_material(material)
-    assert set(material) == {"version", "source", "cfg", "runtime_contract", "user_request", "task"}
-    assert sent["user_request"] == request
+    assert set(material) == {"version", "source", "cfg", "runtime_contract", "task"}
+    assert "user_request" not in sent
+    for obsolete in (None, request):
+        with pytest.raises(TypeError):
+            prepare_material(source_bundle(), graph(), user_request=obsolete)
     assert all(item["file"].startswith("skill/") for item in sent["source"]["files"])
-    evidence = evidence_reference({"file": "task/user-request.txt", "start_line": 1, "end_line": 1, "reason": "User purpose."}, material)
-    assert evidence["text"] == "Preserve the original selection.\r\n"
+    with pytest.raises(ValueError):
+        evidence_reference({"file": "task/user-request.txt", "start_line": 1, "end_line": 1, "reason": "Retired namespace."}, material)
     raw, compiled, _ = compile_response(valid_raw_response(material), material)
     assert set(compiled) >= {"task_ref", "realizations", "demands", "expressions"}
     assert set(compiled).isdisjoint({"demand", "task_targets", "semantic_context"})
-    assert compiled["task_ref"]["basis"] == "user_request"
+    assert "basis" not in compiled["task_ref"]
     for old in ("task_goals", "task_expressions", "policies", "semantic_context"):
         invalid = deepcopy(raw)
         invalid[old] = []
         with pytest.raises(ValueError):
             compile_response(invalid, material)
+
+
+@pytest.mark.parametrize("retired", [None, "Independent task"])
+def test_material_rejects_retired_user_request_even_when_null(retired):
+    from skillflow.propagation.material import checked_material
+    value = prepare_material(source_bundle(), graph())
+    with pytest.raises(ValueError, match="exact current input fields"):
+        checked_material({**value, "user_request": retired})

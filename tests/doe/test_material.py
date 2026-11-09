@@ -152,19 +152,17 @@ def test_fixed_cases_are_standalone_deterministic_and_do_not_mutate_sources(case
     assert path.read_bytes() == original
     assert len(first["sinks"]) == len(raw.sinks)
     assert first["source"] == raw.source
-    assert first["task"]["basis"] == "declared_skill"
+    assert "task" not in first
     assert first["runtime_contract"] == {**runtime_contract(), "sha256": runtime_contract_binding(runtime_contract())["sha256"]}
     assert "entry_state" not in first["shared_info"] and "exit_state" not in first["shared_info"]
     assert not {"reviews", "sensitivity", "findings", "task_basis"}.intersection(first)
     validate_doe_material(first)
 
 
-def test_user_task_is_preserved_without_extracting_requirements():
-    text = "只处理订阅用户；不得改变正文。\n保留空行：\n\n"
+def test_source_only_material_has_no_redundant_purpose_wrapper():
     facts = _versions_fixture()
-    facts.material["user_request"] = text
     material = _plain(prepare_doe_material(facts))
-    assert material["task"] == {"basis": "user_request", "text": text}
+    assert "task" not in material
     assert material["source"]["files"][0]["content"] == _source()["files"][0]["content"]
 
 
@@ -260,7 +258,10 @@ def test_two_candidate_instances_with_same_element_are_not_collapsed():
     alternate = deepcopy(event["instances"][0])
     # These are two recorded candidate bodies, not actual collection members.
     # Keep the whole body so no independent parameter unions recreate a third pair.
-    alternate["body"][-1]["atomic_ops"][0]["inputs"].reverse()
+    delivery = alternate["body"][-1]["atomic_ops"][0]
+    delivery["inputs"].reverse()
+    for candidate in delivery.get("alternatives", []):
+        candidate["inputs"].reverse()
     event["instances"].append(alternate)
     material = _plain(prepare_doe_material(raw))
     sink = next(s for s in material["sinks"] if s["sink"]["boundary"]["sink_type"] == "external_tool")

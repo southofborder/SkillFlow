@@ -1,4 +1,4 @@
-"""Four-axis semantic review: coverage is recorded, never semantic proof."""
+"""Source-led semantic review without per-line coverage declarations."""
 from __future__ import annotations
 
 import json
@@ -6,11 +6,11 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator, TypeAdapter
 
-from skillflow.common.source_evidence import StrictRecord, Text, SourceRef
+from skillflow.common.source_evidence import StrictRecord, Text
 from skillflow.propagation.contracts.evidence import SpecEvidence
 from skillflow.propagation.contracts.task import TaskRepairObjection
 
-SCHEMA_VERSION = "annotation-review-v7"
+SCHEMA_VERSION = "annotation-review-v8"
 Evidence = SpecEvidence
 
 
@@ -68,14 +68,6 @@ class CheckedConclusion(StrictRecord):
         return self
 
 
-class RawSourceCheck(RawCheck, SourceRef):
-    pass
-
-
-class SourceCheck(CheckedConclusion, SourceRef):
-    pass
-
-
 class RawRequirementCheck(RawCheck):
     requirement_id: Text
 
@@ -94,7 +86,6 @@ class DeclarationCheck(CheckedConclusion):
 
 class RawReviewResponse(StrictRecord):
     outcome: Literal["completed"]
-    source_checks: list[RawSourceCheck] = Field(min_length=1)
     requirement_checks: list[RawRequirementCheck] = Field(min_length=1)
     declaration_checks: list[RawDeclarationCheck]
     reviewed_ir_ids: list[Text] = Field(min_length=1)
@@ -112,7 +103,6 @@ class RawReviewResponse(StrictRecord):
 
 
 class ReviewResponse(RawReviewResponse):
-    source_checks: list[SourceCheck] = Field(min_length=1)
     requirement_checks: list[RequirementCheck] = Field(min_length=1)
     declaration_checks: list[DeclarationCheck]
     findings: list[Finding]

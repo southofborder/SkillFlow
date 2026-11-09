@@ -18,6 +18,7 @@ from skillflow.common.semantic_failure import SemanticFailure
 from skillflow.common.source_evidence import _json_object
 from skillflow.common.structural_correction import (
     ResponseChain, ResponseChainError, VERSION as STRUCTURAL_VERSION, chain_counts,
+    StructuralCorrectionLimitReached,
 )
 from skillflow.common.upstream import checked_run_path, make_run_reference, resolve_run_reference
 from skillflow.propagation.annotation.config import annotation_config, PUBLIC_CONFIG_FIELDS
@@ -26,15 +27,40 @@ from skillflow.task.material import prepare_task_material, validate_revision
 from skillflow.task.prompts import build_task_prompt
 from skillflow.task.services import validate_task_response
 
-IDENTITY = "skillflow-task-extraction-v1"
-FORMAT_VERSION = 1
+IDENTITY = "skillflow-task-extraction-v3"
+FORMAT_VERSION = 3
 CALL_PREFIX = "calls/task"
 POLICY = {"source_only": True, "semantic_repairs": 0, "structural_correction": STRUCTURAL_VERSION,
           "automatic_resend_after_acceptance": False}
 
 
+def _policy(max_corrections=None, *, allow_cannot_assess=True, self_check=False):
+    if max_corrections is not None and (type(max_corrections) is not int or max_corrections < 0):
+        raise ValueError("max_corrections must be a nonnegative integer or None")
+    if type(allow_cannot_assess) is not bool:
+        raise ValueError("allow_cannot_assess must be Boolean")
+    if type(self_check) is not bool:
+        raise ValueError("self_check must be Boolean")
+    return {**deepcopy(POLICY), **({"max_corrections": max_corrections} if max_corrections is not None else {}),
+            **({"allow_cannot_assess": False} if not allow_cannot_assess else {}),
+            **({"self_check": True} if self_check else {})}
+
+
 class TaskRunIdentityError(ValueError):
     """Task run inputs, accepted response, or saved identities have changed."""
+
+
+def _validate_task_candidate(raw, material, policy):
+    if not policy.get("allow_cannot_assess", True):
+        from skillflow.common.validation import structural_error
+        try:
+            value = _json_object(raw)
+        except (ValueError, TypeError):
+            value = None
+        if isinstance(value, dict) and value.get("outcome") == "cannot_assess":
+            raise structural_error("whole_failure_forbidden", "/outcome",
+                "Submit source-supported requirements and unresolved source issues instead of a whole-analysis refusal")
+    return validate_task_response(raw, material)
 
 
 def _read(path):
@@ -88,8 +114,9 @@ def _write_exact_text(path, value, writer):
         temporary.unlink(missing_ok=True)
 
 
-def prepare_task_run(run_dir, source=None, *, user_request=None, revision=None,
-                     config=None, source_owner=None, secrets=(), resume_preparation=False):
+def prepare_task_run(run_dir, source=None, *, revision=None,
+                     config=None, source_owner=None, secrets=(), resume_preparation=False,
+                     max_corrections=None, allow_cannot_assess=True, self_check=False):
     """Prepare from an already frozen source; optionally reference its exact owner.
 
     An explicit owner must directly hold inputs/source.json or a byte snapshot.
@@ -97,6 +124,7 @@ def prepare_task_run(run_dir, source=None, *, user_request=None, revision=None,
     """
     directory = checked_run_path(run_dir)
     public, writer = _config(config), ArtifactWriter(tuple(secrets))
+    policy = _policy(max_corrections, allow_cannot_assess=allow_cannot_assess, self_check=self_check)
     owner = None if source_owner is None else checked_run_path(source_owner)
     if owner is not None:
         if owner == directory or owner.is_relative_to(directory):
@@ -108,9 +136,9 @@ def prepare_task_run(run_dir, source=None, *, user_request=None, revision=None,
         if source is not None and canonical_sha256(source) != canonical_sha256(owned):
             raise ValueError("Supplied source differs from explicit source owner")
         source = owned
-    material = prepare_task_material(source, user_request=user_request)
+    material = prepare_task_material(source)
     revision = validate_revision(revision, material)
-    prompt = build_task_prompt(material, revision)
+    prompt = build_task_prompt(material, revision, allow_cannot_assess=allow_cannot_assess, self_check=self_check)
     for value in (material, revision, prompt):
         if writer.clean(value) != value:
             raise ValueError("A credential overlaps verified Task input")
@@ -120,6 +148,7 @@ def prepare_task_run(run_dir, source=None, *, user_request=None, revision=None,
             manifest, saved_material, saved_prompt = _verify(directory, config=public)
             expected_owner = None if owner is None else make_run_reference(directory, owner)
             if (canonical_sha256(saved_material) != canonical_sha256(material) or saved_prompt != prompt
+                    or manifest["policy"] != policy
                     or canonical_sha256(manifest["source_owner"]) != canonical_sha256(expected_owner)
                     or manifest["revision_sha256"] != canonical_sha256(revision)):
                 raise TaskRunIdentityError("Existing Task preparation belongs to a different request")
@@ -130,7 +159,7 @@ def prepare_task_run(run_dir, source=None, *, user_request=None, revision=None,
             _check_preparation_prefix(directory, material, revision, prompt, owner)
         if owner is None:
             writer.json(directory / "inputs/source.json", material["source"])
-        writer.json(directory / "inputs/request.json", {"user_request": user_request, "revision": revision})
+        writer.json(directory / "inputs/request.json", {"revision": revision})
         _write_exact_text(directory / "inputs/prompt.txt", prompt, writer)
         manifest = {"identity": IDENTITY, "schema_version": FORMAT_VERSION,
             "task_schema_version": TASK_SCHEMA_VERSION, "run_id": directory.name,
@@ -139,7 +168,7 @@ def prepare_task_run(run_dir, source=None, *, user_request=None, revision=None,
             "source_sha256": material["source"]["source_sha256"],
             "request_kind": "task_extraction" if revision is None else "task_revision",
             "material_sha256": canonical_sha256(material), "revision_sha256": canonical_sha256(revision),
-            "prompt_sha256": canonical_sha256(prompt), "policy": deepcopy(POLICY), "files": _files(directory)}
+            "prompt_sha256": canonical_sha256(prompt), "policy": policy, "files": _files(directory)}
         sealed = _seal(manifest)
         writer.json(directory / "manifest.json", sealed)
         return sealed
@@ -151,7 +180,7 @@ def _check_preparation_prefix(directory, material, revision, prompt, owner):
     No files are removed or rewritten before the entire prefix is checked. A
     partial prefix is justified by the caller's exact frozen input, not by names.
     """
-    expected = {"inputs/request.json": {"user_request": material["user_request"], "revision": revision},
+    expected = {"inputs/request.json": {"revision": revision},
                 "inputs/prompt.txt": prompt}
     if owner is None:
         expected["inputs/source.json"] = material["source"]
@@ -185,11 +214,18 @@ def verify_task_prepared(run_dir, *, config=None):
 
 def _verify(directory, *, config=None, check_implementation=True):
     manifest = _unseal(_read(directory / "manifest.json"))
+    saved_policy = manifest.get("policy")
+    try:
+        policy = _policy(saved_policy.get("max_corrections"),
+            allow_cannot_assess=saved_policy.get("allow_cannot_assess", True),
+            self_check=saved_policy.get("self_check", False)) if isinstance(saved_policy, dict) else None
+    except ValueError as error:
+        raise TaskRunIdentityError("Unsupported Task correction policy") from error
     if (manifest.get("identity") != IDENTITY or type(manifest.get("schema_version")) is not int
             or manifest.get("schema_version") != FORMAT_VERSION
             or manifest.get("task_schema_version") != TASK_SCHEMA_VERSION
             or manifest.get("preparation_status") != "ready"
-            or canonical_sha256(manifest.get("policy")) != canonical_sha256(POLICY)):
+            or canonical_sha256(saved_policy) != canonical_sha256(policy)):
         raise TaskRunIdentityError("Unsupported Task run protocol")
     if config is not None and _config(config) != manifest["config"]:
         raise TaskRunIdentityError("Task run configuration differs")
@@ -209,11 +245,13 @@ def _verify(directory, *, config=None, check_implementation=True):
             raise TaskRunIdentityError("Referenced source must not be copied")
         source = _owner_source(resolve_run_reference(directory, owner))
     request = _read(directory / "inputs/request.json")
-    if set(request) != {"user_request", "revision"}:
+    if set(request) != {"revision"}:
         raise TaskRunIdentityError("Task request contains unsupported fields")
-    material = prepare_task_material(source, user_request=request["user_request"])
+    material = prepare_task_material(source)
     revision = validate_revision(request["revision"], material)
-    prompt = build_task_prompt(material, revision)
+    prompt = build_task_prompt(material, revision,
+                               allow_cannot_assess=manifest["policy"].get("allow_cannot_assess", True),
+                               self_check=manifest["policy"].get("self_check", False))
     if (canonical_sha256(material) != manifest["material_sha256"]
             or canonical_sha256(revision) != manifest["revision_sha256"]
             or canonical_sha256(prompt) != manifest["prompt_sha256"]
@@ -233,19 +271,23 @@ def _base_result(manifest):
 
 def _report(result, task):
     lines = ["# Task extraction record", "", f"Status: {result['status']}", "", result["reason"], "",
-             "Line accounting and structural validation do not prove task completeness, minimal demands or the absence of DOE.", ""]
+             "Structure and source-reference validation does not prove requirement completeness, demand minimality or absence of DOE.", ""]
     if task is not None:
-        lines.extend([f"Task revision: `{task['task_sha256']}`", "", task["purpose"]["text"], ""])
-        lines.extend(f"- {r['id']}: {r['text']}" for r in task["requirements"])
-        lines.extend(["", "Source accounting: ", ""])
-        lines.extend(f"- {r['file']}:{r['start_line']}-{r['end_line']} → "
-                     f"{', '.join(r['requirement_ids']) or r['disposition']}; {r['reason']}"
-                     for r in task["source_accounting"])
+        lines.extend([f"Task version: `{task['task_sha256']}`", "", task["purpose"]["text"], ""])
+        for requirement in task["requirements"]:
+            lines.extend([f"- {requirement['id']}：{requirement['text']}"])
+            lines.extend(f"  - {e['file']}:{e['start_line']}-{e['end_line']} — {e['reason']}"
+                         for e in requirement["evidences"])
+        if task["issues"]:
+            lines.extend(["", "Conflicts and ambiguities:", ""])
+            lines.extend(f"- {issue['id']} ({issue['resolution']})：{issue['reason']}"
+                         for issue in task["issues"])
     return "\n".join(lines) + "\n"
 
 
 def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None,
-             config=None, secrets=(), stop_event=None, progress=None, replay=False, read_only=False):
+             config=None, secrets=(), stop_event=None, progress=None, replay=False, read_only=False,
+             max_corrections=None):
     """Resume durable calls or replay accepted responses without online access."""
     directory = checked_run_path(run_dir)
     if read_only and not replay:
@@ -257,6 +299,10 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
     writer, stopping = ArtifactWriter(tuple(secrets)), stop_event or Event()
     with (nullcontext() if read_only else exclusive_run(directory)):
         manifest, material, prompt = _verify(directory, config=config, check_implementation=not read_only)
+        if max_corrections is not None and _policy(max_corrections,
+                allow_cannot_assess=manifest["policy"].get("allow_cannot_assess", True),
+                self_check=manifest["policy"].get("self_check", False)) != manifest["policy"]:
+            raise TaskRunIdentityError("Task correction policy differs from preparation")
         if writer.clean(material) != material or writer.clean(prompt) != prompt:
             raise ValueError("A credential overlaps verified Task input")
         saved = _read(directory / "result.json") if (directory / "result.json").is_file() else None
@@ -267,11 +313,19 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
             writer.json(marker_path, _seal({"kind": "running"}))
         try:
             factory = client_factory or (injected_factory(client) if client is not None else None)
+            strategy = None
+            if not manifest["policy"].get("allow_cannot_assess", True):
+                # This imports the mechanical record strategy only; Task still
+                # receives solely its frozen source and finite revision inputs.
+                from skillflow.document_guided.fragments import fragment_correction_strategy
+                strategy = fragment_correction_strategy("task")
             chain = ResponseChain(directory, prefix=CALL_PREFIX, base_prompt=prompt,
                 request_kind=manifest["request_kind"], config=manifest["config"], writer=writer,
-                validate=lambda raw: validate_task_response(raw, material), client_factory=factory,
+                validate=lambda raw: _validate_task_candidate(raw, material, manifest["policy"]), client_factory=factory,
                 factory_provider=factory_provider, stop_event=stopping, progress=progress,
                 replay=replay, read_only=read_only,
+                correction_strategy=strategy,
+                max_corrections=manifest["policy"].get("max_corrections"),
                 interruption=marker.get("cursor") if marker["kind"] == "interrupted" else None)
             task = chain.run()
             reference = task_reference(task)
@@ -283,13 +337,16 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
                 raise TaskRunIdentityError("Accepted Task artifact is missing")
             else:
                 writer.json(task_path, task)
-            result.update(status="complete", reason="Independent Task extraction and physical source-line accounting completed; semantics still require whole-chain review.",
+            result.update(status="complete", reason="Independent Task extraction and source-evidence validation completed; semantics still require whole-chain review.",
                           task_ref=reference)
         except (TaskRunIdentityError, ResponseChainError, ResponseIntegrityError) as error:
             raise TaskRunIdentityError(str(error)) from error
         except SemanticFailure as error:
             result.update(status="semantic_failure", reason=writer.clean(error.reason),
                           error_kind="cannot_assess", failure=writer.clean(error.failure))
+        except StructuralCorrectionLimitReached as error:
+            result.update(status="structural_failure", reason=writer.clean(str(error)),
+                          error_kind="correction_limit", failure={"diagnostics": error.diagnostics})
         except KeyboardInterrupt as error:
             result.update(status="interrupted", reason=writer.clean(str(error)), error_kind="interrupted")
         except Exception as error:
@@ -299,10 +356,15 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
         if chain is not None:
             result.update(accepted_call=chain.accepted_call, response_chain=chain.snapshot(),
                           request_validation=chain.request_validation)
-        result["counts"] = chain_counts(directory, CALL_PREFIX)
-        if (saved is not None and (replay or saved.get("status") == "complete")
-                and canonical_sha256(saved) != canonical_sha256(result)):
-            raise TaskRunIdentityError("Task result differs from saved response-chain decision")
+        try:
+            result["counts"] = chain_counts(directory, CALL_PREFIX)
+        except Exception:
+            result["counts"] = {"status": "unavailable"}
+        if saved is not None and (replay or saved.get("status") == "complete"):
+            if (canonical_sha256({key: value for key, value in saved.items() if key != "counts"})
+                    != canonical_sha256({key: value for key, value in result.items() if key != "counts"})):
+                raise TaskRunIdentityError("Task result differs from saved response-chain decision")
+            result["counts"] = saved["counts"]
         if not replay:
             writer.json(marker_path, _seal({"kind": "interrupted" if result["status"] == "interrupted" else "finished",
                 "cursor": None if chain is None else chain.cursor}))

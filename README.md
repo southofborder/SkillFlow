@@ -1,5 +1,41 @@
 # SkillFlow
 
+SkillFlow develops task-related static data minimization analysis for Agent Skills,
+including unnecessary sensitive payloads in otherwise necessary actions. The current
+implementation is **interface-r4**, accepted and exercised in the closed
+2026-11-04 batch. Start with the [current-version reference](docs/current-version.md)
+for the supported workflow, evidence, and operating boundaries.
+
+The repository entry is `python -m tools.doe.document_guided_pilot`. Its normal
+path uses seven semantic requests and two workers: a source-only sealed Task,
+flow, CFG, processing, task correspondence, sensitivity, and source review.
+The program assembles the isolated semantic fragments before deterministic
+propagation and DOE. Finite loop summaries and the sparse backend preserve
+member, candidate, receiver, and version relationships within documented limits.
+
+All four interface-r4 runs (GA4, 001, 010, 013) closed with complete propagation
+of their generated IR and one matching zero-call replay each. **All four DOE
+results remain partial; none establishes complete semantic coverage or a confirmed
+DOE reduction.** Offline acceptance covers 591 distinct latest scoped test cases,
+not one all-green whole-repository run. See the [closure evidence](docs/current-version.md#latest-closed-validation).
+
+The current working tree is `D:/projects/SkillFlow` on `main`.
+`D:/projects/SkillFlow-staged` is a separately registered historical staged worktree;
+its code is not the current interface-r4 implementation. Preserve frozen sources,
+raw responses, failures, and historical reports. Checkout, installation, and
+documentation do not start analysis automatically or authorize new model/Skill
+runs, old-run resumption, or extra replays. Manual commands and authorization
+boundaries are in the [current-version reference](docs/current-version.md#manual-entry).
+
+[中文说明](README-CH.md) · [Current version](docs/current-version.md) · [Documentation](docs/README.md)
+
+## Historical README snapshot
+
+The remaining text preserves an earlier workflow description and its references.
+Its “current” labels, three-call pipeline, Task versions, model configuration,
+and command examples are historical. Use the current-version reference above
+for interface-r4; the preserved material does not authorize execution.
+
 Cross-computer development: start with the
 [research and chat handoff](docs/research-chat-handoff.md) and its
 [submission verification](docs/research-handoff-verification.md). The current

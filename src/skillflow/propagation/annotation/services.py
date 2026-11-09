@@ -76,8 +76,11 @@ def to_payload(response: AnnotationResponse | dict) -> dict[str, Any]:
     """
     raw = response.model_dump(mode="python") if isinstance(response, AnnotationResponse) else response
     parsed = AnnotationResponse.model_validate(raw).model_dump(mode="json")
-    return AnnotationPayload.model_validate({name: parsed[name] for name in
-        ("ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")}).model_dump(mode="json")
+    fields = {name: parsed[name] for name in
+        ("ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")}
+    if parsed.get("processing_gaps"):
+        fields["processing_gaps"] = parsed["processing_gaps"]
+    return AnnotationPayload.model_validate(fields).model_dump(mode="json")
 
 
 def _validate_response(raw: Any, material: dict[str, Any], response_type) -> dict[str, Any]:
@@ -105,9 +108,8 @@ def _validate_response(raw: Any, material: dict[str, Any], response_type) -> dic
     parsed = annotation.model_dump(mode="json")
     expected = set(cfg_instructions(material["cfg"]))
     actual = set(parsed["ir_semantics"])
-    if actual != expected:
-        raise structural_error("instruction_coverage", "/ir_semantics",
-                               f"IR semantics coverage mismatch: missing={sorted(expected-actual)}, unexpected={sorted(actual-expected)}")
+    from skillflow.propagation.contracts.limitations import check_processing_coverage
+    check_processing_coverage(material["cfg"], parsed)
     diagnostics = []
     def check_modes(events, path):
         for index, event in enumerate(events):
@@ -132,6 +134,9 @@ def _validate_response(raw: Any, material: dict[str, Any], response_type) -> dic
     evidence_items = [(json_pointer("location_evidences", location_id, index), evidence)
                       for location_id, evidences in annotation.location_evidences.items()
                       for index, evidence in enumerate(evidences)]
+    evidence_items.extend((json_pointer("processing_gaps", gap_index, "evidences", index), evidence)
+                          for gap_index, gap in enumerate(annotation.processing_gaps)
+                          for index, evidence in enumerate(gap.evidences))
     for path, evidence in [*evidence_items, *iter_located_spec_evidence(annotation)]:
         try:
             with validation_at(path):
@@ -176,9 +181,9 @@ def compile_response(raw: Any, material: dict[str, Any]):
 
 
 def annotate_skill(source: dict[str, Any], cfg: dict[str, Any], *, task_baseline, client: CompletionClient,
-                   user_request=None, stop_event=None) -> dict[str, Any]:
+                   stop_event=None) -> dict[str, Any]:
     """Obtain a structurally valid whole-graph candidate; semantic review is separate."""
-    material = prepare_material(source, cfg, task_baseline=task_baseline, user_request=user_request)
+    material = prepare_material(source, cfg, task_baseline=task_baseline)
     return correct_response(build_prompt(material), complete=client.complete,
                             validate=lambda response: validate_response(response, material),
                             stop_event=stop_event)

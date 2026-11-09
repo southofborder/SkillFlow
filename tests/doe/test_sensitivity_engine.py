@@ -208,11 +208,15 @@ def test_known_absent_declared_range_is_partial_not_manufactured(operations, val
     assert any(d["code"] == "absent_sensitive_range" for d in result["diagnostics"])
 
 
-def test_nested_each_reports_capability_limit_without_flattening():
+def test_nested_each_retains_every_member_level_without_flattening():
     values = fixture([{"op": "select_part", "input": inp(), "path": ["body"], "output": "body"}], mode="model")
-    result = review(values, declarations([{"kind": "each"}, "rows", {"kind": "each"}, "token"]))
-    assert result["status"] == "partial" and not rows(result)
-    assert result["diagnostics"][0]["code"] == "unsupported_sensitivity_scope"
+    path = [{"kind": "each"}, "rows", {"kind": "each"}, "token"]
+    sensitivity = declarations(path)
+    result = review(values, sensitivity)
+    assert result["status"] == "complete" and rows(result)
+    assert all(row["path"] == path for row in rows(result))
+    assert not any(row["code"] == "unsupported_sensitivity_scope" for row in result["diagnostics"])
+    validate(result, values, sensitivity)
 
 
 def test_influence_without_supported_demand_is_possible_not_plaintext_excess():

@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from skillflow.common.recording import canonical_sha256
+from skillflow.propagation.contracts.limitations import diagnostic_applies
 from .material import _id, _Index
 from .task_material import _read_object
 from .demand_material import checked_demand_material, validate_demand_result
@@ -109,25 +110,33 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
     if facts is not None and demand_result is None:
         raise ValueError("Verified demand result is required for sensitivity material validation")
     expected_demand = validate_demand_result(demand_result) if demand_result is not None else None
+    target_index = None
+    def targets():
+        nonlocal target_index
+        if target_index is None:
+            target_index = build_demand_target_index(facts.cfg, annotation["raw_annotation"])
+        return target_index
     if expected_demand is not None and facts is not None and annotation is not None:
         from .demand_results import validate_result_references
-        validate_result_references(expected_demand, facts,
-            build_demand_target_index(facts.cfg, annotation["raw_annotation"]))
+        validate_result_references(expected_demand, facts, targets())
     expected_comparisons = {sink["id"]: sink for sink in expected_demand["sinks"]} if expected_demand is not None else None
     sensitivity = value["derivations"]["sensitivity"]
     demand = value["derivations"]["demand"]
     diagnostics = {d["id"]: d for d in value["diagnostics"]}
+    scoped_demand_ids = {row["id"] for row in (expected_demand or {}).get("diagnostics", [])
+                         if "affected_instruction_ids" in row}
+    if any("affected_instruction_ids" in row and row["id"] not in scoped_demand_ids for row in diagnostics.values()):
+        raise ValueError("Program-scoped sensitivity diagnostics must come from verified demand coverage")
     constraint_analysis = None
     if facts is not None and task is not None and annotation is not None and demand_candidate is not None:
         from .demand_engine import DemandEngine
         from .constraint_preservation import ConstraintAnalysis
         checked_task = task if isinstance(task, Task) else Task.model_validate(task)
-        target_index = build_demand_target_index(facts.cfg, annotation["raw_annotation"])
         checked_candidate = validate_demand_candidate(_json(demand_candidate), task=checked_task,
-            source_files=joint_source_files(annotation["material"]), targets=target_index)
+            source_files=joint_source_files(annotation["material"]), targets=targets())
         # Rebuild the read-only index and checks, not a second demand solve.
         constraint_analysis = ConstraintAnalysis(DemandEngine(facts, checked_task, annotation,
-            checked_candidate.model_dump(mode="json"), target_index))
+            checked_candidate.model_dump(mode="json"), targets()))
         if value["constraints"]["checks"] != constraint_analysis.checks:
             raise ValueError("Forward constraint checks differ from verified facts")
     if len(diagnostics) != len(value["diagnostics"]):
@@ -148,7 +157,7 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             task = task if isinstance(task, Task) else Task.model_validate(task)
             task_files = source_files
             parsed_demand = validate_demand_candidate(_json(demand_candidate), task=task, source_files=task_files,
-                targets=build_demand_target_index(facts.cfg, annotation["raw_annotation"]))
+                targets=targets())
             if expected_demand is not None and expected_demand["goals"] != parsed_demand.model_dump(mode="json")["goals"]:
                 raise ValueError("Verified demand result goals differ from candidate")
             requirements = {row.id for row in task.requirements}
@@ -193,7 +202,8 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             relevant = set(sliced["usage_context"]["instructions"])
             relevant.update(index.operations[key]["position"]["instruction_id"] for key in sliced["backward_slice"]["operations"])
             limits = sorted(set(base["limitations"]) | {identity for identity, diagnostic in diagnostics.items()
-                if diagnostic["blocking"] and (diagnostic["instruction_id"] is None or diagnostic["instruction_id"] in relevant)})
+                if diagnostic["blocking"] and diagnostic_applies(diagnostic, relevant,
+                    scoped_instructions=sliced["usage_context"]["instructions"])})
             if sink["limitations"] != limits:
                 raise ValueError("Sensitivity sink changes relevant saved analysis limitations")
         if index is not None:
@@ -289,10 +299,14 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             raise ValueError("Sensitivity demand derivation closure differs from verified demand result")
         for diagnostic in expected_demand["diagnostics"]:
             projection = {k: diagnostic[k] for k in ("id", "code", "reason", "instruction_id", "operation_id", "blocking")}
+            if "affected_instruction_ids" in diagnostic:
+                projection["affected_instruction_ids"] = deepcopy(diagnostic["affected_instruction_ids"])
             if diagnostics.get(diagnostic["id"]) != projection:
                 raise ValueError("Sensitivity result drops or changes a verified demand diagnostic")
         if value["coverage"]["demand_status"] != expected_demand["status"]:
             raise ValueError("Sensitivity demand status differs from verified result")
+        if value["coverage"].get("unresolved_boundaries", []) != expected_demand["coverage"].get("unresolved_boundaries", []):
+            raise ValueError("Sensitivity unresolved boundary coverage differs from verified demand coverage")
     coverage = value["coverage"]
     if constraint_analysis is not None and value["constraints"] != constraint_analysis.to_dict():
         raise ValueError("Constraint preservation or forward influence differs from verified facts")

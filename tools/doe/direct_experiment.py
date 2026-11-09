@@ -25,18 +25,17 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _freeze_case(source, run, case_id, files, user_request=None):
+def _freeze_case(source, run, case_id, files):
     from tools.doe.direct_baseline import package_bundle
     case = run / "cases" / case_id
     if not case.exists():
-        return package_bundle(source, run, case_id, source_files=files, user_request=user_request)
+        return package_bundle(source, run, case_id, source_files=files)
     manifest = json.loads((case / "manifest.json").read_text(encoding="utf-8"))
     expected = {f: sha(source / f) for f in files}
     if {s["path"]: s["sha256"] for s in manifest["sources"]} != expected:
         raise ValueError("Existing frozen case differs from source")
-    request_hash = hashlib.sha256(user_request.encode("utf-8")).hexdigest() if user_request is not None else None
-    if manifest["user_request_sha256"] != request_hash:
-        raise ValueError("Existing frozen user request differs")
+    if "user_request_sha256" in manifest or (case / "user_request.txt").exists():
+        raise ValueError("Legacy independent-request cases cannot enter Skill-only preparation")
     return manifest
 
 
@@ -89,7 +88,7 @@ def pilot(run: Path) -> None:
         "reference_status": "assistant_authored_exploratory",
         "purpose": "Test direct source-only audit and full semantic-chain reconstruction; no same-model SkillFlow comparison.",
         "runtime_recorded_model_expected": "gpt-6.1-sol",
-        "runtime_recorded_reasoning_effort_expected": "ultra",
+        "runtime_recorded_reasoning_effort_expected": "max",
         "fork_turns": "none", "tool_access_hard_disabled": False,
         "environment_hard_isolation": False, "tools_forbidden_by_protocol": True,
         "pilot_cases": list(definitions), "pilot_main_repeats": 1,
@@ -116,16 +115,13 @@ def expanded(run: Path) -> None:
         source = ROOT / case["package_path"]
         if not source.exists():
             source = corpus / case["package_path"]
-        request = ROOT / case["user_request_path"]
-        if not request.exists():
-            request = corpus / case["user_request_path"]
+        if "user_request_path" in case or "user_request_sha256" in case:
+            raise ValueError("The archived independent-task corpus cannot enter Skill-only preparation")
         files = [f["path"] for f in case["source_files"]]
         for f in case["source_files"]:
             if sha(source / f["path"]) != f["sha256"]:
                 raise ValueError("Held-out source differs from its sealed catalog")
-        if sha(request) != case["user_request_sha256"]:
-            raise ValueError("Held-out task differs from its sealed catalog")
-        _freeze_case(source, run, case["case_id"], files, request.read_text(encoding="utf-8"))
+        _freeze_case(source, run, case["case_id"], files)
         for repeat in (1, 2, 3):
             for arm in ("audit", "chain"):
                 _prepare_main(run, f"{case['case_id']}_{arm}_r{repeat}", case["case_id"], arm,

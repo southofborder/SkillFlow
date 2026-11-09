@@ -1,6 +1,6 @@
 """Source-only direct-model experiment records, with no model or network calls.
 
-Only explicitly selected source bytes and the optional user request enter prompts.
+Only explicitly selected Skill source bytes enter prompts.
 Receipt imports export visible answers and an allowlist of execution metadata;
 reasoning items, tool arguments, cumulative usage and account data are discarded.
 """
@@ -18,7 +18,7 @@ from typing import Any, Iterable
 IDENTITY = "skillflow-direct-baseline-v1"
 DEFAULT_SESSIONS = Path("C:/Users/24831/.codex/sessions")
 EXPECTED_MODEL = "gpt-6.1-sol"
-EXPECTED_EFFORT = "ultra"
+EXPECTED_EFFORT = "max"
 TOKEN_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
     "output_tokens", "reasoning_output_tokens", "total_tokens",
@@ -86,7 +86,7 @@ def render_source_bundle(source_dir: Path | str, source_files: Iterable[str]) ->
 
 def package_bundle(
     source_dir: Path | str, run_dir: Path | str, case_id: str, *,
-    source_files: Iterable[str], user_request: str | None = None,
+    source_files: Iterable[str],
 ) -> dict:
     """Freeze selected file bytes; never discover analysis files or overwrite."""
     source = Path(source_dir)
@@ -105,13 +105,9 @@ def package_bundle(
         entries.append({"path": relative, "sha256": sha256(data), "bytes": len(data)})
     bundle = render_source_bundle(target / "inputs", paths).encode("utf-8")
     _write_new(target / "source_bundle.txt", bundle)
-    request_bytes = user_request.encode("utf-8") if user_request is not None else None
-    if request_bytes is not None:
-        _write_new(target / "user_request.txt", request_bytes)
     manifest = {
         "schema": IDENTITY, "case_id": case_id, "sources": entries,
         "source_bundle_sha256": sha256(bundle),
-        "user_request_sha256": sha256(request_bytes) if request_bytes is not None else None,
         "source_selection": "Explicit caller-selected source files only; no recursive analysis discovery.",
     }
     _write_new(target / "manifest.json", _json_bytes(manifest))
@@ -119,19 +115,20 @@ def package_bundle(
 
 
 def render_prompt(
-    template_path: Path | str, source_bundle: str, user_request: str | None = None, *,
+    template_path: Path | str, source_bundle: str, *,
     shared_rules: str = "", original_answer: str | None = None,
     arm_instruction: str | None = None,
 ) -> str:
     """Replace known template tokens once, without interpreting source braces."""
     template = Path(template_path).read_bytes().decode("utf-8")
+    if "{user_request}" in template:
+        raise ValueError("Legacy independent-request templates are not supported")
     values = {
         "shared_rules": shared_rules, "source_bundle": source_bundle,
-        "user_request": user_request if user_request is not None else "No independent user request was supplied.",
         "original_answer": original_answer, "arm_instruction": arm_instruction,
     }
-    # Split on original template tokens: inserted source/user text is never processed.
-    token = re.compile(r"\{(shared_rules|source_bundle|user_request|original_answer|arm_instruction)\}")
+    # Split on original template tokens: inserted source text is never processed.
+    token = re.compile(r"\{(shared_rules|source_bundle|original_answer|arm_instruction)\}")
     def replace(match: re.Match) -> str:
         value = values[match.group(1)]
         if value is None:
@@ -150,11 +147,11 @@ def prepare_trial(
     case = root / "cases" / _name(case_id)
     manifest = _read_json(case / "manifest.json")
     bundle = (case / "source_bundle.txt").read_bytes().decode("utf-8")
-    request_path = case / "user_request.txt"
-    request = request_path.read_bytes().decode("utf-8") if request_path.exists() else None
+    if "user_request_sha256" in manifest or (case / "user_request.txt").exists():
+        raise ValueError("Legacy independent-request cases are not supported")
     shared = Path(shared_path).read_bytes().decode("utf-8") if shared_path else ""
     original = Path(original_answer_path).read_bytes().decode("utf-8") if original_answer_path else None
-    prompt = render_prompt(template_path, bundle, request, shared_rules=shared,
+    prompt = render_prompt(template_path, bundle, shared_rules=shared,
                            original_answer=original, arm_instruction=arm_instruction)
     target = root / "trials" / _name(trial_id)
     if target.exists():
@@ -452,10 +449,8 @@ def verify(run_dir: Path | str, *, sessions_dir: Path | str | None = None) -> di
             path = _inside(case / "inputs", source["path"])
             if not path.is_file() or sha256(path.read_bytes()) != source["sha256"]:
                 errors.append(f"Source hash mismatch: {manifest['case_id']}/{source['path']}")
-        request = case / "user_request.txt"
-        actual_request = sha256(request.read_bytes()) if request.exists() else None
-        if actual_request != manifest["user_request_sha256"]:
-            errors.append(f"User-request hash mismatch: {manifest['case_id']}")
+        if "user_request_sha256" in manifest or (case / "user_request.txt").exists():
+            errors.append(f"Legacy independent-request case is not supported: {manifest['case_id']}")
         try:
             regenerated = render_source_bundle(case / "inputs", [s["path"] for s in manifest["sources"]]).encode("utf-8")
             saved = (case / "source_bundle.txt").read_bytes()
@@ -469,7 +464,6 @@ def verify(run_dir: Path | str, *, sessions_dir: Path | str | None = None) -> di
         trial = path.parent
         registration = _read_json(path)
         case = root / "cases" / registration["case_id"]
-        request_path = case / "user_request.txt"
         original_path = trial / "original_answer.txt"
         try:
             if sha256((case / "manifest.json").read_bytes()) != registration["case_manifest_sha256"]:
@@ -495,7 +489,6 @@ def verify(run_dir: Path | str, *, sessions_dir: Path | str | None = None) -> di
                     errors.append(f"Held-out review is not the preselected first repeat: {registration['trial_id']}")
             rendered = render_prompt(
                 trial / "template.txt", (case / "source_bundle.txt").read_bytes().decode("utf-8"),
-                request_path.read_bytes().decode("utf-8") if request_path.exists() else None,
                 shared_rules=(trial / "shared.txt").read_bytes().decode("utf-8"), original_answer=original,
                 arm_instruction=registration.get("arm_instruction"),
             ).encode("utf-8")
@@ -571,7 +564,6 @@ def main(argv: list[str] | None = None) -> int:
     package.add_argument("--case-id", required=True)
     package.add_argument("--source-dir", required=True)
     package.add_argument("--source-file", action="append", required=True)
-    package.add_argument("--user-request-file")
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--run-dir", required=True)
     prepare.add_argument("--trial-id", required=True)
@@ -597,8 +589,7 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument("--output")
     args = parser.parse_args(argv)
     if args.command == "package":
-        request = Path(args.user_request_file).read_bytes().decode("utf-8") if args.user_request_file else None
-        result = package_bundle(args.source_dir, args.run_dir, args.case_id, source_files=args.source_file, user_request=request)
+        result = package_bundle(args.source_dir, args.run_dir, args.case_id, source_files=args.source_file)
     elif args.command == "prepare":
         arm = Path(args.arm_instruction_file).read_bytes().decode("utf-8") if args.arm_instruction_file else None
         result = prepare_trial(args.run_dir, args.trial_id, args.case_id, args.template, shared_path=args.shared,

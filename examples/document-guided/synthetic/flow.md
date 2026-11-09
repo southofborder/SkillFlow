@@ -1,0 +1,3 @@
+# Flow understanding
+Read the session packet, prepare one calibration record, deliver it, and return internally. The interface deployment is unspecified (skill/SKILL.md:1).
+The request uses the same acquired packet: preserve badge and conditionally include offset when adjustment is true. The acquisition result is consumed by the preparation step, not reacquired from another source (skill/SKILL.md:1).

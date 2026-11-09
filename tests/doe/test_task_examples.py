@@ -24,9 +24,9 @@ def example(case):
 @pytest.mark.parametrize("case,count", [("001", 7), ("010", 8), ("013", 9)])
 def test_authored_candidates_keep_exact_references_and_no_judgments(case, count):
     _, candidate, review = example(case)
-    assert set(candidate) == {"purpose", "requirements", "source_accounting", "issues"}
+    assert set(candidate) == {"purpose", "requirements", "issues"}
     assert len(review.task.requirements) == count
-    assert review.task.basis == "declared_skill"
+    assert "basis" not in review.task.model_dump()
     for realization in review.realizations:
         assert realization["bindings"]
         for binding in realization["bindings"]:

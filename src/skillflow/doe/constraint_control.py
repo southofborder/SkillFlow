@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.contracts.references import target_key
-from .sensitivity_engine import range_presence
+from .sensitivity_engine import range_presence, unstable_collection_offsets
 
 
 UNKNOWN = object()
@@ -66,12 +66,18 @@ def _equal(left, right):
 def literal_at(data, identity, path=(), seen=None):
     seen = set() if seen is None else set(seen)
     marker = (identity, canonical_sha256(path))
-    if marker in seen or identity not in data:
+    if any(previous == identity for previous, _ in seen) or identity not in data:
         return UNKNOWN
     seen.add(marker)
     item = data[identity]
     content = item["content"]
     form = content["form"]
+    if form == "loop_summary":
+        values = [literal_at({**data, identity: {**item, "content": variant["content"]}},
+                             identity, path, seen - {marker}) for variant in content["variants"]]
+        return values[0] if values and all(not _unknown(value) and _equal(value, values[0]) for value in values) else UNKNOWN
+    if form == "selection":
+        return literal_at(data, content["base"], [*content["path"], *path], seen)
     if form == "literal":
         value = content["value"]
         try:
@@ -100,6 +106,13 @@ def literal_at(data, identity, path=(), seen=None):
         for part in content["parts"]:
             if list(path[:len(part["path"])]) == part["path"]:
                 return literal_at(data, part["data"], path[len(part["path"]):], seen)
+    if form == "mapped_collection" and path:
+        values = [literal_at(data, value, path[1:], set(seen)) for member in content["members"]
+                  if unstable_collection_offsets(data, content["base"])
+                  or member["selector"] == path[0] or isinstance(member["selector"], dict)
+                  for value in member["values"]]
+        if values and all(not _unknown(value) and _equal(value, values[0]) for value in values):
+            return values[0]
     return UNKNOWN
 
 
@@ -211,12 +224,39 @@ class BooleanFacts:
     def data_kind(self, identity, path=(), seen=None):
         """Type evidence from existing content/operations, without making values."""
         seen = set() if seen is None else set(seen)
-        marker = (identity, tuple(path))
-        if marker in seen:
+        marker = (identity, canonical_sha256(list(path)))
+        if any(item[0] == identity for item in seen):
             return None
         seen.add(marker)
         content = self.engine.index.data[identity]["content"]
+        return self._content_kind(identity, list(path), content, seen)
+
+    def _content_kind(self, identity, path, content, seen):
         form = content["form"]
+        if form == "loop_summary":
+            kinds = {self._content_kind(identity, path, row["content"], set(seen))
+                     for row in content["variants"]}
+            return next(iter(kinds)) if len(kinds) == 1 else None
+        if form == "selection":
+            return self.data_kind(content["base"], [*content["path"], *path], seen)
+        if form == "accumulated_collection":
+            if not path:
+                return list
+            if type(path[0]) is str:
+                return None
+            base_size = collection_size(self.engine.index.data, content["base"])
+            concrete = type(path[0]) is int and base_size is not None
+            kinds = set()
+            if not concrete or path[0] < base_size:
+                kinds.add(self.data_kind(content["base"], path, seen))
+            if not concrete or path[0] >= base_size:
+                suffix = path[1:]
+                if content["mode"] == "items":
+                    suffix = [path[0] - base_size if concrete else path[0], *suffix]
+                elif concrete and path[0] != base_size:
+                    return None
+                kinds.add(self.data_kind(content["added"], suffix, seen))
+            return next(iter(kinds)) if len(kinds) == 1 else None
         if form == "literal":
             value = _path_value(content["value"], path)
             return None if value is MISSING or value is INVALID or value is UNKNOWN else type(value)
@@ -227,6 +267,14 @@ class BooleanFacts:
             return self.data_kind(content["base"], path, seen)
         if form == "subset_view" and not path:
             return list
+        if form == "mapped_collection":
+            if not path:
+                return list
+            kinds = {self.data_kind(value, path[1:], set(seen)) for member in content["members"]
+                     if unstable_collection_offsets(self.engine.index.data, content["base"])
+                     or member["selector"] == path[0] or isinstance(member["selector"], dict)
+                     for value in member["values"]}
+            return next(iter(kinds)) if len(kinds) == 1 else None
         if form == "known_parts":
             kinds = set()
             for part in content["parts"]:
@@ -251,7 +299,7 @@ class BooleanFacts:
             definition = self.engine.definitions.get(operand.get("identifier"))
             if operand["type"] == "result" and definition:
                 producer, slot = definition
-                binding = next((row for row in self.engine.compiled["ir_semantics"][producer]["output_bindings"]
+                binding = next((row for row in self.engine.compiled["ir_semantics"].get(producer, {}).get("output_bindings", [])
                                 if row["output_index"] == slot), None)
                 if binding:
                     return {"op": "ref", "value": binding["value"]}, producer, None
@@ -280,7 +328,7 @@ class BooleanFacts:
                 definition = self.engine.definitions.get(operand["identifier"])
                 if definition:
                     producer, slot = definition
-                    binding = next((row for row in self.engine.compiled["ir_semantics"][producer]["output_bindings"]
+                    binding = next((row for row in self.engine.compiled["ir_semantics"].get(producer, {}).get("output_bindings", [])
                                     if row["output_index"] == slot), None)
                     if binding:
                         return self.identity(binding["value"], producer, None, seen)
@@ -446,6 +494,21 @@ def collection_size(data, identity, seen=None):
         return None
     seen.add(identity)
     content = data[identity]["content"]
+    if content["form"] == "loop_summary":
+        sizes = [collection_size({**data, identity: {**data[identity], "content": variant["content"]}},
+                                 identity, seen - {identity}) for variant in content["variants"]]
+        return sizes[0] if sizes and all(size is not None and size == sizes[0] for size in sizes) else None
+    if content["form"] == "accumulated_collection":
+        size = collection_size(data, content["base"], seen)
+        added = 1 if content["mode"] == "item" else collection_size(data, content["added"], seen)
+        return size + added if size is not None and added is not None else None
+    if content["form"] == "selection":
+        value = literal_at(data, content["base"], content["path"])
+        return len(value) if type(value) is list else None
+    if content["form"] == "mapped_collection":
+        if not content["members"]:
+            return 0
+        return collection_size(data, content["base"], seen)
     if content["form"] == "literal":
         return len(content["value"]) if type(content["value"]) is list else None
     if content["form"] == "known_parts" and content["parts_complete"]:

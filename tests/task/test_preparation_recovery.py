@@ -58,10 +58,19 @@ def test_different_partial_prompt_is_rejected_before_any_input_is_rewritten(tmp_
     assert inventory(directory) == before
 
 
-def test_completed_task_preparation_cannot_accept_a_different_request(tmp_path):
+def test_completed_task_preparation_rejects_retired_request_argument_without_changes(tmp_path):
+    directory = tmp_path / "task"
+    runner.prepare_task_run(directory, source())
+    before = inventory(directory)
+    with pytest.raises(TypeError, match="user_request"):
+        runner.prepare_task_run(directory, source(), user_request="A new user task.", resume_preparation=True)
+    assert inventory(directory) == before
+
+
+def test_completed_task_preparation_cannot_accept_a_different_source(tmp_path):
     directory = tmp_path / "task"
     runner.prepare_task_run(directory, source())
     before = inventory(directory)
     with pytest.raises(runner.TaskRunIdentityError, match="different request"):
-        runner.prepare_task_run(directory, source(), user_request="A new user task.", resume_preparation=True)
+        runner.prepare_task_run(directory, source({"SKILL.md": "Return a different field."}), resume_preparation=True)
     assert inventory(directory) == before

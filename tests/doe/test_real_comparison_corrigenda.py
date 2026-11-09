@@ -104,7 +104,7 @@ def base_study(tmp_path_factory):
         (source.parent.parent / "source-bundle.txt").write_bytes(source.read_bytes())
         evidence = [{"path": "SKILL.md", "start_line": 2, "end_line": 2, "quote": "The ordinary caller is unspecified."}]
         reference = {"case_id": case_id, "source_sha256": case["source_sha256"], "state": "approved",
-                     "coverage_state": "complete_for_human_verification", "purpose_basis": "skill_declared_purpose_only", "user_request": None,
+                     "coverage_state": "complete_for_human_verification", "purpose_basis": "skill_declared_purpose_only",
                      "declared_purpose": [{"id": "P1", "evidence": evidence}], "required_behavior": [],
                      "receiving_points": [{"id": "B1", "evidence": evidence}], "necessary_sensitive_uses": [],
                      "supported_excesses": [], "unknowns": [], "preservation_checks": [], "mandatory_checks": [{"id": "M1", "evidence": evidence}]}

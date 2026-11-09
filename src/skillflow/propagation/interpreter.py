@@ -5,10 +5,9 @@ from copy import deepcopy
 from itertools import product
 import json
 
-from pydantic import TypeAdapter
-
 from skillflow.propagation.data import DataPart
 from skillflow.propagation.data import DataRegistry
+from skillflow.propagation.data import DataConflictError
 from skillflow.propagation.data import Dependency
 from skillflow.propagation.data import FieldUpdatesContent
 from skillflow.propagation.data import KnownPartsContent
@@ -17,6 +16,8 @@ from skillflow.propagation.data import OpaqueContent
 from skillflow.propagation.data import Origin
 from skillflow.propagation.data import WholeExceptContent
 from skillflow.propagation.data import SubsetViewContent
+from skillflow.propagation.data import MappedCollectionContent, MappedMember
+from skillflow.propagation.data import SelectionContent, AccumulatedCollectionContent, LoopSummaryContent
 from skillflow.propagation.data.registry import DataReferenceError
 from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.models import AtomicOpRecord
@@ -28,18 +29,20 @@ from skillflow.propagation.models import StateChange
 from skillflow.propagation.models import ForEachRecord
 from skillflow.propagation.models import ForEachInstance
 from skillflow.propagation.models import BuildMemberRecord
-from skillflow.propagation.contracts.specs import AtomicOp
+from skillflow.propagation.models import OperationAlternative
 from skillflow.propagation.contracts.specs import IRSemantics
 from skillflow.propagation.contracts.specs import value_refs
 from skillflow.propagation.contracts.specs import iter_effect_events
+from skillflow.propagation.contracts.specs import iter_scoped_events
 from skillflow.propagation.conditions import guard_truths
 from skillflow.propagation.contracts.uses import active_value_uses
 
-_ATOMIC_SPEC = TypeAdapter(AtomicOp)
-
-
 class PendingValue(ValueError):
     """No current candidate, not an unknown external source or an empty value."""
+
+
+class UnsupportedLoopDomain(PendingValue):
+    """A typed loop operand cannot be represented; only this path is cut."""
 
 
 class PropagationLimitError(RuntimeError):
@@ -67,14 +70,25 @@ def static_key(*parts):
 
 
 class TransferInterpreter:
-    def __init__(self, cfg, annotation, registry: DataRegistry, *, max_variants=100000):
+    def __init__(self, cfg, annotation, registry: DataRegistry, *, max_variants=100000, typed_specs=None):
         self.cfg = cfg
         self.annotation = annotation
         self.registry = registry
         self.max_variants = max_variants
+        self.compatible_candidates = 0
         self._last_diagnostics = []
         self._step_diagnostics = []
         self._request_pairs = {}
+        self.predecessor_states = {}
+        self.current_block = None
+        self.active_predecessor = None
+        self.loop_backedge_available = False
+        # The solver supplies its already validated specifications. Direct
+        # interpreter callers cross this boundary once, never once per value.
+        self.specs = (dict(typed_specs) if typed_specs is not None else {
+            identity: spec if isinstance(spec, IRSemantics) else IRSemantics.model_validate(spec)
+            for identity, spec in annotation["ir_semantics"].items()
+        })
         # A caller may intentionally reuse a registry namespace across runs.
         # Different frozen rules must still never refine an older result ID.
         self.rule_identity = canonical_sha256({"cfg": cfg, "annotation": annotation})
@@ -87,6 +101,34 @@ class TransferInterpreter:
             for ref in loc["operand_refs"]:
                 key = (ref["instruction_id"], ref["side"], ref["index"])
                 self.operand_locations.setdefault(key, set()).add(self.locations[name])
+
+    def prepare_member_metadata(self):
+        """Prepare the finite member inventory before descriptor reads begin.
+
+        Region/dominator metadata is assigned by the solver first. Operations
+        never change this inventory during a worklist pass, so a new member
+        fact cannot silently introduce a previously unobserved control source.
+        """
+        registry = self.registry
+        if not hasattr(registry, "member_sources"):
+            return
+        scopes, sources = {}, {}
+        for block in self.cfg["blocks"].values():
+            for ir in block["instructions"]:
+                spec = self.specs.get(ir["id"])
+                if spec is None:
+                    continue
+                for event_index, _, event in iter_scoped_events(spec):
+                    for op_index, operation in enumerate(event.atomic_ops):
+                        if operation.op != "member":
+                            continue
+                        scope = static_key(self.rule_identity, ir["id"], event_index, op_index, "member")
+                        scopes[scope] = registry.regions.get(ir["id"], ir["id"])
+                        sources[scope] = {"ir": ir["id"], "local": operation.output, "results": [
+                            ir["outputs"][binding.output_index]["identifier"] for binding in spec.output_bindings
+                            if plain(binding.value) == {"kind": "local", "name": operation.output}]}
+        registry.member_scopes = scopes
+        registry.member_sources = sources
 
     @property
     def last_diagnostics(self):
@@ -130,10 +172,13 @@ class TransferInterpreter:
         Declaring an operand or a tool boundary alone never allocates content.
         """
         locations = set()
+        from skillflow.propagation.contracts.limitations import unmodeled_ids
+        unmodeled = unmodeled_ids(self.annotation)
         for block in self.cfg["blocks"].values():
             for ir in block["instructions"]:
-                spec = self.annotation["ir_semantics"][ir["id"]]
-                typed_spec = IRSemantics.model_validate(spec)
+                if ir["id"] in unmodeled:
+                    continue
+                typed_spec = self.specs[ir["id"]]
                 for event in typed_spec.events:
                     if getattr(event, "kind", None) == "for_each":
                         locations.update(self.referenced_context_locations(ir, event.collection))
@@ -144,10 +189,10 @@ class TransferInterpreter:
                             locations.add(self.locations[op["location"]])
                         elif op["op"] == "write" and op["mode"] == "append":
                             locations.add(self.locations[op["target"]])
-                        for use in active_value_uses(_ATOMIC_SPEC.validate_python(op), ir):
+                        for use in active_value_uses(operation, ir):
                             locations.update(self.referenced_context_locations(ir, use.value))
-                for binding in spec["output_bindings"]:
-                    locations.update(self.referenced_context_locations(ir, binding["value"]))
+                for binding in typed_spec.output_bindings:
+                    locations.update(self.referenced_context_locations(ir, binding.value))
         return locations
 
     def literal(self, value, position):
@@ -185,28 +230,177 @@ class TransferInterpreter:
             else:
                 ids = frozenset().union(*(self.read_location(loc, self._entry_state)
                                          for loc in self.context_locations(ir, index)))
+                ids = self._use_aliases(ids, ir, self._entry_state, locals_, [ir["id"], "input-use", index])
             self._entry_inputs[index] = ids
         return self._entry_inputs[index]
 
-    def _tuples(self, inputs):
-        count = 1
-        for ids in inputs:
-            count *= len(ids)
-        if count > self.max_variants:
-            raise PropagationLimitError(f"candidate product {count} exceeds {self.max_variants}")
-        return product(*(sorted(ids) for ids in inputs))
+    def _use_aliases(self, identities, ir, state, locals_, position):
+        """A stored value keeps its creation provenance in a current-use view.
 
-    def _result(self, position, inputs, content, *, relations=None, acquired_from=None):
+        Creation member A does not prohibit using the same handle in member B.
+        This view is not a new acquisition, copy of credentials, or cache model.
+        """
+        if not hasattr(self.registry, "facts"):
+            return identities
+        contexts = self._ambient_bindings(ir, state, locals_)
+        values = set()
+        for identity in identities:
+            creation = self.registry.bindings(identity)
+            if not creation:
+                values.add(identity)
+                continue
+            for context in contexts:
+                carried = self.registry.carried_bindings(identity)
+                for key, value in context.items():
+                    if key in carried and carried[key] != value:
+                        carried["unresolved:" + key.removeprefix("incoming:")] = "multiple_generations"
+                    else:
+                        carried[key] = value
+                values.add(self._result([position, "stored-use"], [identity], SelectionContent(base=identity, path=[]), bindings=carried))
+        return frozenset(values)
+
+    def _tuples(self, inputs):
+        """Join compatible candidates before applying the relation budget.
+
+        The slot order and repeated references remain intact. A raw Cartesian
+        product is neither materialized nor charged before member/predecessor
+        constraints remove impossible combinations.
+        """
+        groups = [frozenset(ids) for ids in inputs]
+        if any(not group for group in groups):
+            return iter(())
+        identities = set().union(*groups) if groups else set()
+        bindings = {identity: dict(self.registry.bindings(identity))
+                    if hasattr(self.registry, "bindings") else {} for identity in identities}
+        indexes = []
+        for group in groups:
+            axes = {}
+            for identity in group:
+                for axis, selector in bindings[identity].items():
+                    axes.setdefault(axis, {}).setdefault(selector, set()).add(identity)
+            indexes.append({axis: (group - set().union(*choices.values()), choices)
+                            for axis, choices in axes.items()})
+        order = sorted(range(len(groups)), key=lambda index: (len(groups[index]), index))
+        selected, results = [None] * len(groups), []
+
+        def compatible(index, context):
+            allowed = groups[index]
+            for axis, selector in context.items():
+                if axis in indexes[index]:
+                    unbound, choices = indexes[index][axis]
+                    allowed = allowed & (unbound | choices.get(selector, set()))
+                    if not allowed:
+                        break
+            return allowed
+
+        def visit(depth, context):
+            if depth == len(order):
+                args = tuple(selected)
+                choices = {identity: bindings[identity] for identity in args}
+                for identity, bound in choices.items():
+                    for axis in (key.removeprefix("unresolved:") for key in bound if key.startswith("unresolved:")):
+                        # Check only complete compatible tuples: an impossible
+                        # later operand must not turn a discarded prefix into
+                        # a spurious unsupported-correlation diagnostic.
+                        if any(other != identity and ("incoming:" + axis in values or "unresolved:" + axis in values)
+                               for other, values in choices.items()):
+                            raise UnsupportedLoopDomain("Unresolved carried-value correlation across multiple generations; no input tuple was guessed")
+                results.append(args)
+                self.compatible_candidates += 1
+                if len(results) > self.max_variants:
+                    raise PropagationLimitError(f"compatible candidate relation exceeds {self.max_variants}")
+                return
+            index = order[depth]
+            for identity in sorted(compatible(index, context)):
+                combined = {**context, **bindings[identity]}
+                if all(compatible(later, combined) for later in order[depth + 1:]):
+                    selected[index] = identity
+                    visit(depth + 1, combined)
+
+        visit(0, {})
+        return iter(sorted(results))
+
+    def _ambient_bindings(self, ir, state, locals_):
+        """Control occurrence is not a request argument or plaintext source."""
+        if not hasattr(self.registry, "member_sources"):
+            return [{}]
+        registry = self.registry
+        contexts = [{}]
+        current = self.current_block
+        for scope, source in sorted(registry.member_sources.items()):
+            owner = registry.member_scopes.get(scope)
+            if owner in registry.region_blocks and current not in registry.region_blocks[owner]:
+                continue
+            source_block = registry.ir_blocks.get(source["ir"])
+            if source_block not in registry.dominators.get(current, {current}):
+                continue
+            if source["ir"] == ir["id"]:
+                values = locals_.get(source["local"], frozenset())
+            else:
+                if source_block == current and registry.ir_orders[source["ir"]] >= registry.ir_orders[ir["id"]]:
+                    continue
+                values = frozenset().union(*(state.get(FlowLocation(kind="result", name=name), frozenset()) for name in source["results"]))
+            if not values:
+                continue
+            candidates = []
+            for context in contexts:
+                for identity in sorted(values):
+                    binding = registry.bindings(identity)
+                    if all(key not in context or context[key] == value for key, value in binding.items()):
+                        candidates.append({**context, **binding})
+            unique = {canonical_sha256(value): value for value in candidates}
+            contexts = [unique[key] for key in sorted(unique)]
+            if len(contexts) > self.max_variants:
+                raise PropagationLimitError("member control contexts exceed configured resource budget")
+        return contexts
+
+    def _contexts_for(self, args, ambient):
+        bindings = self.registry.combine_bindings(args) if hasattr(self.registry, "combine_bindings") else {}
+        if bindings is None:
+            return []
+        return [{**context, **bindings} for context in ambient
+                if all(key not in context or context[key] == value for key, value in bindings.items())]
+
+    def _result(self, position, inputs, content, *, relations=None, acquired_from=None, bindings=None):
+        if hasattr(self.registry, "facts") and isinstance(position, list) and len(position) == 4 and position[2] == "collect":
+            # Collection candidates are equation inputs, never dynamic sites.
+            position = position[:3]
         relations = relations if relations is not None else ["derived"] * len(inputs)
         deps = []
         for data_id, relation in zip(inputs, relations):
             if not any(d.data == data_id and d.relation == relation for d in deps):
                 deps.append(Dependency(data=data_id, relation=relation))
+        origin = Origin(at=str(position), acquired_from=acquired_from, inputs=list(inputs), dependencies=deps)
+        if hasattr(self.registry, "scope_for"):
+            scope = self.registry.scope_for(position, inputs)
+            if scope is not None or bindings:
+                return self.registry.family(scope or "correlated:" + str(self.current_block),
+                    position, inputs, content, origin, bindings=bindings).id
         return self.registry.create_result(
             static_key(self.rule_identity, position, list(inputs)), content=content,
-            origin=Origin(at=str(position), acquired_from=acquired_from, inputs=list(inputs),
-                          dependencies=deps),
+            origin=origin,
         ).id
+
+    def _require_collection_operand(self, identity, seen=frozenset()):
+        """Reject known noncollections without demanding a known member set.
+
+        This is filter semantics formerly checked by the whole registry audit.
+        Query only the selected descriptor and its structural bases; opaque or
+        recursive summaries remain unknown, not an empty or invalid collection.
+        """
+        if identity in seen:
+            return
+        from skillflow.propagation.data.summary import content_options
+        values = content_options(self.registry, identity, seen)
+        for content in values:
+            form = content["form"]
+            invalid = ((form == "literal" and type(content["value"]) is not list)
+                or (form == "known_parts" and any(type(part["path"][0]) is str for part in content["parts"]))
+                or (form == "field_updates" and any(type(part["path"][0]) is str for part in content["updates"])))
+            if invalid:
+                raise DataConflictError("subset_view requires a collection, not a known object or scalar")
+            if form in {"whole_except", "subset_view", "field_updates"}:
+                self._require_collection_operand(content["base"], seen | {identity})
 
     def _build_candidates(self, ir, op, state, locals_, pos):
         """Resolve controls first and retain correlated inclusion shapes."""
@@ -279,14 +473,31 @@ class TransferInterpreter:
                         raise PropagationLimitError("conditional build variants exceed configured resource limit")
         return inputs, members, variants
 
-    def execute(self, ir, event_index, op_index, operation, state, locals_, *, uncertain=False, body_event_index=None, request_inputs=None):
+    def execute(self, ir, event_index, op_index, operation, state, locals_, *, uncertain=False, body_event_index=None, request_inputs=None, member_token=None):
         self._step_diagnostics = []
         op = plain(operation)
         pos = ([ir["id"], event_index, op_index] if body_event_index is None
                else [ir["id"], event_index, "body", body_event_index, op_index])
+        if member_token is not None:
+            pos = [*pos, "member", member_token]
         kind = op["op"]
+        ambient = self._ambient_bindings(ir, state, locals_)
+        if hasattr(self.registry, "current_position"):
+            self.registry.current_position = pos
         members, when_input_index, build_variants = None, None, None
-        if kind == "build":
+        if kind == "merge":
+            inputs = []
+            saved_entry, saved_inputs = self._entry_state, self._entry_inputs
+            for item in op["incoming"]:
+                incoming = (self.predecessor_states.get(item["predecessor"])
+                            if self.active_predecessor is None or self.active_predecessor == item["predecessor"] else None)
+                if incoming is None:
+                    inputs.append(frozenset())
+                    continue
+                self._entry_state, self._entry_inputs = incoming, {}
+                inputs.append(self.resolve(item["value"], ir, incoming, locals_, [pos, item["predecessor"]]))
+            self._entry_state, self._entry_inputs = saved_entry, saved_inputs
+        elif kind == "build":
             inputs, members, build_variants = self._build_candidates(ir, op, state, locals_, pos)
         elif kind == "deliver" and op.get("when") is not None:
             guard = self.resolve(op["when"], ir, state, locals_, [pos, "when"])
@@ -303,20 +514,84 @@ class TransferInterpreter:
         else:
             refs = [plain(r) for r in value_refs(operation)]
             inputs = [self.resolve(r, ir, state, locals_, [pos, "input", i]) for i, r in enumerate(refs)]
-        if any(not ids for ids in inputs):
+        if kind != "merge" and any(not ids for ids in inputs):
             raise PendingValue(f"{pos}: input has no available data candidates")
         outputs = set()
-        endpoints, changes = [], []
-        if kind == "read":
+        output_inputs = {}
+
+        def add_output(identity, selected_inputs):
+            outputs.add(identity)
+            output_inputs.setdefault(identity, set()).add(tuple(sorted(selected_inputs.items())))
+
+        endpoints, changes, alternatives, branch_targets = [], [], [], []
+        if kind == "merge":
+            for index, values in enumerate(inputs):
+                for identity in sorted(values):
+                    carried = (hasattr(self.registry, "aggregate_bindings")
+                               and self.registry.regions.get(ir["id"]) == self.current_block)
+                    bindings = (self.registry.carried_bindings(identity, region=self.current_block) if carried
+                                else dict(self.registry.bindings(identity)) if hasattr(self.registry, "bindings") else {})
+                    bindings["predecessor:" + str(self.current_block)] = op["incoming"][index]["predecessor"]
+                    value = self._result([pos, "carried-use"] if carried else pos,
+                                         [identity], SelectionContent(base=identity, path=[]), bindings=bindings)
+                    outputs.add(value)
+                    slots = [frozenset([identity]) if i == index else frozenset() for i in range(len(inputs))]
+                    alternatives.append(OperationAlternative(inputs=slots, outputs=[frozenset([value])], bindings=bindings))
+        elif kind == "member":
+            scope = static_key(self.rule_identity, ir["id"], event_index, op_index, "member")
+            for collection in sorted(inputs[0]):
+                try:
+                    entries = self.registry.resolve_iteration_entries(collection, scope)
+                except DataReferenceError as error:
+                    raise UnsupportedLoopDomain("Unsupported collection domain: " + str(error)) from error
+                for entry in entries:
+                    selector = plain(entry.selector)
+                    source_key = (self.registry.family_producer(collection)
+                                  if hasattr(self.registry, "family_producer") else collection)
+                    for context in self._contexts_for([collection], ambient):
+                        bindings = {**context, scope: static_key(source_key, selector)}
+                        value = self._result(pos, [entry.element.id], SelectionContent(base=collection, path=[entry.selector]), bindings=bindings)
+                        outputs.add(value)
+                        alternatives.append(OperationAlternative(inputs=[frozenset([collection])], outputs=[frozenset([value])], bindings=bindings))
+        elif kind == "branch":
+            from skillflow.propagation.loop_guards import guard_values
+            valid, invalid = set(), []
+            for identity in sorted(inputs[0]):
+                try:
+                    truths = guard_values(self.registry, [identity], op["predicate"],
+                                          traversal_exit=self.loop_backedge_available)
+                except ValueError as error:
+                    invalid.append(str(error))
+                    continue
+                targets = sorted({op["true_target"] if truth else op["false_target"] for truth in truths})
+                for bindings in self._contexts_for([identity], ambient):
+                    valid.add(identity)
+                    alternatives.append(OperationAlternative(inputs=[frozenset([identity])], bindings=bindings, branch_targets=targets))
+            if not valid:
+                raise UnsupportedLoopDomain("Unsupported typed guard domain: " + "; ".join(sorted(set(invalid))))
+            if invalid:
+                self._step_diagnostics.append({"code": "unresolved_path", "instruction_id": ir["id"],
+                    "reason": "Unsupported typed guard candidates were not routed: " + "; ".join(sorted(set(invalid)))})
+            inputs = [frozenset(valid)]
+            branch_targets = sorted({target for candidate in alternatives for target in candidate.branch_targets})
+        elif kind == "append":
+            for args in self._tuples(inputs):
+                aggregate = self.registry.aggregate_bindings(pos, args) if hasattr(self.registry, "aggregate_bindings") else None
+                value = self._result(pos, args, AccumulatedCollectionContent(base=args[0], added=args[1], mode=op["mode"]), bindings=aggregate)
+                outputs.add(value)
+                bindings = self.registry.combine_bindings(args) if hasattr(self.registry, "combine_bindings") else {}
+                alternatives.append(OperationAlternative(inputs=[frozenset([a]) for a in args], outputs=[frozenset([value])], bindings=bindings))
+        elif kind == "read":
             location = self.locations[op["location"]]
             endpoints.append(location)
-            outputs.update(self.read_location(location, state))
+            outputs.update(self._use_aliases(self.read_location(location, state), ir, state, locals_, [pos, "read-use"]))
         elif kind == "receive":
             location = self.locations[op["location"]]
             endpoints.append(location)
             for args in self._tuples(inputs):
-                outputs.add(self._result(pos, args, OpaqueContent(), relations=["possible"] * len(args),
-                                         acquired_from=f"{location.kind}:{location.name}"))
+                for context in self._contexts_for(args, ambient):
+                    add_output(self._result(pos, args, OpaqueContent(), relations=["possible"] * len(args),
+                        acquired_from=f"{location.kind}:{location.name}", bindings=context), dict(enumerate(args)))
         elif kind == "deliver":
             endpoints.append(self.locations[op["target"]])
         elif kind == "write":
@@ -325,7 +600,7 @@ class TransferInterpreter:
             targets = self.aliases(location)
             for target in targets:
                 before = state.get(target, frozenset())
-                weak = uncertain or target != location or location.name.startswith("symbolic:")
+                weak = op.get("may", False) or uncertain or target != location or location.name.startswith("symbolic:")
                 if op["mode"] == "delete":
                     after = before if weak else frozenset()
                 elif op["mode"] == "replace":
@@ -349,7 +624,10 @@ class TransferInterpreter:
         elif kind == "select_part":
             for base in sorted(inputs[0]):
                 try:
-                    outputs.add(self.registry.resolve_part(base, op["path"]).id)
+                    candidates = (self.registry.project(base, op["path"], pos)
+                                  if hasattr(self.registry, "project") else self.registry.resolve_part_candidates(base, op["path"]))
+                    for value in candidates:
+                        add_output(value.id, {0: base})
                 except DataReferenceError as error:
                     self._step_diagnostics.append({
                         "code": "missing_part", "instruction_id": ir["id"],
@@ -360,21 +638,30 @@ class TransferInterpreter:
                         self._step_diagnostics[-1]["body_event_index"] = body_event_index
         elif kind == "filter_items":
             for args in self._tuples(inputs):
-                outputs.add(self._result(pos, args, SubsetViewContent(base=args[0], predicate=op["predicate"])))
+                self._require_collection_operand(args[0])
+                add_output(self._result(pos, args, SubsetViewContent(base=args[0], predicate=op["predicate"])), dict(enumerate(args)))
         elif kind == "exclude_parts":
             for args in self._tuples(inputs):
-                outputs.add(self._result(pos, args, WholeExceptContent(base=args[0], excluded_parts=op["paths"])))
+                add_output(self._result(pos, args, WholeExceptContent(base=args[0], excluded_parts=op["paths"])), dict(enumerate(args)))
         elif kind == "update_fields":
             for args in self._tuples(inputs):
                 updates = [DataPart(path=item["path"], data=data_id)
                            for item, data_id in zip(op["updates"], args[1:])]
-                outputs.add(self._result(pos, args, FieldUpdatesContent(base=args[0], updates=updates)))
+                add_output(self._result(pos, args, FieldUpdatesContent(base=args[0], updates=updates)), dict(enumerate(args)))
         elif kind == "build":
             for args, content, shape in build_variants:
-                outputs.add(self._result([pos, "members", shape], args, content))
+                selected, cursor = {}, 0
+                for index, member in enumerate(members):
+                    if member.when_input_index is not None:
+                        selected[member.when_input_index] = args[cursor]
+                        cursor += 1
+                    if op["parts"][index]["path"] in shape:
+                        selected[member.value_input_index] = args[cursor]
+                        cursor += 1
+                add_output(self._result([pos, "members", shape], args, content), selected)
         elif kind == "compute":
             for args in self._tuples(inputs):
-                outputs.add(self._result(pos, args, OpaqueContent(), relations=op["dependencies"]))
+                add_output(self._result(pos, args, OpaqueContent(), relations=op["dependencies"]), dict(enumerate(args)))
         else:
             raise ValueError(f"unsupported abstract operation: {kind}")
         resolved_outputs = []
@@ -383,9 +670,24 @@ class TransferInterpreter:
                 raise PendingValue(f"{pos}: output has no candidates (not an opaque source)")
             locals_[op["output"]] = frozenset(outputs)
             resolved_outputs = [frozenset(outputs)]
+        if not alternatives and kind != "branch":
+            for args in self._tuples(inputs):
+                for bindings in self._contexts_for(args, ambient):
+                    paired = frozenset(identity for identity in outputs
+                        if (identity not in output_inputs or any(
+                            all(args[index] == value for index, value in relation)
+                            for relation in output_inputs[identity]))
+                        and (not hasattr(self.registry, "bindings") or all(
+                            key not in bindings or bindings[key] == value
+                            for key, value in self.registry.bindings(identity).items())))
+                    alternatives.append(OperationAlternative(inputs=[frozenset([item]) for item in args],
+                        outputs=[paired] if "output" in op else [], bindings=bindings))
+        if hasattr(self.registry, "facts") and kind != "branch" and not alternatives:
+            raise PendingValue(f"{pos}: no compatible loop occurrence supplies this operation")
         return AtomicOpRecord(op=kind, inputs=inputs, outputs=resolved_outputs,
                               endpoints=endpoints, changes=changes,
-                              members=members, when_input_index=when_input_index)
+                              members=members, when_input_index=when_input_index, may_state=op.get("may", False),
+                              alternatives=alternatives, branch_targets=branch_targets)
 
     def bind_outputs(self, ir, spec, state, locals_):
         for binding in spec["output_bindings"]:
@@ -400,48 +702,94 @@ class TransferInterpreter:
             state[FlowLocation(kind="result", name=operand["identifier"])] = ids
 
     def _effect_record(self, ir, event, operations):
-        return EffectEvent(effect=event.effect, atomic_ops=operations)
+        return EffectEvent(effect=event.effect, atomic_ops=operations, case=event.case,
+                           requires_completion=event.requires_completion)
 
     def _for_each(self, ir, event_index, event, state, locals_, *, uncertain):
         collections = self.resolve(event.collection, ir, state, locals_,
                                    [ir["id"], event_index, "collection"])
         if not collections:
             raise PendingValue(f"{ir['id']}/{event_index}: collection has no available candidates")
-        instances, diagnostics = [], []
+        instances, diagnostics, output_ids, state_candidates = [], [], set(), []
         scope = static_key(self.rule_identity, ir["id"], event_index, "element")
         for collection in sorted(collections):
+            members = {}
             # Unknown collections have one scoped representative. Known finite
             # lists retain each real member; an explicit empty list has none.
-            for element in self.registry.resolve_elements(collection, scope):
+            entries = self.registry.resolve_iteration_entries(collection, scope)
+            repeated = len({entry.element.id for entry in entries}) != len(entries)
+            for entry in entries:
+                element = entry.element
                 scoped_locals = {**locals_, event.item: frozenset([element.id])}
+                selector = (entry.selector.model_dump(mode="json")
+                            if hasattr(entry.selector, "model_dump") else entry.selector)
+                collection_site = (self.registry.family_producer(collection)
+                    if hasattr(self.registry, "family_producer") else collection)
+                member_token = static_key(scope, collection_site, selector)
                 outcomes = self._arrangements(ir, event.body, dict(state), scoped_locals,
-                                              uncertain=uncertain, outer_event=event_index)
+                                              uncertain=uncertain, outer_event=event_index,
+                                              member_token=member_token)
                 if not outcomes:
                     raise PendingValue(f"{ir['id']}/{event_index}: member scope cannot resolve its body")
-                for final_state, _, records, found in outcomes:
+                for final_state, final_locals, records, found in outcomes:
                     if final_state != state:
-                        raise ValueError("for_each body must not update shared state")
+                        writes = [op for op in records.values() if op.op == "write"]
+                        if any(not op.may_state for op in writes):
+                            raise ValueError("for_each body must not update shared state outside a may summary")
+                        state_candidates.append(final_state)
                     body = [self._effect_record(ir, body_event,
                             [records[(b, o)] for o in range(len(body_event.atomic_ops))])
                             for b, body_event in enumerate(event.body)]
-                    instances.append(ForEachInstance(collection=collection, element=element.id, body=body))
+                    yielded = frozenset()
+                    if event.yield_value is not None:
+                        yielded = self.resolve(event.yield_value, ir, final_state, final_locals,
+                                               [ir["id"], event_index, "yield", member_token])
+                        if not yielded:
+                            raise PendingValue("for_each yield has no available member candidates")
+                        identity = (entry.selector, element.id)
+                        members.setdefault(identity, set()).update(yielded)
+                    instances.append(ForEachInstance(collection=collection, element=element.id, body=body,
+                        **({"selector": entry.selector} if event.output is not None or repeated else {}),
+                        **({"yielded": yielded} if event.output is not None else {})))
                     diagnostics.extend(found)
+            if event.output is not None:
+                content = MappedCollectionContent(base=collection, scope=scope, members=[
+                    MappedMember(selector=selector, element=element, values=sorted(values))
+                    for (selector, element), values in members.items()])
+                # The source collection controls membership, not copied payload.
+                yielded_ids = sorted({value for member in content.members for value in member.values})
+                output_ids.add(self._result([ir["id"], event_index, "collect", collection], yielded_ids, content))
+        if event.output is not None:
+            locals_[event.output] = frozenset(output_ids)
+        # Join possible local effects only after the scope. Members do not read
+        # a previous member's abstract post-state, and empty scopes have none.
+        if state_candidates:
+            state.update(join_states([dict(state), *state_candidates]))
         # Keep each complete scoped arrangement. Unioning each argument across
         # members would fabricate cross-member recipient/payload combinations.
         unique = {canonical_sha256(item.model_dump(mode="json")): item for item in instances}
         return ForEachRecord(kind="for_each", collections=collections,
-                             instances=[unique[key] for key in sorted(unique)]), diagnostics
+                             instances=[unique[key] for key in sorted(unique)], outputs=frozenset(output_ids),
+                             completion_groups=event.completion_groups,
+                             requires_completion=event.requires_completion), diagnostics
 
-    def _arrangements(self, ir, events, state, locals_, *, uncertain, outer_event=None):
+    def _arrangements(self, ir, events, state, locals_, *, uncertain, outer_event=None, member_token=None):
         from skillflow.propagation.contracts.specs import schedule_dependencies
         dependencies = schedule_dependencies(self._current_spec, outer_event=outer_event)
         atoms = [(e, -1, event) if getattr(event, "kind", None) == "for_each" else (e, o, op)
                  for e, event in enumerate(events)
                  for o, op in ([(-1, event)] if getattr(event, "kind", None) == "for_each"
-                               else enumerate(event.atomic_ops))]
+                               else enumerate(event.atomic_ops) if event.atomic_ops else [(-2, event)])]
         outcomes = []
+        group_atoms, returning_cases = {}, {}
+        for e, o, _ in atoms:
+            case = getattr(events[e], "case", None)
+            if case is not None:
+                group_atoms.setdefault(case.group, set()).add((e, o))
+                if case.disposition == "return":
+                    returning_cases.setdefault(case.group, set()).add(case.id)
 
-        def visit(current, local_values, done, records, diagnostics):
+        def visit(current, local_values, done, records, diagnostics, case_bases, case_states):
             self._attempts += 1
             if self._attempts > self.max_variants:
                 raise PropagationLimitError("partial-order arrangements exceed configured resource limit")
@@ -454,8 +802,15 @@ class TransferInterpreter:
                 if not uncertain and len(done) != ordinal:
                     continue
                 next_state, next_locals = dict(current), dict(local_values)
+                bases, branch_states = dict(case_bases), dict(case_states)
+                case = getattr(events[e], "case", None)
+                if case is not None:
+                    bases.setdefault(case.group, dict(current))
+                    next_state = dict(branch_states.get(case.id, bases[case.group]))
                 try:
-                    if o == -1:
+                    if o == -2:
+                        rec, found = None, []
+                    elif o == -1:
                         rec, found = self._for_each(ir, e, op, next_state, next_locals, uncertain=uncertain)
                     else:
                         coordinate = (e, None, o) if outer_event is None else (outer_event, e, o)
@@ -469,20 +824,36 @@ class TransferInterpreter:
                         rec = self.execute(ir, e if outer_event is None else outer_event, o, op,
                                            next_state, next_locals, uncertain=uncertain,
                                            body_event_index=e if outer_event is not None else None,
-                                           request_inputs=request_inputs)
+                                            request_inputs=request_inputs, member_token=member_token)
                         found = self._step_diagnostics
+                    if case is not None:
+                        branch_states[case.id] = dict(next_state)
+                        next_state = join_states([current, next_state])
+                        if group_atoms[case.group] <= done | {(e, o)}:
+                            # Retain failure-prefix records, but never publish
+                            # thrown-only changes as a normal continuation.
+                            next_state = join_states(branch_states[identity]
+                                for identity in sorted(returning_cases[case.group]))
                     visit(next_state, next_locals, done | {(e, o)},
-                          {**records, (e, o): rec}, [*diagnostics, *found])
-                except PendingValue:
+                          {**records, (e, o): rec}, [*diagnostics, *found], bases, branch_states)
+                except PendingValue as error:
+                    if isinstance(error, UnsupportedLoopDomain):
+                        self._unsupported_loop = error
                     self._failed_diagnostics.extend([*diagnostics, *self._step_diagnostics])
                 if not uncertain:
                     break
-        visit(state, locals_, set(), {}, [])
+        visit(state, locals_, set(), {}, [], {}, {})
         return outcomes
 
     @staticmethod
     def _merge_operations(variants):
+        if len(variants) == 1:
+            return variants[0]
         data = variants[0].model_dump(mode="python")
+        data["branch_targets"] = sorted({target for item in variants for target in item.branch_targets})
+        alternatives = {canonical_sha256(item.model_dump(mode="json")): item
+                        for variant in variants for item in variant.alternatives}
+        data["alternatives"] = [alternatives[item] for item in sorted(alternatives)]
         if data["op"] == "build":
             merged_inputs, merged_members = [], []
             for index, member in enumerate(variants[0].members):
@@ -516,6 +887,7 @@ class TransferInterpreter:
         self._last_diagnostics = []
         self._failed_diagnostics = []
         self._attempts = 0
+        self._unsupported_loop = None
         spec = plain(typed_spec)
         self._current_spec = typed_spec
         from skillflow.propagation.contracts.uses import request_pairs
@@ -540,6 +912,8 @@ class TransferInterpreter:
             unique = {json.dumps(item, ensure_ascii=True, sort_keys=True): item for item in findings}
             self._last_diagnostics = [unique[key] for key in sorted(unique)]
         if not outcomes:
+            if self._unsupported_loop is not None:
+                raise self._unsupported_loop
             raise PendingValue(f"{ir['id']}: references cannot be resolved in any supported ordering")
         result_events = []
         for e, event in enumerate(typed_spec.events):
@@ -548,7 +922,9 @@ class TransferInterpreter:
                           for outcome in outcomes for instance in outcome[1][(e, -1)].instances}
                 collections = frozenset().union(*(outcome[1][(e, -1)].collections for outcome in outcomes))
                 result_events.append(ForEachRecord(kind="for_each", collections=collections,
-                                                  instances=[unique[key] for key in sorted(unique)]))
+                                                  instances=[unique[key] for key in sorted(unique)],
+                    completion_groups=event.completion_groups, requires_completion=event.requires_completion,
+                    outputs=frozenset().union(*(outcome[1][(e, -1)].outputs for outcome in outcomes))))
             else:
                 records = [self._merge_operations([out[1][(e, o)] for out in outcomes])
                            for o in range(len(event.atomic_ops))]

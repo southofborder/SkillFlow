@@ -33,6 +33,15 @@ def value_uses(operation) -> list[ValueUse]:
     from skillflow.propagation.contracts.specs import ExcludePartsOp
     from skillflow.propagation.contracts.specs import FilterItemsOp
     from skillflow.propagation.contracts.specs import UpdateFieldsOp
+    from skillflow.propagation.contracts.specs import MergeOp, MemberOp, BranchOp, AppendOp
+    if isinstance(operation, MergeOp):
+        return [ValueUse(item.value) for item in operation.incoming]
+    if isinstance(operation, BranchOp):
+        return [ValueUse(operation.input, role="control")]
+    if isinstance(operation, MemberOp):
+        return [ValueUse(operation.input)]
+    if isinstance(operation, AppendOp):
+        return [ValueUse(operation.input), ValueUse(operation.value)]
     if isinstance(operation, BuildOp):
         uses = []
         for index, member in enumerate(operation.parts):
@@ -107,13 +116,33 @@ def request_pairs(spec) -> dict[tuple[int, int | None, int], tuple[int, int | No
     from skillflow.propagation.contracts.specs import structural_precedence
     from skillflow.propagation.contracts.specs import operation_key
     operations = operation_items(spec)
+    # A flat call is expanded by the program into one explicitly identified
+    # request/response pair. Repeated identical arguments are still distinct.
+    explicit = {}
+    for key, operation in operations.items():
+        identity = getattr(operation, "request_id", None)
+        if identity is not None:
+            scope = None if key[1] is None else key[0]
+            explicit.setdefault((scope, identity), []).append((key, operation))
+    result, paired = {}, set()
+    for entries in explicit.values():
+        requests = [(key, op) for key, op in entries if op.op == "deliver"]
+        responses = [(key, op) for key, op in entries if op.op == "receive"]
+        if len(requests) != 1 or len(responses) != 1 or _identity(requests[0][1]) != _identity(responses[0][1]):
+            raise structural_error("request_pairs", "", "explicit call requires exactly one matching request and response")
+        request, response = requests[0][0], responses[0][0]
+        if spec.order == "fixed" and tuple(-1 if value is None else value for value in request) >= tuple(-1 if value is None else value for value in response):
+            raise structural_error("request_pairs", "", "explicit call response precedes its request")
+        result[response] = request
+        paired.update((request, response))
     scopes = {}
     for key, operation in operations.items():
+        if key in paired:
+            continue
         if operation.op not in {"deliver", "receive"} or getattr(operation, "when", None) is not None:
             continue
         scope = None if key[1] is None else key[0]
         scopes.setdefault(scope, []).append((key, operation))
-    result = {}
     if spec.order == "fixed":
         for entries in scopes.values():
             available = []

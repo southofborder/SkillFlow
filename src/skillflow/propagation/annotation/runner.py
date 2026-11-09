@@ -58,8 +58,8 @@ from skillflow.propagation.annotation.requests import (validate_repair_context, 
 from skillflow.propagation.annotation.inputs import (write_material_parts, load_prepared_material,
     read_component, resolve_material_owner)
 
-IDENTITY = "skill-ir-security-profile-v18"
-FORMAT_VERSION = 18
+IDENTITY = "skill-ir-security-profile-v21"
+FORMAT_VERSION = 21
 CALL_PREFIX = "calls/annotation"
 CALL_PATH = CALL_PREFIX + "/a001"
 POLICY = {"structural_correction": STRUCTURAL_VERSION, "structural_attempt_limit": None,
@@ -113,7 +113,7 @@ def _text(path, value, writer):
 
 
 def prepare_run(input, analysis, *, run_dir, config=None, secrets=(), repair_context=None,
-                user_request=None, upstream_run=None, task_run=None):
+                upstream_run=None, task_run=None):
     """Freeze an input once and prepare a single annotation, without networking."""
     directory = checked_run_path(run_dir)
     source_path = Path(input).resolve() if input is not None else None
@@ -172,9 +172,9 @@ def prepare_run(input, analysis, *, run_dir, config=None, secrets=(), repair_con
                     raise ValueError("A credential overlaps the actual graph")
                 metadata = freeze_input(source_path, directory, writer)
                 _, source, _ = read_snapshot(directory)
-                material = prepare_material(source, cfg, task_baseline=baseline, user_request=user_request)
+                material = prepare_material(source, cfg, task_baseline=baseline)
             else:
-                if input is not None or analysis is not None or user_request is not None:
+                if input is not None or analysis is not None:
                     raise ValueError("Referenced preparation must not also supply copied input components")
                 upstream = checked_run_path(upstream_run)
                 if directory == upstream or upstream.is_relative_to(directory):
@@ -285,7 +285,7 @@ def _base_result(manifest):
     }
 
 
-BUSINESS_FIELDS = frozenset({"task_ref", "realizations", "demands", "expressions", "ir_semantics", "locations", "sink_boundaries"})
+BUSINESS_FIELDS = frozenset({"task_ref", "realizations", "demands", "expressions", "ir_semantics", "locations", "sink_boundaries", "processing_gaps"})
 
 
 def result_snapshot(result):
@@ -303,6 +303,12 @@ def _check_result_snapshot(saved, manifest):
 def verify_prepared(run_dir, *, config=None, replay=False):
     """Check an existing preparation without creating clients or rewriting it."""
     directory = checked_run_path(run_dir)
+    from skillflow.document_guided.online import ANNOTATION_IDENTITY, load_annotation
+    if (directory / "manifest.json").exists() and read_json(directory / "manifest.json").get("identity") == ANNOTATION_IDENTITY:
+        loaded = load_annotation(directory, recompute=replay)
+        if config is not None and _config(config) != loaded["manifest"]["config"]:
+            raise RunIdentityError("Composed annotation configuration differs")
+        return loaded["manifest"]
     if not (directory / "manifest.json").is_file():
         raise RunIdentityError("No prepared annotation manifest exists")
     if config is None:

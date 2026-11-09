@@ -21,7 +21,7 @@ def write(path, data):
     return path
 
 
-def receipt_rows(*, child="child-1", turn="turn-1", answer="Original answer.\n", tool=False, model="gpt-6.1-sol", effort="ultra", usage=True):
+def receipt_rows(*, child="child-1", turn="turn-1", answer="Original answer.\n", tool=False, model="gpt-6.1-sol", effort="max", usage=True):
     rows = [
         {"type": "session_meta", "payload": {
             "id": child, "session_id": "root-1", "parent_thread_id": "root-1",
@@ -71,8 +71,8 @@ def prepare(tmp_path):
     write(source / "references/details.txt", b"Keep reference {original_answer} verbatim.\r\n\r\nFinal line.\r\n")
     write(source / "analysis.json", "DERIVED_ANSWER_LEAK_CANARY")
     run = tmp_path / "run"
-    package_bundle(source, run, "case-1", source_files=["SKILL.md", "references/details.txt"], user_request="Retain the stated conditions.")
-    template = write(tmp_path / "audit.txt", "{shared_rules}\n{source_bundle}\nUSER\n{user_request}\n")
+    package_bundle(source, run, "case-1", source_files=["SKILL.md", "references/details.txt"])
+    template = write(tmp_path / "audit.txt", "{shared_rules}\n{source_bundle}\n")
     shared = write(tmp_path / "shared.txt", "Source only. No tools.")
     prepare_trial(run, "trial-1", "case-1", template, shared_path=shared)
     return run, source
@@ -104,12 +104,22 @@ def test_freezes_and_imports_never_overwrite(tmp_path):
             package_bundle(source, run, "other", source_files=[bad])
 
 
-def test_render_prompt_does_not_interpret_user_or_source_braces(tmp_path):
-    template = write(tmp_path / "review.txt", "{shared_rules}\n{source_bundle}\n{user_request}\n{original_answer}\n{arm_instruction}")
-    result = render_prompt(template, "source {user_request}", "user {shared_rules}", shared_rules="common", original_answer="answer {source_bundle}", arm_instruction="audit")
-    assert result == "common\nsource {user_request}\nuser {shared_rules}\nanswer {source_bundle}\naudit"
+def test_render_prompt_does_not_interpret_source_braces(tmp_path):
+    template = write(tmp_path / "review.txt", "{shared_rules}\n{source_bundle}\n{original_answer}\n{arm_instruction}")
+    result = render_prompt(template, "source {user_request}", shared_rules="common", original_answer="answer {source_bundle}", arm_instruction="audit")
+    assert result == "common\nsource {user_request}\nanswer {source_bundle}\naudit"
     with pytest.raises(ValueError, match="original_answer"):
-        render_prompt(template, "source", "user")
+        render_prompt(template, "source")
+
+
+def test_independent_request_inputs_and_legacy_templates_are_rejected(tmp_path):
+    source = tmp_path / "source"
+    write(source / "SKILL.md", "Return the original value.")
+    with pytest.raises(TypeError):
+        package_bundle(source, tmp_path / "run", "c1", source_files=["SKILL.md"], user_request="Different purpose")
+    template = write(tmp_path / "legacy.txt", "{source_bundle}\n{user_request}")
+    with pytest.raises(ValueError, match="Legacy independent-request"):
+        render_prompt(template, "source")
 
 
 def test_exact_child_turn_visible_answer_usage_dedup_and_allowlist(tmp_path):
@@ -118,7 +128,7 @@ def test_exact_child_turn_visible_answer_usage_dedup_and_allowlist(tmp_path):
     actual, decision = parse_receipt(receipt, "child-1")
     assert actual == answer
     assert decision["protocol_status"] == "conformant"
-    assert decision["observed_configuration"] == [{"model": "gpt-6.1-sol", "effort": "ultra", "model_provider": "openai"}]
+    assert decision["observed_configuration"] == [{"model": "gpt-6.1-sol", "effort": "max", "model_provider": "openai"}]
     assert decision["usage"]["response_count"] == 1
     assert decision["usage"]["totals"]["input_tokens"] == 110
     assert decision["usage"]["totals"]["total_tokens"] == 135
@@ -171,7 +181,7 @@ def test_review_must_contain_its_own_registered_first_answer(tmp_path):
     run, _ = prepare(tmp_path)
     receipt = write_receipt(tmp_path / "receipt.jsonl", receipt_rows(answer="The actual first answer.\n"))
     import_trial(run, "trial-1", agent_session_id="child-1", receipt_path=receipt)
-    template = write(tmp_path / "review.txt", "{shared_rules}\n{source_bundle}\n{user_request}\n{original_answer}\n")
+    template = write(tmp_path / "review.txt", "{shared_rules}\n{source_bundle}\n{original_answer}\n")
     wrong = write(tmp_path / "wrong-answer.txt", "An answer from a different run.\n")
     prepare_trial(run, "review-1", "case-1", template, original_answer_path=wrong,
                   metadata={"review": True, "parent_trial_id": "trial-1"})
@@ -274,3 +284,16 @@ def test_duplicate_exposures_use_all_five_identity_axes():
     assert deduplicate_exposures([item, duplicate, {**item, "recipient": "archive"}]) == [item, {**item, "recipient": "archive"}]
     with pytest.raises(ValueError, match="missing"):
         exposure_identity({"source": "records"})
+
+
+def test_max_default_rejects_ultra_without_relabelling_historical_receipt(tmp_path):
+    receipt = write_receipt(tmp_path / "receipt.jsonl", receipt_rows(effort="ultra"))
+    before = receipt.read_bytes()
+    _, current = parse_receipt(receipt, "child-1")
+    assert current["expected_effort"] == "max"
+    assert current["protocol_status"] == "violated"
+    assert current["configuration_verified"] is False
+    _, historical = parse_receipt(receipt, "child-1", expected_effort="ultra")
+    assert historical["protocol_status"] == "conformant"
+    assert historical["observed_configuration"][0]["effort"] == "ultra"
+    assert receipt.read_bytes() == before

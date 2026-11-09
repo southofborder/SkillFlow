@@ -27,7 +27,7 @@ def drafts(tmp_path):
         fact = {"id": "P1", "reason": "Preserve the declared output.", "evidence": evidence}
         ref = {**case, "state": "assistant_draft", "human_verified": False,
                "coverage_state": "complete_for_human_verification", "grading_schema_version": GRADING_SCHEMA_VERSION,
-               "purpose_basis": "skill_declared_purpose_only", "user_request": None, "reviewed_files": ["SKILL.md"],
+               "purpose_basis": "skill_declared_purpose_only", "reviewed_files": ["SKILL.md"],
                "declared_purpose": [fact], "required_behavior": [fact], "receiving_points": [{**fact, "id": "B1"}],
                "necessary_sensitive_uses": [], "supported_excesses": [], "unknowns": [],
                "preservation_checks": [fact], "mandatory_checks": [{**fact, "id": "M1"}]}

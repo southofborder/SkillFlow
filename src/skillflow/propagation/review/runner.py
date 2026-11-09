@@ -39,8 +39,8 @@ from skillflow.propagation.review.prompts import build_prompt
 from skillflow.propagation.review.services import validate_response
 from skillflow.propagation.review.services import resolve_findings
 
-IDENTITY = "skill-ir-annotation-review-v11"
-FORMAT_VERSION = 11
+IDENTITY = "skill-ir-annotation-review-v13"
+FORMAT_VERSION = 13
 CALL_PATH = "calls/review/a001"
 POLICY = {"semantic_reviews": 1, "semantic_repairs": 0, "structural_corrections": "unlimited",
           "json_normalization": NORMALIZATION_VERSION,

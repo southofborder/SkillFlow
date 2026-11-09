@@ -31,21 +31,25 @@ def write_material_parts(directory, material, writer, *, include_source=True, au
     material = checked_material(material)
     if include_source and not (directory / "inputs/snapshot.json").is_file():
         writer.json(directory / "inputs/source.json", material["source"])
-    for field, filename in (("cfg", "cfg.json"), ("runtime_contract", "runtime-contract.json"),
-                            ("user_request", "user-request.json")):
+    for field, filename in (("cfg", "cfg.json"), ("runtime_contract", "runtime-contract.json")):
         writer.json(directory / "inputs" / filename, material[field])
     if authored_task:
         writer.json(directory / "inputs/task.json", material["task"])
 
 
 def read_source_parts(directory):
-    """Read the one owner of source/graph/runtime/request, before Task resolution."""
+    """Read the one owner of source/graph/runtime, before Task resolution."""
     directory = checked_run_path(directory)
+    if (directory / "inputs/user-request.json").exists():
+        raise ValueError("Retired user-request component is not accepted")
+    if (directory / "inputs/references.json").exists():
+        from skillflow.document_guided.online import ANNOTATION_IDENTITY, source_parts
+        if read_component(directory / "manifest.json").get("identity") == ANNOTATION_IDENTITY:
+            return source_parts(directory)
     source = (read_snapshot(directory)[1] if (directory / "inputs/snapshot.json").is_file()
               else read_component(directory / "inputs/source.json"))
     return {"source": source, "cfg": read_component(directory / "inputs/cfg.json"),
-            "runtime_contract": read_component(directory / "inputs/runtime-contract.json"),
-            "user_request": read_component(directory / "inputs/user-request.json")}
+            "runtime_contract": read_component(directory / "inputs/runtime-contract.json")}
 
 
 def read_material_parts(directory, *, task_baseline=None):
@@ -68,7 +72,8 @@ def _material_chain(run_dir):
     from skillflow.propagation.annotation.runner import IDENTITY as annotation_identity
     from skillflow.propagation.review.refinement import IDENTITY as refinement_identity
     from skillflow.pipeline import IDENTITY as pipeline_identity
-    supported = {annotation_identity, refinement_identity, pipeline_identity}
+    from skillflow.document_guided.online import ANNOTATION_IDENTITY
+    supported = {annotation_identity, refinement_identity, pipeline_identity, ANNOTATION_IDENTITY}
     while True:
         if directory in seen:
             raise ValueError("Cyclic material ownership reference")
@@ -94,7 +99,12 @@ def _material_chain(run_dir):
 
 
 def resolve_material_owner(run_dir):
-    return _material_chain(run_dir)[-1][0]
+    owner, manifest = _material_chain(run_dir)[-1]
+    from skillflow.document_guided.online import ANNOTATION_IDENTITY
+    if manifest["identity"] == ANNOTATION_IDENTITY:
+        refs = read_component(owner / "inputs/references.json")
+        return resolve_run_reference(owner, refs["source_owner"])
+    return owner
 
 
 def load_prepared_material(run_dir, *, task_baseline=None):

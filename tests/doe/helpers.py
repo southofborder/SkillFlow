@@ -13,24 +13,19 @@ from tests.doe.components import mutable_components
 from tests.doe.fixtures.rebuild_field_fixtures import rebuild_raw_annotation
 
 
-def source_task(source, candidate=None, *, user_request=None):
+def source_task(source, candidate=None):
     """Explicit test baseline, never a model response or extraction algorithm."""
-    files = task_source_files(source, user_request=user_request)
+    files = task_source_files(source)
     if candidate is None:
-        file = "task/user-request.txt" if user_request is not None else next(iter(files))
+        file = next(iter(files))
         number = next(i for i, line in enumerate(source_lines(files[file]), 1) if line.strip())
         evidence = {"file": file, "start_line": number, "end_line": number,
                     "reason": "独立算法测试显式给定的来源；不主张语义等价或完备。"}
         candidate = {"purpose": {"text": "保留算法测试指定的结果。", "evidences": [evidence]},
             "requirements": [{"id": "R", "text": "保留算法测试显式指定的结果。", "evidences": [evidence]}],
-            "source_accounting": [{"file": name, "start_line": i, "end_line": i,
-                "disposition": "requirement" if name == file and i == number else "supporting_context",
-                "requirement_ids": ["R"] if name == file and i == number else [], "issue_ids": [],
-                "reason": "离线算法样例物理行登记；不是源文语义评测基准。"}
-                for name, text in files.items() for i, line in enumerate(source_lines(text), 1) if line.strip()],
+
             "issues": []}
     return validate_task_candidate(candidate, source_files=files,
-        basis="user_request" if user_request is not None else "declared_skill",
         source_sha256=source["source_sha256"])
 
 

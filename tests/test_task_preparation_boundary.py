@@ -40,7 +40,7 @@ def interrupted_preparation(tmp_path, monkeypatch, cut="before_task"):
                 raise KeyboardInterrupt("after Task prompt")
             scoped.setattr(tasks, "_write_exact_text", stop)
         with pytest.raises(KeyboardInterrupt):
-            pipeline.prepare_analysis_run(skill, cfg, run_dir=directory, user_request="Return label.")
+            pipeline.prepare_analysis_run(skill, cfg, run_dir=directory)
     assert (directory / "manifest.json").is_file()
     assert not (directory / "task/manifest.json").exists()
     return skill, cfg, directory
@@ -56,14 +56,14 @@ def test_prepare_resumes_task_prefix_from_frozen_owner_when_original_inputs_are_
     cfg.unlink()
     with pytest.raises(pipeline.PipelineIdentityError, match="Task preparation is incomplete"):
         pipeline.verify_analysis_prepared(directory)
-    result = pipeline.prepare_analysis_run(skill, cfg, run_dir=directory, user_request="Return label.")
+    result = pipeline.prepare_analysis_run(skill, cfg, run_dir=directory)
     assert result["preparation_status"] == "ready"
     assert (directory / "manifest.json").read_bytes() == manifest_bytes
     assert all((directory / "inputs" / name).read_bytes() == value for name, value in frozen.items())
     assert pipeline.verify_analysis_prepared(directory)["preparation_status"] == "ready"
     assert not (directory / "task/calls").exists()
     with pytest.raises(pipeline.PipelineIdentityError, match="new pipeline directory"):
-        pipeline.prepare_analysis_run(skill, cfg, run_dir=directory, user_request="Return label.")
+        pipeline.prepare_analysis_run(skill, cfg, run_dir=directory)
 
 
 def test_live_run_lazily_prepares_task_but_replay_does_not_create_it(tmp_path, monkeypatch):
@@ -85,14 +85,12 @@ def test_live_run_lazily_prepares_task_but_replay_does_not_create_it(tmp_path, m
     assert not (directory / "annotation").exists()
 
 
-@pytest.mark.parametrize("mutation", ["user_request", "cfg_path", "config", "frozen_cfg"])
+@pytest.mark.parametrize("mutation", ["cfg_path", "config", "frozen_cfg"])
 def test_resume_refuses_changed_request_or_frozen_cfg(tmp_path, monkeypatch, mutation):
     skill, cfg, directory = interrupted_preparation(tmp_path, monkeypatch)
     before_manifest = (directory / "manifest.json").read_bytes()
-    kwargs = {"user_request": "Return label."}
-    if mutation == "user_request":
-        kwargs["user_request"] = "Return all data."
-    elif mutation == "cfg_path":
+    kwargs = {}
+    if mutation == "cfg_path":
         cfg = tmp_path / "different-analysis.json"
     elif mutation == "config":
         kwargs["config"] = {"model": "different-model"}
@@ -110,6 +108,6 @@ def test_task_preparation_recovery_rejects_unknown_artifacts_without_new_calls(t
     path.parent.mkdir()
     path.write_text("{}", encoding="utf-8")
     with pytest.raises(tasks.TaskRunIdentityError, match="Unknown file"):
-        pipeline.prepare_analysis_run(skill, cfg, run_dir=directory, user_request="Return label.")
+        pipeline.prepare_analysis_run(skill, cfg, run_dir=directory)
     assert path.read_text(encoding="utf-8") == "{}"
     assert not (directory / "task/manifest.json").exists()

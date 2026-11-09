@@ -25,7 +25,7 @@ from skillflow.propagation.data.models import _require_list
 
 
 def _scope_path(value):
-    if value and not (len(value) == 2 and value[0] == "events" and type(value[1]) is int):
+    if value and not (len(value) == 2 and value[0] in {"events", "segments"} and type(value[1]) is int):
         raise ValueError("constraint scope must be the IR or one existing for_each")
     return value
 

@@ -4,17 +4,18 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator, model_serializer
 
 from skillflow.propagation.contracts.references import target_key
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.source_evidence import Text, _require_json
 from skillflow.propagation.contracts.boundaries import SinkBoundary
-from skillflow.propagation.contracts.demand import DemandGoal, DemandPath, DemandProperty
+from skillflow.propagation.contracts.demand import DemandGoal, DemandPath, DemandProperty, GoalPath, EachDemandStep, _check_goal_path
 from skillflow.propagation.contracts.specs import ValueRef
 from skillflow.propagation.contracts.task import TaskReference, TaskBinding
 from skillflow.propagation.contracts.realizations import RealizationGap
 from skillflow.propagation.data.models import _check_json_value
+from skillflow.propagation.models import OperationAlternative
 from .models import Position
 
 
@@ -96,21 +97,37 @@ class LiteralNode(_Node):
         return self
 
 
-DemandNode = Annotated[OperationNode | OperandNode | ActionNode | ElementNode | LiteralNode,
+class CollectionOutputNode(_Node):
+    kind: Literal["collection_output"]
+    operation_id: None
+    slot: None
+    event_index: Index
+    reference: ValueRef
+    yield_reference: ValueRef
+
+
+DemandNode = Annotated[OperationNode | OperandNode | ActionNode | ElementNode | LiteralNode | CollectionOutputNode,
                        Field(discriminator="kind")]
 
 
 class Derivation(Strict):
     node: DemandNode
     property: DemandProperty
-    path: DemandPath
+    path: GoalPath
     each: bool
-    excluded_paths: list[DemandPath]
+    excluded_paths: list[GoalPath]
     requirement_id: Text
     seed_goal_id: Text
     conservative: bool
     rules: Annotated[list[Text], Field(min_length=1)]
     parents: list[Text]
+
+    @model_validator(mode="after")
+    def member_paths(self):
+        _check_goal_path(self.path)
+        for path in self.excluded_paths:
+            _check_goal_path(path)
+        return self
 
     @field_validator("rules", "parents")
     @classmethod
@@ -124,6 +141,14 @@ class ActualPayload(Strict):
     operation_id: Text
     position: Position
     inputs: list[Annotated[list[Text], Field(min_length=1)]]
+    alternatives: list[OperationAlternative] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def omit_unpaired_legacy(self, handler):
+        value = handler(self)
+        if not self.alternatives:
+            value.pop("alternatives", None)
+        return value
 
     @field_validator("inputs")
     @classmethod
@@ -181,6 +206,14 @@ class Diagnostic(Strict):
     requirement_id: Text | None
     operation_id: Text | None
     blocking: bool
+    affected_instruction_ids: list[Text] | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_legacy_scope(self, handler):
+        result = handler(self)
+        if self.affected_instruction_ids is None:
+            result.pop("affected_instruction_ids", None)
+        return result
 
 
 class RequirementCoverage(Strict):
@@ -201,7 +234,6 @@ class SeedTrace(Strict):
 
 class RequirementTrace(Strict):
     requirement_id: Text
-    source_accounting_indices: list[Index]
     seeds: list[SeedTrace]
 
 
@@ -214,11 +246,19 @@ class Coverage(Strict):
     requirements: dict[Text, RequirementCoverage]
     sinks: Index
     expected_sinks: Index
-    upstream: dict[Text, Literal["processed", "not_reached", "not_solved", "unresolved_binding"]]
+    upstream: dict[Text, Literal["processed", "not_reached", "not_solved", "unresolved_binding", "unmodeled", "blocked"]]
+    unresolved_boundaries: list[SinkBoundary] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def omit_empty_boundary_gaps(self, handler):
+        result = handler(self)
+        if not self.unresolved_boundaries:
+            result.pop("unresolved_boundaries", None)
+        return result
 
 
 class DemandResult(Strict):
-    schema_version: Literal["skillflow-demand-v4"]
+    schema_version: Literal["skillflow-demand-v7"]
     status: Literal["complete", "partial"]
     goals: list[DemandGoal]
     traceability: Traceability
@@ -308,7 +348,7 @@ def validate_result_shape(value):
 
 def validate_result_references(value, facts, targets):
     """Bind saved references to facts without re-solving preservation semantics."""
-    from .material import _Index
+    from .material import _Index, payload_alternatives
     from skillflow.propagation.conditions import payload_inputs
     checked = validate_result_shape(value)
     index = _Index(facts)
@@ -325,9 +365,6 @@ def validate_result_references(value, facts, targets):
     goals = {row["id"]: row for row in checked["goals"]}
     for trace in checked["traceability"]["requirements"]:
         req = trace["requirement_id"]
-        expected_indices = [i for i, row in enumerate(task["source_accounting"]) if req in row["requirement_ids"]]
-        if trace["source_accounting_indices"] != expected_indices:
-            raise ValueError("Demand source accounting projection differs")
         coverage = checked["coverage"]["requirements"][req]
         original = {k: v for k, v in realizations[req].items() if k != "constraints"}
         if {k: coverage[k] for k in original} != original:
@@ -341,12 +378,37 @@ def validate_result_references(value, facts, targets):
             expected_pointer = mappings[identity]["raw_pointer"] if canonical_goals.get(identity) == goals[identity] else None
             if seed["raw_pointer"] != expected_pointer:
                 raise ValueError("Demand raw declaration coordinate differs")
-    data_ids = {item["id"] for item in facts.data}
-    actual_boundaries = {canonical_sha256(item) for item in facts.sinks}
+    data_ids = set(index.data)
+    actual_boundaries = {canonical_sha256(item) for item in index.sinks}
     if {canonical_sha256(item["boundary"]) for item in checked["sinks"]} != actual_boundaries:
         raise ValueError("Demand sink coverage differs from upstream facts")
-    if checked["coverage"]["upstream"] != facts.coverage:
+    if checked["coverage"]["upstream"] != index.coverage:
         raise ValueError("Demand upstream coverage differs from facts")
+    from skillflow.propagation.facts import declared_boundary_coverage
+    unresolved = [row["boundary"] for row in declared_boundary_coverage(annotation["compiled_annotation"], index.sinks, index.coverage)
+                  if row["status"] == "unresolved"]
+    if checked["coverage"].get("unresolved_boundaries", []) != unresolved:
+        raise ValueError("Demand unresolved boundary coverage differs from declared but unevaluated operations")
+    from skillflow.propagation.contracts.limitations import processing_impacts, gap_id, diagnostic_applies
+    expected_gaps = processing_impacts(index.cfg, annotation["compiled_annotation"])
+    gaps = {gap_id(g): g for g in annotation["compiled_annotation"].get("processing_gaps", [])
+            if index.coverage[g["instruction_id"]] != "not_reached"}
+    actual_gaps = {}
+    for diagnostic in checked["diagnostics"]:
+        affected = diagnostic.get("affected_instruction_ids")
+        if affected is not None:
+            if diagnostic["code"] != "processing_gap" or not set(affected) <= set(index.instructions):
+                raise ValueError("Demand diagnostic has an unsupported scoped footprint")
+            identity = diagnostic["reason"].split(": ", 1)[0]
+            if (identity not in gaps or diagnostic["instruction_id"] != gaps[identity]["instruction_id"]
+                    or affected != expected_gaps[identity] or not diagnostic["blocking"]
+                    or diagnostic["reason"] != identity + ": " + gaps[identity]["reason"]):
+                raise ValueError("Processing limitation differs from its program-computed dependency closure")
+            actual_gaps[identity] = diagnostic
+        elif diagnostic["code"] == "processing_gap":
+            raise ValueError("Processing limitation lacks its dependency footprint")
+    if set(actual_gaps) != set(gaps):
+        raise ValueError("Demand result drops declared processing limitations")
     if any(target_key(goal["target"]) not in targets for goal in checked["goals"]):
         raise ValueError("Demand goal target is absent")
     for derivation in checked["derivations"].values():
@@ -374,10 +436,28 @@ def validate_result_references(value, facts, targets):
                        and [scope["event_index"], scope["instance_index"]] == node["scope"]]
             if len(matches) != 1 or matches[0]["collection"] != node["collection"] or node["data_ids"] != [matches[0]["element"]]:
                 raise ValueError("Demand element identity differs from its scope")
+        elif node["kind"] == "collection_output":
+            ir, event_index = node["instruction_id"], node["event_index"]
+            events = index.records.get(ir, {}).get("events", [])
+            if event_index >= len(events) or events[event_index].get("kind") != "for_each":
+                raise ValueError("Demand collection output has no recorded member scope")
+            declared = annotation["compiled_annotation"]["ir_semantics"][ir]["events"][event_index]
+            if (sorted(node["data_ids"]) != sorted(events[event_index].get("outputs", []))
+                    or node["reference"] != declared["collection"] or node["yield_reference"] != declared.get("yield")):
+                raise ValueError("Demand collection output differs from its recorded yields")
     for sink in checked["sinks"]:
+        sliced = index.slice(sink["boundary"])
+        relevant = set(sliced["usage_context"]["instructions"])
+        relevant.update(index.operations[key]["position"]["instruction_id"] for key in sliced["backward_slice"]["operations"])
+        expected_limits = sorted(d["id"] for d in checked["diagnostics"] if d["blocking"] and diagnostic_applies(d, relevant,
+                                scoped_instructions=sliced["usage_context"]["instructions"]))
+        if sink["limitations"] != expected_limits:
+            raise ValueError("Demand sink changes relevant analysis limitations")
         operations = index.sink_operations(sink["boundary"])
         payload = [{"operation_id": key, "position": index.operations[key]["position"],
-                    "inputs": payload_inputs(index.operations[key]["record"])} for key in operations]
+                    "inputs": payload_inputs(index.operations[key]["record"]),
+                    **({"alternatives": payload_alternatives(index.operations[key]["record"])}
+                       if index.operations[key]["record"].get("alternatives") else {})} for key in operations]
         if sink["actual_payload"] != payload:
             raise ValueError("Demand sink actual payload differs from recorded facts")
         for item in sink["unestablished_ranges"]:

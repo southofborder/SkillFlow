@@ -23,9 +23,9 @@ def accepted_annotation(directory, material, raw):
     class AuthoredTaskClient:
         def complete(self, prompt):
             return deepcopy(declaration)
-    prepare_task_run(task_directory, material['source'], user_request=material['user_request'])
+    prepare_task_run(task_directory, material['source'])
     assert run_task(task_directory, client=AuthoredTaskClient())['status'] == 'complete'
-    prepare_run(package,graph,run_dir=directory, task_run=task_directory, user_request=material['user_request'])
+    prepare_run(package,graph,run_dir=directory, task_run=task_directory)
     class Client:
         def complete(self,prompt): return deepcopy(raw)
     result = run_annotation(directory,client=Client())

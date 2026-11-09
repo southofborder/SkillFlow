@@ -10,9 +10,10 @@ from copy import deepcopy
 
 from .material import _id
 from .constraint_results import ConstraintSupport
-from .sensitivity_engine import prefix as _prefix, covers
+from .sensitivity_engine import prefix as _prefix, covers, unstable_collection_offsets
 from skillflow.common.source_evidence import resolve_pointer
 from skillflow.propagation.contracts.references import target_key
+from skillflow.propagation.contracts.limitations import processing_impacts
 
 
 def _overlap(a, b):
@@ -25,7 +26,9 @@ class ForwardInfluence:
         self.engine = engine
         self.edges = defaultdict(set)
         self.member_sources = defaultdict(set)
+        self.map_edges = defaultdict(list)
         self.incomplete = False
+        self.limited_instructions = set().union(*processing_impacts(engine.index.cfg, engine.compiled).values())
         self._setup()
 
     def _resolve(self, ref, ir, scope=None):
@@ -66,6 +69,21 @@ class ForwardInfluence:
             meta = e.nodes[node]
             for source in self._resolve(meta["reference"], meta["instruction_id"]):
                 self.edges[source].add(node)
+        for target, meta in list(e.nodes.items()):
+            if meta["kind"] != "collection_output":
+                continue
+            ir, event_index = meta["instruction_id"], meta["event_index"]
+            events = e.index.records.get(ir, {}).get("events", [])
+            if event_index >= len(events):
+                self.incomplete = True
+                continue
+            record = events[event_index]
+            for number, instance in enumerate(record.get("instances", [])):
+                for source in self._resolve(meta["yield_reference"], ir, (event_index, number)):
+                    if not e.nodes[source]["data_ids"] or set(e.nodes[source]["data_ids"]) & set(instance.get("yielded", [])):
+                        selector = ({"kind": "each"} if unstable_collection_offsets(e.index.data, instance["collection"])
+                                    else deepcopy(instance["selector"]))
+                        self.map_edges[source].append((target, [selector]))
 
     def run(self, operation, slot, path, *, queue_order="fifo"):
         e, rows, queue = self.engine, {}, deque()
@@ -115,9 +133,13 @@ class ForwardInfluence:
                 missing = True
             for target in sorted(self.edges.get(row["node"], ())):
                 emit(target, changed, "symbolic_use", identity)
+            for target, prefix in self.map_edges.get(row["node"], ()):
+                emit(target, [*prefix, *changed], "map_yield_change", identity)
             kind, key, current_ir = node["kind"], node["operation_id"], node["instruction_id"]
             if current_ir is not None:
                 instructions.add(current_ir)
+                if current_ir in self.limited_instructions:
+                    missing = True
             if kind == "element":
                 # Membership/shape can change. Never pair this with another element.
                 for other, info in e.ops.items():
@@ -159,6 +181,33 @@ class ForwardInfluence:
                         output(key, member["path"] + changed, identity, "member_change")
                     if member["when_input_index"] == input_slot:
                         output(key, member["path"], identity, "member_presence_change")
+            elif op == "merge":
+                output(key, changed, identity, "incoming_value_change")
+            elif op == "member":
+                if not changed:
+                    # A changed collection can create or remove occurrences;
+                    # baseline finite members do not establish a new count.
+                    changed_scopes.add((current_ir, -1))
+                    missing = True
+                output(key, changed[1:] if changed and type(changed[0]) is not str else [],
+                       identity, "explicit_member_change")
+            elif op == "append":
+                if input_slot == 0:
+                    output(key, changed, identity, "accumulated_prefix_change")
+                else:
+                    from .constraint_control import collection_size
+                    sizes = {collection_size(e.index.data, data) for data in record["inputs"][0]}
+                    size = next(iter(sizes)) if len(sizes) == 1 else None
+                    if spec["mode"] == "item":
+                        output(key, [size if size is not None else {"kind": "each"}, *changed],
+                               identity, "accumulated_item_change")
+                    else:
+                        projected = deepcopy(changed)
+                        if projected and type(projected[0]) is int:
+                            projected[0] = projected[0] + size if size is not None else {"kind": "each"}
+                        output(key, projected, identity, "accumulated_items_change")
+            elif op == "branch":
+                behavior.add(key)
             elif op in {"compute", "filter_items", "receive"}:
                 output(key, [], identity, "conservative_processing_change")
             elif op == "read":

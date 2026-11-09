@@ -14,7 +14,7 @@ from skillflow.propagation.annotation.prompts import build_prompt
 
 
 def test_source_rules_replace_stale_read_only_stage_and_keep_english_instructions():
-    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v7"
+    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v11"
     rules = {item["id"]: item["text"] for item in runtime_contract()["rules"]}
     assert len(rules) == len(runtime_contract()["rules"])
     assert "This stage only labels the read effect" not in rules["EM01"]

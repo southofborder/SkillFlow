@@ -47,9 +47,13 @@ def save_call(tool, root, relative, *, failed=False, attempts=1, usage=True, obs
 def lineage(tool, tmp_path, monkeypatch):
     parent, child = tmp_path / "parent", tmp_path / "child"
     parent.mkdir()
-    manifest = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": tool._prepare.PARENT_IDENTITY,
+    # This is a newly authored accounting fixture, not a migrated historical run.
+    identity = {"schema_version": tool._prepare.PARENT_FORMAT_VERSION,
+                "profile_schema_version": tool._prepare.SCHEMA_VERSION,
+                "identity": tool._prepare.PARENT_IDENTITY}
+    manifest = {**identity,
                 "config": {"model": "requested-model"}, "cases": []}
-    outcome = {"schema_version": 14, "profile_schema_version": "security-profile-v15", "identity": tool._prepare.PARENT_IDENTITY,
+    outcome = {**identity,
                "summary": {"cases": 30}, "cases": {}}
     for number in range(1, 31):
         identifier = f"{number:03}"

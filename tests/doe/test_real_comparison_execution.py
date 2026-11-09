@@ -94,7 +94,7 @@ def test_schedule_is_fixed_balanced_and_prespecifies_only_repeat_one_reviews(tmp
     result = x.prepare_schedule(tmp_path, case_records())
     assert len(result["main"]) == 216 and len(result["reviews"]) == 48
     assert len({r["workflow_id"] for r in result["main"] + result["reviews"]}) == 264
-    assert all(r["repeat"] == 1 and r["method"] != "skillflow" and r["user_request"] is None for r in result["reviews"])
+    assert all(r["repeat"] == 1 and r["method"] != "skillflow" and "user_request" not in r for r in result["reviews"])
     assert x.prepare_schedule(tmp_path, case_records()) == result
     with pytest.raises(ValueError, match="Immutable"):
         x.prepare_schedule(tmp_path, case_records(), seed=1)
@@ -222,7 +222,7 @@ def test_native_composition_rebuilds_graph_and_injects_every_stage(tmp_path):
     def prepare(source_path, selected, **kwargs):
         calls.append(("prepare", source_path, kwargs))
         assert read(selected) == {"cfg": {"native": "graph"}}
-        assert kwargs["user_request"] is None and kwargs["config"] == {}
+        assert "user_request" not in kwargs and kwargs["config"] == {}
     def run(directory, **kwargs):
         calls.append(("analysis", directory, kwargs))
         factories = [kwargs[k] for k in ("client_factory", "review_client_factory", "repair_client_factory",
@@ -359,7 +359,7 @@ def test_main_and_review_prompts_require_exact_frozen_rendering(tmp_path):
     (tmp_path / "prompts").mkdir()
     (tmp_path / "cases/c").mkdir(parents=True)
     (tmp_path / "cases/c/source-bundle.txt").write_text("Original {source_bundle} 原文", encoding="utf-8")
-    (tmp_path / "prompts/audit.txt").write_text("RULES {user_request}\nSOURCE {source_bundle}", encoding="utf-8")
+    (tmp_path / "prompts/audit.txt").write_text("RULES\nSOURCE {source_bundle}", encoding="utf-8")
     (tmp_path / "prompts/review.txt").write_text("{original_task}\n{original_answer}", encoding="utf-8")
     main = {"kind": "main", "method": "audit", "case_id": "c", "repeat": 1, "source_sha256": "s"}
     exact = render_direct(tmp_path, "c", "audit")

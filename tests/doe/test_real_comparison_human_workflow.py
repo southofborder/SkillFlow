@@ -39,7 +39,7 @@ def closed_cohort(tmp_path):
         required = evidence(2, "Return only the approved summary.")
         unknown = evidence(3, "The ordinary return caller is unspecified.")
         reference = {"case_id": case_id, "source_sha256": case["source_sha256"], "state": "approved",
-                     "coverage_state": "complete_for_human_verification", "purpose_basis": "skill_declared_purpose_only", "user_request": None,
+                     "coverage_state": "complete_for_human_verification", "purpose_basis": "skill_declared_purpose_only",
                      "declared_purpose": [{"id": "P1", "reason": "Return the requested summary.", "evidence": required}],
                      "required_behavior": [{"id": "Q1", "reason": "Preserve the approved summary.", "evidence": required}],
                      "receiving_points": [{"id": "B1", "reason": "Ordinary return has an unspecified caller.", "evidence": unknown}],

@@ -55,7 +55,6 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--input", required=True)
     prepare.add_argument("--analysis", required=True)
     prepare.add_argument("--run-dir", required=True)
-    prepare.add_argument("--request-file", type=Path)
     execute = stages.add_parser("run", help="Execute or resume the prepared chain")
     execute.add_argument("--run-dir", required=True)
     replay = stages.add_parser("replay", help="Rebuild saved stage decisions with zero API calls")
@@ -79,8 +78,7 @@ def main(argv: list[str] | None = None) -> int:
                 secrets = (config.api_key,) if config.api_key else ()
                 if args.pipeline_command == "prepare":
                     result = prepare_analysis_run(args.input, args.analysis, run_dir=args.run_dir,
-                        config=public, secrets=secrets,
-                        user_request=None if args.request_file is None else args.request_file.read_bytes().decode("utf-8-sig"))
+                        config=public, secrets=secrets)
                     print(result["preparation_status"], Path(args.run_dir).resolve())
                     return 0 if result["preparation_status"] == "ready" else 1
                 from skillflow.common.recording import streaming_factory

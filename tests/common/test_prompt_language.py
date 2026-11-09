@@ -104,9 +104,9 @@ def test_original_chinese_source_task_and_candidate_are_not_translated():
     assert sent_review["raw_annotation"] == prepared_review["raw_annotation"]
     assert raw_reason in review
 
-    request = "请保留这份独立用户请求的原文。"
-    task = build_task_prompt(prepare_task_material(material["source"], user_request=request))
-    assert source_text in task and request in task
+    task = build_task_prompt(prepare_task_material(material["source"]))
+    assert source_text in task
+    assert "user_request" not in task
 
     candidate = {"reason": "当前候选的文字也不自动翻译。"}
     corrected = correction_prompt(annotation, compact_json(candidate), [{

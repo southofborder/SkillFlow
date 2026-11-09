@@ -19,15 +19,14 @@ def source(content="首段\r\n\r\n```text\r\n甲\r\n\r\n乙\r\n```\r\n"):
 
 def test_audit_uses_shared_evidence_contracts_and_validation():
     from skillflow.graph.audit import models
-    from skillflow.graph.audit import prompts
     from skillflow.graph.audit import services
 
     assert issubclass(models.Finding, shared.StrictRecord)
     assert models.Finding.model_fields["source_refs"].annotation == list[shared.SourceRef]
     for name in ("_fail", "_unique", "_json_object",
-                 "_checked_source", "_digest", "validate_source_ref", "nonempty_source_lines"):
+                 "_checked_source", "_digest", "validate_source_ref"):
         assert getattr(services, name) is getattr(shared, name)
-    assert prompts.source_lines is shared.source_lines
+    # Sparse audits no longer import the removed per-line accounting renderer.
     with pytest.raises(shared.ResponseValidationError):
         services._json_object('{"duplicate": 1, "duplicate": 2}')
 

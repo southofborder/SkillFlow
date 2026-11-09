@@ -402,6 +402,8 @@ def test_injected_first_error_survives_terminal_checkpoint_failure(tmp_path, mon
     with pytest.raises(recording.SavedCallFailure) as saved:
         recording.SavedResponseClient(tmp_path, ArtifactWriter(())).complete("checked")
     assert saved.value.error_type == "TimeoutError"
+    assert saved.value.recording_failed is True
+    assert saved.value.recording_errors == record["recording_errors"]
 
 
 @pytest.mark.parametrize("outer_error_context", [False, True])

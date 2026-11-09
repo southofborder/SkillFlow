@@ -11,7 +11,7 @@ from skillflow.propagation.contracts.references import cfg_instructions
 from copy import deepcopy
 from typing import Any
 
-from skillflow.common.source_evidence import json_pointer, nonempty_source_lines
+from skillflow.common.source_evidence import json_pointer
 from skillflow.common.source_evidence import resolve_pointer
 from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.material import checked_material as checked_annotation_material
@@ -20,7 +20,7 @@ from skillflow.propagation.contracts.paths import semantics_path
 
 from skillflow.propagation.review.models import SCHEMA_VERSION
 
-REVIEW_FIELDS = {"schema_version", "raw_annotation", "observations", "target_index", "declaration_index", "source_line_universe"}
+REVIEW_FIELDS = {"schema_version", "raw_annotation", "observations", "target_index", "declaration_index"}
 
 
 def _target_index(raw: dict, instruction_ids: set[str]) -> list[dict]:
@@ -132,13 +132,9 @@ def prepare_review_material(material: dict[str, Any], raw_annotation: dict[str, 
     targets.extend({"id": item["id"], "kind": "observation", "pointer": json_pointer(index),
                     "instruction_ids": [item["instruction_id"]]}
                    for index, item in enumerate(observations))
-    from skillflow.propagation.contracts.joint import joint_source_files
-    universe = [{"file": file, "line": line}
-                for file, line in sorted(nonempty_source_lines(joint_source_files(annotation_material)))]
     return {"schema_version": SCHEMA_VERSION, **deepcopy(annotation_material),
             "raw_annotation": raw, "observations": observations, "target_index": targets,
-            "declaration_index": _declaration_index(annotation_material["cfg"], raw, compiled, mapping),
-            "source_line_universe": universe}
+            "declaration_index": _declaration_index(annotation_material["cfg"], raw, compiled, mapping)}
 
 
 def _declaration_index(cfg, raw, compiled, mapping):

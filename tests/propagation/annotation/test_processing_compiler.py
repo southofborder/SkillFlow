@@ -52,7 +52,7 @@ def test_default_acquisition_observes_output_and_each_transform_phase_inputs():
     assert validate_compiled_response(compiled, prepared) == compiled
     with pytest.raises(ValueError):
         validate_response(compiled, prepared)  # no implicit raw/compiled compatibility
-    assert SCHEMA_VERSION == "security-profile-v15"
+    assert SCHEMA_VERSION == "security-profile-v21"
 
 
 @pytest.mark.parametrize("returns,expected", [([], ["fs_read"]),
@@ -130,7 +130,7 @@ def test_observation_dedup_is_per_processing_segment_not_global():
     assert effects_of(compiled["ir_semantics"]["ir_filter"]) == ["model_observe", "transform", "model_observe", "transform"]
 
 
-def test_for_each_shared_item_and_no_local_escape_or_acquisition():
+def test_for_each_shared_item_scoped_acquisition_and_no_local_escape_or_write():
     prepared, raw = raw_fixture()
     spec = raw["ir_semantics"]["ir_filter"]
     segment = spec["events"][0]
@@ -151,7 +151,11 @@ def test_for_each_shared_item_and_no_local_escape_or_acquisition():
     spec["output_bindings"][0]["value"] = {"kind": "input", "index": 0}
     segment["events"][0]["atomic_ops"] = [{"op": "read", "location": "ir_read_boundary_0", "output": "bad", "evidences": segment["evidences"]}]
     segment["events"][0]["effect"] = "fs_read"
-    with pytest.raises(ValueError, match="must not read, receive, or write"):
+    compile_response(raw, prepared)
+    segment["events"][0]["atomic_ops"] = [{"op": "write", "target": "ir_read_boundary_0", "mode": "replace",
+        "input": {"kind": "local", "name": "row"}, "evidences": segment["evidences"]}]
+    segment["events"][0]["effect"] = "fs_write"
+    with pytest.raises(ValueError, match="must not write shared state"):
         compile_response(raw, prepared)
 
 
@@ -318,7 +322,7 @@ def test_conditional_member_observation_and_control_use_share_guard():
     assert observations[1]["inputs"] == [{"kind": "input", "index": 0}]
     assert observations[1]["when"] == {"kind": "literal", "value": False}
     assert atoms[-1]["parts"][0]["when"] == observations[1]["when"]
-    assert mapping["compiler_version"] == "skillflow-processing-compiler-v9"
+    assert mapping["compiler_version"] == "skillflow-processing-compiler-v12"
     assert compile_response(checked, prepared)[1:] == (compiled, mapping)
 
 

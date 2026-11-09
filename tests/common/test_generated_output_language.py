@@ -11,6 +11,9 @@ def test_program_output_literals_are_english():
     localized_input_messages = {
         ("common/audit_execution.py", "拒绝访问"),
         ("common/audit_execution.py", "另一个程序正在使用"),
+        # Legacy controlled-display input sentinels, never generated output.
+        ("graph/audit/display.py", "未记录"),
+        ("graph/audit/display.py", "记录值"),
     }
     violations = []
     for path in root.rglob("*.py"):

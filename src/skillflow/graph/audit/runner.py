@@ -1,4 +1,4 @@
-"""Version 6: contract-bound, independent full-source audits and offline replay."""
+"""Version 8: compact fact display and reference-validated semantic audits."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +28,7 @@ def experiment_root():
     return project_root() / "experiments/graph/audit"
 def pinned_config():
     return project_root() / "experiments/graph/baseline/deepseek-v4-flash.json"
-IDENTITY = "skill-ir-controlled-source-audit-v7"
+IDENTITY = "skill-ir-controlled-source-audit-v8"
 CASE_IDS = tuple(f"c{i:02}" for i in range(1, 6))
 SUITES = {"f01-five": CASE_IDS, "semantics-v5-seven": CASE_IDS + ("c06", "c07")}
 PAUSED_SELECTION = (
@@ -146,7 +146,7 @@ def prepare_run(directory: Path, *, executable: Path | None = None, review30: bo
             review_rows.append(row)
     save("verification/review30.json", {"enabled": review30, "manifest_sha256": sha_file(review_manifest), "samples": review_rows})
     manifest = {
-        "schema_version": 7, "identity": IDENTITY, "created_at": now(), "run_id": directory.name,
+        "schema_version": 8, "identity": IDENTITY, "created_at": now(), "run_id": directory.name,
         "suite": suite, **contract_binding(),
         "planned_logical_calls": len(cases), "config": public_config(),
         "implementation": implementation_provenance(), "input_provenance": prepared["provenance"],
@@ -160,7 +160,7 @@ def prepare_run(directory: Path, *, executable: Path | None = None, review30: bo
     }
     manifest["manifest_sha256"] = canonical_sha256(manifest)
     writer.json(directory / "manifest.json", manifest)
-    writer.text(directory / "README.md", "# Controlled retelling and source review v7\n\nThe complete source and controlled text are compared under one contract. Each case has one logical call; transient transport execution retries are counted separately.\n"
+    writer.text(directory / "README.md", "# Controlled graph facts and source review v8\n\nThe complete source and compact certified graph facts are compared under one contract. The full Lean text remains in audit. Each case has one logical call; transient transport execution retries are counted separately.\n"
                 "prepare is offline; run writes report.md; replay reads current-format records offline.\n")
     return manifest
 
@@ -168,8 +168,8 @@ def prepare_run(directory: Path, *, executable: Path | None = None, review30: bo
 def verify_run(directory: Path, *, live: bool) -> dict:
     from skillflow.common.audit_execution import AUDIT_RETRY_POLICY
     manifest = read_json(directory / "manifest.json")
-    if manifest.get("schema_version") != 7 or manifest.get("identity") != IDENTITY:
-        raise ValueError("Unsupported run version; v7 does not replay or migrate historical records")
+    if manifest.get("schema_version") != 8 or manifest.get("identity") != IDENTITY:
+        raise ValueError("Unsupported run version; v8 does not replay or migrate historical records")
     unsigned = deepcopy(manifest)
     if unsigned.pop("manifest_sha256", None) != canonical_sha256(unsigned):
         raise ValueError("Prepared run manifest digest mismatch")
@@ -383,7 +383,7 @@ def execute_run(directory: Path, *, client_factory=None, secrets=(), replay=Fals
                           "usage": trace[-1].get("usage") if trace else None,
                           "http_attempts": len(trace[-1].get("http_attempts", [])) if trace else 0})
         logical_count = len({call["case_id"] for call in calls})
-        result = {"schema_version": 7, "identity": IDENTITY, "run_id": manifest["run_id"],
+        result = {"schema_version": 8, "identity": IDENTITY, "run_id": manifest["run_id"],
                   "suite": manifest["suite"], **contract_binding(),
                   "mode": "replay" if replay else "run", "finished_at": now(),
                   "planned_logical_calls": len(identifiers), "recorded_logical_calls": logical_count,

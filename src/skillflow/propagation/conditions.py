@@ -36,7 +36,7 @@ def guard_truths(data: DataRegistry | Iterable | Mapping, data_ids) -> frozenset
             raise ValueError(f"condition references unknown Data: {data_id}")
         content = _plain(data.get(data_id) if index is None else index[data_id])["content"]
         form = content["form"]
-        if form == "opaque":
+        if form in {"opaque", "loop_summary", "selection"}:
             truths.update((False, True))
         elif form == "literal" and type(content["value"]) is bool:
             truths.add(content["value"])

@@ -92,16 +92,61 @@ def test_single_call_receives_only_complete_source_and_controlled_text(material)
     parsed = audit_source_controlled(source, document, client)
     assert len(client.prompts) == 1
     payload = json.loads(client.prompts[0].split("\nINPUT_JSON\n")[1])
-    assert "".join(line["text"] for line in payload["source_files"][0]["lines"]) == source["files"][0]["content"]
-    assert payload["controlled_text"] == document["text"]
-    assert payload["controlled_units"] == [{"id": u["id"], "basis": u["basis"]} for u in document["units"]]
-    assert payload["source_files"][0]["lines"][2] == {"line": 3, "text": "读取请求并返回。\n"}
+    assert "".join(line[1] for line in payload["source_files"][0]["lines"]) == source["files"][0]["content"]
+    assert [f["value"] for f in payload["controlled_facts"]] == [u["text"] for u in document["units"]]
+    assert [f["id"] for f in payload["controlled_facts"]] == [u["id"] for u in document["units"]]
+    assert payload["source_files"][0]["lines"][2] == [3, "读取请求并返回。\n"]
     for forbidden in ("raw_graph_only_marker", "oracle_only_marker", "mutation_only_marker", "old_result_only_marker",
-                      "certificate_only_marker", "private_rich_location", "/blocks/arbitrary/instructions", "graph_sha256"):
+                      "certificate_only_marker", "private_rich_location", "graph_sha256"):
         assert forbidden not in client.prompts[0]
     assert parsed["findings"][1]["graph_refs"] == ["/blocks/arbitrary/instructions"]
     assert "not proof of semantic equivalence" in parsed["coverage_notice"]
     assert material == original
+
+
+@pytest.mark.parametrize("outcome", ["completed", "cannot_assess"])
+def test_rendered_response_examples_have_complete_fields_and_valid_references(material, outcome):
+    from skillflow.common.semantic_failure import SemanticFailure
+    from skillflow.graph.audit.models import Suggestion
+
+    source, document, _ = material
+    instructions = source_controlled_prompt(source, document).split("\nINPUT_JSON\n", 1)[0]
+    # Read the exact objects sent to the model. Bind only the documented example
+    # locations to this fixture; do not add missing fields or reshape objects.
+    examples = []
+    remaining = instructions
+    while '{"schema_version":6' in remaining:
+        start = remaining.index('{"schema_version":6')
+        example, length = json.JSONDecoder().raw_decode(remaining[start:])
+        examples.append(example)
+        remaining = remaining[start + length:]
+    assert {item["outcome"] for item in examples} == {"completed", "cannot_assess"}
+    example = next(item for item in examples if item["outcome"] == outcome)
+    example = json.loads(json.dumps(example).replace("source-file-path", "SKILL.md").replace(
+        "existing-controlled-unit-id", "u_ops"))
+    if outcome == "cannot_assess":
+        with pytest.raises(SemanticFailure) as caught:
+            validate_audit(example, source, document)
+        assert caught.value.failure["graph_refs"] == document["units"][1]["graph_refs"]
+    else:
+        assert example["findings"][0]["status"] == "omitted"
+        rendered_suggestion = example["findings"][0]["suggestions"][0]
+        assert set(rendered_suggestion) == set(Suggestion.model_fields)
+        checked = validate_audit(example, source, document)
+        assert checked["findings"][0]["suggestions"][0]["graph_refs"] == document["units"][1]["graph_refs"]
+        rendered_suggestion["suggestion"] = rendered_suggestion.pop("change")
+        with pytest.raises(ValueError, match="Extra inputs"):
+            validate_audit(example, source, document)
+
+
+@pytest.mark.parametrize("field", ["target_ids", "change", "reason"])
+def test_suggestion_required_fields_are_not_program_filled(material, field):
+    source, document, response = material
+    change = suggestion()
+    del change[field]
+    response["findings"][1].update(status="omitted", suggestions=[change])
+    with pytest.raises(ValueError, match="Field required"):
+        validate_audit(response, source, document)
 
 
 def test_combined_behavior_order_and_binding_need_no_classification_or_optional_fields(material):
@@ -152,7 +197,7 @@ def test_auxiliary_kind_is_not_a_second_model_visible_classification(material):
     prompt = source_controlled_prompt(source, document)
     assert "unverified_auxiliary_kind" not in prompt
     payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1])
-    assert all(set(unit) == {"id", "basis"} for unit in payload["controlled_units"])
+    assert all(set(unit) == {"id", "basis", "value"} for unit in payload["controlled_facts"])
 
 
 def test_auditor_receives_fixed_ir_roles_without_case_specific_answers(material):
@@ -170,8 +215,8 @@ def test_auditor_receives_fixed_ir_roles_without_case_specific_answers(material)
     # Definitions are shared instructions, not a second graph, source summary,
     # or an unverified alteration of the certified controlled text.
     payload = json.loads(payload)
-    assert payload["controlled_text"] == document["text"]
-    assert set(payload) == {"source_files", "controlled_text", "controlled_units"}
+    assert payload["controlled_facts"][1]["value"] == document["units"][1]["text"]
+    assert set(payload) == {"source_files", "controlled_facts"}
 
 
 def test_audit_boundary_does_not_invent_path_selection_or_strengthen_wf(material):
@@ -210,10 +255,10 @@ def test_english_audit_instructions_keep_material_verbatim_and_check_granularity
     ):
         assert rule in normalized
     payload = json.loads(payload_text)
-    assert [{"path": item["path"], "content": "".join(line["text"] for line in item["lines"])}
+    assert [{"path": item["path"], "content": "".join(line[1] for line in item["lines"])}
             for item in payload["source_files"]] == [
         {"path": item["path"], "content": item["content"]} for item in source["files"]]
-    assert payload["controlled_text"] == document["text"]
+    assert [f["value"] for f in payload["controlled_facts"]] == [u["text"] for u in document["units"]]
 
 
 def test_new_interpretation_boundary_does_not_override_model_uncertainty(material):
@@ -267,11 +312,10 @@ def test_missing_or_repeated_coverage_is_rejected(material, field):
 
 
 @pytest.mark.parametrize("refs", ["source_refs", "controlled_refs"])
-def test_complete_coverage_list_does_not_replace_findings(material, refs):
+def test_unreferenced_background_does_not_require_inventory_findings(material, refs):
     source, document, response = material
     response["findings"][0][refs] = []
-    with pytest.raises(ValueError, match="findings do not cover"):
-        validate_audit(response, source, document)
+    assert validate_audit(response, source, document)["outcome"] == "completed"
 
 
 @pytest.mark.parametrize("status", ["omitted", "mistranslated", "unsupported_addition"])
@@ -378,7 +422,7 @@ def test_mixed_units_keep_their_evidence_classification(material):
     client = FakeClient(response)
     audit_source_controlled(source, document, client)
     payload = json.loads(client.prompts[0].split("\nINPUT_JSON\n")[1])
-    assert payload["controlled_units"][1]["basis"] == "mixed"
+    assert payload["controlled_facts"][1]["basis"] == "mixed"
 
 
 def test_prior_role_fields_are_not_accepted(material):
@@ -413,7 +457,7 @@ def test_prompt_contains_each_source_line_once_and_reports_resolve_real_text(mat
     source["files"][0]["content"] = newline.join(["# source_only_marker", "", "读取请求并返回。"])
     bind_source(source)
     payload = json.loads(source_controlled_prompt(source, document).split("\nINPUT_JSON\n", 1)[1])
-    content = "".join(line["text"] for line in payload["source_files"][0]["lines"])
+    content = "".join(line[1] for line in payload["source_files"][0]["lines"])
     assert content == source["files"][0]["content"]
     assert json.dumps(payload, ensure_ascii=False).count("读取请求并返回。") == 1
     assert "source_line_index" not in payload and "required_coverage" not in payload
@@ -435,12 +479,12 @@ def test_compact_protocol_rejects_previous_version_and_all_removed_fields(materi
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
-def test_physical_line_coverage_does_not_promote_one_line_to_a_whole_paragraph(material, newline):
+def test_actual_line_range_is_preserved_without_claiming_unquoted_lines_reviewed(material, newline):
     source, document, response = material
     source["files"][0]["content"] = newline.join(["# source", "", "first requirement", "second requirement", "  "])
     bind_source(source)
-    with pytest.raises(ValueError, match="nonempty source lines.*4"):
-        validate_audit(response, source, document)
+    checked = validate_audit(response, source, document)
+    assert checked["findings"][1]["source_refs"][0]["end_line"] == 3
     response["findings"][1]["source_refs"][0]["end_line"] = 4
     assert validate_audit(response, source, document)["outcome"] == "completed"
 
@@ -449,8 +493,7 @@ def test_line_coverage_union_is_per_file_and_allows_overlapping_ranges(material)
     source, document, response = material
     source["files"].append({"path": "notes/code.txt", "content": "```\r\nrun()\r\n\r\n```"})
     bind_source(source)
-    with pytest.raises(ValueError, match="notes/code.txt"):
-        validate_audit(response, source, document)
+    assert validate_audit(response, source, document)["outcome"] == "completed"
     response["findings"][1]["source_refs"] += [
         {"file": "notes/code.txt", "start_line": 1, "end_line": 2},
         {"file": "notes/code.txt", "start_line": 2, "end_line": 4},
@@ -479,10 +522,10 @@ def test_blank_and_empty_files_do_not_add_coverage_requirements(material):
     assert validate_audit(response, source, document)["outcome"] == "completed"
 
 
-def test_prompt_describes_line_coverage_without_requiring_one_finding_per_line(material):
+def test_prompt_checks_semantic_omissions_without_line_or_fact_inventory(material):
     instructions, payload = source_controlled_prompt(material[0], material[1]).split("\nINPUT_JSON\n", 1)
     normalized = " ".join(instructions.split())
-    assert "every nonempty physical line" in normalized
-    assert "does not require one finding per line" in normalized
-    assert "cannot_assess branch validates its cited positions" in normalized
+    assert "not create findings merely to enumerate every physical line" in normalized
+    assert "Normal and cannot_assess responses validate their actual references" in normalized
+    assert "whether both statements and the unresolved conflict are preserved" in normalized
     assert "source_units" not in json.loads(payload)

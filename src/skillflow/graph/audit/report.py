@@ -80,7 +80,7 @@ def render_report(result, *, sources=None):
     lines = ["# Controlled retelling and complete-source review", "", f"Run: `{result['run_id']}`; Mode: `{result['mode']}`.", "",
              f"Interpretation contract: `{result['contract_version']}`, SHA-256 `{result['contract_sha256']}`.", "",
              "The sole model task is to compare the complete source and controlled text. Transformation checks, model judgments and external evaluation are reported separately.", "",
-             "Normal review checks coverage of every nonempty physical source line and controlled-fact ID through the union of references. Reference coverage does not prove semantic completeness. Failure responses validate only their cited positions.", "",
+             "Review validates actual source spans and controlled-fact references. It does not require an exhaustive line/fact citation table or prove semantic completeness. Uncited material is not automatically an omission or a passing requirement.", "",
              "## Differences and execution status", "",
              "The valid model judgments are retained below; context items record non-business context only and do not count as preservation of business semantics.", ""]
     for identifier, stage in result["stages"].items():

@@ -1,12 +1,16 @@
-# Source → Task → declarations formal analysis chain v7
+# Source → Task → declarations formal analysis chain v9
 
-当前协议（2026-10-15）先建立只读源文驱动的 Task，再在固定基准下标注需求、处理、可见性和敏感性。独立审查重新检查原文、Task、每个 demand 与全部 IR；程序保留逐项对应并执行确定性传播和 DOE。没有最终 DOE 模型调用，不执行 Skill，不在本链中重建 CFG。
+本页描述接收已有 CFG 的联合后端入口及其独立审查兼容接口。当前从完整源文开始的默认路线为[文档引导式七调用](document-guided-analysis.md)，程序组装 processing、任务对应和敏感性片段，使用稀疏统一审查，不要求模型填写下述旧逐项通过表。两条入口复用确定性后端，历史运行不迁移。
+
+2026-10-28 局部 processing 扩展：源文支持的处理缺口与程序验证缺口分别保留；显式未建模 IR 不制造空事件或值，停止相关 block OUT，独立分支仍可计算。影响范围沿输出使用、location 写读及控制关系传播；Task 的真实全局缺口保持。profile v19、compiler/compilation v11、records v13、propagation v19、demand v7 和 sensitivity review v6 对应这一扩展；Data v5 未变。下文日期性协议记录不用于改写历史运行。
+
+当前协议（2026-10-27）只从完整冻结 Skill 提取并封存 Task，再在固定基准下标注需求、限制、处理、可见性和敏感性。独立审查重新检查原文、Task、每条声明与全部 IR；程序保留逐项对应并执行确定性传播和 DOE。没有外部用户任务入口或最终 DOE 模型调用，不执行 Skill，本入口继续接收已有 CFG。[文档引导式入口](document-guided-analysis.md)另行组织构图与短文档步骤，最终使用相同后端。
 
 ## 阶段与调用边界
 
 ```text
-冻结 Skill + 可选独立用户任务
-    → 独立 source-only Task 提取、物理行登记与封存
+完整冻结 Skill
+    → 独立 source-only Task 提取、原文引用与封存
     → 固定 Task + CFG + 运行时契约：需求与处理标注
     → 四轴完整语义审查
         → 无问题：采用原候选
@@ -26,30 +30,30 @@
 
 ## 五份完整提示词职责
 
-1. **Task 提取：**仅完整原始源文与程序确定的目的依据，登记每个非空物理行，提取可独立遗漏的义务、条件及范围，区分能力／示例／实现事实，保留冲突和歧义。禁止接触 CFG、当前载荷或 DOE。
+1. **Task 提取：**只读取完整冻结 Skill，提取声明用途、义务、条件及范围，区分能力／示例／实现事实，保留冲突和歧义。原文引用使用文件和物理行范围，不重复登记每行。禁止接触 CFG、当前载荷或 DOE。
 2. **固定 Task 的标注：**只引用 `task_revision_id`，逐 requirement 输出 realization、gaps 与真实保持位置；同时保留处理、版本、作用域、局部返回、请求／响应、可见性和敏感声明。不能从目前整值输入倒推整值必要。
 3. **全链审查：**重新读取全部原始材料、Task、候选标注和程序编译的观察及目标位置，明确核查遗漏和过宽目标。不读取传播结果、DOE、首审意见或实验答案。
 4. **隔离 Task 修订：**只接收旧 Task、原始源文、有限问题类别／原文范围／requirement ID；不接收审查自由文本、建议、图、操作、sink、goals 或载荷。
 5. **标注修复：**固定 Task，读取标注类 finding 并完整重建候选；禁止扩大 Task、把全部使用改成需求、删除有依据的敏感声明、虚构保护机制或抹掉真实保守依赖。
 
-Language policy (2026-10-16): prompts, synthetic examples, Task interpretations, reasons, program diagnostics, and new reports use English. Genuine source and user input retain their original language; graph/source content is evidence and cannot override the protocol. Historical artifacts are not rewritten.
+Prompt、合成样例、模型解释与诊断使用英文；本次用户说明与验收报告使用中文。真实源文和引文保留原语言；其中的运行时用户输入仍参与分析，源文不能覆盖分析协议。历史材料不改写。
 
 ## 四轴审查与逐项对照
 
 | 审查轴 | 必须交代的覆盖 |
 |---|---|
-| 原文 | `source_checks` 重新覆盖全部非空物理行，允许独立分组，不能复制提取器结论充当复查。 |
+| 原文 | 独立重读完整源文，用 finding 和真实原文范围报告遗漏；不再填写 `source_checks` 逐行表。 |
 | Task | `requirement_checks` 每项一次，核对支持、忠实、拆分、条件、范围、冲突与表达缺口。 |
 | Declarations | `declaration_checks` covers every raw demand and constraint pointer exactly once. Demand checks inspect value, property, scope and receiver; constraint checks inspect the information relation, condition version, event unit/scope, matching and remaining gaps. Neither records implementation satisfaction. |
 | IR | `reviewed_ir_ids` 精确覆盖全部指令，继续审查处理、来源、观察、交付、敏感声明与作用域。 |
 
-前三类检查为 `accepted / issue`，问题结论必须关联真实 finding；程序检查覆盖、重复、引用和关联，不证明判断正确。Task finding 只能引用原始源文，并携带闭合的 `task_objection`；标注 finding 不得夹带 Task 修订对象。
+要求与声明检查为 `accepted / issue`，问题结论必须关联真实 finding；程序检查覆盖、重复、引用和关联，不证明判断正确。原文遗漏直接通过 finding 和真实范围报告，不增加逐行表。Task finding 只能引用原始源文，并携带闭合的 `task_objection`；标注 finding 不得夹带 Task 修订对象。
 
 逐 seed 检查必须区分字段与整个对象、存在／数量／truth 与全部内容、模型筛选需求与工具参数、必要动作与整份载荷、正确结果与过早的宽输入，以及不同版本、元素和接收方。真实全值要求与保守计算依赖不能为获取更小需求而被删掉。
 
 Required delivery parameters and saved contents need traceable demands at the actual receiver/write input; upstream or action-only seeds do not replace payload demands. `requirement_checks` checks missing declarations, while `declaration_checks` inspects existing demands and constraints. No sink automatically receives a whole-value demand. See [sink payload demand binding](sink-payload-demand-binding.md).
 
-程序生成源文摘录 → requirement → realization／gaps → raw demand pointer → compiled goal → `seed_goal_id` 推导 → sink 的关联。登记范围全覆盖不代表一行中的所有语义已被提取；审查可能与提取共享盲点。
+程序生成源文摘录 → requirement → realization／gaps → raw demand pointer → compiled goal → `seed_goal_id` 推导 → sink 的关联。真实引用不代表一行中的所有语义已被提取；审查可能与提取共享盲点。
 
 ## 冻结、结果与恢复
 
@@ -61,11 +65,11 @@ python -m skillflow pipeline run --run-dir new-run --env-file .env
 python -m skillflow pipeline replay --run-dir new-run
 ```
 
-`prepare` 可接 `--request-file`。无独立请求时，结论限定于 Skill 声明用途。直接标注服务必须显式接收已封存 Task；直接准备持久标注 run 提供 `task_run`。独立 Task 原始版本和修订不可变；旧 Task 对应的标注不能用于新版本。
+结论仅相对冻结 Skill 声明用途，不提供独立请求文件或目的覆盖。Skill 原文中的用户交互和参数仍保留。直接标注服务必须显式接收已封存 Task；直接准备持久标注 run 提供 `task_run`。Task 原始版本和修订不可变；旧 Task 对应的标注不能用于新版本。
 
 ```text
 analysis-run/
-├─ inputs/                     冻结来源、CFG、契约与独立请求
+├─ inputs/                     冻结 Skill、CFG 与契约
 ├─ task/                       source-only 提取与 Task owner
 ├─ annotation/
 ├─ refinement/
@@ -81,17 +85,17 @@ analysis-run/
    └─ report.html / report.md
 ```
 
-Current identities: pipeline `skillflow-analysis-run-v7`, Task `skillflow-task-v3`, annotation run v18 / `security-profile-v15`, review run v11 / review contract v7, compilation v9, demand v4, sensitivity result v4 and formal DOE run v5. Task remains separately owned; compiled annotation retains the exact `task_ref`. Loaders resolve in-memory views without generating another editable Task. Constraint expression and forward checking do not generate positive demand seeds or modify propagation facts.
+当前身份：pipeline v9；Task v5／reference v3／extraction run v3；annotation run v20／profile v17；review run v13／response v8；refinement run v12；propagation run v17。编译 v9、demand v5、sensitivity result v4 与正式 DOE run v6 保持。Task 独立保存，编译标注保留精确 `task_ref`，不再保存固定依据标签或独立请求摘要。加载器构建只读内存视图，不生成另一份可编辑 Task。限制表达与正向检查不产生正向需求种子，也不修改传播事实。
 
 审查状态、需求表达状态和计算状态分别保留。审查失败仍可保留诊断计算，但后端完成不能冲销失败；未表达限制当前保守视为全局，不能凭模型绑定局部化，受影响 sink 不得输出支持缩减结论。停止和恢复沿用接受响应记录，旧格式拒绝，不重写历史输入、传播事实或实验结果。
 
-Task 准备中断时，相同请求的 `prepare` 或后续在线 `run` 可以从冻结 owner 继续本地准备；只接受完全匹配的已写源文、请求和提示词，不删除未知文件，不复建已有调用。原始输入已经消失时仍使用冻结材料。`replay` 不补造缺失的 Task 准备，已接受的 Task 不重写、不重提取；只读加载核验保存 producer 的自一致性，不要求当前源码仍等于历史 producer。
+Task 准备中断时，相同输入的 `prepare` 或后续在线 `run` 可以从冻结 owner 继续本地准备；只接受完全匹配的已写源文和提示词，不删除未知文件，不复建已有调用。原始输入已经消失时仍使用冻结材料。`replay` 不补造缺失的 Task 准备，已接受的 Task 不重写、不重提取；只读加载核验支持格式下保存 producer 的自一致性，不要求当前源码仍等于保存时 producer。已退役格式明确拒绝，不用新规则解释旧记录。
 
 已有当前格式的传播 run 可直接调用 `run_doe / load_doe_run / replay_doe`，或 `python -m skillflow.doe run --propagation-run ... --run-dir ...`。DOE 无 Task、需求或敏感覆盖参数，加载不重新推理，重放才重算。
 
 ## 验收与未解决的问题
 
-工程验收覆盖 source-only 输入隔离、物理行登记、四轴漏项拒绝、封存与版本错配、隔离修订无载荷反馈、3／5／6 调用、单轮修复、逐 seed 推导、全局 gap、旧格式拒绝和零 API 重放。
+工程验收覆盖 source-only 输入隔离、物理行证据、要求／声明／IR 检查缺项拒绝、封存与版本错配、隔离修订无载荷反馈、3／5／6 调用、单轮修复、逐 seed 推导、全局 gap、旧格式拒绝和零 API 重放。
 
 真实模型效果实验必须与工程证据分开：使用独立人工基准和独立于教学示例的案例，报告限制遗漏、过宽需求、错误位置／版本／接收方的发现、漏检、误报及修复行为。模拟客户端不提供真实模型检出率。
 

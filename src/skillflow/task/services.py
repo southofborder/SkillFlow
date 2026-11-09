@@ -26,7 +26,7 @@ class _FailureResponse(BaseModel):
 
 def validate_task_response(raw, material):
     material = checked_task_material(material)
-    files = task_source_files(material["source"], user_request=material["user_request"])
+    files = task_source_files(material["source"])
     try:
         raw = _json_object(raw)
     except (ValueError, TypeError) as error:
@@ -44,16 +44,16 @@ def validate_task_response(raw, material):
             except ValueError as error:
                 raise structural_error("evidence_span", f"/failure/evidences/{index}", str(error)) from error
         raise SemanticFailure(parsed.failure.model_dump(mode="json"))
-    return validate_task_candidate(raw, source_files=files, basis=material["basis"],
+    return validate_task_candidate(raw, source_files=files,
                                    source_sha256=material["source"]["source_sha256"]).model_dump(mode="json")
 
 
-def extract_task(source, *, client, user_request=None, revision=None, stop_event=None):
-    material = prepare_task_material(source, user_request=user_request)
+def extract_task(source, *, client, revision=None, stop_event=None):
+    material = prepare_task_material(source)
     return correct_response(build_task_prompt(material, revision), complete=client.complete,
                             validate=lambda raw: validate_task_response(raw, material), stop_event=stop_event)
 
 
-def revise_task(source, *, previous_task, objections, client, user_request=None, stop_event=None):
-    return extract_task(source, client=client, user_request=user_request, stop_event=stop_event,
+def revise_task(source, *, previous_task, objections, client, stop_event=None):
+    return extract_task(source, client=client, stop_event=stop_event,
                         revision={"previous_task": previous_task, "objections": objections})

@@ -1,18 +1,16 @@
 # SkillFlow DOE 任务基准与用途切片
 
-## 当前实现更新（2026-10-15）
+## 当前实现边界（2026-10-27）
 
-[Task v3](task-evidence.md) 将任务基准从联合标注中分离：只接收完整冻结源文和可选用户任务，逐非空物理行记录处置；Task 是唯一要求释义，保留精确原值、条件、次数、顺序、范围、质量、副作用、禁止及同元素关系。Task 不包含 CFG bindings，程序封存来源、独立请求和任务版本。
+[Task v5](task-evidence.md) 独立读取完整冻结 Skill，提取声明用途及要求，保留精确原值、条件、次数、顺序、范围、质量、副作用、禁止及同元素关系。它不接收外部任务，不包含 CFG bindings、固定依据标签或逐行处置表；程序封存来源和版本。
 
-固定 Task 后，标注阶段逐 requirement 输出 `expressed / partial / retained_only / unmapped` 的 realization、图绑定和剩余缺口，并声明六类正向保持目标。`constraint / prohibit` 不再是正向 goal。完整源文、Task、逐 seed demand 及处理关系由[四轴审查](joint-pipeline.md)独立检查；Task 问题触发 source-only 修订和全新标注，不能让当前载荷反向扩大基准。
+固定 Task 后，标注阶段逐 requirement 输出 `expressed / partial / retained_only / unmapped` 的 realization、图绑定和剩余缺口，并分别声明六类正向 demands 与受支持 constraints。禁止事项不生成正向 seed。完整源文、Task、声明及处理关系由[四轴审查](joint-pipeline.md)独立检查；Task 问题触发 source-only 修订和全新标注，不能让当前载荷反向扩大基准。
 
 程序生成“原文 → Task → realization／缺口 → 原始 demand → 编译 goal → 逐 seed 推导 → sink”对应。现阶段未知影响范围的未表达限制保守全局处理，不凭模型任意绑定宣称局部；有条件的诊断计算不能升级为支持缩减的结论。后端完成、真实引用、登记覆盖及审查通过均不构成自然语言完整性、行为满足或无 DOE 证明。
 
-下面的任务依据、功能保持及 sink 回溯／用途原则继续有效；早期 `Task` 草图、原文编号和最终 DOE 模型分工属于历史接口。当前结构以[独立 Task](task-evidence.md)、[反向需求](backward-demand.md)、[敏感范围对照](sensitivity.md)和[正式分析链](joint-pipeline.md)为准。说明与报告使用中文，模型指令正文使用英文。历史输入及传播事实不回写。
+下面的功能保持及 sink 回溯／用途原则继续有效；早期可选用户任务、原文单元编号和最终 DOE 模型分工已退役。当前结构以[独立 Task](task-evidence.md)、[反向需求](backward-demand.md)、[敏感范围对照](sensitivity.md)和[正式分析链](joint-pipeline.md)为准。说明与报告使用中文，模型指令正文使用英文。历史输入及传播事实不回写。
 
 确认日期：2026-10-10。本文固定 DOE 阶段的任务依据和 sink 审查材料选择原则，是后续实现与验收的设计基准。
-
-**Historical design below:** the original `Task` sketch and final-model allocation have been superseded by the Task, demand and sensitivity contracts linked above. The read-only `SinkSlice` service remains available. Existing CFG, Data, propagation facts and historical results are not rewritten.
 
 ## 1. 两个概念与必要性判断
 
@@ -54,35 +52,34 @@ DOE 需要保持上述结果与限制，却不必保持“整条记录全部进�
 
 ## 2. 任务基准 `Task`
 
-### 2.1 依据的默认与边界
+### 2.1 唯一依据与边界
 
 采用已经确认的规则：
 
-> 有独立用户任务时，以用户任务为目的依据；没有时，自动分析 Skill 声明的用途，并将结论明确限定为“相对该 Skill 声明用途的静态最小化判断”。
+> 从完整冻结 Skill 提取目的与要求，结论限定为“相对该 Skill 声明用途的静态最小化判断”。
 
-不要求逐个 Skill 额外填写任务，也不把 Skill 作者声明的用途视为已经获得真实用户授权。
+不提供外部任务覆盖，也不把 Skill 作者声明的用途视为已经获得真实用户授权。Skill 自身描述的用户输入、运行参数及交互继续纳入处理和控制关系，不是被删除的外部任务入口。
 
-用户任务与 Skill 的要求存在冲突时，保留并说明冲突以及本次采用的目的依据，不静默改写输入。无法据此完成必要性判断时明确记录判断失败，不能用空发现生成安全结论。
+Skill 的不同源文件或要求存在冲突时，保留冲突与歧义，不静默选择方便分析的一方。无法据此完成某项判断时记录限制或失败，不能用空发现生成安全结论。
 
 ### 2.2 最小职责结构
 
 ```text
-TaskBasis
-├─ basis
-│  └─ user_request / declared_skill
-│     本次采用的目的依据，由程序确定
+Task
 ├─ purpose
-│  └─ 要实现的结果、服务对象及原文编号
-└─ requirements[]
-   └─ 必须保持的结果、条件、副作用、质量及禁止事项
-      每项引用已有原文编号
+│  └─ 要实现的结果、服务对象及原文范围
+├─ requirements[]
+│  └─ 必须保持的结果、条件、副作用、质量及禁止事项
+│     每项引用冻结文件和物理行范围
+└─ issues[]
+   └─ 源文冲突及未解决歧义
 ```
 
 `purpose` 和 `requirements` 的说明都须具有可定位的依据，不能根据当前载荷倒推任务需要什么。相关要求允许合并表达，不强制逐句原子化，不增加维度分类和评分，也不另建一条重复的证据链。
 
-程序确定依据身份并提供原文；同一次 DOE 判断解释目的、需要保持的要求和敏感范围。不增加独立的任务提取模型角色或调用。
+独立模型步骤只解释源文目的和要求；程序核验引用并封存 Task。后续标注使用固定版本，将正向需求、限制及敏感范围绑定实际对象，最终 DOE 由程序计算，不再增加最终裁决调用。
 
-`Task` 保存于 DOE 自己的阶段结果，不写入 CFG、Security Profile 或冻结传播事实。它不是提前填写的必要性答案，不用于筛掉任何 sink。
+`Task` 保存于独立 Task 运行，后续通过精确 `task_ref` 取得；不在 CFG、标注或传播事实中重复保存正文。它不是提前填写的必要性答案，不用于筛掉任何 sink。
 
 ### 2.3 保留要求，不豁免全部载荷
 

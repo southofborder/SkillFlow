@@ -16,7 +16,7 @@ def review():
              "skill/ref.md": "Keep the original argument.\n未翻译的来源。"}
     def evidence(file="skill/SKILL.md", start=3, end=3, reason="This preserves the original items."):
         return {"file": file, "start_line": start, "end_line": end, "reason": reason}
-    task = {"schema_version": "skillflow-task-v3", "basis": "declared_skill",
+    task = {"schema_version": "skillflow-task-v5",
             "purpose": {"text": "Return the specified result.", "evidences": [evidence(start=1, end=1)]},
             "requirements": [
                 {"id": "R1", "text": "Return the original items value.", "evidences": [evidence()],
@@ -35,13 +35,14 @@ def review():
                target_key({"block_id":"b","path":[]}): {"pointer": "/blocks/b", "kind": "block", "block_id": "b"}}
     realizations = [{"requirement_id": r["id"], "status": "expressed" if r["bindings"] else "unmapped",
         "bindings": r.pop("bindings"), "gaps": []} for r in task["requirements"]]
-    task.update(source_accounting=[], issues=[])
+    task.update(issues=[])
     return SimpleNamespace(task=task, files=files, targets=targets, cfg=cfg, realizations=realizations,
                            boundaries={"binary_files": ["blob.bin"], "uninterpreted_files": []})
 
 
 def test_shared_view_preserves_exact_source_and_candidate_order(review):
     view = build_view(review)
+    assert "basis" not in view
     assert [item["id"] for item in view["requirements"]] == ["R1", "R2", "R3"]
     assert view["requirements"][0]["evidences"][0]["quote"] == "Return items unchanged.\r\n"
     assert view["requirements"][1]["evidences"][0]["file"] == "skill/ref.md"

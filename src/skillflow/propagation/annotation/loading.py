@@ -84,6 +84,9 @@ def load_annotation_run(run_dir):
     saved materials is rejected, as are incomplete executions and old formats.
     """
     directory = checked_run_path(run_dir)
+    from skillflow.document_guided.online import ANNOTATION_IDENTITY, load_annotation
+    if _read(directory / "manifest.json").get("identity") == ANNOTATION_IDENTITY:
+        return load_annotation(directory)
     try:
         identity = _read(directory / "manifest.json")
         if (identity.get("identity") != IDENTITY or identity.get("schema_version") != FORMAT_VERSION
@@ -114,7 +117,7 @@ def load_annotation_run(run_dir):
         material = load_prepared_material(directory)
         _, source, source_metadata = read_snapshot(resolve_material_owner(directory))
         cfg = material["cfg"]
-        if (material != prepare_material(source, cfg, task_baseline=material["task"], user_request=material["user_request"])
+        if (material != prepare_material(source, cfg, task_baseline=material["task"])
                 or manifest.get("source_sha256") != source["source_sha256"]
                 or manifest.get("graph_sha256") != canonical_sha256(cfg)
                 or manifest.get("material_sha256") != canonical_sha256(material)

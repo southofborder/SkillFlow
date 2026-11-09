@@ -70,8 +70,8 @@ def build_demand_target_index(cfg: dict[str, Any], raw_annotation: Any) -> dict[
     if not isinstance(raw_annotation, dict) or not isinstance(raw_annotation.get("ir_semantics"), dict):
         raise ValueError("demand targets require a raw annotation with ir_semantics")
     instructions = {ir["id"]: ir for block in graph["blocks"].values() for ir in block["instructions"]}
-    if set(raw_annotation["ir_semantics"]) != set(instructions):
-        raise ValueError("demand target specs must cover exactly the actual CFG instructions")
+    from skillflow.propagation.contracts.limitations import check_processing_coverage
+    check_processing_coverage(graph, raw_annotation)
     raw_specs = {ir_id: RawIRSemantics.model_validate(spec).model_dump(mode="json")
                  for ir_id, spec in raw_annotation["ir_semantics"].items()}
     targets = build_task_target_index(graph)
@@ -167,6 +167,11 @@ def build_demand_target_index(cfg: dict[str, Any], raw_annotation: Any) -> dict[
                     ref={"kind": "local", "name": event["item"]}, scope_path=path)
                 for body_index, child in enumerate(event["body"]):
                     segment(child, [*path, "body", body_index], inner, path)
+                if event.get("output") is not None:
+                    available.add(event["output"])
+                    add([*path, "output"], "collection_output", event["output"], available,
+                        ref={"kind": "local", "name": event["output"]}, scope_path=None,
+                        foreach_path=path)
         for binding_index, binding in enumerate(spec["output_bindings"]):
             add(["output_bindings", binding_index], "output_binding", binding["value"], available,
                 output_index=binding["output_index"], ref=binding["value"], scope_path=None)

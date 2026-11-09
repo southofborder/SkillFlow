@@ -166,8 +166,6 @@ def endpoint_example():
     requirement = "Send a calibration record containing the original badge and the original offset exactly when adjustment is true."
     ex["task_candidate"]["purpose"]["text"] = requirement
     ex["task_candidate"]["requirements"][0]["text"] = requirement
-    ex["task_candidate"]["source_accounting"][0]["reason"] = (
-        "The line specifies the required submission; acquisition, private-field context and internal return describe its implementation.")
     raw = ex["annotation"]
     raw["locations"] = {
         "session_packet": {"kind": "runtime_context", "name": "calibration_packet", "operand_refs": [

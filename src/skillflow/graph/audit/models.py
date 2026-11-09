@@ -1,6 +1,6 @@
 """Contracts for the single source-to-controlled-text semantic review.
 
-These records constrain evidence and coverage, not the truth of model judgments.
+These records constrain cited evidence, not the truth or completeness of judgments.
 Graph locations are absent from model output and derived by the local service.
 """
 

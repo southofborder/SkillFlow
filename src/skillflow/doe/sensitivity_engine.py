@@ -12,6 +12,7 @@ from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.conditions import payload_input_indices
 from skillflow.propagation.data import is_definitely_empty_collection
 from skillflow.propagation.contracts.paths import semantics_path, element_scope_path
+from skillflow.propagation.contracts.limitations import diagnostic_applies
 from .material import _id
 
 
@@ -96,6 +97,30 @@ def _demand_range(demand):
     return [*start, *demand["path"]], [[*start, *p] for p in demand["excluded_paths"]]
 
 
+def unstable_collection_offsets(data, identity, seen=None):
+    seen = set() if seen is None else seen
+    if identity in seen:
+        return True
+    seen = {*seen, identity}
+    content = data[identity]["content"]
+    if content["form"] == "loop_summary":
+        return True  # Static contribution families are not runtime offsets.
+    if content["form"] == "selection":
+        return unstable_collection_offsets(data, content["base"], seen)
+    if content["form"] == "subset_view":
+        return True
+    if content["form"] == "whole_except" and any(len(path) == 1 for path in content["excluded_parts"]):
+        return True
+    return (content["form"] in {"whole_except", "field_updates", "mapped_collection", "accumulated_collection"}
+            and unstable_collection_offsets(data, content["base"], seen))
+
+
+def mapped_selector(data, content, member):
+    """A filtered source retains occurrence identity without output offsets."""
+    return ({"kind": "each"} if unstable_collection_offsets(data, content["base"])
+            else member["selector"])
+
+
 def demand_overlap(signal, demand):
     """Return preservation of this property, a structural restriction, or none.
 
@@ -118,6 +143,10 @@ def demand_overlap(signal, demand):
         return "retain"
     if wanted == "action":
         return "none"
+    if wanted == "cardinality" and prefix(path, sensitive) and len(sensitive) > len(path) + 1:
+        # A nested field is not a member of the counted container. Removing
+        # that field preserves the containing member and the outer count.
+        return "none"
     if wanted == prop:
         return "retain"
     if wanted == "truth":
@@ -134,11 +163,48 @@ def range_presence(data, data_id, path, seen=None):
         return "present"
     seen = set() if seen is None else set(seen)
     key = (data_id, canonical_sha256(path))
-    if key in seen:
+    if any(previous == data_id for previous, _ in seen):
         return "unknown"
     seen.add(key)
-    content = data[data_id]["content"]
+    return _content_presence(data, data_id, path, data[data_id]["content"], seen)
+
+
+def _alternative_presence(statuses):
+    if "present" in statuses:
+        return "present"
+    if not statuses or "unknown" in statuses:
+        return "unknown"
+    if all(status == "empty" for status in statuses):
+        return "empty"
+    if all(status in {"absent", "empty"} for status in statuses):
+        return "absent"
+    return "invalid"
+
+
+def _content_presence(data, data_id, path, content, seen):
     form = content["form"]
+    if form == "loop_summary":
+        return _alternative_presence([_content_presence(data, data_id, path, variant["content"], set(seen))
+            for variant in content["variants"]])
+    if form == "selection":
+        return range_presence(data, content["base"], content["path"] + path, seen)
+    if form == "accumulated_collection":
+        if type(path[0]) is str:
+            return "invalid"
+        from .constraint_control import collection_size
+        size = collection_size(data, content["base"])
+        selected, suffix = path[0], path[1:]
+        statuses = []
+        if type(selected) is not int or size is None or selected < size:
+            statuses.append(range_presence(data, content["base"], path, seen))
+        if type(selected) is not int or size is None or selected >= size:
+            if content["mode"] == "item":
+                if type(selected) is not int or size is None or selected == size:
+                    statuses.append(range_presence(data, content["added"], suffix, seen))
+            else:
+                shifted = selected - size if type(selected) is int and size is not None else {"kind": "each"}
+                statuses.append(range_presence(data, content["added"], [shifted, *suffix], seen))
+        return _alternative_presence(statuses) if statuses else "absent"
     if isinstance(path[0], dict) and path[0].get("kind") == "each" and is_definitely_empty_collection(data, data_id):
         return "empty"
     if form == "literal":
@@ -159,6 +225,19 @@ def range_presence(data, data_id, path, seen=None):
                 return literal(value[step], remaining) if step < len(value) else "absent"
             return "invalid"
         return literal(content["value"], path)
+    if form == "mapped_collection":
+        if type(path[0]) is str:
+            return "invalid"
+        statuses = [range_presence(data, value, path[1:], set(seen))
+                    for member in content["members"]
+                    if unstable_collection_offsets(data, content["base"])
+                    or isinstance(path[0], dict) or member["selector"] == path[0]
+                    or isinstance(member["selector"], dict) for value in member["values"]]
+        if "present" in statuses:
+            return "present"
+        if "unknown" in statuses:
+            return "unknown"
+        return "absent" if statuses else ("empty" if is_definitely_empty_collection(data, data_id) else "unknown")
     if form == "whole_except":
         if any(covers(excluded, path) for excluded in content["excluded_parts"]):
             return "absent"
@@ -240,6 +319,7 @@ class SensitivityEngine:
         self.path_budget = 2 + sum(len(p.get("path", [])) for d in self.data.values()
             for p in [*d["content"].get("parts", []), *d["content"].get("updates", [])])
         self.path_budget += sum(len(d["declaration"]["path"]) for d in declarations.values())
+        self.path_budget += sum(value["content"]["form"] == "mapped_collection" for value in self.data.values())
         self._edges()
 
     def diagnostic(self, code, reason, ir=None, op=None, blocking=True):
@@ -251,6 +331,7 @@ class SensitivityEngine:
 
     def _edges(self):
         expression_inputs = {}
+        self.family_sources = defaultdict(set)
         for key, operation in self.engine.ops.items():
             spec, record = operation["spec"], operation["record"]
             expression = self.engine.expressions.get((operation["position"]["instruction_id"], operation["raw_op"]))
@@ -272,15 +353,47 @@ class SensitivityEngine:
                     for source in record["inputs"][guard]:
                         for slot in record["outputs"]:
                             for target in slot:
-                                if source in self.data[target]["origin"]["inputs"]:
+                                item = self.data[target]
+                                inputs = set(item["origin"]["inputs"])
+                                inputs.update(value for variant in item["content"].get("variants", [])
+                                              for value in variant["inputs"])
+                                paired = not record.get("alternatives") or any(
+                                    source in row["inputs"][guard] and any(target in values for values in row["outputs"])
+                                    for row in record["alternatives"])
+                                if source in inputs and paired:
                                     self.edges[source].append((target, "conditional_membership", member["path"]))
-        for identity, data in self.data.items():
-            content, origin = data["content"], data["origin"]
+        def attach(identity, content, origin, *, family=False):
             form = content["form"]
             if form == "known_parts":
                 for part in content["parts"]:
-                    self.edges[identity].append((part["data"], "select", part["path"]))
+                    self.edges[identity].append((part["data"], "family_select" if family else "select", part["path"]))
                     self.edges[part["data"]].append((identity, "embed", part["path"]))
+                    if family:
+                        self.family_sources[identity].add(part["data"])
+            elif form == "mapped_collection":
+                for member in content["members"]:
+                    for value in member["values"]:
+                        selector = mapped_selector(self.data, content, member)
+                        self.edges[value].append((identity, "embed", [selector]))
+                        self.edges[identity].append((value, "family_select" if family else "map_select", [selector]))
+                        if family:
+                            self.family_sources[identity].add(value)
+                self.edges[content["base"]].append((identity, "map_structure", None))
+            elif form == "selection":
+                self.edges[content["base"]].append((identity, "select", content["path"]))
+                self.edges[identity].append((content["base"], "family_embed" if family else "embed", content["path"]))
+                if family:
+                    self.family_sources[identity].add(content["base"])
+                self.path_budget += len(content["path"])
+            elif form == "accumulated_collection":
+                self.edges[content["base"]].append((identity, "accumulated_base", None))
+                from .constraint_control import collection_size
+                size = collection_size(self.data, content["base"])
+                if content["mode"] == "item":
+                    self.edges[content["added"]].append((identity, "embed", [size if size is not None else {"kind": "each"}]))
+                else:
+                    self.edges[content["added"]].append((identity, "accumulated_items", size))
+                self.path_budget += 1
             elif form in {"whole_except", "field_updates", "subset_view"}:
                 removed = content.get("excluded_parts", [p["path"] for p in content.get("updates", [])])
                 self.edges[content["base"]].append((identity, "subset" if form == "subset_view" else "cut", removed))
@@ -299,17 +412,32 @@ class SensitivityEngine:
                     requirements = expression_inputs[identity].get(dependency["data"], []) if identity in expression_inputs else None
                     self.edges[dependency["data"]].append((identity, dependency["relation"], requirements))
 
+        for identity, data in self.data.items():
+            content, origin = data["content"], data["origin"]
+            if content["form"] == "loop_summary":
+                for variant in content["variants"]:
+                    attach(identity, variant["content"], {"dependencies": variant.get("dependencies", [])}, family=True)
+            else:
+                attach(identity, content, origin)
+
     def emit(self, data_id, signal, rule, parent=None):
         signal = {k: deepcopy(signal[k]) for k in ("declaration_id", "label", "property", "path", "excluded_paths", "relation")}
         if len(signal["path"]) > self.path_budget:
-            self.diagnostic("sensitivity_path_limit", "A recursive content path cannot be represented precisely; its influence is retained.")
+            owners = {info["position"]["instruction_id"] for info in self.engine.ops.values()
+                      if any(data_id in output for output in info["record"]["outputs"])}
+            owner = next(iter(owners)) if len(owners) == 1 else self.declarations.get(
+                signal["declaration_id"], {}).get("instruction_id")
+            self.diagnostic("sensitivity_path_limit", "A recursive content path cannot be represented precisely; its influence is retained.", ir=owner)
             signal.update(path=[], excluded_paths=[], relation="possible")
         identity = _id("sensitivity_", [data_id, signal])
         if identity in self.rows:
             row = self.rows[identity]
+            changed = rule not in row["rules"] or bool(parent and parent != identity and parent not in row["parents"])
             row["rules"] = sorted(set(row["rules"]) | {rule})
             if parent and parent != identity:
                 row["parents"] = sorted(set(row["parents"]) | {parent})
+            if changed and self.data[data_id]["content"]["form"] in {"mapped_collection", "loop_summary"}:
+                self.queue.append(identity)
             return
         if any(dominates(self.rows[old], signal) for old in self.by_data[data_id]):
             return
@@ -341,7 +469,7 @@ class SensitivityEngine:
         event_indices = {scope[1] for m in self.engine.annotation["mapping"]["events"]
             if m["instruction_id"] == ir and m["raw_path"][:len(prefix_path)] == prefix_path
             and (scope := element_scope_path(m["compiled_path"])) is not None}
-        record = self.engine.facts.records.get(ir)
+        record = self.engine.index.records.get(ir)
         if record is None or len(event_indices) != 1:
             return False
         event = record["events"][next(iter(event_indices))]
@@ -352,8 +480,10 @@ class SensitivityEngine:
     def seed(self):
         for identity, row in self.declarations.items():
             declaration = row["declaration"]
-            if sum(isinstance(step, dict) and step.get("kind") == "each" for step in declaration["path"]) > 1:
-                self.diagnostic("unsupported_sensitivity_scope", "Nested each sensitivity ranges are outside the supported single member scope.", row["instruction_id"])
+            if self.engine.index.coverage.get(row["instruction_id"]) == "not_reached":
+                # The loader verifies typed-guard pruning. This is absence of
+                # an occurrence, not a missing member record or an empty value.
+                self.resolved.add(identity)
                 continue
             refs = set()
             for scope in self._scopes(row):
@@ -389,7 +519,38 @@ class SensitivityEngine:
             identity = self.queue.popleft()
             row = self.rows[identity]
             for target, relation, parameter in self.edges[row["data_id"]]:
-                if relation == "select":
+                if relation == "map_structure":
+                    if row["property"] not in {"cardinality", "shape"} or row["path"]:
+                        continue
+                    signal = deepcopy(row)
+                    if row["property"] == "shape":
+                        signal["relation"] = "possible"
+                elif relation == "map_select":
+                    if not self._map_projection_supported(row["data_id"], target, identity, set()):
+                        continue
+                    signal = select(row, parameter)
+                    if signal is not None and signal["property"] != "presence" and range_presence(
+                            self.data, target, signal["path"]) in {"absent", "invalid", "empty"}:
+                        continue
+                elif relation in {"family_select", "family_embed"}:
+                    if not self._family_projection_supported(row["data_id"], target, identity, set()):
+                        continue
+                    signal = select(row, parameter) if relation == "family_select" else embed(row, parameter)
+                elif relation == "accumulated_base":
+                    signal = deepcopy(row)
+                    if not signal["path"] and signal["property"] in {"cardinality", "shape"}:
+                        signal["relation"] = "possible" if row["relation"] == "possible" else "derived"
+                elif relation == "accumulated_items":
+                    signal = deepcopy(row)
+                    if signal["path"]:
+                        if type(signal["path"][0]) is int:
+                            signal["path"][0] = signal["path"][0] + parameter if parameter is not None else {"kind": "each"}
+                        signal["excluded_paths"] = [[p[0] + parameter, *p[1:]] if p and type(p[0]) is int
+                            and parameter is not None else p for p in signal["excluded_paths"]
+                            if not (p and type(p[0]) is int and parameter is None)]
+                    elif signal["property"] in {"cardinality", "shape"}:
+                        signal["relation"] = "possible" if row["relation"] == "possible" else "derived"
+                elif relation == "select":
                     signal = select(row, parameter)
                 elif relation == "embed":
                     signal = embed(row, parameter)
@@ -422,13 +583,48 @@ class SensitivityEngine:
                 if signal is not None:
                     self.emit(target, signal, "supported_expression_" + relation if parameter is not None and relation in {"derived", "possible"} else relation, identity)
 
+    def _map_projection_supported(self, mapped, target, identity, seen):
+        """Do not transfer one alternative member's labels into its siblings."""
+        if identity in seen:
+            return False
+        seen = {*seen, identity}
+        row = self.rows[identity]
+        if "explicit_declaration" in row["rules"]:
+            return True
+        values = {value for member in self.data[mapped]["content"]["members"] for value in member["values"]}
+        for parent in row["parents"]:
+            owner = self.rows[parent]["data_id"]
+            if row["data_id"] == mapped and owner in values:
+                if owner == target:
+                    return True
+            elif self._map_projection_supported(mapped, target, parent, seen):
+                return True
+        return False
+
+    def _family_projection_supported(self, family, target, identity, seen):
+        """A union of relation templates does not copy labels between choices."""
+        if identity in seen:
+            return False
+        seen = {*seen, identity}
+        row = self.rows[identity]
+        if "explicit_declaration" in row["rules"]:
+            return True
+        for parent in row["parents"]:
+            owner = self.rows[parent]["data_id"]
+            if row["data_id"] == family and owner in self.family_sources[family]:
+                if owner == target:
+                    return True
+            elif self._family_projection_supported(family, target, parent, seen):
+                return True
+        return False
+
     @staticmethod
     def _compare(signal, demands, limits):
         overlap = [(identity, demand_overlap(signal, demand)) for identity, demand in demands]
+        if limits:
+            return "no_excess_established", "Relevant analysis limitations leave this comparison unresolved; this is neither a safe verdict nor evidence of removable content.", overlap
         if any(kind == "retain" for _, kind in overlap):
             return "no_excess_established", "A task-preservation demand retains this information property or conservatively retains the overlapping range. This is not irreplacability.", overlap
-        if limits:
-            return "no_excess_established", "Relevant analysis limitations prevent a supported excess conclusion; missing demands are not evidence of removable content.", overlap
         if signal["relation"] != "direct":
             return "possible_excess", "Only a derived or possible relation to declared sensitive information is established. This does not establish the original sensitive value as payload content or independently establish that this subpart is sensitive.", overlap
         if not demands:
@@ -446,13 +642,16 @@ class SensitivityEngine:
         for diagnostic in self.demand["diagnostics"]:
             self.diagnostics[diagnostic["id"]] = {k: diagnostic[k] for k in
                 ("id", "code", "reason", "instruction_id", "operation_id", "blocking")}
+            if "affected_instruction_ids" in diagnostic:
+                self.diagnostics[diagnostic["id"]]["affected_instruction_ids"] = deepcopy(diagnostic["affected_instruction_ids"])
         sinks, used_sensitivity, used_demands = [], set(), set()
         for sink in self.demand["sinks"]:
             relevant = set(self.engine.index.slice(sink["boundary"])["usage_context"]["instructions"])
             relevant.update(self.engine.ops[key]["position"]["instruction_id"] for key in
                 self.engine.index.slice(sink["boundary"])["backward_slice"]["operations"])
             limits = sorted(set(sink["limitations"]) | {identity for identity, diagnostic in self.diagnostics.items()
-                if diagnostic["blocking"] and (diagnostic["instruction_id"] is None or diagnostic["instruction_id"] in relevant)})
+                if diagnostic["blocking"] and diagnostic_applies(diagnostic, relevant,
+                    scoped_instructions=self.engine.index.slice(sink["boundary"])["usage_context"]["instructions"])})
             reviews = []
             for payload in sink["actual_payload"]:
                 key = payload["operation_id"]
@@ -501,12 +700,14 @@ class SensitivityEngine:
                         if field != "id"} for k in sorted(ids)}
         partial = (self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
                    or any(c["status"] == "not_established" for c in constraints.checks.values()))
-        return {"schema_version": "skillflow-sensitivity-review-v4", "status": "partial" if partial else "complete",
+        return {"schema_version": "skillflow-sensitivity-review-v6", "status": "partial" if partial else "complete",
             "sinks": sinks, "derivations": {"sensitivity": closure(used_sensitivity, self.rows),
                 "demand": closure(used_demands, self.demand["derivations"])},
             "constraints": constraints.to_dict(),
             "diagnostics": [self.diagnostics[k] for k in sorted(self.diagnostics)],
             "coverage": {"declared_scopes": len({canonical_sha256([r["instruction_id"], r["scope_path"]]) for r in self.declarations.values()}),
                 "declarations": len(self.declarations), "resolved_declarations": len(self.resolved),
-                "sinks": len(sinks), "expected_sinks": len(self.engine.facts.sinks),
+                "sinks": len(sinks), "expected_sinks": len(self.engine.index.sinks),
+                **({"unresolved_boundaries": deepcopy(self.demand["coverage"]["unresolved_boundaries"])}
+                   if self.demand["coverage"].get("unresolved_boundaries") else {}),
                 "sensitivity_basis": "declared_ranges_only", "demand_status": self.demand["status"]}}

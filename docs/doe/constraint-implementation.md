@@ -1,5 +1,7 @@
 # Constraint implementation reference
 
+The current document-guided entry uses the [eight-call workflow](document-guided-analysis.md) and a sparse unified source review. References below to declaration-check tables describe the standalone legacy review interface; those tables are not model output requirements in the current entry. The bounded constraint checks and gap policy remain in use. Data v5 mapped collections additionally preserve yielded member content and source cardinality, without treating the base collection as plaintext in every output member.
+
 Current implementation: 2026-10-19. This document records the bounded implementation of [constraint semantics](constraint-semantics.md), its [44-case semantic matrix](constraint-acceptance.md), and offline engineering evidence. It is not a claim that all source restrictions are expressible, all matrix preservation expectations are implemented, or a real Skill has been proven compliant. No remote model call or historical run migration was used for the measurements below.
 
 ## Ownership and analysis flow
@@ -103,23 +105,23 @@ The gate records one of three positive rules, or `not_established`:
 
 ## Current versions
 
-These are current interfaces; frozen older artifacts retain their own versions and are not automatically relabeled.
+Updated 2026-10-24: the redundant Task/source review tables have been removed; constraint semantics and final DOE result kinds are unchanged. These are current interfaces; frozen older artifacts retain their own versions and are not automatically relabeled.
 
 | Interface | Current version |
 |---|---|
-| Sealed Task / Task reference | `skillflow-task-v3` / `skillflow-task-reference-v1` (unchanged) |
+| Sealed Task / Task reference | `skillflow-task-v4` / `skillflow-task-reference-v2` |
 | Abstract runtime contract | `skillflow-abstract-runtime-v7` (unchanged) |
-| Annotation material and profile | `security-profile-v15` |
+| Annotation material and profile | `security-profile-v16` |
 | Processing compiler / compilation mapping | `skillflow-processing-compiler-v9` / `skillflow-processing-compilation-v9` |
-| Annotation run | `skill-ir-security-profile-v18`, format 18 |
-| Review schema | `annotation-review-v7` |
-| Review / refinement run | `skill-ir-annotation-review-v11`, format 11 / `skill-ir-annotation-refinement-v10`, format 10 |
-| Propagation run | `skill-ir-propagation-v15`, format 15 |
-| Demand result | `skillflow-demand-v4` |
+| Annotation run | `skill-ir-security-profile-v19`, format 19 |
+| Review schema | `annotation-review-v8` |
+| Review / refinement run | `skill-ir-annotation-review-v12`, format 12 / `skill-ir-annotation-refinement-v11`, format 11 |
+| Propagation run | `skill-ir-propagation-v16`, format 16 |
+| Demand result | `skillflow-demand-v5` |
 | Sensitivity result | `skillflow-sensitivity-review-v4` |
-| Formal DOE run | `skillflow-doe-run-v5`, format 5 |
-| Source-to-DOE pipeline | `skillflow-analysis-run-v7`, format 7 |
-| Joint pilot run | `skillflow-joint-pipeline-pilot-v8`, schema 8 |
+| Formal DOE run | `skillflow-doe-run-v6`, format 6 |
+| Source-to-DOE pipeline | `skillflow-analysis-run-v8`, format 8 |
+| Joint pilot run | `skillflow-joint-pipeline-pilot-v9`, schema 9 |
 
 No new exposure level, runtime execution mechanism, standalone reduced-program run, or model-authored result status is introduced.
 

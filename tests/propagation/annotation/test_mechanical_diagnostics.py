@@ -35,7 +35,7 @@ def test_realization_reference_failures_are_structural_precise_and_batched():
     row.update(status="retained_only", bindings=[
         {"target": {"instruction_id": "absent", "path": []}, "reason": "candidate claim"}],
         gaps=[{"reason": "candidate gap", "evidences": [
-            {"file": "missing", "start_line": 1, "end_line": 1, "reason": "candidate evidence"},
+            {"file": "skill/missing.md", "start_line": 1, "end_line": 1, "reason": "candidate evidence"},
             {"file": "skill/SKILL.md", "start_line": 999, "end_line": 1000, "reason": "candidate evidence"}]}])
     task = SimpleNamespace(requirements=[SimpleNamespace(id=row["requirement_id"])])
     with pytest.raises(StructuralValidationError) as caught:
@@ -99,7 +99,7 @@ def test_invalid_failure_references_are_batched_but_valid_failure_stays_terminal
     raw = {"outcome": "cannot_assess", "failure": {
         "reason": "必要关系尚不能判断。", "instruction_ids": ["absent"],
         "evidences": [{"rule_id": "absent_rule", "reason": "依据。"},
-                      {"file": "missing", "start_line": 1, "end_line": 1, "reason": "依据。"}]}}
+                      {"file": "skill/missing.md", "start_line": 1, "end_line": 1, "reason": "依据。"}]}}
     with pytest.raises(StructuralValidationError) as caught:
         validate_raw_response(raw, material)
     assert [row["path"] for row in caught.value.diagnostics] == [
@@ -140,7 +140,6 @@ def _two_requirement_fixture():
     second = deepcopy(fixture["task_candidate"]["requirements"][0])
     second.update(id="R2", text="Retain the additional declared calibration outcome.")
     fixture["task_candidate"]["requirements"].append(second)
-    fixture["task_candidate"]["source_accounting"][0]["requirement_ids"].append("R2")
     realization = deepcopy(fixture["annotation"]["realizations"][0])
     realization["requirement_id"] = "R2"
     fixture["annotation"]["realizations"].append(realization)

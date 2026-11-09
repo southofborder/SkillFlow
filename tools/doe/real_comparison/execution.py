@@ -18,7 +18,7 @@ import time
 
 from tools.doe.real_comparison.protocol import SCHEMA, SEED, METHODS, policy, sha256, write_json, utc_now
 
-EXPECTED = {"model": "gpt-6.1-sol", "effort": "ultra", "provider": "openai"}
+EXPECTED = {"model": "gpt-6.1-sol", "effort": "max", "provider": "openai"}
 ENVELOPE = """You are participating in a source-only static analysis experiment.
 Work only from the complete material in this message. Do not use tools, browse,
 read files, execute code, delegate, or request follow-up information. Return one
@@ -319,7 +319,7 @@ def prepare_schedule(run_dir, case_records, *, seed=SEED):
         for method in methods:
             item = {"workflow_id": f"{_name(case['case_id'])}_{method}_r{repeat}",
                     "case_id": case["case_id"], "method": method, "repeat": repeat,
-                    "kind": "main", "source_sha256": case["source_sha256"], "user_request": None}
+                    "kind": "main", "source_sha256": case["source_sha256"]}
             schedule.append(item)
             if repeat == 1 and method in {"audit", "chain"}:
                 reviews.append({**item, "workflow_id": item["workflow_id"] + "_review", "kind": "review",
@@ -632,7 +632,7 @@ def _native_pipeline(source, attempt, client, *, renderer=None):
         return {"status": "failed", "stage": "graph", "reason": graph["reason"], "graph": graph}
     graph_path = attempt / "selected-analysis.json"
     write_json(graph_path, {"cfg": selected}, immutable=True)
-    prepare_analysis_run(source, graph_path, run_dir=attempt / "analysis", config={}, user_request=None)
+    prepare_analysis_run(source, graph_path, run_dir=attempt / "analysis", config={})
     downstream = run_analysis(attempt / "analysis", client_factory=factory, review_client_factory=factory,
                               repair_client_factory=factory, task_client_factory=factory,
                               task_repair_client_factory=factory, config={})
@@ -664,7 +664,7 @@ def run_workflow(run_dir, workflow_id, *, source_path, prompt=None, original_wor
         if not workflow_id.startswith("calibration_"):
             raise ExecutionStop("Calibration identities cannot masquerade as formal workflows")
         item = {"workflow_id": workflow_id, "case_id": name, "source_sha256": inspect_input(source_path)[2]["source_sha256"],
-                "method": "skillflow" if prompt is None else "audit", "repeat": 0, "kind": "calibration", "user_request": None}
+                "method": "skillflow" if prompt is None else "audit", "repeat": 0, "kind": "calibration"}
     else:
         raise ValueError("Unknown experiment execution mode")
     if inspect_input(source_path)[2]["source_sha256"] != item["source_sha256"]:

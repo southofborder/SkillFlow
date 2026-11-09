@@ -121,9 +121,12 @@ def validated_trace(path: Path) -> list:
 class SavedCallFailure(ValueError):
     """Preserve an already-recorded failure's identity during offline replay."""
 
-    def __init__(self, error_type: str, message: str):
+    def __init__(self, error_type: str, message: str, *, record=None):
         super().__init__(message)
         self.error_type = error_type
+        if record and record.get("recording_failed"):
+            self.recording_failed = True
+            self.recording_errors = deepcopy(record.get("recording_errors", []))
 
 
 class ResponseIntegrityError(ValueError):
@@ -221,7 +224,7 @@ class SavedResponseClient:
         record = read_json(self.directory / "call.json")
         if record.get("response_rejected") or record.get("status") == "invalid_record":
             raise SavedCallFailure(record.get("error_type", "ResponseIntegrityError"),
-                                   record.get("error", "Recorded response was rejected; no automatic recovery is permitted"))
+                                   record.get("error", "Recorded response was rejected; no automatic recovery is permitted"), record=record)
         if record["prompt"] != self.writer.clean(prompt):
             raise ValueError("Replay prompt differs from the recorded call input")
         if record["prompt_sha256"] != canonical_sha256(record["prompt"]):
@@ -238,7 +241,7 @@ class SavedResponseClient:
         # Use it offline, never send an uncertain call again.
         if len(trace) == 1 and trace[0].get("status") == "complete" and trace[0]["prompt"] == record["prompt"]:
             return deepcopy(_complete_transport_response(trace, record["prompt"]))
-        raise SavedCallFailure(record.get("error_type", "IncompleteResponse"), record.get("error", "Saved call is incomplete; no automatic resend is permitted"))
+        raise SavedCallFailure(record.get("error_type", "IncompleteResponse"), record.get("error", "Saved call is incomplete; no automatic resend is permitted"), record=record)
 
 
 class RecordingClient:

@@ -188,7 +188,7 @@ def test_packets_do_not_mix_reference_and_source(tmp_path):
     case = tmp_path / "reference-packets/real-001"
     reference = json.loads((case / "reference.template.json").read_text(encoding="utf-8"))
     draft = json.loads((case / "reference.source-facts-draft.json").read_text(encoding="utf-8"))
-    assert reference["user_request"] is None
+    assert "user_request" not in reference
     assert reference["human_verified"] is False
     assert all(v["status"] == "pending" for v in reference["human_verifications"])
     assert draft["human_verified"] is False

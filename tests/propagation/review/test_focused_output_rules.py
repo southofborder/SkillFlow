@@ -12,7 +12,6 @@ from skillflow.propagation.annotation.requests import build_repair_context
 from skillflow.propagation.review.models import (
     RawDeclarationCheck,
     RawRequirementCheck,
-    RawSourceCheck,
 )
 from skillflow.propagation.review.prompts import build_prompt, review_example_material
 from skillflow.propagation.review.services import validate_response
@@ -20,7 +19,6 @@ from tests.propagation.review.test_endpoint_review_example import rendered_lesso
 
 
 CHECKS = {
-    "source_checks": (RawSourceCheck, "file,start_line,end_line,status,reason,finding_indexes"),
     "requirement_checks": (RawRequirementCheck, "requirement_id,status,reason,finding_indexes"),
     "declaration_checks": (RawDeclarationCheck, "raw_pointer,status,reason,finding_indexes"),
 }

@@ -50,13 +50,12 @@ def test_null_effect_does_not_claim_nonempty_effect_evidence():
         EffectSpec.model_validate({"effect": None, "evidences": [evidence()], "atomic_ops": [operation()]})
 
 
-def test_empty_ir_requires_explicit_inapplicability_and_operator_coverage():
+def test_empty_ir_needs_no_inapplicability_boilerplate_but_known_operator_is_checked():
     value = {"operator": [], "operator_evidences": [{**evidence(), "value": None}],
              "order": "fixed", "events": [], "output_bindings": [], "sensitivity": []}
-    with pytest.raises(ValidationError, match="empty_effect_evidences"):
-        RawIRSemantics.model_validate(value)
-    value["empty_effect_evidences"] = [evidence()]
     assert RawIRSemantics.model_validate(value).operator == []
+    unknown = {key: item for key, item in value.items() if key not in {"operator", "operator_evidences"}}
+    assert RawIRSemantics.model_validate(unknown).operator is None
     with pytest.raises(ValidationError, match="operator evidence"):
         RawIRSemantics.model_validate({**value, "operator": ["llm"]})
     with pytest.raises(ValidationError):
@@ -80,13 +79,13 @@ def test_reference_registry_categories_are_not_inferred_from_prefixes():
 
 
 def test_short_view_has_one_source_copy_and_complete_cfg_targets():
-    prepared = prepare_material(source_bundle("a\r\nb\n"), graph(), user_request="keep b")
+    prepared = prepare_material(source_bundle("a\r\nb\n"), graph())
     view = model_material(prepared)
-    assert set(view) == {"source", "cfg", "runtime_contract", "user_request", "task"}
-    assert set(prepared) == {"version", "source", "cfg", "runtime_contract", "user_request", "task"}
+    assert set(view) == {"source", "cfg", "runtime_contract", "task"}
+    assert set(prepared) == {"version", "source", "cfg", "runtime_contract", "task"}
     assert "".join(view["source"]["files"][0]["lines"]) == "a\r\nb\n"
     assert {f["file"] for f in view["source"]["files"]} == {"skill/SKILL.md"}
-    assert view["user_request"] == "keep b"
+    assert "user_request" not in view
     assert all("sha256" not in f for f in view["source"]["files"])
 
 

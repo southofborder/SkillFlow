@@ -26,8 +26,8 @@ from .sensitivity_material import (SensitivityReview, build_sensitivity_index,
 from .sensitivity_report import render_html, render_markdown
 
 
-IDENTITY = "skillflow-doe-run-v5"
-FORMAT_VERSION = 5
+IDENTITY = "skillflow-doe-run-v7"
+FORMAT_VERSION = 7
 _MARKER = ".preparing.json"
 _ARTIFACTS = frozenset({"audit/index.json",
     "audit/demand-support.json", "doe-result.json", "report.html", "report.md"})
@@ -190,6 +190,48 @@ def _report_metadata(result, annotation, demand, provenance):
         "source_files": joint_source_files(annotation["material"]), "demand": deepcopy(demand)}
 
 
+def _compute(facts, annotation):
+    """The same zero-call computation for publication and failed-run replay."""
+    review = prepare_joint_sensitivity_review(facts, annotation)
+    result, index = review.to_dict(), _index_snapshot(review.index_dict())
+    support = _demand_support(review.demand_dict(), result)
+    # prepare_joint_sensitivity_review already validates the result and its
+    # references. Reconstruction belongs to loading a saved result, not saving
+    # the review we just computed.
+    return review, result, index, support
+
+
+def verify_uncommitted_doe(propagation_run, *, run_dir):
+    """Recompute a failed computation without publishing or repairing artifacts.
+
+    Its original exception is deliberately allowed to escape. A caller comparing
+    the enclosing recorded run can then compare the genuine failure, rather than
+    a missing-manifest error from the successful-result replay loader. Returning
+    means the former computation failure did not recur, not a successful replay.
+    """
+    directory = _directory(run_dir)
+    upstream = checked_run_path(propagation_run)
+    if directory.is_relative_to(upstream) or upstream.is_relative_to(directory):
+        raise ValueError("Formal DOE outputs cannot overlap propagation inputs")
+    if (directory / "manifest.json").exists():
+        raise ValueError("Uncommitted DOE verification requires no published manifest")
+    loaded = _model_bundle(upstream)
+    expected = {"identity": IDENTITY, "schema_version": FORMAT_VERSION,
+        "upstream": make_run_reference(directory, upstream),
+        "upstream_identity": loaded.upstream_identity,
+        "implementation": implementation_provenance()}
+    marker_path = directory / _MARKER
+    if marker_path.exists():
+        marker = _read(marker_path)
+        _check_signed(marker, "Formal DOE preparation marker")
+        if (set(marker) != set(expected) | {"created_at", "manifest_sha256"}
+                or any(canonical_sha256(marker.get(k)) != canonical_sha256(v)
+                       for k, v in expected.items())):
+            raise ValueError("Interrupted formal DOE input or implementation differs")
+    _inventory(directory, resumable=marker_path.exists())
+    _compute(loaded, loaded.annotation)
+
+
 def run_doe(propagation_run, *, run_dir):
     """Freeze a checked model-derived propagation run and compute DOE once.
 
@@ -208,7 +250,7 @@ def run_doe(propagation_run, *, run_dir):
         "implementation": implementation_provenance()}
     with exclusive_run(directory):
         if (directory / "manifest.json").exists():
-            stored = load_doe_run(directory)
+            stored = _load_materials(directory, _read(directory / "manifest.json"), upstream=loaded)
             if any(canonical_sha256(stored["manifest"].get(key)) != canonical_sha256(value)
                    for key, value in expected.items()):
                 raise ValueError("Existing formal DOE input or implementation differs")
@@ -227,31 +269,26 @@ def run_doe(propagation_run, *, run_dir):
             marker = _signed({**expected, "created_at": _now()})
             atomic_write_text(marker_path, _json(marker))
         # One demand worklist, then sensitivity uses that same solved demand.
-        review = prepare_joint_sensitivity_review(facts, annotation)
-        result, index = review.to_dict(), _index_snapshot(review.index_dict())
-        support = _demand_support(review.demand_dict(), result)
-        _validate(result, index, support, facts, annotation)
+        review, result, index, support = _compute(facts, annotation)
         values = {"audit/index.json": index, "audit/demand-support.json": support, "doe-result.json": result}
         for name, value in values.items():
             _write_matching(directory / name, _json(value))
         metadata = _report_metadata(result, annotation, review.demand_dict(), loaded.provenance)
         _write_matching(directory / "report.html", render_html(review, metadata=metadata))
         _write_matching(directory / "report.md", render_markdown(review, metadata=metadata))
-        fresh = _model_bundle(upstream)
-        if canonical_sha256(fresh.upstream_identity) != canonical_sha256(loaded.upstream_identity):
-            raise ValueError("Propagation material changed during formal DOE preparation")
+        from skillflow.propagation.runner import check_propagation_unchanged
+        check_propagation_unchanged(upstream, loaded.manifest)
         manifest = _signed({**expected, "created_at": marker["created_at"], "committed_at": _now(),
             "status": result["status"], "metadata": _metadata(result, annotation, loaded.provenance),
             "result_sha256": canonical_sha256(result), "index_sha256": canonical_sha256(index),
             "support_sha256": canonical_sha256(support),
             "artifacts": {name: sha_file(directory / name) for name in sorted(_ARTIFACTS)},
             "policy": deepcopy(_POLICY)})
-        _load_materials(directory, manifest)
         atomic_write_text(directory / "manifest.json", _json(manifest))
-        return load_doe_run(directory)
+        return _loaded_result(manifest, loaded, result, review, support)
 
 
-def _load_materials(directory, manifest):
+def _load_materials(directory, manifest, *, upstream=None):
     if (manifest.get("identity") != IDENTITY or type(manifest.get("schema_version")) is not int
             or manifest["schema_version"] != FORMAT_VERSION):
         raise ValueError("Unsupported formal DOE run version")
@@ -274,7 +311,9 @@ def _load_materials(directory, manifest):
             raise ValueError("Formal DOE " + key + " digest mismatch")
     # Upstream owns accepted call recovery. Never relabel an authored fixture as
     # a model response, and never silently substitute another propagation run.
-    upstream = _model_bundle(resolve_run_reference(directory, manifest["upstream"]))
+    origin = resolve_run_reference(directory, manifest["upstream"])
+    if upstream is None:
+        upstream = _model_bundle(origin)
     if canonical_sha256(upstream.upstream_identity) != canonical_sha256(manifest["upstream_identity"]):
         raise ValueError("Formal DOE input differs from verified propagation material")
     facts, annotation = upstream, upstream.annotation
@@ -288,7 +327,13 @@ def _load_materials(directory, manifest):
     if (manifest["status"] != result["status"]
             or canonical_sha256(manifest["metadata"]) != canonical_sha256(metadata)):
         raise ValueError("Formal DOE status or metadata differs")
-    return {"manifest": deepcopy(manifest), "materials": facts, "annotation": annotation,
+    return _loaded_result(manifest, upstream, result, review, support)
+
+
+def _loaded_result(manifest, upstream, result, review, support):
+    """Use one verified bundle for both newly saved and loaded DOE results."""
+    annotation = upstream.annotation
+    return {"manifest": deepcopy(manifest), "materials": upstream, "annotation": annotation,
             "result": result, "review": review, "support": support,
             "upstream_identity": deepcopy(upstream.upstream_identity),
             "task_provenance": _checked_task_provenance(annotation, upstream.provenance)}

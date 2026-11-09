@@ -1,6 +1,6 @@
 # SkillFlow Data 数据结构与更新规则
 
-状态：Data v4 数据契约。快照版本为 `skillflow-data-v4`；v1／v2／v3 历史快照不自动迁移。
+状态：Data v6 数据契约。快照版本为 `skillflow-data-v6`；历史快照不自动迁移。
 
 本模块为后续静态数据最小化分析提供统一的数据载体。来源整体、组成部分和处理结果
 均使用 `Data`，固定表达已知内容、数据身份以及调用方声明的生产关系。数据结构本身
@@ -8,7 +8,7 @@
 
 Data 模块本身不实现传播记录、图遍历、固定点、观察事件或 DOE 判定，不调用 LLM。
 操作关系由调用方依据已有材料明确提供；模块不从开放 opcode 或标签猜测业务语义。
-原始 IR、Security Profile 与现有生产流程不依赖本模块，也不增加字段。
+IR 不反向依赖 Data；确定性传播使用本模块，不要求模型填写内部 Data 身份。
 
 ## 文件与依赖
 
@@ -42,7 +42,7 @@ tests/propagation/data/
 结构由 Pydantic 模型约束，不以任意开放字典代替正式契约。`LiteralContent` 中
 被分析数据的 JSON 值可以包含业务字段；这不允许在 Data 结构上增加任意字段。
 
-### 内容的六种形态
+### 内容形态
 
 | `form` | 字段 | 解释 |
 | --- | --- | --- |
@@ -52,6 +52,16 @@ tests/propagation/data/
 | `field_updates` | `base`、`updates` | 用指定 Data 覆盖非交叠路径；保留 base 的其他未知内容 |
 | `subset_view` | `base`、`predicate` | 原集合的候选子集视图；成员内容身份保留，文字谓词不由分析器执行 |
 | `literal` | `value` | 明确的 JSON 值，包括 null、空对象和空列表 |
+| `mapped_collection` | 源集合、作用域、成员与 yield 候选 | 既有结构化遍历的映射；重复 occurrence 不合并，候选不是额外成员 |
+| `selection` | `base`、`path` | 有限投影关系，不将循环产生的输入历史展开成越来越深的身份 |
+| `accumulated_collection` | `base`、`added`、`mode` | 累计初始内容与追加贡献；不冒充精确求出的最终数组 |
+| `loop_summary` | `scope`、`producer`、`variants`、`bindings` | 程序生成的有限静态关系与成员／前驱对应，求解后封存 |
+
+循环内的可增长事实表位于 `propagation/loop_domain.py`，不修改普通注册表已发布的 Data。
+封存之后才发布新的不可变注册表。循环摘要中的可能依赖不等于明文包含；已知输入
+occurrence 保持，通用累计的精确最终位置、长度及路径可行性可以未知。
+`data/summary.py` 仅查询有限已知形状；递归尾部或部分更新不足以确定形状时返回未知，
+不能读取旧父对象来证明更新后集合仍为空。
 
 组成条目采用 `DataPart(path=[...], data="Data ID")`。`parts` 是固定结构条目的列表，
 不内嵌另一份 Data。此前草图中的业务字段字典落为这个列表，是为了统一保留字段路径

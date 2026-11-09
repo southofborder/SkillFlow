@@ -114,9 +114,9 @@ def build_view(review, *, metadata=None):
             "lines": [{"number": number, "text": line, "cited": number in cited[path],
                        "anchor": _line_anchor(path, number)} for number, line in enumerate(lines[path], 1)],
             "uncited_ranges": _uncited_ranges(lines[path], cited[path])})
-    return {"schema_version": task["schema_version"], "basis": task["basis"], "notice": NOTICE,
+    return {"schema_version": task["schema_version"], "notice": NOTICE,
             "purpose": purpose, "requirements": requirements,
-            "source_accounting": deepcopy(task["source_accounting"]), "issues": deepcopy(task["issues"]), "instructions": list(instructions.values()),
+            "issues": deepcopy(task["issues"]), "instructions": list(instructions.values()),
             "sources": sources, "boundaries": _plain(review.boundaries),
             "candidate_origin": str(metadata.get("candidate_origin", "Offline supplied candidate; not a model response, gold standard, or human confirmation.")),
             "assistant_review": str(metadata.get("assistant_review", "No semantic review is recorded in this preparation. Independent assistant reviews, if supplied, are separate opinions.")),
@@ -166,8 +166,9 @@ def render_html(review, *, metadata=None):
         '<nav><a href="#reference-validation">Reference validation</a><a href="#requirements">Requirements</a>'
         '<a href="#reverse-index">IR reverse index</a><a href="#full-source">Full source</a>'
         '<a href="#assistant-review">Assistant semantic review</a></nav>',
-        '<section id="reference-validation" class="card"><h2>Reference validation</h2><p>Basis: <b>'
-        + escape(view["basis"]) + '</b> · Format: ' + escape(view["schema_version"]) + '</p><p>'
+        '<section id="reference-validation" class="card"><h2>Reference validation</h2>'
+        '<p>Task requirements come from the frozen Skill source. Format: '
+        + escape(view["schema_version"]) + '</p><p>'
         + escape(view["candidate_origin"]) + '</p><p>Source text is extracted from the frozen files. '
         'Bindings are resolved against the actual CFG. Valid references do not establish entailment, '
         'task completeness, action necessity, or a minimal information scope.</p></section>',
@@ -235,7 +236,7 @@ def render_markdown(review, *, metadata=None):
     """Render the same evidence and target order as HTML with safe source blocks."""
     view = build_view(review, metadata=metadata)
     parts = ['# Task Evidence Review', NOTICE, '## Reference validation',
-        '**Basis:** ' + _md_text(view["basis"]), '**Format:** ' + _md_text(view["schema_version"]),
+        'Task requirements come from the frozen Skill source.', '**Format:** ' + _md_text(view["schema_version"]),
         _md_text(view["candidate_origin"]),
         'References are checked against frozen source and CFG targets. Valid references do not establish semantic support, '
         'task completeness, action necessity, or minimum information scope.',

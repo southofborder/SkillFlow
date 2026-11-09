@@ -277,13 +277,15 @@ def test_stable_copy_and_retry_loops_terminate_without_per_iteration_id_growth(m
     assert propagate(cfg, annotation, schedule="lifo").records.records_dict() == result.records.records_dict()
 
 
-def test_generation_feedback_stops_before_claiming_a_finite_solution():
+def test_generation_feedback_uses_finite_immutable_equations():
     cfg, annotation = loop_case("generate")
     result = propagate(cfg, annotation)
-    assert result.status == "unsupported_feedback"
-    assert len(result.records) == 0
-    assert any(item["code"] == "unsupported_feedback" for item in result.diagnostics)
-    assert set(result.coverage.values()) == {"not_solved"}
+    assert result.status == "complete", result.diagnostics
+    assert len(result.records) > 0
+    assert result.stats["loop_families"] > 0
+    assert result.stats["block_evaluations"] < 20
+    assert set(result.coverage.values()) == {"processed"}
+    assert result.registry.to_dict() == propagate(cfg, annotation, schedule="lifo").registry.to_dict()
 
 
 def test_unknown_order_keeps_raw_and_clean_candidates_without_defaulting_to_protection():
@@ -311,7 +313,7 @@ def test_explicit_empty_seed_does_not_turn_missing_read_or_result_into_new_sourc
     assert result.status == "incomplete"
     assert len(result.registry) == 0
     assert result.coverage["ir_read"] == "unresolved_binding"
-    assert result.coverage["ir_copy"] == "not_solved"
+    assert result.coverage["ir_copy"] == "blocked"
 
 
 def test_selection_keeps_actual_part_identity_and_does_not_narrow_whole_reads():
@@ -419,7 +421,11 @@ def late_input_case(*, select_missing=False):
 def test_pending_write_cannot_emit_schedule_dependent_downstream_data():
     cfg, annotation = late_input_case()
     fifo, lifo = propagate(cfg, annotation, schedule="fifo"), propagate(cfg, annotation, schedule="lifo")
-    assert fifo.status == lifo.status == "complete"
+    # The shorter branch never defines X. Relational execution must not borrow
+    # its value from the other predecessor merely because that path finishes.
+    assert fifo.status == lifo.status == "incomplete"
+    assert all(any(issue["code"] == "unresolved_path" and issue["instruction_id"] == "ir_write"
+                   for issue in result.diagnostics) for result in (fifo, lifo))
     assert fifo.registry.to_dict() == lifo.registry.to_dict()
     assert fifo.records.records_dict() == lifo.records.records_dict()
 
@@ -451,7 +457,7 @@ def test_missing_part_diagnostics_keep_precise_positions_outside_compact_record(
     assert result.registry.get(issue["data_id"]).content == LiteralContent(value={})
     event = result.records.records_dict()["ir_select"]["events"][0]
     assert set(event) == {"effect", "atomic_ops"}
-    assert set(event["atomic_ops"][0]) == {"op", "inputs", "outputs", "endpoints", "changes"}
+    assert set(event["atomic_ops"][0]) == {"op", "inputs", "outputs", "endpoints", "changes", "alternatives"}
     assert result.registry.get(at(result, "ir_select", "owner")).content == LiteralContent(value="present")
 
 

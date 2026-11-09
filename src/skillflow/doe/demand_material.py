@@ -5,7 +5,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from skillflow.common.recording import canonical_sha256
-from skillflow.propagation.annotation.services import compile_response
 from skillflow.propagation.contracts.task import Task, task_source_files, checked_task
 from skillflow.propagation.loading import PropagationMaterials
 from .task_material import _read_object
@@ -65,7 +64,7 @@ def validate_record_spec_structure(facts, compiled):
 
 
 def checked_demand_material(facts, task, annotation):
-    """Validate components, source claims and compilation without a handoff JSON."""
+    """Bind a consumer to the already checked propagation candidate."""
     if not isinstance(facts, PropagationMaterials):
         raise TypeError("Demand analysis requires verified propagation materials")
     task_value = task.model_dump(mode="json") if isinstance(task, Task) else _read_object(task)
@@ -80,19 +79,20 @@ def checked_demand_material(facts, task, annotation):
                  source_sha256=material["source"]["source_sha256"])
     if task_value != annotation["task"] or task_value != material["task"]:
         raise ValueError("Demand Task differs from its sealed annotation revision")
-    if material != facts.annotation["material"]:
+    accepted = facts.annotation
+    if material != accepted["material"]:
         raise ValueError("Demand annotation source, CFG, request or runtime contract differs")
-    raw, compiled, mapping = compile_response(annotation["raw_annotation"], material)
-    if compiled != annotation["compiled_annotation"] or mapping != annotation["mapping"]:
-        raise ValueError("Demand annotation compilation or mapping differs")
-    if annotation != facts.annotation:
+    # The propagation owner checked raw/compiled correspondence once. Equality
+    # keeps a caller from substituting a different candidate without compiling
+    # the same accepted fragment again on every downstream read or save.
+    if canonical_sha256(annotation) != canonical_sha256(accepted):
         raise ValueError("Demand annotation differs from the verified propagation candidate")
+    compiled = accepted["compiled_annotation"]
     declared = {canonical_sha256(b) for b in compiled["sink_boundaries"]}
     if any(canonical_sha256(b) not in declared for b in facts.sinks):
         raise ValueError("Demand sink boundary differs from compiled annotation")
     validate_record_spec_structure(facts, compiled)
-    return facts, parsed, {**annotation, "raw_annotation": raw, "compiled_annotation": compiled,
-                           "mapping": mapping}, files
+    return facts, parsed, accepted, files
 
 
 def prepare_demand_review(facts, task, annotation, candidate, *, queue_order="fifo") -> DemandReview:
@@ -121,7 +121,7 @@ def validate_demand_result(result):
     result = validate_result_shape(result)
     if set(result) != {"schema_version", "status", "goals", "derivations", "sinks", "diagnostics", "coverage", "traceability"}:
         raise ValueError("Demand result fields differ")
-    if result["schema_version"] != "skillflow-demand-v4" or result["status"] not in {"complete", "partial"}:
+    if result["schema_version"] != "skillflow-demand-v7" or result["status"] not in {"complete", "partial"}:
         raise ValueError("Unsupported demand result version or status")
     if not isinstance(result["derivations"], dict) or not isinstance(result["sinks"], list):
         raise ValueError("Invalid demand collections")

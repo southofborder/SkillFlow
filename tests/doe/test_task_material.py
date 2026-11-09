@@ -38,9 +38,7 @@ def _span(file="skill/SKILL.md", start=1, end=1):
 def _candidate(target=None):
     value = {"purpose": {"text": "Return the required value.", "evidences": [_span()]},
         "requirements": [{"id": "R1", "text": "Preserve the required return value.", "evidences": [_span()]}],
-        "source_accounting": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
-            "disposition": "requirement", "requirement_ids": ["R1"], "issue_ids": [],
-            "reason": "独立来源契约样例。"}], "issues": []}
+         "issues": []}
     if target is not None:
         value["requirements"][0]["bindings"] = [{"target": target, "reason": "Task 阶段禁止图绑定。"}]
     return value
@@ -51,21 +49,20 @@ def _index():
 
 
 def _validate(candidate):
-    return validate_task_candidate(candidate, source_files={"skill/SKILL.md": "Return body unchanged.\n"},
-                                   basis="declared_skill")
+    return validate_task_candidate(candidate, source_files={"skill/SKILL.md": "Return body unchanged.\n"})
 
 
 def _id_at(index, pointer):
     return next(value["target"] for value in index.values() if value["pointer"] == pointer)
 
 
-def test_candidate_has_only_claims_and_task_basis_is_program_derived():
+def test_candidate_has_only_claims_and_task_has_no_redundant_basis():
     candidate = _candidate()
     task = _validate(candidate)
-    assert set(task.model_dump()) == {"schema_version", "basis", "purpose", "requirements",
-        "source_sha256", "user_request_sha256", "task_sha256", "source_accounting", "issues"}
-    assert task.schema_version == "skillflow-task-v3"
-    assert task.basis == "declared_skill"
+    assert set(task.model_dump()) == {"schema_version", "purpose", "requirements",
+        "source_sha256", "task_sha256", "issues"}
+    assert task.schema_version == "skillflow-task-v5"
+    assert "basis" not in task.model_dump()
     for key, value in [("basis", "user_request"), ("schema_version", "skillflow-task-v2")]:
         with pytest.raises(ValueError):
             _validate({**candidate, key: value})
@@ -137,7 +134,6 @@ def test_empty_requirements_and_unsupported_future_fields_are_rejected():
 def test_same_span_and_target_may_support_different_requirements():
     candidate = _candidate()
     candidate["requirements"].append({**deepcopy(candidate["requirements"][0]), "id": "R2"})
-    candidate["source_accounting"][0]["requirement_ids"].append("R2")
     assert len(_validate(candidate).requirements) == 2
 
 
@@ -224,9 +220,8 @@ def test_source_paths_are_namespaced_without_text_normalization():
     source = {"files": [{"path": "user-request.txt", "content": "Skill\r\n"},
                          {"path": "ref/workflow.md", "content": "Cross-file requirement."}]}
     original = deepcopy(source)
-    files = task_source_files(source, user_request="User\r\n")
-    assert files == {"skill/user-request.txt": "Skill\r\n", "skill/ref/workflow.md": "Cross-file requirement.",
-                     "task/user-request.txt": "User\r\n"}
+    files = task_source_files(source)
+    assert files == {"skill/user-request.txt": "Skill\r\n", "skill/ref/workflow.md": "Cross-file requirement."}
     assert source == original
 
 
@@ -236,28 +231,29 @@ def test_source_path_aliases_and_escapes_are_rejected(path):
         task_source_files({"files": [{"path": path, "content": "Task"}]})
 
 
-def test_duplicate_source_paths_and_empty_user_request_are_rejected():
+def test_duplicate_source_paths_and_retired_user_request_are_rejected():
     file = {"path": "SKILL.md", "content": "Task"}
     with pytest.raises(ValueError):
         task_source_files({"files": [file, file]})
-    for task in ["", "  ", False, 1]:
-        with pytest.raises(ValueError):
+    for task in [None, "", "  ", False, 1, "Return a different value."]:
+        with pytest.raises(TypeError, match="user_request"):
             task_source_files({"files": [file]}, user_request=task)
 
 
-def test_user_request_selects_basis_and_must_support_purpose_but_skill_requirements_remain():
-    files = {"skill/SKILL.md": "Return body unchanged.\n", "task/user-request.txt": "Give me the body.\r\n"}
+def test_retired_basis_is_rejected_and_only_skill_evidence_is_accepted():
+    files = {"skill/SKILL.md": "Return body unchanged.\n", "skill/reference.md": "Give the body without rewriting.\r\n"}
     candidate = _candidate()
-    with pytest.raises(ValueError, match="purpose must cite"):
+    with pytest.raises(TypeError, match="basis"):
         validate_task_candidate(candidate, source_files=files, basis="user_request")
-    candidate["purpose"]["evidences"] = [_span(file="task/user-request.txt")]
-    candidate["source_accounting"].append({"file": "task/user-request.txt", "start_line": 1, "end_line": 1,
-        "disposition": "supporting_context", "requirement_ids": [], "issue_ids": [], "reason": "独立任务目的。"})
-    result = validate_task_candidate(candidate, source_files=files, basis="user_request")
-    assert result.basis == "user_request"
+    candidate["purpose"]["evidences"] = [_span(file="skill/reference.md")]
+    result = validate_task_candidate(candidate, source_files=files)
+    assert "basis" not in result.model_dump()
     assert result.requirements[0].evidences[0].file == "skill/SKILL.md"
-    with pytest.raises(ValueError, match="source identity"):
-        validate_task_candidate(candidate, source_files=files, basis="declared_skill")
+    with pytest.raises(ValueError, match="only accepts frozen Skill"):
+        validate_task_candidate(candidate, source_files={**files, "task/user-request.txt": "Give me the body."})
+    candidate["purpose"]["evidences"] = [_span(file="task/user-request.txt")]
+    with pytest.raises(ValueError, match="frozen Skill file"):
+        validate_task_candidate(candidate, source_files=files)
 
 
 def test_candidate_serialization_strict_json_and_isolation():
@@ -289,7 +285,7 @@ def test_fixed_cases_prepare_without_audit_dependencies_or_data_mutation(case, t
     assert first == second
     assert first.cfg == raw.cfg
     assert first.boundaries == raw.source_metadata
-    assert first.task.basis == "declared_skill"
+    assert "basis" not in first.task.model_dump()
     assert first.realizations and first.index_dict()["targets"]
     assert all(set(entry) == {"file", "original_path", "origin", "line_count"}
                for entry in first.index_dict()["files"])

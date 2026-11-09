@@ -204,31 +204,9 @@ def authored_bindings(case, cfg):
 
 
 def authored_candidate(case, cfg):
-    """Explicit source-only baseline; graph bindings stay in their own recipe.
-
-    The pinned readable files are test inputs, not accepted model responses.
-    Physical accounting is a fixture projection of authored evidence, not an
-    extraction heuristic or semantic completeness claim.
-    """
-    import json
-    from skillflow.common.paths import project_root
-    from skillflow.common.source_evidence import source_lines
-    from skillflow.propagation.contracts.task import task_source_files
+    """Explicit offline source-only claims, never an accepted model response."""
     from copy import deepcopy
     value = deepcopy(_bound_recipe(case, cfg))
     for requirement in value["requirements"]:
         requirement.pop("bindings")
-    material = json.loads((project_root() / BASELINE / case / "annotation/inputs/material.json").read_bytes())
-    files = task_source_files(material["source"])
-    accounting = []
-    for file, text in files.items():
-        for number, line in enumerate(source_lines(text), 1):
-            if not line.strip():
-                continue
-            refs = [r["id"] for r in value["requirements"] if any(e["file"] == file
-                and e["start_line"] <= number <= e["end_line"] for e in r["evidences"])]
-            accounting.append({"file": file, "start_line": number, "end_line": number,
-                "disposition": "requirement" if refs else "supporting_context",
-                "requirement_ids": refs, "issue_ids": [],
-                "reason": "离线人工编写样例的物理行处置；不声称语义提取完备。"})
-    return {**value, "source_accounting": accounting, "issues": []}
+    return {**value, "issues": []}
