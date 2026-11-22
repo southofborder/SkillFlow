@@ -37,7 +37,7 @@ class Preservation(Strict):
     data_id: Text
     path: SensitivityPath
     preserved: bool
-    rule: Literal["structural", "terminal_subset", "no_influence", "not_established"]
+    rule: Literal["structural", "terminal_subset", "receiver_subset", "no_influence", "not_established"]
     reason: Text
     influence_refs: list[Text]
 

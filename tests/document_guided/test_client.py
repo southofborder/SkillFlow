@@ -255,3 +255,133 @@ def test_formal_prepare_and_replay_never_instantiate_cli_client(tmp_path, monkey
     monkeypatch.setattr(pilot, "replay", lambda run_dir: {"status": "diagnostic_complete"})
     assert pilot.main(["prepare", "--input", "source", "--run-dir", str(tmp_path)]) == 0
     assert pilot.main(["replay", "--run-dir", str(tmp_path)]) == 0
+
+
+def observed_process(tmp_path, monkeypatch, *, outcome="complete", fail_monitor=False):
+    """Drive the existing 30-second communicate polls without waiting or spawning."""
+    from tools.doe import document_guided_observation as observation
+    value, prompt, launches = client(tmp_path, [])
+    clock, inputs, timeouts = [0.0], [], []
+    monkeypatch.setattr(transport.time, "perf_counter", lambda: clock[0])
+    value.timeout = 90
+    def popen(argv, **kwargs):
+        launches.append({"argv": argv, **kwargs})
+        if outcome == "launch_error":
+            raise OSError("Injected launch failure")
+        if fail_monitor:
+            (Path(kwargs["cwd"]).parent / observation.FILENAME).mkdir()
+        class Process:
+            pid, returncode, calls = 76543, None, 0
+            def communicate(self, input=None, timeout=None):
+                if self.returncode is not None:
+                    return None, None
+                inputs.append(input)
+                timeouts.append(timeout)
+                self.calls += 1
+                if self.calls == 1:
+                    kwargs["stdout"].write(b'{"type":"turn.started"}\n')
+                    kwargs["stdout"].flush()
+                    if outcome == "interrupted":
+                        raise KeyboardInterrupt()
+                if outcome == "complete" and self.calls == 3:
+                    clock[0] += 5
+                    kwargs["stdout"].write(json.dumps(message("completed answer")).encode())
+                    kwargs["stdout"].flush()
+                    self.returncode = 0
+                    return None, None
+                clock[0] += timeout
+                kwargs["stderr"].write(b"stream disconnected: connection reset; reconnecting\n")
+                kwargs["stderr"].flush()
+                raise transport.subprocess.TimeoutExpired(argv, timeout)
+            def poll(self):
+                return self.returncode
+            def kill(self):
+                self.returncode = -9
+        return Process()
+    value.popen = popen
+    return value, prompt, launches, inputs, timeouts
+
+
+def test_public_observations_use_existing_polls_and_preserve_native_input(tmp_path, monkeypatch):
+    from tools.doe.document_guided_observation import observation_summary
+    value, prompt, launches, inputs, timeouts = observed_process(tmp_path, monkeypatch)
+    assert value.complete(prompt) == "completed answer"
+    assert inputs == [(transport.ENVELOPE + prompt).encode(), None, None]
+    assert timeouts == [30, 30, 30] and len(launches) == 1
+    attempt = next((tmp_path / "transport").rglob("attempt-001"))
+    summary = observation_summary(attempt, [])
+    assert summary["sample_count"] == 3 and summary["status"] == "terminal"
+    assert summary["first_public_event_interval_seconds"] == [0, 30]
+    assert summary["first_completed_final_interval_seconds"] == [60, 65]
+    assert transport.read(attempt / "process.json")["elapsed_seconds"] == 65
+    assert value.complete(prompt) == "completed answer" and len(launches) == 1
+
+
+def test_native_timeout_with_reconnect_stays_ineligible_for_outer_retry(tmp_path, monkeypatch):
+    from tools.doe.document_guided_observation import observation_summary
+    value, prompt, launches, inputs, timeouts = observed_process(tmp_path, monkeypatch, outcome="timeout")
+    for _ in range(2):
+        with pytest.raises(transport.ModelRequestFailure, match="not an eligible"):
+            value.complete(prompt)
+    assert len(launches) == 1 and timeouts == [30, 30, 30]
+    attempt = next((tmp_path / "transport").rglob("attempt-001"))
+    process = transport.read(attempt / "process.json")
+    assert process["status"] == "timeout" and process["elapsed_seconds"] == 90 and process["exited"]
+    summary = observation_summary(attempt, [])
+    assert summary["status"] == "terminal" and summary["first_completed_final_interval_seconds"] is None
+    assert transport.read(attempt / "usage.json") == {"usage": {}, "known": False}
+
+
+@pytest.mark.parametrize("outcome", ["complete", "timeout"])
+def test_optional_observation_write_failure_preserves_answer_or_failure(tmp_path, monkeypatch, outcome):
+    value, prompt, launches, inputs, timeouts = observed_process(tmp_path, monkeypatch,
+        outcome=outcome, fail_monitor=True)
+    if outcome == "complete":
+        assert value.complete(prompt) == "completed answer"
+    else:
+        with pytest.raises(transport.ModelRequestFailure, match="not an eligible"):
+            value.complete(prompt)
+    assert len(launches) == 1
+    process = transport.read(next((tmp_path / "transport").rglob("process.json")))
+    assert any("Public observation unavailable" in warning for warning in process["monitor_warnings"])
+
+
+@pytest.mark.parametrize("outcome", ["interrupted", "launch_error"])
+def test_terminal_observation_survives_interruption_or_launch_failure(tmp_path, monkeypatch, outcome):
+    from tools.doe.document_guided_observation import observation_summary
+    value, prompt, launches, inputs, timeouts = observed_process(tmp_path, monkeypatch, outcome=outcome)
+    error = KeyboardInterrupt if outcome == "interrupted" else transport.PendingCLIRequest
+    with pytest.raises(error):
+        value.complete(prompt)
+    assert len(launches) == 1
+    attempt = next((tmp_path / "transport").rglob("attempt-001"))
+    summary = observation_summary(attempt, [])
+    assert summary["status"] == "terminal" and summary["sample_count"] == 1
+
+
+@pytest.mark.parametrize("outcome", ["complete", "timeout"])
+def test_optional_observer_setup_failure_preserves_native_behavior(tmp_path, monkeypatch, outcome):
+    value, prompt, launches, inputs, timeouts = observed_process(tmp_path, monkeypatch, outcome=outcome)
+    def fail(*args):
+        raise RuntimeError("Injected optional observer setup failure")
+    monkeypatch.setattr(transport, "PublicObserver", fail)
+    if outcome == "complete":
+        assert value.complete(prompt) == "completed answer"
+    else:
+        with pytest.raises(transport.ModelRequestFailure, match="not an eligible"):
+            value.complete(prompt)
+    assert len(launches) == 1 and inputs[0] == (transport.ENVELOPE + prompt).encode()
+    process = transport.read(next((tmp_path / "transport").rglob("process.json")))
+    assert any("Public observation setup unavailable" in warning for warning in process["monitor_warnings"])
+
+
+def test_observer_setup_interrupt_is_recorded_and_not_swallowed(tmp_path, monkeypatch):
+    value, prompt, launches, inputs, timeouts = observed_process(tmp_path, monkeypatch)
+    def interrupt(*args):
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(transport, "PublicObserver", interrupt)
+    with pytest.raises(KeyboardInterrupt, match="User interrupted"):
+        value.complete(prompt)
+    assert launches == []
+    process = transport.read(next((tmp_path / "transport").rglob("process.json")))
+    assert process["status"] == "interrupted" and process["exited"] is False

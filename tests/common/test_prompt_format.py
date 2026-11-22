@@ -40,7 +40,7 @@ def test_current_formats_preserve_all_fields_limits_tags_and_named_definitions(s
             elif key in ("anyOf", "oneOf", "allOf", "prefixItems"):
                 for child in value:
                     check(child)
-            elif key in ("items", "additionalProperties"):
+            elif key in ("items", "additionalProperties", "propertyNames"):
                 check(value)
             elif key in ("enum", "const", "default", "minimum", "minLength", "minItems", "pattern"):
                 assert key + "=" + compact_json(value) in rendered
@@ -58,6 +58,8 @@ def test_current_formats_preserve_all_fields_limits_tags_and_named_definitions(s
     {"$ref": "#/$defs/Absent"}, {"type": "bad-type"},
     {"type": "object", "properties": {"x": {"$defs": {}}}},
     {"discriminator": {"propertyName": "kind", "extra": 1}},
+    {"propertyNames": {"minLength": 1}},
+    {"type": "object", "propertyNames": {"format": "email"}},
 ])
 def test_unknown_keywords_references_and_unsupported_combinations_fail_closed(node):
     with pytest.raises(ValueError):
@@ -76,6 +78,19 @@ def test_optional_null_defaults_constraints_and_extra_keys_are_distinct():
     assert "extra:FORBIDDEN" in rendered
     for term in ("default=4", "minimum=1", "maximum=5", "maxLength=3", "multipleOf=0.5", "uniqueItems=true"):
         assert term in rendered
+
+
+def test_property_names_preserves_key_constraints_separately_from_values():
+    schema = {"type": "object", "propertyNames": {"minLength": 1, "pattern": "^[a-z]+$"},
+              "patternProperties": {".*": {"type": "integer", "minimum": 3}},
+              "additionalProperties": False}
+    before = deepcopy(schema)
+    rendered = render_prompt_format(schema)
+    assert schema == before
+    assert 'propertyNames:minLength=1 & pattern="^[a-z]+$"' in rendered
+    assert '/".*"/:integer & minimum=3' in rendered
+    assert "propertyNames constrains every object key as a string" in rendered
+    assert "propertyNames:FORBIDDEN" in render_prompt_format({"type": "object", "propertyNames": False})
 
 
 def test_prompt_sections_are_unambiguous_and_json_can_be_extracted_losslessly():

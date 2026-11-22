@@ -10,8 +10,9 @@ import pytest
 
 from skillflow.document_guided import runner
 from skillflow.document_guided.online import read
+from skillflow.document_guided.fragment_display import fragment_prompt_parts
 from skillflow.propagation.annotation.loading import load_annotation_run
-from tests.document_guided.test_parallel_runner import Harness, freeze_producer
+from tests.document_guided.test_parallel_runner import Harness, freeze_producer, prompt_scope
 
 
 @pytest.fixture(autouse=True)
@@ -20,8 +21,8 @@ def offline_producer_and_certificate(monkeypatch):
     monkeypatch.setattr(runner, "_certificate", lambda *args, **kwargs: None)
 
 
-def malformed(harness, stage, prompt, response):
-    """Record deliberately malformed fragments, including their one correction."""
+def record_answer(harness, stage, prompt, response):
+    """Record a fixture answer supplied outside the common harness."""
     with harness.lock:
         harness.attempts[stage] = harness.attempts.get(stage, 0) + 1
         harness.calls.append(stage)
@@ -29,18 +30,29 @@ def malformed(harness, stage, prompt, response):
     return deepcopy(response)
 
 
+def slot_plan(prompt, heading):
+    return prompt_scope(prompt)
+
+
 class InitiallyBlocked(Harness):
     def complete(self, stage, prompt):
         if stage == "task-correspondence":
             # No identifiable realization record can be salvaged. The legal
             # partial review still sees the available source, Task and CFG.
-            return malformed(self, stage, prompt, {"realizations": "invalid"})
+            return record_answer(self, stage, prompt, {"realizations": "invalid"})
+        if stage == "revision-graph":
+            plan = slot_plan(prompt, "AUTHORIZED GRAPH SLOTS")
+            slot, = [row for row in plan["slots"].values() if row["path"][-1] == "opcode"]
+            assert slot["old_value"] == "store_label"
+            return record_answer(self, stage, prompt, {"plan_sha256": plan["plan_sha256"], "updates": [{
+                "slot_id": slot["slot_id"], "value": self.graph["blocks"][0]["instructions"][0]["opcode"]}]})
         answer = super().complete(stage, prompt)
         if stage == "graph" and "cfg" in self.domains:
-            answer["blocks"][0]["instructions"][0]["opcode"] = "store_label"
+            answer["blocks"][0]["operations"][0]["opcode"] = "store_label"
         if stage == "review" and "cfg" in self.domains:
             for finding in answer["findings"]:
                 if finding["domain"] == "cfg":
+                    finding["target_ids"] = ["cfg:/blocks/block_001/instructions/0"]
                     finding["explanation"] = "The source displays the label, but the CFG describes storing it."
                     finding["suggestion"] = "Restore the source-supported display action and rebuild its dependents."
         return answer
@@ -57,7 +69,7 @@ def stop_before_backend(state):
     ("task", 11, {"revision/task", "revision-task-correspondence", "revision/review"}),
 ])
 def test_partial_review_upstream_finding_uses_one_real_dependency_repair(tmp_path, domain, count, closure):
-    harness = InitiallyBlocked(tmp_path / "run", domains=(domain,))
+    harness = InitiallyBlocked(tmp_path / "run", domains=(domain,), precise_repair=True)
     harness.prepare(tmp_path / "package")
     result = runner.run(harness.directory, client_factory=harness.factory, progress=stop_before_backend)
     assert result["repair_used"], result
@@ -119,7 +131,7 @@ def test_task_repair_does_not_retry_an_unchanged_failed_sensitivity_fragment(tmp
     class FailedIndependentFragment(Harness):
         def complete(self, stage, prompt):
             if stage == "sensitivity":
-                return malformed(self, stage, prompt, {"declarations": "invalid"})
+                return record_answer(self, stage, prompt, {"declarations": "invalid"})
             return super().complete(stage, prompt)
     harness = FailedIndependentFragment(tmp_path / "run", domains=("task",))
     harness.prepare(tmp_path / "package")
@@ -144,7 +156,7 @@ def test_source_supported_missing_sensitivity_finding_repairs_only_failed_owner(
     class MissingSensitivity(Harness):
         def complete(self, stage, prompt):
             if stage == "sensitivity":
-                return malformed(self, stage, prompt, {"declarations": "invalid"})
+                return record_answer(self, stage, prompt, {"declarations": "invalid"})
             answer = super().complete(stage, prompt)
             if stage == "review":
                 answer["findings"] = [{"domain": "annotation", "target_ids": ["stage:sensitivity"],
@@ -194,13 +206,25 @@ def test_annotation_owner_repairs_only_its_dependency_closure(tmp_path, owner, c
                     declaration = self.fragments["sensitivity"]["declarations"][0]
                     pointer = "/ir_semantics/" + declaration["instruction_id"] + "/sensitivity/0"
                 else:
-                    pointer = "/realizations/0" if owner == "task-correspondence" else ""
+                    pointer = "/realizations/0" if owner == "task-correspondence" else "/ir_semantics/ir_001"
                 answer["findings"] = [{"domain": "annotation", "target_ids": ["annotation:" + pointer],
                     "explanation": "OWNER_SPECIFIC_REVIEW_CANARY: injected isolated routing exercise.",
                     "source_refs": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}],
                     "suggestion": "Correct the source-supported declaration in its actual owner."}]
+            displayed = fragment_prompt_parts(prompt)
+            if (stage == "revision-task-correspondence" and displayed is not None
+                    and "scope" in displayed[1]):
+                plan = slot_plan(prompt, "TASK REQUIREMENT SLOTS")
+                slots = []
+                for requirement, slot in plan["slots"].items():
+                    record = deepcopy(slot["previous"])
+                    goal = record["operation_demands"][0]["demands"][0]
+                    goal["reason"] += " Rechecked the original receiving boundary."
+                    slots.append({"requirement_id": requirement, **record})
+                return {"slots": slots}
             return answer
-    harness = OwnedFinding(tmp_path / "run")
+    harness = OwnedFinding(tmp_path / "run", precise_repair=True,
+        domains=("annotation",) if owner == "processing" else ())
     if owner == "sensitivity":
         from tests.document_guided.test_parallel_recovery import add_synthetic_sensitivity
         add_synthetic_sensitivity(harness, "Synthetic label sensitivity for routing")
@@ -215,10 +239,21 @@ def test_annotation_owner_repairs_only_its_dependency_closure(tmp_path, owner, c
     for stage in closure - {"revision/review"}:
         prompt = harness.prompts[stage]
         assert "OWNER_SPECIFIC_REVIEW_CANARY" not in prompt
-        context = json.loads(prompt.split("SOURCE REVIEW REPAIR\n", 1)[1].split(
-            "\n\nGLOBAL REQUIREMENTS AND LIMITATIONS", 1)[0])
-        assert bool(context["source_rechecks"]) == (stage == "revision-" + owner)
-        for recheck in context["source_rechecks"]:
-            assert set(recheck) == {"target_ids", "source_refs"}
+        displayed = fragment_prompt_parts(prompt)
+        if displayed is None:
+            from skillflow.document_guided.processing_display import _parts
+            displayed = _parts(prompt)
+        if displayed is not None and "scope" in displayed[1]:
+            plan = displayed[1]["scope"]
+            rechecks = [check for slot in plan["slots"].values() for check in slot["source_rechecks"]]
+            columns = {"target_id", "source_refs"}
+        else:
+            assert displayed is not None
+            context = displayed[1]["repair_context"]
+            rechecks = context["source_rechecks"]
+            columns = {"target_ids", "source_refs"}
+        assert bool(rechecks) == (stage == "revision-" + owner)
+        for recheck in rechecks:
+            assert set(recheck) == columns
     assert "OWNER_SPECIFIC_REVIEW_CANARY" not in harness.prompts["revision/review"]
     assert runner.replay(harness.directory) == result

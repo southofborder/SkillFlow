@@ -22,7 +22,7 @@ def prompt_block(name: str, body: str) -> str:
 
 _KEYWORDS = frozenset({
     "$defs", "$ref", "title", "description", "type", "properties", "required",
-    "additionalProperties", "patternProperties", "items", "prefixItems", "anyOf",
+    "additionalProperties", "patternProperties", "propertyNames", "items", "prefixItems", "anyOf",
     "oneOf", "allOf", "enum", "const", "default", "discriminator", "minimum",
     "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength",
     "maxLength", "pattern", "minItems", "maxItems", "uniqueItems", "minProperties",
@@ -63,7 +63,7 @@ def render_prompt_format(schema: dict[str, Any]) -> str:
         if "$defs" in node and not root:
             raise ValueError(f"nested definitions are not supported at {path}")
         typ = node.get("type")
-        object_keys = {"properties", "required", "additionalProperties", "patternProperties"}
+        object_keys = {"properties", "required", "additionalProperties", "patternProperties", "propertyNames"}
         array_keys = {"items", "prefixItems"}
         # Do not silently turn a conditional object/array constraint into a type
         # restriction, or discard the other members of a type union.
@@ -89,6 +89,8 @@ def render_prompt_format(schema: dict[str, Any]) -> str:
                       for key, value in props.items()]
             fields.extend(f"/{compact_json(pattern)}/:{render(value, path + '/patternProperties/' + pattern)}"
                           for pattern, value in node.get("patternProperties", {}).items())
+            if "propertyNames" in node:
+                fields.append("propertyNames:" + render(node["propertyNames"], path + "/propertyNames"))
             fields.append("extra:" + render(node.get("additionalProperties", True), path + "/additionalProperties"))
             if required - set(props):
                 fields.append("required:" + compact_json(sorted(required - set(props))))
@@ -124,6 +126,7 @@ def render_prompt_format(schema: dict[str, Any]) -> str:
     body = ["Format notation: fields are required unless suffixed ?. Omission is distinct from null. "
             "ANY allows one or more branches; ONE exactly one; ALL and & require all constraints. "
             "extra:FORBIDDEN rejects unknown object keys; extra:JSON permits them. "
+            "propertyNames constrains every object key as a string, separately from its value. "
             "Arrays preserve order; ... describes each remaining item. Defaults apply only on omission. "
             "JSON means any JSON value. pattern is a regular-expression constraint. "
             "Named types below are definitions, not additional response fields. Application rules follow.",

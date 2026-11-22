@@ -21,8 +21,8 @@ from tests.propagation.annotation.helpers import material, semantics
 
 def test_one_isolated_contract_and_canonical_binding():
     current = runtime_contract()
-    assert set(current) == {"version", "rules"}
-    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v11"
+    assert set(current) == {"version", "rules", "operation_contract"}
+    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v12"
     assert [rule["id"] for rule in current["rules"]] == [f"EM{i:02}" for i in range(1, 19)]
     binding = runtime_contract_binding(current)
     assert binding == {"version": CONTRACT_VERSION, "sha256": canonical_sha256(current)}

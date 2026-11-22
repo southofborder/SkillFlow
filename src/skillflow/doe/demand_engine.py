@@ -20,6 +20,13 @@ from skillflow.propagation.conditions import payload_inputs, guard_truths, valid
 from skillflow.propagation.contracts.limitations import processing_impacts, diagnostic_applies
 from .material import _Index, _id, payload_alternatives
 
+EXACT_INFORMATION_BOUND_RULES = frozenset({
+    "actual_operand", "cfg_result_use", "incoming_value", "public_result",
+    "public_return_boundary", "processing_boundary", "selected_path", "remaining_content",
+    "unchanged_content", "updated_value", "constructed_member", "expression_reference",
+    "reviewed_input_contract", "reviewed_optional_input_presence", "same_element",
+})
+
 
 def _walk(value, path):
     for part in path:
@@ -84,7 +91,7 @@ def _below(exclusions, path):
 
 
 class DemandEngine:
-    def __init__(self, facts, task, annotation, candidate, targets):
+    def __init__(self, facts, task, annotation, candidate, targets, *, input_contract_review=None):
         self.facts, self.task, self.annotation = facts, task, annotation
         self.candidate, self.targets = candidate, targets
         self.index = _Index(facts)
@@ -99,6 +106,7 @@ class DemandEngine:
         self.locals, self.elements = {}, {}
         self.derivations, self.queue, self.diagnostics = {}, deque(), {}
         self.expressions, self.bound_goals = {}, set()
+        self.unavailable_actions = {}
         self._active_seed = None
         self.realizations = {r["requirement_id"]: deepcopy(r) for r in self.compiled["realizations"]}
         self.observers = defaultdict(list)
@@ -106,6 +114,22 @@ class DemandEngine:
                             for i, out in enumerate(ir["outputs"])}
         self.path_budget = 1 + max((len(g.get("path", [])) for g in candidate["goals"]), default=0)
         self._setup()
+        from .unavailable_actions import UnavailableDependencies
+        self.unavailable_dependencies = UnavailableDependencies(self)
+        from .input_contracts import InputContracts
+        self.contracts = InputContracts(self, input_contract_review)
+        from .source_input_findings import SourceInputMismatchIndex
+        self.source_input_mismatches = SourceInputMismatchIndex(self.contracts.receipt)
+        from .review_barriers import ReviewValidationBarriers
+        self.review_validation_barriers = ReviewValidationBarriers(self.contracts.receipt)
+        for entry in self.compiled.get("input_contracts", []):
+            contract = entry["contract"]
+            rules = contract.get("rules", [contract])
+            for rule in rules:
+                self.path_budget += len(rule.get("output", {}).get("path", []))
+                self.path_budget += sum(len(wanted["path"]) for row in rule["inputs"] for wanted in row["required"])
+                self.path_budget += sum(len(item["information"]["path"]) for row in rule["inputs"]
+                                        for item in row.get("unresolved_ranges", []))
 
     def diagnostic(self, code, reason, ir=None, requirement=None, operation=None, *, blocking=True, affected=None):
         value = {"code": code, "reason": reason, "instruction_id": ir,
@@ -209,7 +233,7 @@ class DemandEngine:
                         # A declared collection is not an evaluated collection.
                         # Do not create a node which claims a recorded member
                         # scope and then fails the public result validator.
-                        if self.index.coverage.get(ir) != "not_reached":
+                        if self.index.coverage.get(ir) != "infeasible":
                             self.diagnostic("missing_collection_record",
                                 "A declared collection output has no evaluated member scope; its payload and cardinality remain unresolved.", ir)
                         continue
@@ -228,6 +252,117 @@ class DemandEngine:
         for supplement in self.candidate["expressions"]:
             target = self.targets[target_key(supplement["target"])]
             self.expressions[(target.get("instruction_id"), tuple(target["raw_path"]))] = supplement["expression"]
+
+    def _contract_transfer(self, operation, n, requirement, parent, conservative=False):
+        """Apply accepted semantic rules; gaps retain only named input ranges."""
+        info = self.ops[operation]
+        ir = info["position"]["instruction_id"]
+        result = self.contracts.transfer(operation, n)
+        for row in result["requirements"]:
+            from .sensitivity_engine import range_presence
+            values = info["record"]["inputs"][row["input_index"]]
+            if row.get("if_present"):
+                self.input(operation, row["input_index"], need("presence", row["path"]),
+                           requirement, "reviewed_optional_input_presence", parent, conservative)
+                if values and all(range_presence(self.index.data, value, row["path"]) in {"absent", "empty"} for value in values):
+                    continue
+            if row["property"] != "presence" and row["path"] and values:
+                missing = [value for value in values if range_presence(self.index.data, value, row["path"]) == "absent"]
+                invalid = [value for value in values if range_presence(self.index.data, value, row["path"]) == "invalid"]
+                if missing and not row.get("if_present"):
+                    self.diagnostic("input_contract_missing_input",
+                        "The required input field " + str(row["path"]) + " is absent in recorded candidates "
+                        + str(missing) + "; the declared output cannot be justified from that input. Contract: "
+                        + str(result["contract_ids"]) + ". Correct the input binding or the source output specification.",
+                        ir, requirement, operation, affected=[ir])
+                if invalid:
+                    self.diagnostic("input_contract_wrong_input",
+                        "The required field selector " + str(row["path"]) + " is invalid for recorded input candidates "
+                        + str(invalid) + "; correct the input type or source-backed field relation. Contract: "
+                        + str(result["contract_ids"]) + ".", ir, requirement, operation, affected=[ir])
+            self.input(operation, row["input_index"], need(row["property"], row["path"]),
+                       requirement, "reviewed_input_contract", parent, conservative)
+        for gap in result["gaps"]:
+            reason = (gap["reason"] + " Output: " + str(gap["output"]) + "; contract: " + gap["pointer"]
+                      + "; missing relationship: " + gap["missing"]
+                      + "; required resolution: " + gap["resolution"]
+                      + "; review scope: " + str(gap.get("scope_id")))
+            diagnostic = self.diagnostic(gap["code"], reason, ir, requirement, operation, affected=[ir])
+            if gap["no_inputs"]:
+                continue
+            slots = self.slots(operation) if gap["input_index"] is None else [gap["input_index"]]
+            for slot in slots:
+                self.input(operation, slot, need(gap["property"], gap["path"], excluded=gap["excluded_paths"]), requirement,
+                           "input_contract_gap:" + diagnostic, parent, True,
+                           information_bound=gap["information_bound"])
+        return result
+
+    def _review_validation_errors(self, key, node, information, requirement, conservative):
+        """Retain affected real inputs without treating invalid findings as facts."""
+        from .review_barriers import operation_barriers, barrier_diagnostic
+        meta = self.nodes[node]
+        operation = meta["operation_id"]
+        if operation is None or meta["kind"] not in {"action", "op_output"}:
+            return False
+        barriers = operation_barriers(self, operation)
+        for barrier in barriers:
+            diagnostic = barrier_diagnostic(self, barrier, meta["instruction_id"], operation, requirement)
+            rule = "input_contract_gap:" + diagnostic
+            self.emit(node, information, requirement, rule, key, True)
+            # The invalid record does not establish a narrower field relation.
+            # Preserve every real operand even when an earlier gap already
+            # made the arriving output demand conservative.
+            for slot in self.slots(operation):
+                self.input(operation, slot, need(), requirement, rule, key, True)
+        return bool(barriers) and not conservative
+
+    def _source_input_errors(self, key, node, information, requirement, conservative):
+        """Record known native-output errors without inventing corrected inputs."""
+        from .input_contracts import selector, overlaps, covers
+        meta = self.nodes[node]
+        operation = meta["operation_id"]
+        if operation is None or meta["kind"] not in {"action", "op_output"}:
+            return False
+        info = self.ops[operation]
+        wanted = selector(information)
+        exclusions = [([{"kind": "each"}] if information.get("each") else []) + path
+                      for path in information.get("excluded_paths", [])]
+        matched = []
+        for finding in self.source_input_mismatches.for_operation(meta["instruction_id"], list(info["raw_op"])):
+            for impact in finding["impacts"]:
+                if impact["kind"] == "action":
+                    applies = meta["kind"] == "action"
+                else:
+                    applies = (meta["kind"] == "op_output" and overlaps(wanted["path"], impact["path"])
+                        and not any(covers(path, impact["path"]) or covers(path, wanted["path"])
+                                    for path in exclusions)
+                        and (impact["property"] == "value"
+                             or wanted["property"] == "value" and covers(wanted["path"], impact["path"])
+                             or wanted["property"] == impact["property"] and len(wanted["path"]) == len(impact["path"])))
+                if applies:
+                    matched.append(finding)
+                    break
+        for finding in matched:
+            diagnostic = self.diagnostic("input_contract_source_" + finding["kind"],
+                "Known source input error " + finding["id"] + ": " + finding["reason"]
+                + " Affected native demand: " + str(wanted)
+                + ". The actual input is preserved; no missing or corrected value is synthesized.",
+                meta["instruction_id"], requirement, operation, affected=[meta["instruction_id"]])
+            self.emit(node, information, requirement, "input_contract_gap:" + diagnostic, key, True)
+        # A conservative counterpart has a distinct identity. Process the real
+        # dependencies through it rather than mutating an existing derivation.
+        return bool(matched) and not conservative
+
+    def _location_identity_inputs(self, operation, requirement, parent, conservative):
+        """Retain exact CFG operands bound to a required boundary's location."""
+        info = self.ops[operation]
+        ir = info["position"]["instruction_id"]
+        spec = info["spec"]
+        location = self.compiled["locations"].get(spec.get("target", spec.get("location")), {})
+        for reference in location.get("operand_refs", []):
+            if reference["instruction_id"] == ir and reference["side"] == "input":
+                self.emit(self.node_at("ir_input", ir, slot=reference["index"]), need(), requirement,
+                          "required_location_identity", parent, conservative)
 
     def _operand_data(self, ir, index, side):
         operand = self.index.instructions[ir][side][index]
@@ -286,19 +421,27 @@ class DemandEngine:
                 result[i] = (use.value.model_dump(mode="json"), use.role)
         return result
 
-    def emit(self, node, n, req, rule, parent=None, conservative=False):
+    def emit(self, node, n, req, rule, parent=None, conservative=False, *, information_bound=None):
         if node is None:
             self.diagnostic("missing_binding", "No existing operation or value binding can carry this demand.", requirement=req)
             return
         n = _canonical_need(n)
+        # Uncertain necessity can still have a reviewed upper bound on the
+        # information property. Carry that bound only through exact transfers;
+        # an unrelated weak/opaque dependency must not inherit certification.
+        if information_bound is None:
+            information_bound = bool(conservative and parent and rule in EXACT_INFORMATION_BOUND_RULES
+                and self.derivations[parent].get("information_bound", False))
+        information_bound = bool(conservative and information_bound)
         if len(n["path"]) > self.path_budget:
             n, conservative = need(), True
+            information_bound = False
             self.diagnostic("path_widening", "Recursive access paths were conservatively retained as a whole value.",
                             ir=self.nodes[node]["instruction_id"], requirement=req, blocking=False)
         seed = self.derivations[parent]["seed_goal_id"] if parent is not None else self._active_seed
         if seed is None:
             raise ValueError("Every demand derivation requires an originating seed goal")
-        key = _id("demand_", [node, n, req, seed, conservative])
+        key = _id("demand_", [node, n, req, seed, conservative, information_bound])
         if key in self.derivations:
             row = self.derivations[key]
             row["rules"] = sorted(set(row["rules"]) | {rule})
@@ -308,6 +451,8 @@ class DemandEngine:
         self.derivations[key] = {"id": key, "node": deepcopy(self.nodes[node]),
                                  **n, "requirement_id": req, "seed_goal_id": seed, "conservative": conservative,
                                  "rules": [rule], "parents": [parent] if parent and parent != key else []}
+        if information_bound:
+            self.derivations[key]["information_bound"] = True
         self.queue.append((key, node, n, req, conservative, seed))
 
     def emit_ref(self, ref, ir, scope, n, req, rule, parent=None, conservative=False):
@@ -315,9 +460,9 @@ class DemandEngine:
         for node in nodes:
             self.emit(node, n, req, rule, parent, conservative or len(nodes) > 1)
 
-    def input(self, key, slot, n, req, rule, parent, conservative=False):
+    def input(self, key, slot, n, req, rule, parent, conservative=False, *, information_bound=None):
         self.emit(self.node_at("op_input", self.ops[key]["position"]["instruction_id"], key, slot),
-                  n, req, rule, parent, conservative)
+                  n, req, rule, parent, conservative, information_bound=information_bound)
 
     def _observe(self, source, ir, scope, segment, n, req, parent, conservative):
         """Attach only observations emitted for the same real processing segment."""
@@ -334,6 +479,8 @@ class DemandEngine:
         Text conditions are not parsed. Keeping their declared operands is a
         conservative dependence, never a field-level Boolean proof.
         """
+        demand = self.derivations[parent]
+        unestablished = demand["conservative"] and demand["seed_goal_id"] in self.unavailable_actions
         target_block = self.index.ir_block[ir]
         for block, successors in self.index.successors.items():
             if len(successors) < 2 or not any(target_block in self.index.reachable[s] for s in successors):
@@ -346,7 +493,7 @@ class DemandEngine:
                            if owner == control["id"] and path and path[0] != "events"]
             if expressions:
                 for expression in expressions:
-                    self._control_expression(expression, control["id"], need("truth"), req, parent)
+                    self._control_expression(expression, control["id"], need("truth"), req, parent, unestablished)
                 continue
             branches = [info for info in self.ops.values() if info["position"]["instruction_id"] == control["id"]
                         and info["spec"]["op"] == "branch"]
@@ -354,26 +501,26 @@ class DemandEngine:
                 for info in branches:
                     prop = "truth" if info["spec"]["predicate"] == "truthy" else "cardinality"
                     self.emit_ref(info["spec"]["input"], control["id"], info["scope"], need(prop), req,
-                                  "typed_control_operand", parent)
+                                  "typed_control_operand", parent, unestablished)
                 continue
             for i, operand in enumerate(control["inputs"]):
                 if operand["type"] not in {"literal", "external_resource"}:
                     self.emit(self.node_at("ir_input", control["id"], slot=i), need(), req,
                               "control_operands_retained", parent, True)
 
-    def _control_expression(self, expr, ir, n, req, parent):
+    def _control_expression(self, expr, ir, n, req, parent, conservative=False):
         op = expr["op"]
         if op == "ref":
-            self.emit_ref(expr["value"], ir, None, n, req, "structured_control", parent)
+            self.emit_ref(expr["value"], ir, None, n, req, "structured_control", parent, conservative)
         elif op == "literal":
             return
         elif op == "field":
-            self._control_expression(expr["arg"], ir, _prepend_need(n, expr["path"]), req, parent)
+            self._control_expression(expr["arg"], ir, _prepend_need(n, expr["path"]), req, parent, conservative)
         elif op in {"present", "count", "not"}:
-            self._control_expression(expr["arg"], ir, need({"present": "presence", "count": "cardinality", "not": "truth"}[op]), req, parent)
+            self._control_expression(expr["arg"], ir, need({"present": "presence", "count": "cardinality", "not": "truth"}[op]), req, parent, conservative)
         else:
             for arg in expr["args"] if op in {"and", "or"} else [expr["left"], expr["right"]]:
-                self._control_expression(arg, ir, need("truth" if op in {"and", "or"} else "value"), req, parent)
+                self._control_expression(arg, ir, need("truth" if op in {"and", "or"} else "value"), req, parent, conservative)
 
     def expression(self, expr, info, n, req, parent, conservative=False, *, each=False):
         op = expr["op"]
@@ -416,15 +563,17 @@ class DemandEngine:
     def seed(self):
         from skillflow.propagation.contracts.demand import goal_target_capability
         requirement_ids = {r.id for r in self.task.requirements}
+        goal_ids_by_requirement = defaultdict(set)
         for goal in self.candidate["goals"]:
             req, prop = goal["requirement_id"], goal["preserve"]
+            goal_ids_by_requirement[req].add(goal["id"])
             self._active_seed = goal["id"]
             target = self.targets[target_key(goal["target"])]
             ir = target.get("instruction_id")
             if goal_target_capability(target, prop) is None:
                 self.diagnostic("unbound_goal", "The selected target cannot carry this executable preservation property.", ir, req)
                 continue
-            if ir and self.index.coverage.get(ir) == "not_reached":
+            if ir and self.index.coverage.get(ir) == "infeasible":
                 # The checked propagation result proves this path inactive.
                 # Keep its declared goal but do not look for a nonexistent
                 # producer or claim its Task requirement has been fulfilled.
@@ -435,6 +584,19 @@ class DemandEngine:
             each = bool(goal_path and isinstance(goal_path[0], dict) and goal_path[0].get("kind") == "each")
             n = need(prop, goal_path[1:] if each else goal_path, each=each)
             keys = self._target_ops(target)
+            if prop == "action" and ir:
+                evidence = self.unavailable_dependencies.evidence(goal, target)
+                if evidence is not None:
+                    diagnostic = self.diagnostic(evidence["code"], evidence["reason"], ir, req)
+                    self.unavailable_actions[goal["id"]] = target
+                    self.emit(self.node("action", ir=ir), n, req,
+                              "unavailable_dependency:" + diagnostic, conservative=True)
+                    if not keys:
+                        continue
+                elif target["kind"] != "instruction" and not keys:
+                    self.diagnostic("inactive_goal", "The instruction was evaluated with no active occurrence of this selected operation. No action demand is seeded for the excluded occurrence.",
+                                    ir, req, blocking=False)
+                    continue
             if keys:
                 self.bound_goals.add(req)
                 for key in keys:
@@ -496,7 +658,9 @@ class DemandEngine:
                 self.diagnostic("requirement_expression_gap",
                     "This requirement is not fully expressed as positive demands and supported constraints. No program-verifiable local impact boundary is available; retain it as a global limitation.",
                     requirement=req)
-            if req not in self.bound_goals and not realization.get("constraints"):
+            goals = goal_ids_by_requirement[req]
+            only_located_failures = bool(goals) and goals <= self.unavailable_actions.keys()
+            if req not in self.bound_goals and not realization.get("constraints") and not only_located_failures:
                 self.diagnostic("unbound_requirement", "No applicable demand goal is available; this does not mean the requirement can be omitted.", requirement=req)
         for issue in self.task.issues:
             if issue.resolution == "unresolved":
@@ -602,6 +766,12 @@ class DemandEngine:
         kind, ir, op_key = meta["kind"], meta["instruction_id"], meta["operation_id"]
         if ir:
             self._controls(ir, req, key)
+        if self._review_validation_errors(key, node, n, req, conservative):
+            return
+        if self._source_input_errors(key, node, n, req, conservative):
+            return
+        if op_key is not None and kind in {"action", "op_output"}:
+            self._location_identity_inputs(op_key, req, key, conservative)
         if kind == "literal":
             return
         if kind == "element":
@@ -657,6 +827,9 @@ class DemandEngine:
                 definition, index = self.definitions[operand["identifier"]]
                 self.emit(self.node_at("ir_output", definition, slot=index), n, req, "cfg_result_use", key, conservative)
             elif operand["type"] not in {"literal", "external_resource"}:
+                if seed in self.unavailable_actions and conservative:
+                    self.unavailable_dependencies.context_operand(ir, meta["slot"], n, req, key)
+                    return
                 locations = [(loc["kind"], loc["name"]) for loc in self.compiled["locations"].values()
                              if {"instruction_id": ir, "side": "input", "index": meta["slot"]} in loc["operand_refs"]]
                 for location in locations:
@@ -674,6 +847,11 @@ class DemandEngine:
             return
         if kind == "ir_output":
             binding = next((b for b in self.compiled["ir_semantics"].get(ir, {}).get("output_bindings", []) if b["output_index"] == meta["slot"]), None)
+            if (seed in self.unavailable_actions and conservative
+                    and self.unavailable_dependencies.has_incomplete_execution(ir)):
+                self.unavailable_dependencies.output(ir, binding, n, req, key)
+                if not meta["data_ids"]:
+                    return
             if binding is None:
                 self.diagnostic("missing_output_binding", "A required public result has no transfer binding.", ir, req)
             else:
@@ -690,6 +868,17 @@ class DemandEngine:
                             self.input(observer, slot, n, req, "public_return_boundary", key, conservative)
             return
         if kind == "action":
+            if not op_key and conservative and seed in self.unavailable_actions:
+                self.unavailable_dependencies.action(ir, self.unavailable_actions[seed], req, key)
+            if op_key:
+                info = self.ops[op_key]
+                contract = self.contracts.entry(op_key)
+                boundary = self.compiled["locations"].get(info["spec"].get("target"), {})
+                if contract is not None:
+                    self._contract_transfer(op_key, need() if contract["kind"] == "compute" else need("action"), req, key, conservative)
+                elif (info["spec"]["op"] == "deliver" and not info["generated"]
+                      and boundary.get("kind") in {"tool", "remote"} and self.slots(op_key)):
+                    self._contract_transfer(op_key, need("action"), req, key, conservative)
             if op_key and self.ops[op_key]["scope"] is not None:
                 info = self.ops[op_key]
                 collection = self.compiled["ir_semantics"][ir]["events"][info["scope"][0]]["collection"]
@@ -762,17 +951,15 @@ class DemandEngine:
             if expression:
                 self.expression(expression, info, n, req, key, conservative)
             else:
-                for slot in self.slots(op_key):
-                    self.input(op_key, slot, need(), req, "opaque_computation", key, True)
+                self._contract_transfer(op_key, n, req, key, conservative)
         elif operation == "receive":
-            for slot in self.slots(op_key):
-                self.input(op_key, slot, need(), req, "external_request_retained", key, True)
+            has_contract = self.contracts.entry(op_key) is not None
+            if has_contract or self.slots(op_key):
+                self._contract_transfer(op_key, n, req, key, conservative)
             for link in self.index.links.values():
                 if link["kind"] == "request_response" and link["target"] == op_key:
                     request = link["source"]
                     self.emit(self.node("action", ir=ir, op=request), need("action"), req, "required_acquisition", key, conservative)
-                    for slot in self.slots(request):
-                        self.input(request, slot, need(), req, "external_request_retained", key, True)
         elif operation == "read":
             for link in self.index.links.values():
                 if link["kind"] == "saved_read" and link["target"] == op_key:
@@ -859,29 +1046,35 @@ class DemandEngine:
             args = self.queue.popleft() if queue_order == "fifo" else self.queue.pop()
             self.step(*args)
         for d in self.index.diagnostics:
-            self.diagnostic("upstream_diagnostic", d.get("reason", str(d)), d.get("instruction_id"))
+            self.diagnostic("upstream_diagnostic", d.get("reason", str(d)), d.get("instruction_id"),
+                            affected=d.get("affected_instruction_ids"))
         for ir, state in self.index.coverage.items():
-            if state not in {"processed", "not_reached"}:
-                self.diagnostic("upstream_coverage", "Upstream propagation has not produced this reachable record.", ir)
+            if state not in {"processed", "infeasible"}:
+                self.diagnostic("upstream_coverage", "Upstream propagation has not established this instruction's execution; coverage: " + state + ".", ir)
         impacts = processing_impacts(self.index.cfg, self.compiled)
         for gap in self.compiled.get("processing_gaps", []):
-            if self.index.coverage[gap["instruction_id"]] == "not_reached":
+            if self.index.coverage[gap["instruction_id"]] == "infeasible":
                 continue
             from skillflow.propagation.contracts.limitations import gap_id
             identity = gap_id(gap)
             self.diagnostic("processing_gap", identity + ": " + gap["reason"], gap["instruction_id"],
                             affected=impacts[identity])
         sinks = self._sinks()
+        from .input_assessments import build_input_assessments
+        input_assessments, input_findings = build_input_assessments(self)
         from skillflow.propagation.facts import declared_boundary_coverage
         unresolved = [row["boundary"] for row in declared_boundary_coverage(self.compiled, self.index.sinks, self.index.coverage)
                       if row["status"] == "unresolved"]
-        return {"schema_version": "skillflow-demand-v7",
+        return {"schema_version": "skillflow-demand-v12",
                 "status": "partial" if any(d["blocking"] for d in self.diagnostics.values()) else "complete",
                 "goals": deepcopy(self.candidate["goals"]),
                 "traceability": self._traceability(),
                 "derivations": {k: {field: deepcopy(value) for field, value in self.derivations[k].items()
                                     if field != "id"} for k in sorted(self.derivations)},
                 "sinks": sinks,
+                "input_assessments": input_assessments,
+                "input_findings": input_findings,
+                "input_contract_review_sha256": (self.contracts.receipt or {}).get("receipt_sha256"),
                 "diagnostics": [self.diagnostics[k] for k in sorted(self.diagnostics)],
                 "coverage": {"requirements": {r.id: {
                     **{k: deepcopy(v) for k, v in self.realizations[r.id].items() if k != "constraints"},
@@ -930,8 +1123,11 @@ class DemandEngine:
             sliced = self.index.slice(boundary)
             relevant = set(sliced["usage_context"]["instructions"])
             relevant.update(self.ops[k]["position"]["instruction_id"] for k in sliced["backward_slice"]["operations"])
-            limits = sorted(k for k, d in self.diagnostics.items() if d["blocking"] and diagnostic_applies(d, relevant,
-                            scoped_instructions=sliced["usage_context"]["instructions"]))
+            from .input_assessments import applicable_contract_diagnostics
+            contract_limits = applicable_contract_diagnostics(self.derivations, ids)
+            limits = sorted(k for k, d in self.diagnostics.items() if d["blocking"] and (
+                k in contract_limits if d["code"].startswith("input_contract_") else diagnostic_applies(d, relevant,
+                            scoped_instructions=sliced["usage_context"]["instructions"])))
             established = [k for k in ids if not self.derivations[k]["conservative"]]
             conservative = [k for k in ids if self.derivations[k]["conservative"]]
             ranges = []

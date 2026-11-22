@@ -59,7 +59,7 @@ def build_sensitivity_index(annotation, sensitivity_candidate):
 
 
 def prepare_sensitivity_review(facts, task=None, annotation=None, demand_candidate=None,
-                               sensitivity_candidate=None, *, queue_order="fifo"):
+                               sensitivity_candidate=None, *, queue_order="fifo", input_contract_review=None):
     """Apply one deterministic engine to joint or explicit offline declarations.
 
     An independent candidate is a separately authored, validated input. It is
@@ -86,20 +86,24 @@ def prepare_sensitivity_review(facts, task=None, annotation=None, demand_candida
         raw=annotation["raw_annotation"], source_files=files)
     sensitivity = _json(sensitivity)
     index = build_sensitivity_index(annotation, sensitivity)
-    engine = DemandEngine(facts, task, annotation, demands.model_dump(mode="json"), targets)
+    engine = DemandEngine(facts, task, annotation, demands.model_dump(mode="json"), targets,
+                          input_contract_review=input_contract_review)
     demand_result = engine.solve(queue_order=queue_order)
     validate_demand_result(demand_result)
     result = SensitivityEngine(engine, demand_result, index["declarations"]).solve()
-    validate_sensitivity_result(result, facts, task, annotation, demands, sensitivity, demand_result=demand_result)
+    validate_sensitivity_result(result, facts, task, annotation, demands, sensitivity, demand_result=demand_result,
+                                input_contract_review=input_contract_review)
     return SensitivityReview(deepcopy(result), index, deepcopy(demand_result))
 
 
-def prepare_joint_sensitivity_review(facts, annotation, *, queue_order="fifo"):
-    return prepare_sensitivity_review(facts, annotation=annotation, queue_order=queue_order)
+def prepare_joint_sensitivity_review(facts, annotation, *, queue_order="fifo", input_contract_review=None):
+    return prepare_sensitivity_review(facts, annotation=annotation, queue_order=queue_order,
+                                      input_contract_review=input_contract_review)
 
 
 def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
-                                demand_candidate=None, sensitivity_candidate=None, *, demand_result=None):
+                                demand_candidate=None, sensitivity_candidate=None, *, demand_result=None,
+                                input_contract_review=None):
     """Strict stored-result and reference checks; this does not re-run inference."""
     from skillflow.propagation.conditions import payload_input_indices
     from skillflow.propagation.contracts.sensitivity import validate_sensitivity_candidate
@@ -110,24 +114,27 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
     if facts is not None and demand_result is None:
         raise ValueError("Verified demand result is required for sensitivity material validation")
     expected_demand = validate_demand_result(demand_result) if demand_result is not None else None
+    if expected_demand is not None and expected_demand["input_contract_review_sha256"] != (input_contract_review or {}).get("receipt_sha256"):
+        raise ValueError("Demand input-contract review identity differs from the validated review receipt")
     target_index = None
     def targets():
         nonlocal target_index
         if target_index is None:
             target_index = build_demand_target_index(facts.cfg, annotation["raw_annotation"])
         return target_index
-    if expected_demand is not None and facts is not None and annotation is not None:
-        from .demand_results import validate_result_references
-        validate_result_references(expected_demand, facts, targets())
     expected_comparisons = {sink["id"]: sink for sink in expected_demand["sinks"]} if expected_demand is not None else None
     sensitivity = value["derivations"]["sensitivity"]
     demand = value["derivations"]["demand"]
     diagnostics = {d["id"]: d for d in value["diagnostics"]}
+    from .input_assessments import derivation_problem_refs
+    from types import SimpleNamespace
+    problem_refs = derivation_problem_refs(SimpleNamespace(derivations=demand))
     scoped_demand_ids = {row["id"] for row in (expected_demand or {}).get("diagnostics", [])
                          if "affected_instruction_ids" in row}
     if any("affected_instruction_ids" in row and row["id"] not in scoped_demand_ids for row in diagnostics.values()):
         raise ValueError("Program-scoped sensitivity diagnostics must come from verified demand coverage")
     constraint_analysis = None
+    reference_engine = None
     if facts is not None and task is not None and annotation is not None and demand_candidate is not None:
         from .demand_engine import DemandEngine
         from .constraint_preservation import ConstraintAnalysis
@@ -135,10 +142,15 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
         checked_candidate = validate_demand_candidate(_json(demand_candidate), task=checked_task,
             source_files=joint_source_files(annotation["material"]), targets=targets())
         # Rebuild the read-only index and checks, not a second demand solve.
-        constraint_analysis = ConstraintAnalysis(DemandEngine(facts, checked_task, annotation,
-            checked_candidate.model_dump(mode="json"), targets()))
+        reference_engine = DemandEngine(facts, checked_task, annotation,
+            checked_candidate.model_dump(mode="json"), targets(), input_contract_review=input_contract_review)
+        constraint_analysis = ConstraintAnalysis(reference_engine)
         if value["constraints"]["checks"] != constraint_analysis.checks:
             raise ValueError("Forward constraint checks differ from verified facts")
+    if expected_demand is not None and facts is not None and annotation is not None:
+        from .demand_results import validate_result_references
+        validate_result_references(expected_demand, facts, targets(), input_contract_review=input_contract_review,
+                                   engine=reference_engine)
     if len(diagnostics) != len(value["diagnostics"]):
         raise ValueError("Duplicate sensitivity diagnostic")
     for records in (sensitivity, demand):
@@ -202,7 +214,8 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             relevant = set(sliced["usage_context"]["instructions"])
             relevant.update(index.operations[key]["position"]["instruction_id"] for key in sliced["backward_slice"]["operations"])
             limits = sorted(set(base["limitations"]) | {identity for identity, diagnostic in diagnostics.items()
-                if diagnostic["blocking"] and diagnostic_applies(diagnostic, relevant,
+                if diagnostic["blocking"] and not diagnostic["code"].startswith("input_contract_")
+                and diagnostic_applies(diagnostic, relevant,
                     scoped_instructions=sliced["usage_context"]["instructions"])})
             if sink["limitations"] != limits:
                 raise ValueError("Sensitivity sink changes relevant saved analysis limitations")
@@ -250,19 +263,32 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
                 if any(demand[k]["node"]["operation_id"] != review["operation_id"]
                        or demand[k]["node"]["slot"] != slot for k in review["demand_refs"]):
                     raise ValueError("Sensitivity demand belongs to another receiver or parameter")
-            from .sensitivity_engine import SensitivityEngine
+            from .sensitivity_engine import SensitivityEngine, comparison_limitations
+            from .input_assessments import deletable_reduction
+            reduction, assessment_refs = (deletable_reduction(expected_demand,
+                review["operation_id"], review["input_index"], review["data_id"], review["path"])
+                if expected_demand is not None else (None, []))
+            if review.get("assessment_refs", []) != assessment_refs:
+                raise ValueError("Sensitivity input assessment references differ from verified demand material")
+            expected_limits = comparison_limitations(row,
+                [(identity, demand[identity]) for identity in review["demand_refs"]],
+                sink["limitations"], diagnostics, problem_refs)
+            if review["limitations"] != expected_limits:
+                raise ValueError("Sensitivity comparison changes its scoped relevant limitations")
             expected_conclusion = SensitivityEngine._compare(row,
-                [(identity, demand[identity]) for identity in review["demand_refs"]], review["limitations"])[0]
+                [(identity, demand[identity]) for identity in review["demand_refs"]], review["limitations"], reduction)[0]
             expected_constraint_refs = []
             if expected_conclusion == "excess_supported":
+                reduction = reduction or {"kind": "exclude_field", "path": deepcopy(review["path"])}
+                changed_path = [] if reduction["kind"] == "remove_input" else reduction["path"]
                 if constraint_analysis is not None:
                     expected_constraint_refs, preserved = constraint_analysis.evaluate(
-                        review["operation_id"], review["input_index"], review["data_id"], review["path"])
+                        review["operation_id"], review["input_index"], review["data_id"], changed_path)
                 else:
                     preservation = value["constraints"]["preservation"]
                     expected_constraint_refs = sorted(identity for identity, proof in preservation.items()
                         if (proof["operation_id"], proof["input_index"], proof["data_id"], proof["path"])
-                        == (review["operation_id"], review["input_index"], review["data_id"], review["path"]))
+                        == (review["operation_id"], review["input_index"], review["data_id"], changed_path))
                     if {preservation[key]["constraint_id"] for key in expected_constraint_refs} != set(value["constraints"]["checks"]):
                         raise ValueError("Constraint preservation does not cover every declared constraint")
                     preserved = all(preservation[key]["preserved"] for key in expected_constraint_refs)
@@ -273,13 +299,16 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             if review["conclusion"] != expected_conclusion:
                 raise ValueError("Sensitivity conclusion differs from the supported comparison rule")
             if review["conclusion"] == "excess_supported":
-                if review["relation"] != "direct" or review["property"] != "value" or not review["path"] or review["excluded_paths"] or review["limitations"] or not review["demand_refs"]:
-                    raise ValueError("Unsupported excess conclusion lacks a direct, constrained field range")
+                if review["relation"] != "direct" or review["limitations"]:
+                    raise ValueError("Supported excess requires a direct range without relevant limitations")
                 from .sensitivity_engine import demand_overlap
                 if any(demand_overlap(row, demand[k]) != "none" for k in review["demand_refs"]):
                     raise ValueError("Supported excess overlaps a preservation demand")
-                if type(review["path"][-1]) is not str or review["reduction"] != {"kind": "exclude_field", "path": review["path"]}:
-                    raise ValueError("Supported excess lacks its precise field reduction")
+                if not assessment_refs and (review["property"] != "value" or not review["path"]
+                    or review["excluded_paths"] or not review["demand_refs"] or type(review["path"][-1]) is not str):
+                    raise ValueError("Unsupported excess conclusion lacks a direct, constrained field range")
+                if review["reduction"] != reduction:
+                    raise ValueError("Supported excess lacks its verified input or field reduction")
             elif review["reduction"] is not None:
                 raise ValueError("A non-supported conclusion cannot propose a certified reduction")
     if expected is not None and sink_ids != expected.keys():

@@ -14,7 +14,7 @@ from skillflow.propagation.annotation.prompts import build_prompt
 
 
 def test_source_rules_replace_stale_read_only_stage_and_keep_english_instructions():
-    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v11"
+    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v12"
     rules = {item["id"]: item["text"] for item in runtime_contract()["rules"]}
     assert len(rules) == len(runtime_contract()["rules"])
     assert "This stage only labels the read effect" not in rules["EM01"]
@@ -27,7 +27,9 @@ def test_source_rules_replace_stale_read_only_stage_and_keep_english_instruction
     assert "Defaults apply normally when execution details are absent" in rules["EM03"]
     assert "whose result alone is returned" in rules["EM04"]
     assert "model-invisible credential proxy or isolated handle" in rules["EM04"]
-    assert "Unknown content in an identified source is not an unknown address" in rules["EM08"]
+    assert "its name is a stable source identity even if content is unknown" in rules["EM08"]
+    assert "Only an actually unidentified address sets address_kind=unidentified" in rules["EM08"]
+    assert "Unknown payload, unavailable concrete value, or missing execution is not evidence of address uncertainty" in rules["EM08"]
     assert "does not broaden later API arguments" in rules["EM06"]
     assert "receive at a tool location in a null-effect event" in rules["EM09"]
     assert "An explicitly pure calculation remains compute" in rules["EM09"]

@@ -15,6 +15,7 @@ from skillflow.common.source_evidence import _json_object, json_pointer
 from skillflow.common.validation import StructuralValidationError, structural_error, schema_error
 from skillflow.propagation.contracts import specs
 from skillflow.propagation.contracts.values import StrictSpec, Text, ValueRef
+from skillflow.propagation.contracts.locations import AddressPolicy, require_address_source_evidence
 from skillflow.propagation.contracts.evidence import SourceEvidence, CFGEvidence, RuleEvidence
 from skillflow.propagation.contracts.demand import OperationTaskGoal, OperationExpression, RawDemandGoal, RawDemandSupplement
 from skillflow.propagation.contracts.realizations import RealizationGap
@@ -22,9 +23,13 @@ from skillflow.propagation.contracts.task import TaskBinding
 from skillflow.propagation.contracts.constraints import TaskConstraint
 from skillflow.propagation.contracts.sensitivity import SensitivityDeclaration
 from skillflow.propagation.contracts.profiles import FailureResponse
+from skillflow.propagation.contracts.input_requirements import (
+    ToolInputContract, normalize_input_contracts, expected_input_contract_obligations,
+    validate_required_input_contract_coverage,
+)
 
 
-WIRE_VERSION = "skillflow-flat-annotation-v3"
+WIRE_VERSION = "skillflow-flat-annotation-v6"
 _CITATION_NOTICE = "Declaration citation; semantic support is not independently verified."
 _WIRE_EVIDENCE_TYPES = [create_model("Flat" + cls.__name__, __base__=cls,
     reason=(Text | None, None)) for cls in (SourceEvidence, CFGEvidence, RuleEvidence)]
@@ -41,11 +46,15 @@ PROCESSING_RULES = {
     "evidence_inheritance": "IR evidence is nonempty. Child evidence may be omitted or []; it inherits the nearest applicable parent. Explicit expression and sensitivity evidence must cite source files and inclusive real lines; omitted source evidence skips CFG-only parents. A CFG/rule citation never becomes source evidence. Locations and source-backed gaps need their own applicable evidence.",
     "validate_ref": "input(index) reads the enclosing IR input, not the preceding operation. Indexes must exist; external_resource identifies a boundary, not payload. local(name) must be defined once in the current scope before use. Case/body locals do not escape except through declared output. Under partial order, alternatives may name a later local only while retaining an already available candidate; no cyclic local definitions.",
     "output_bindings": "Bind every actual public CFG output index exactly once to a real available value. A binding aliases that value; it does not compute, save or select content. Return/dispatch instructions have no invented public output 0. Preserve the actual producer and consumer versions.",
-    "locations": "Operations name existing locations; each kind/name pair and each operand_refs coordinate is distinct. operand_refs use real CFG operands. Storage/runtime_context scope and retention describe the actual boundary; model/remote/user cannot be task-internal. An ordinary save/write defaults to mode=replace when omitted; this is the public runtime abstraction, not a claim that the source specifies overwrite. Source-explicit append/delete or another supported update takes priority. Delete writes have no input; replace/append writes have one. Unknown serialization alone does not remove a known write or its actual input. Only source-supported named task-local runtime_context replace writes inside cases may use may=true; keep existing/new handles separate with actual creation credentials, without claiming exact cache-hit counts.",
+    "locations": "Operations name existing locations; each kind/name pair and each operand_refs coordinate is distinct. operand_refs use real CFG operands. address_kind defaults to identified: names identify sources, not known contents. Caller arguments, caught exceptions and call/member outcomes remain distinct even when unknown; use actual input/local/call results or an evidenced source identity. Only a genuinely unknown address sets address_kind=unidentified with specific address_reason and physical source evidence; it may alias every same-kind address and has weak writes. symbolic: spelling alone is rejected unless address_kind is explicit; it never determines aliasing. Storage/runtime_context scope and retention describe the actual boundary; model/remote/user cannot be task-internal. Ordinary save/write defaults to mode=replace; explicit append/delete takes priority. Delete has no input; replace/append has one. Unknown serialization does not erase a write. Only source-supported task-local runtime_context replace writes inside cases may use may=true; preserve actual creation credentials and unknown cache counts.",
     "request_pair": "call supplies location, ordered request inputs and one response output; the program generates its exact deliver/receive pairing. For separate deliver/receive, use the same ordered request references, location and lexical scope with a unique pairing. Zero arguments are []; equal arguments do not merge distinct calls. Never supply request_id.",
     "collection_scope": "for_each names its real collection and one scoped item. Supply yield and output together or omit both. Only the yield escapes; repeated occurrences stay distinct and empty collections execute no body. Body-local references cannot escape, shadow or cross members, and must not directly read mutable CFG context_key operands. Nested for_each segments and shared writes remain unsupported except the explicit may state summary above; real CFG loops need not be collapsed into for_each. Do not encode iteration or append as opaque compute.",
     "validate_fields": "Build/update field paths cannot duplicate or overlap by prefix; excluded paths are also distinct. Object paths start with a field name; list paths start with an index and complete list construction uses consecutive indexes from 0. Do not mix field/index containers at one path. Conditional build members require an object and Boolean when. Field keys and integer indexes differ.",
     "compute_dependencies": "A compute has one dependency label per input when supplied; omission means possible for every input. Possible influence is not plaintext inclusion. Expressions reference actual operands/locals with source evidence. Preserve a real opaque computation without inventing external acquisition or input-to-error calculations.",
+    "semantic_input_requirements": "Every non-tool opaque compute requires source-backed demand_transfer rules unless a validated expression targets that exact operation. An instruction-level or neighboring expression does not exempt it. Each rule selects one exact output property/path and accounts for every actual input_index exactly once: required information, optional explicit unresolved_ranges, and remainder=independent or unresolved for their complement. Input required ranges alone may set if_present=true when the physical source makes that information conditional on its presence. The flag itself preserves presence plus the required value/information when present, while known absence is valid; a separate presence requirement is redundant. Omit false. This flag is forbidden on output selectors/output_parts; never infer optionality from observed absence. Whole-output rules do not match a narrower field/property. Optional output_parts explicitly declares a closed decomposition including required structure; each part selects an authored rule, with no whole-value recursive part. Several rules alone do not establish completeness. Explain why required information suffices and why the independent complement cannot affect this output obligation; current consumption alone does not establish necessity. Use an existing precise expression OR demand_transfer, never both. Preserve all actual operands, forward dependencies and observations, including unnecessary ones.",
+    "semantic_input_gaps": "An unresolved_ranges entry names exactly one information property/path and a gap; the independent remainder excludes required and unresolved ranges. A gap requires code, concrete reason, missing fact, resolution stating the evidence or relation needed to settle it, and physical source evidence. Generic opacity or a generic request to review source is insufficient. Keep uncertainty local: ambiguous selection or counted population concerns membership, selection controls or cardinality, not unrelated member payload values. A source-backed unknown relation for y must not retain independent z. Use an unresolved remainder only when the missing fact affects that entire complement. Natural-language specificity remains subject to independent source review.",
+    "tool_input_contract": "Every actual tool/remote call, deliver and receive requires an input_contract, including zero-input interfaces with inputs=[] plus reason and evidence. List interface-required information ranges, not every supplied parameter as necessary. Account for each actual input once, preserving the actual extra payload. Cite the interface/source explicitly. For an explicitly optional interface field use if_present=true: the flag automatically preserves presence and supplied value without requiring an absent value; do not add a redundant presence selector to fix this flag. Never infer optionality just from recorded absence. A required invocation preserves interface-required fields; a contract does not create Task purpose or make an unused call required. Paired deliver/receive carry identical contracts. Missing attachments are structural omissions; use specific supported gaps instead of omitting the obligation. No declared request inputs does not certify absence of hidden state or source abstraction errors.",
+    "acquisition_projection": "Only explicit source/interface support permits optional input_contract.acquisition_projections. Each capability binds selection_input_index of the real request, selection_parameter_path within that argument, and one exact value returned_range relative to the paired receive output, with reason and physical evidence. The existing exact request/response pair and lexical scope are retained; equal payloads do not identify a pair. Absence means capability unestablished. A whole returned range does not imply arbitrary descendant selection, and separate rows do not imply arbitrary joint masks. Do not infer a capability from a parameter name or later result use, generate selection values/query encodings, or rewrite the request. Capability review is independent of input necessity.",
     "expression_target": "Expression supplements address an existing computation/control target with that target's real declared inputs. They cannot add an undeclared dependency, replace boundary acquisition, or turn prose into a Boolean fact. Inline operation expressions use that operation's declared values.",
     "loop_operations": "Use merge to associate each incoming value with a distinct actual predecessor block, member to select a source collection occurrence, and append with mode=item/items for real accumulation. branch belongs to the block terminator; its true/false targets exactly cover the actual outgoing successors. truthy requires an actual Boolean, not implicit truth conversion; nonempty/empty test collections, and has_member preserves collection traversal. The program derives loop regions and occurrence identities; never supply a loop ID, unfold iterations, or substitute unguarded alternatives/compute for predecessor/member relations.",
 }
@@ -96,6 +105,7 @@ class FlatCall(StrictSpec):
     output: Text
     demands: list[OperationTaskGoal] = Field(default_factory=list)
     evidences: list[WireEvidence] = Field(default_factory=list)
+    input_contract: ToolInputContract | None = None
 
 
 FlatAtomicOp = Annotated[Union[tuple([*_OPS, FlatCall])], Field(discriminator="op")]
@@ -197,13 +207,18 @@ class FlatIR(StrictSpec):
     output_bindings: list[FlatBinding] = Field(default_factory=list)
     sensitivity: list[FlatSensitivity] = Field(default_factory=list)
 
-class FlatLocation(StrictSpec):
+class FlatLocation(AddressPolicy):
     kind: specs.LocationKind
     name: Text
     operand_refs: list[specs.OperandRef] = Field(default_factory=list)
     access_scope: Literal["task", "recipient", "shared", "public"] | None = None
     retention: Literal["task", "persistent"] | None = None
     evidences: WireEvidences
+
+    @model_validator(mode="after")
+    def address_evidence(self):
+        require_address_source_evidence(self, self.evidences)
+        return self
 
 
 FlatGap = create_model("FlatRealizationGap", __base__=RealizationGap,
@@ -458,6 +473,9 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
                            "request_id": token, "evidences": deepcopy(op["evidences"])}
                 response = {"op": "receive", "location": op["location"], "inputs": deepcopy(op["inputs"]),
                             "output": op["output"], "request_id": token, "evidences": deepcopy(op["evidences"])}
+                if op.get("input_contract") is not None:
+                    request["input_contract"] = deepcopy(op["input_contract"])
+                    response["input_contract"] = deepcopy(op["input_contract"])
                 request_goals, response_goals = [], []
                 request_indexes, response_indexes = [], []
                 for goal_index, goal in enumerate(op.get("demands", [])):
@@ -657,7 +675,14 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
         if processing_only:
             _validate_processing_backend(backend, material)
             return wire, backend, paths
-        return wire, validate_raw_response(backend, material), paths
+        backend = validate_raw_response(backend, material)
+        # Full current-route wire entry is strict too; standalone backend raw
+        # compilation retains its legacy optional attachment behavior.
+        from skillflow.propagation.contracts.demand_index import build_demand_target_index
+        from skillflow.propagation.contracts.task import task_source_files
+        _require_input_contracts(build_demand_target_index(material["cfg"], backend), backend,
+                                task_source_files(material["source"]))
+        return wire, backend, paths
     except StructuralValidationError as error:
         for row in error.diagnostics:
             pointer = row["path"]
@@ -666,6 +691,19 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
                     row["path"] = paths[prefix] + pointer[len(prefix):]
                     break
         raise
+
+
+def _require_input_contracts(targets, backend, source_files):
+    """Called only after expressions and their exact references are valid."""
+    from skillflow.propagation.contracts.references import target_key
+    exact = {target_key(expression["target"]) for expression in backend["expressions"]}
+    exact.update(key for key, target in targets.items() if target.get("domain") == "transfer"
+                 and target.get("kind") == "operation" and target["value"].get("expression") is not None)
+    contracts = normalize_input_contracts(targets, source_files, backend["locations"],
+                                         exact_expression_targets=exact)
+    obligations = expected_input_contract_obligations(targets, backend["locations"],
+                                                      exact_expression_targets=exact)
+    validate_required_input_contract_coverage(obligations, contracts)
 
 
 def _validate_processing_backend(backend, material):
@@ -719,6 +757,7 @@ def _validate_processing_backend(backend, material):
             diagnostics.extend({**row, "path": pointer + row["path"]} for row in error.diagnostics)
     if not diagnostics:
         targets = build_demand_target_index(prepared["cfg"], backend)
+        from skillflow.propagation.contracts.task import task_source_files
         expressions = [(f"/expressions/{i}", expression, targets.get(target_key(expression["target"])))
                        for i, expression in enumerate(backend["expressions"])]
         expressions += [(json_pointer("ir_semantics", target["instruction_id"], *target["raw_path"], "expression"),
@@ -750,6 +789,11 @@ def _validate_processing_backend(backend, material):
                     check_evidence(evidence, prepared)
                 except StructuralValidationError as error:
                     diagnostics.extend({**row, "path": pointer + f"/evidences/{i}" + row["path"]} for row in error.diagnostics)
+        if not diagnostics:
+            try:
+                _require_input_contracts(targets, backend, task_source_files(prepared["source"]))
+            except StructuralValidationError as error:
+                diagnostics.extend(error.diagnostics)
     if diagnostics:
         raise StructuralValidationError(diagnostics)
 
@@ -867,6 +911,8 @@ def compile_flat_response(raw, material, *, validation_gaps=()):
     for item in mapping["events"]:
         item["wire_path"] = project(json_pointer(*item["raw_path"]))
     for item in mapping["goals"]:
+        item["wire_pointer"] = project(item["raw_pointer"])
+    for item in mapping.get("input_contracts", []):
         item["wire_pointer"] = project(item["raw_pointer"])
     if origins is not None:
         mapping["fragment_origins"] = {pointer: item["fragment"] for pointer, item in origins.items()}

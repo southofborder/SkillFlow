@@ -20,6 +20,7 @@ from skillflow.propagation.data.models import LoopSummaryContent, LoopVariant, S
 from skillflow.propagation.data.registry import SCHEMA_VERSION
 from skillflow.propagation.data.registry import DataConflictError
 from skillflow.propagation.data.registry import DataReferenceError
+from skillflow.propagation.data.registry import DataDomainError
 from skillflow.propagation.data.registry import DataRegistry
 from skillflow.propagation.data.registry import DataRegistryError
 from skillflow.propagation.data.registry import export_identity_index
@@ -31,7 +32,7 @@ from skillflow.propagation.data.registry import is_definitely_empty_collection
 __all__ = [
     "Annotations", "Content", "Data", "DataPart", "Dependency", "ElementStep", "FieldUpdatesContent", "KnownPartsContent",
     "LiteralContent", "MappedCollectionContent", "MappedMember", "OpaqueContent", "Origin", "Path", "PathStep", "SubsetViewContent", "WholeExceptContent",
-    "SCHEMA_VERSION", "DataConflictError", "DataReferenceError", "DataRegistry", "DataRegistryError",
+    "SCHEMA_VERSION", "DataConflictError", "DataReferenceError", "DataDomainError", "DataRegistry", "DataRegistryError",
     "export_identity_index", "restore_registry", "validate_data_records", "validate_element_membership",
     "is_definitely_empty_collection",
 ]

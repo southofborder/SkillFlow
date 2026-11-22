@@ -7,7 +7,7 @@ from skillflow.document_guided import runner
 from skillflow.document_guided.source_review import (
     prepare_review_material, build_source_review_prompt, validate_source_review,
 )
-from tests.document_guided.test_parallel_runner import Harness, freeze_producer
+from tests.document_guided.test_parallel_runner import Harness, freeze_producer, prompt_scope
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/online_interface_r4/001/review-material.json"
@@ -25,7 +25,8 @@ def test_saved_token_prohibition_finding_targets_realization_not_sensitive_range
     fixed = {k: deepcopy(v) for k, v in original.items() if k not in {"owner", "id"}}
     index = next(i for i, r in enumerate(saved["annotation"]["realizations"]) if r["requirement_id"] == "R6")
     fixed["target_ids"] = [f"annotation:/realizations/{index}"]
-    checked = validate_source_review({"outcome": "completed", "findings": [fixed]}, material)
+    checked = validate_source_review({"outcome": "completed", "findings": [fixed],
+        "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": []}, material)
     assert checked["findings"][0]["owner"] == "task-correspondence"
     assert runner._fragment_repair_findings(checked, "task-correspondence")
     assert not runner._fragment_repair_findings(checked, "sensitivity")
@@ -50,6 +51,14 @@ def test_realization_finding_repairs_mapping_only_and_keeps_seven_call_normal_pa
                     "source_refs": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}],
                     "explanation": "The source requirement needs a correspondence recheck, not a new sensitivity label.",
                     "suggestion": "Recheck the requirement's existing receiving operation and value binding."}]
+            if stage == "revision-task-correspondence":
+                plan = prompt_scope(prompt)
+                requirement, = plan["slots"]
+                assert requirement == "R1"
+                record = deepcopy(plan["slots"][requirement]["previous"])
+                goal = record["operation_demands"][0]["demands"][0]
+                goal["reason"] += " Retain the label at its source-supported receiving operation."
+                return {"slots": [{"requirement_id": requirement, **record}]}
             return result
 
     harness = CorrectOwner(tmp_path / "run", canaries=True)

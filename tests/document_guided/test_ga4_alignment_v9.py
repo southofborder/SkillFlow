@@ -20,6 +20,7 @@ from tests.document_guided.ga4_alignment_v9_cases import (
     metadata_fixture, report_rows_fixture, solve,
 )
 from tests.document_guided.test_case_summaries import ga4_fixture
+from tests.doe.test_input_contract_preservation import accepted_receipt
 
 
 def operations(case, ir):
@@ -35,9 +36,10 @@ def one(ids):
     return next(iter(ids))
 
 
-def demand_review(case):
+def demand_review(case, *, input_contract_review=None):
     return prepare_demand_review(case["facts"], Task.model_validate(case["material"]["task"]),
-        case["facts"].annotation, {"goals": case["compiled"]["demands"], "expressions": case["compiled"]["expressions"]}).to_dict()
+        case["facts"].annotation, {"goals": case["compiled"]["demands"], "expressions": case["compiled"]["expressions"]},
+        input_contract_review=input_contract_review).to_dict()
 
 
 def test_public_url_acquisition_normalization_and_real_save_binding():
@@ -62,7 +64,7 @@ def test_public_url_acquisition_normalization_and_real_save_binding():
 def test_empty_urls_return_before_client_api_or_save():
     case = bulk_fixture([])
     for ir in ("ir_filter", "ir_client", "ir_report", "ir_save"):
-        assert case["solved"].coverage[ir] == "not_reached"
+        assert case["solved"].coverage[ir] == "infeasible"
     assert case["solved"].coverage["ir_empty"] == "processed"
     assert not case["facts"].sinks
 
@@ -137,6 +139,20 @@ def test_indexing_cache_read_write_identity_and_clock_fallback_remain_distinct()
 @pytest.mark.parametrize("path,alternatives", [("batch", 1), ("reindex", 2), ("status", 2)])
 def test_real_ga4_exception_sources_are_not_success_values_or_url_computations(path, alternatives):
     material, wire, _ = ga4_fixture(path)
+    if path == "batch":
+        call = wire["ir_semantics"]["ir_call"]["segments"][0]["body"][0]["cases"][0]["segments"][0]["ops"][0]
+        # This fixture calls the source's local requestIndexing helper, whose
+        # options.save=false suppresses its write; it is not the raw API body.
+        call["input_contract"] = {"inputs": [
+            {"input_index": 0, "required": [{"property": "value", "path": []}],
+             "remainder": "independent", "reason": "The helper requires this member URL for its indexing operation."},
+            {"input_index": 1, "required": [{"property": "value", "path": ["save"], "if_present": True}],
+             "remainder": "independent", "reason": "The supplied optional save setting must be preserved to suppress the member write; other option fields are unused."}],
+            "reason": "requestIndexing consumes url and its optional save setting; the batch supplies save:false and saves the final collection.",
+            "evidences": [{"file": "skill/scripts/src/api/indexing.ts", "start_line": 57, "end_line": 79,
+                "reason": "The helper uses url for the request and save for its guarded persistence."},
+                {"file": "skill/scripts/src/api/indexing.ts", "start_line": 89, "end_line": 104,
+                 "reason": "The batch supplies each URL with save:false before saving the final collection."}]}
     case = solve(material, wire)
     loop = case["solved"].records.get("ir_call").events[0]
     assert {instance.selector for instance in loop.instances} == {0, 1}
@@ -147,7 +163,7 @@ def test_real_ga4_exception_sources_are_not_success_values_or_url_computations(p
     assert all(len(instance.yielded) == alternatives for instance in loop.instances)
     assert bool(loop.completion_groups) == (path == "batch")
     if path == "batch":
-        reviewed = demand_review(case)
+        reviewed = demand_review(case, input_contract_review=accepted_receipt(case["facts"], case["facts"].annotation))
         assert reviewed["status"] == "complete"
         assert any(row["node"]["kind"] == "collection_output" and row["property"] == "value"
                    for row in reviewed["derivations"].values())
@@ -165,7 +181,14 @@ def test_real_ga4_exception_sources_are_not_success_values_or_url_computations(p
 def test_report_row_value_demands_keep_both_each_levels_and_receiver_scope():
     case = report_rows_fixture()
     reviewed = demand_review(case)
-    assert reviewed["status"] == "complete"
+    # The unchanged report placeholder only supplies property; it intentionally
+    # has no complete tool interface or source-review receipt. Nested response
+    # demands still remain precise at their own receiver boundaries.
+    assert reviewed["status"] == "partial"
+    gaps = [row for row in reviewed["diagnostics"] if row["blocking"]]
+    assert gaps and {row["code"] for row in gaps} == {"input_contract_unavailable"}
+    assert {row["instruction_id"] for row in gaps} == {"ir_report"}
+    assert all(row["operation_id"] and "no accepted input-requirement review" in row["reason"] for row in gaps)
     assert not any(row["code"] in {"nested_member_demand", "path_widening"} for row in reviewed["diagnostics"])
     summary = next(row for row in reviewed["sinks"] if row["boundary"]["target"] == "summary")
     required = [reviewed["derivations"][key] for key in summary["demanded_information"]]

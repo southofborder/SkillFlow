@@ -16,6 +16,7 @@ Purpose and each requirement need exact {file,start_line,end_line,reason}, inclu
 Current whole-record use, capabilities, examples and implementation facts are not automatically requirements. A precise obligation inside an implementation step still counts. A required action does not exempt all payloads; genuine explicit whole-value requirements must not be narrowed for a desired result.
 Read the complete source to identify obligations, but do not classify or register every source line. Evidence spans support individual purpose, requirement and issue claims; unreferenced context is allowed and does not prove an omission. Keep each supported prohibition even when the current implementation appears to obey it.
 Record ambiguity/conflict in issues with original evidence, affected requirement_ids, resolution and reason. Faithfully retained open descriptions are allowed; do not invent success, encoding, mechanism or implementation. Never output bindings, demands, sensitivity or unsupported fields.
+Preserve a clear source-stated duty at its stated abstraction. Missing implementation, interface-field or serialization details alone do not create a Task ambiguity; do not invent those details. Record an unresolved Task issue when competing source-supported interpretations change the required obligation, condition, applicability or information, including genuine conflicts about exact output representation when it matters.
 """
 
 TASK_CHECK = """7. SELF-CHECK

@@ -12,16 +12,25 @@ from skillflow.propagation.solver import propagate
 from tests.doe.helpers import source_task
 from tests.propagation.annotation.helpers import source_bundle
 from tests.propagation.test_explicit_loops import explicit_loop_fixture
+from tests.doe.test_input_contract_preservation import accepted_receipt
 
 
 EACH = {"kind": "each"}
+
+
+def tool_contract(citation, required_paths, reason):
+    return {"inputs": [{"input_index": index,
+        "required": [{"property": "value", "path": path} for path in paths],
+        "remainder": "independent", "reason": reason}
+        for index, paths in enumerate(required_paths)], "reason": reason, "evidences": [citation]}
 
 
 def loop_review(*, preserve="value", path=None, values=("same-url", "same-url"), count_limit=None):
     cfg, template = explicit_loop_fixture(values)
     cfg["blocks"]["exit"]["instructions"].insert(0, instruction("save", [operand("acc")]))
     text = ("Fetch each URL, retain its URL and full API response in an accumulated record, then save the batch.\n"
-            "The required saved result contains each URL only. API response token fields are confidential.\n")
+            "The required saved result contains each URL only. API response token fields are confidential.\n"
+            "The fetch interface requires the complete URL string as its only argument.\n")
     if path == [] and preserve == "value":
         text = text.replace("each URL only", "the complete original metadata and URL records")
     elif preserve == "cardinality":
@@ -44,7 +53,9 @@ def loop_review(*, preserve="value", path=None, values=("same-url", "same-url"),
     for identity, spec in template["ir_semantics"].items():
         ops = [deepcopy(op) for event in spec["events"] for op in event["atomic_ops"]]
         if identity == "ir_fetch":
-            ops = [{"op": "call", "location": "api", "inputs": [{"kind": "input", "index": 0}], "output": "reply"},
+            ops = [{"op": "call", "location": "api", "inputs": [{"kind": "input", "index": 0}], "output": "reply",
+                    "input_contract": tool_contract({**citation, "start_line": 3, "end_line": 3}, [[[]]],
+                        "The fetch interface requires the complete URL string.")},
                    {"op": "build", "container": "object", "parts": [
                        {"path": ["url"], "value": {"kind": "input", "index": 0}},
                        {"path": ["response"], "value": {"kind": "local", "name": "reply"}}], "output": "record"}]
@@ -65,7 +76,8 @@ def loop_review(*, preserve="value", path=None, values=("same-url", "same-url"),
     assert result.status == "complete", result.diagnostics
     facts = materials_from_result(result, material=material, raw_annotation=raw,
         compiled_annotation=compiled, mapping=mapping, wire_annotation=saved)
-    review = prepare_joint_sensitivity_review(facts, facts.annotation)
+    review = prepare_joint_sensitivity_review(facts, facts.annotation,
+        input_contract_review=accepted_receipt(facts, facts.annotation))
     return result, review.to_dict(), review.demand_dict()
 
 
@@ -100,7 +112,7 @@ def test_loop_cardinality_demand_does_not_require_response_payload():
 
 def test_empty_explicit_loop_has_no_source_occurrence_or_invented_request_count():
     result, review, _ = loop_review(values=(), count_limit=0)
-    assert result.coverage["ir_fetch"] == "not_reached"
+    assert result.coverage["ir_fetch"] == "infeasible"
     assert review["constraints"]["checks"]
     assert {row["status"] for row in review["constraints"]["checks"].values()} == {"satisfied"}
     assert not any(row["code"] == "unresolved_sensitivity_reference" for row in review["diagnostics"])
@@ -152,6 +164,8 @@ def test_nested_explicit_pages_keep_each_recipient_and_excess_field_paired(guard
     wire["ir_semantics"]["ir_row"]["sensitivity"] = [{"value": {"kind": "local", "name": "row"},
         "path": ["secret"], "label": "confidential", "evidences": [citation]}]
     send = wire["ir_semantics"]["ir_send"]["segments"][0]["ops"][0]
+    send["input_contract"] = tool_contract(citation, [[[]], [["public"]]],
+        "The receiver interface requires its address and only the row's public field.")
     send["demands"] = [{"requirement_id": "R", "target": {"kind": "input", "index": index},
         "preserve": "value", "path": path, "reason": "Keep the original recipient and its required public field."}
         for index, path in ((0, []), (1, ["public"]))]
@@ -160,7 +174,8 @@ def test_nested_explicit_pages_keep_each_recipient_and_excess_field_paired(guard
     assert result.status == "complete", result.diagnostics
     facts = materials_from_result(result, material=material, raw_annotation=raw,
         compiled_annotation=compiled, mapping=mapping, wire_annotation=saved)
-    review = prepare_joint_sensitivity_review(facts, facts.annotation)
+    review = prepare_joint_sensitivity_review(facts, facts.annotation,
+        input_contract_review=accepted_receipt(facts, facts.annotation))
     sink = next(row for row in review.to_dict()["sinks"] if row["boundary"]["instruction_id"] == "ir_send")
     assert sink["data_reviews"] and {row["conclusion"] for row in sink["data_reviews"]} == {"excess_supported"}
     assert all(row["input_index"] == 1 and row["reduction"]["path"] == ["secret"] for row in sink["data_reviews"])
@@ -191,7 +206,8 @@ def test_shared_handle_reuse_separates_creation_provenance_from_current_receiver
     source = source_bundle(
         "Initialize a shared opaque handle, then for each member send the current cached handle to its receiver.\n"
         "After sending, acquire a new opaque handle from that member's credential and replace the shared cache.\n"
-        "The receiver requires the selected handle identity. Credentials and the handles themselves are confidential.\n")
+        "The receiver requires the selected handle identity. Credentials and the handles themselves are confidential.\n"
+        "The factory requires its complete credential string; delivery requires the receiver and selected handle identity.\n")
     citation = {"file": "skill/SKILL.md", "start_line": 1, "end_line": 3,
         "reason": "The authored fixture distinguishes handle creation, later reuse, required identity and confidential values."}
     task = source_task(source, {"purpose": {"text": "Send the selected shared handle to each receiver.", "evidences": [citation]},
@@ -212,6 +228,13 @@ def test_shared_handle_reuse_separates_creation_provenance_from_current_receiver
                                   ("ir_initial_handle", "handle", "initial_handle")):
         wire["ir_semantics"][identity]["sensitivity"] = [{"value": {"kind": "local", "name": name},
             "path": [], "label": label, "evidences": [citation]}]
+    interface_citation = {**citation, "start_line": 4, "end_line": 4,
+        "reason": "The synthetic interface explicitly states the required credential, receiver and handle arguments."}
+    for identity in ("ir_fetch", "ir_initial_handle"):
+        wire["ir_semantics"][identity]["segments"][0]["ops"][0]["input_contract"] = tool_contract(
+            interface_citation, [[[]]], "The factory interface requires the complete credential string.")
+    wire["ir_semantics"]["ir_send"]["segments"][0]["ops"][0]["input_contract"] = tool_contract(
+        interface_citation, [[[]], [[]]], "The delivery interface requires the receiver and selected handle identity.")
     wire["ir_semantics"]["ir_send"]["segments"][0]["ops"][0]["demands"] = [
         {"requirement_id": "R", "target": {"kind": "input", "index": slot}, "preserve": "value", "path": [],
          "reason": "The source requires this receiver and selected handle identity."} for slot in (0, 1)]
@@ -220,7 +243,8 @@ def test_shared_handle_reuse_separates_creation_provenance_from_current_receiver
     assert result.status == "complete", result.diagnostics
     facts = materials_from_result(result, material=material, raw_annotation=raw,
         compiled_annotation=compiled, mapping=mapping, wire_annotation=saved)
-    review = prepare_joint_sensitivity_review(facts, facts.annotation).to_dict()
+    review = prepare_joint_sensitivity_review(facts, facts.annotation,
+        input_contract_review=accepted_receipt(facts, facts.annotation)).to_dict()
     sink = next(row for row in review["sinks"] if row["boundary"]["instruction_id"] == "ir_send")
     handles, credentials = {}, {}
     for identity in result.records.get("ir_fetch").events[0].atomic_ops[0].outputs[0]:

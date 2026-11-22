@@ -52,7 +52,7 @@ def test_default_acquisition_observes_output_and_each_transform_phase_inputs():
     assert validate_compiled_response(compiled, prepared) == compiled
     with pytest.raises(ValueError):
         validate_response(compiled, prepared)  # no implicit raw/compiled compatibility
-    assert SCHEMA_VERSION == "security-profile-v21"
+    assert SCHEMA_VERSION == "security-profile-v24"  # Explicit address-policy contract.
 
 
 @pytest.mark.parametrize("returns,expected", [([], ["fs_read"]),
@@ -322,7 +322,7 @@ def test_conditional_member_observation_and_control_use_share_guard():
     assert observations[1]["inputs"] == [{"kind": "input", "index": 0}]
     assert observations[1]["when"] == {"kind": "literal", "value": False}
     assert atoms[-1]["parts"][0]["when"] == observations[1]["when"]
-    assert mapping["compiler_version"] == "skillflow-processing-compiler-v12"
+    assert mapping["compiler_version"] == "skillflow-processing-compiler-v15"
     assert compile_response(checked, prepared)[1:] == (compiled, mapping)
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, model_serializer
 from skillflow.common.source_evidence import Text
 from skillflow.propagation.data import Data, validate_data_records, validate_element_membership, is_definitely_empty_collection
 from skillflow.graph.ir.cfg import ControlFlowGraph
@@ -12,14 +12,14 @@ from skillflow.propagation.contracts.profiles import AnnotationPayload
 from skillflow.propagation.contracts.boundaries import SinkBoundary, classify_sink
 from skillflow.propagation.contracts.compatibility import INTERACTION_EFFECTS, validate_event_operations, validate_operation_boundary
 from skillflow.propagation.contracts.specs import LocationSpec
-from skillflow.propagation.models import FlowLocation, IRFlowRecord, ForEachRecord
+from skillflow.propagation.models import FlowLocation, IRFlowRecord, ForEachRecord, AtomicOpRecord
 from skillflow.propagation.conditions import payload_inputs, validate_record_consumption, record_consumption_shape
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 Status = Literal["complete", "incomplete", "unsupported_feedback", "resource_limit", "execution_error"]
-Coverage = Literal["processed", "not_reached", "not_solved", "unresolved_binding", "unmodeled", "blocked"]
+Coverage = Literal["processed", "not_reached", "infeasible", "not_solved", "unresolved_binding", "unmodeled", "blocked", "execution_error"]
 
 
 class _OperationPosition(_Strict):
@@ -58,9 +58,49 @@ class _MissingPart(_OperationPosition):
     code: Literal["missing_part"]
     reason: Text
     data_id: Text
+    observed_data: Data | None = None
+
+    @model_validator(mode="after")
+    def observed_identity(self):
+        if self.observed_data is not None and self.observed_data.id != self.data_id:
+            raise ValueError("missing-part observation differs from its Data identity")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_observation(self, handler):
+        value = handler(self)
+        if self.observed_data is None:
+            value.pop("observed_data", None)
+        return value
 
 
-Diagnostic = Annotated[_Unsupported | _UnresolvedBinding | _Failure | _MissingPart,
+class _ObservedOperation(_Strict):
+    position: _OperationPosition
+    record: AtomicOpRecord
+
+
+class _OperationFailure(_OperationPosition):
+    code: Literal["operation_execution_error"]
+    reason: Text
+    error_type: Text
+    input_data_ids: list[Text]
+    observed_data: dict[Text, Data]
+    observed_operations: list[_ObservedOperation]
+    affected_instruction_ids: list[Text]
+
+    @model_validator(mode="after")
+    def located_evidence(self):
+        if (self.input_data_ids != sorted(set(self.input_data_ids))
+                or not set(self.input_data_ids) <= self.observed_data.keys()
+                or any(key != value.id for key, value in self.observed_data.items())):
+            raise ValueError("operation failure input evidence differs from observed Data")
+        if (self.affected_instruction_ids != sorted(set(self.affected_instruction_ids))
+                or self.instruction_id not in self.affected_instruction_ids):
+            raise ValueError("operation failure must retain its exact affected instruction scope")
+        return self
+
+
+Diagnostic = Annotated[_Unsupported | _UnresolvedBinding | _Failure | _MissingPart | _OperationFailure,
                        Field(discriminator="code")]
 
 
@@ -292,12 +332,13 @@ def resolved_sink_boundaries(locations, records, *, _checked_records=False) -> l
         found, key=lambda key: (key[0], key[1], -1 if key[2] is None else key[2], key[3]))]
 
 
-def _validate_diagnostics(diagnostics, instructions, blocks, data_ids, records):
+def _validate_diagnostics(diagnostics, instructions, blocks, data_ids, records, annotation):
     # Local shape is checked by the diagnostic union; these are cross-references.
     for item in diagnostics:
         if "instruction_id" in item and item["instruction_id"] not in instructions:
             raise ValueError("diagnostic refers to an unknown IR")
-        if "data_id" in item and item["data_id"] not in data_ids:
+        if ("data_id" in item and item["data_id"] not in data_ids
+                and not (item["code"] == "missing_part" and item.get("observed_data", {}).get("id") == item["data_id"])):
             raise ValueError("diagnostic refers to unknown Data")
         if item["code"] == "missing_part" and item["instruction_id"] in records:
             events = records[item["instruction_id"]].events
@@ -318,6 +359,41 @@ def _validate_diagnostics(diagnostics, instructions, blocks, data_ids, records):
             raise ValueError("diagnostic refers to an unknown block")
         if any(position["instruction_id"] not in instructions for position in item.get("operations", [])):
             raise ValueError("diagnostic operation refers to unknown IR")
+        if set(item.get("affected_instruction_ids", [])) - instructions.keys():
+            raise ValueError("execution failure scope refers to unknown IR")
+        for observation in item.get("observed_operations", []):
+            if observation["position"]["instruction_id"] != item["instruction_id"]:
+                raise ValueError("failed-prefix observation belongs to another instruction")
+        if item["code"] == "operation_execution_error":
+            def operation_at(position):
+                events = annotation["ir_semantics"][position["instruction_id"]]["events"]
+                event_index = position["event_index"]
+                if event_index >= len(events):
+                    raise ValueError("execution failure event is outside its instruction")
+                event = events[event_index]
+                if position.get("scope") == "element":
+                    if event.get("kind") != "for_each" or position.get("op_index") is not None:
+                        raise ValueError("execution failure element scope is not a declared collection")
+                    return None
+                body_index = position.get("body_event_index")
+                if body_index is not None:
+                    if event.get("kind") != "for_each" or body_index >= len(event["body"]):
+                        raise ValueError("execution failure body is outside its collection")
+                    event = event["body"][body_index]
+                operations = event.get("atomic_ops", [])
+                if position["op_index"] is None or position["op_index"] >= len(operations):
+                    raise ValueError("execution failure operation is outside its event")
+                return operations[position["op_index"]]
+            operation_at(item)
+            for observation in item["observed_operations"]:
+                spec = operation_at(observation["position"])
+                record = observation["record"]
+                if spec is None or record["op"] != spec["op"]:
+                    raise ValueError("failed-prefix operation differs from its declared operation")
+                identities = {identity for side in ("inputs", "outputs") for slot in record[side] for identity in slot}
+                identities.update(identity for change in record["changes"] for side in ("before", "after") for identity in change[side])
+                if not identities <= item["observed_data"].keys():
+                    raise ValueError("failed-prefix operation lacks its detached Data evidence")
 
 
 def declared_boundary_coverage(annotation, sinks, coverage):
@@ -328,6 +404,8 @@ def declared_boundary_coverage(annotation, sinks, coverage):
             status, reason = "resolved", "An actual static operation record resolves this boundary."
         elif coverage[boundary["instruction_id"]] == "processed":
             status, reason = "no_occurrence", "The instruction was evaluated, but this boundary has no active occurrence (for example an empty member scope or false conditional observation)."
+        elif coverage[boundary["instruction_id"]] == "infeasible":
+            status, reason = "infeasible", "Verified CFG reachability and recorded guards exclude this instruction."
         else:
             status, reason = "unresolved", "No evaluated instruction record resolves this declared boundary; this is not an empty or safe payload."
         result.append({"boundary": boundary, "status": status, "reason": reason})
@@ -389,16 +467,20 @@ def _validate_outcome(*, graph, annotation, data, records, sinks, status, covera
     if set(records) != processed:
         raise ValueError("records must match processed coverage exactly")
     from skillflow.propagation.loop_guards import admitted_instructions
-    reachable = admitted_instructions(graph, annotation, records, data)
-    if any(ir not in reachable and state != "not_reached" for ir, state in outcome.coverage.items()):
+    uncertain = {ir for item in result["diagnostics"] for ir in item.get("affected_instruction_ids", [])}
+    uncertain.update(item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unresolved_path")
+    reachable = admitted_instructions(graph, annotation, {ir: record for ir, record in records.items() if ir not in uncertain}, data)
+    if any(ir not in reachable and state not in {"not_reached", "infeasible"} for ir, state in outcome.coverage.items()):
         raise ValueError("coverage reachability differs from the selected CFG")
+    if any(state == "infeasible" and ir in reachable for ir, state in outcome.coverage.items()):
+        raise ValueError("infeasible coverage requires a verified path exclusion")
     if outcome.status == "complete" and processed != reachable:
         raise ValueError("complete propagation must process every reachable IR")
     if outcome.status == "unsupported_feedback" and processed:
         raise ValueError("unsupported feedback must not claim solved records")
     if any(item not in annotation["sink_boundaries"] for item in sinks):
         raise ValueError("recorded sink boundary is absent from the compiled annotation")
-    _validate_diagnostics(result["diagnostics"], instructions, graph["blocks"], set(data), records)
+    _validate_diagnostics(result["diagnostics"], instructions, graph["blocks"], set(data), records, annotation)
     codes = {item["code"] for item in result["diagnostics"]}
     if outcome.status == "complete" and codes - {"missing_part"}:
         raise ValueError("complete propagation contradicts a failure diagnostic")
@@ -410,7 +492,8 @@ def _validate_outcome(*, graph, annotation, data, records, sinks, status, covera
         unmodeled = {ir for ir, state in outcome.coverage.items() if state == "unmodeled"}
         unmodeled_reported = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unmodeled_processing"}
         partial_paths = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unresolved_path"}
-        if (not (missing or unmodeled or partial_paths) or missing != reported or unmodeled != unmodeled_reported
+        execution = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "operation_execution_error"}
+        if (not (missing or unmodeled or partial_paths or execution) or missing != reported or unmodeled != unmodeled_reported
                 or not unmodeled <= barriers):
             raise ValueError("incomplete coverage and unresolved binding diagnostics must agree")
     return result

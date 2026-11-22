@@ -106,6 +106,12 @@ def catalog_fixture(from_date=False, limit=False, *, save_mode=None):
             parts.append({"path": [name], "value": local(name)})
     build = {"op": "build", "container": "object", "parts": parts, "output": "arguments"}
     call = {"op": "call", "location": "search", "inputs": [local("arguments")], "output": "response"}
+    call["input_contract"] = {"inputs": [{"input_index": 0,
+        "required": [{"property": "value", "path": ["query"]},
+                     *[{"property": "value", "path": [name], "if_present": True} for name in ("from_date", "limit")]],
+        "remainder": "independent", "reason": "The interface requires the unchanged query and preserves independent optional inclusion and values."}],
+        "reason": "The source lists query, optional from_date and optional limit as the complete request requirements.",
+        "evidences": [evidence(case, 7, 15)]}
     goal(call)
     write = {"op": "write", "target": "count", "input": inp()}
     if save_mode is not None:
@@ -150,6 +156,10 @@ def catalog_sensitive_variant(*, required=False):
     material = prepare_material(source, cfg, task_baseline=task)
     seeds[("storage", "request.json")]["private_note"] = "sensitive-note"
     delivery = {"op": "deliver", "target": "diagnostic", "inputs": [local("arguments")]}
+    delivery["input_contract"] = {"inputs": [{"input_index": 0,
+        "required": [{"property": "value", "path": [name]} for name in (["query", "private_note"] if required else ["query"])],
+        "remainder": "independent", "reason": "The separate source variant explicitly states which diagnostic fields are required."}],
+        "reason": "This interface belongs to the independent authored diagnostic variant.", "evidences": [ev]}
     goal(delivery, path=["query"])
     if required:
         goal(delivery, path=["private_note"], reason="The independent variant explicitly requires this sensitive parameter.")
@@ -190,6 +200,11 @@ def notification_fixture(records=None, *, leak=False):
     if leak:
         parts.append({"path": ["access_token"], "value": local("access_token")})
     call = {"op": "call", "location": "notify", "inputs": [local("arguments")], "output": "ack"}
+    call["input_contract"] = {"inputs": [{"input_index": 0,
+        "required": [{"property": "value", "path": [name]} for name in ("recipient", "body")],
+        "remainder": "independent", "reason": "notify.send requires the record's recipient and original summary as body; extra access_token is not an interface requirement."}],
+        "reason": "The source specifies the notification parameters and prohibits the token payload.",
+        "evidences": [evidence(case, 11, 15)]}
     goal(call, path=["recipient"])
     goal(call, path=["body"])
     semantics = {"ir_acquire": spec(case, [{"op": "read", "location": "events", "output": "records"}], [local("records")], line=8),
@@ -200,6 +215,17 @@ def notification_fixture(records=None, *, leak=False):
         "ir_notify": spec(case, [*selects, {"op": "build", "container": "object", "parts": parts, "output": "arguments"}, call], line=11),
         "ir_back": spec(case), "ir_count": spec(case, [{"op": "compute", "inputs": [inp(), inp(1)], "output": "count"}], [local("count")], line=16),
         "ir_save": spec(case, [{"op": "write", "target": "count", "input": inp()}], line=16), "ir_return": spec(case)}
+    count = semantics["ir_count"]["segments"][0]["ops"][0]
+    count["demand_transfer"] = {"rules": [{"output": {"property": "value", "path": []},
+        "inputs": [{"input_index": index, "required": [], "remainder": "independent",
+            "reason": "Only the population's cardinality can affect this count; unrelated member payload values do not.",
+            "unresolved_ranges": [{"information": {"property": "cardinality", "path": []}, "gap": {
+                "code": "ambiguous_semantics", "reason": "Processed records does not distinguish all input records from the selected/notified population.",
+                "missing": "Which of the two recorded populations supplies the saved count.",
+                "resolution": "Specify whether count.txt records all input records or only selected/notified records.",
+                "evidences": [evidence(case, 16)]}}]} for index in range(2)],
+        "reason": "The output is a count, but the source leaves its counted population ambiguous.",
+        "evidences": [evidence(case, 16)]}]}
     semantics["ir_acquire"]["sensitivity"] = [{"value": local("records"), "path": [{"kind": "each"}, "access_token"], "label": "Recipient-prohibited access token", "evidences": [evidence(case, 14)]}]
     issue = {"id": "count-scope", "kind": "ambiguity", "requirement_ids": ["R_COUNT"], "resolution": "unresolved",
         "reason": "Processed records does not uniquely specify all input records versus selected/notified records.", "evidences": [evidence(case, 16)]}
@@ -240,12 +266,21 @@ def fallback_fixture(*, key=True, first=True, transient=False, retry=False, arch
         boundary = name if name == "archive" else "fast"
         operations = [{"op": "call", "location": boundary, "inputs": arguments, "output": "response"}
                       if succeeds else {"op": "deliver", "target": boundary, "inputs": arguments}]
+        operations[0]["input_contract"] = {"inputs": [{"input_index": index,
+            "required": [{"property": "value", "path": []}], "remainder": "independent",
+            "reason": "The interface requires the original source_id." if index == 0 else "fast.fetch explicitly requires FAST_KEY."}
+            for index in range(len(arguments))],
+            "reason": "fast.fetch requires source_id and FAST_KEY; archive.fetch requires only source_id.",
+            "evidences": [evidence(case, 9, 12)]}
         for index in range(len(arguments)):
             goal(operations[0], index=index)
         # The actual error is separately acquired at the protected boundary;
         # it is never projected from the normal response or computed from ID.
         if not succeeds:
-            operations += [{"op": "receive", "location": name + "_error", "inputs": [], "output": "error"}]
+            operations += [{"op": "receive", "location": name + "_error", "inputs": [], "output": "error",
+                "input_contract": {"inputs": [],
+                    "reason": "The actual protected-call exception acquisition has no separately supplied request operands; it records the failure outcome of the preceding call, without claiming absence of implicit tool state.",
+                    "evidences": [evidence(case, 10, 14)]}}]
         else:
             operations += [{"op": "select_part", "input": local("response"), "path": ["body"], "output": "body"}]
         if name == "fast":

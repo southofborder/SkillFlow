@@ -77,8 +77,8 @@ class CFGWire(Wire):
     diagnostics: list[str] = Field(default_factory=list)
 
 
-def normalize_cfg_wire(value):
-    """Generate bookkeeping only, never connections, source kinds or producers."""
+def cfg_wire_preflight_diagnostics(value):
+    """Read independent application rules without accepting or changing input."""
     diagnostics = []
     blocks = value.get("blocks", []) if isinstance(value, dict) else []
     edges = value.get("edges", []) if isinstance(value, dict) else []
@@ -106,15 +106,27 @@ def normalize_cfg_wire(value):
                     (len(outgoing) > 1 or any(edge.get("condition_text") for edge in outgoing)) and not terminal.get("inputs")):
                 diagnostics.extend(structural_error("dispatch_inputs", f"/blocks/{index}/instructions/{len(instructions)-1}/inputs",
                     "guarded or branching dispatch requires explicit condition dependencies; edge text does not declare data inputs").diagnostics)
+    return diagnostics
+
+
+def prepare_cfg_wire(value):
+    """Return deterministic bookkeeping and every independent preflight error.
+
+    A returned candidate passed both wire and canonical field schemas, but is
+    NOT an accepted graph. The caller must retain these errors and run the
+    unchanged whole compiler. Schema failure prevents that diagnostic pass;
+    it never causes guessed operands, dropped records, or a partial candidate.
+    """
+    diagnostics = cfg_wire_preflight_diagnostics(value)
     try:
         parsed = CFGWire.model_validate(value)
     except ValidationError as error:
         if not diagnostics:
             raise
         diagnostics.extend(schema_error(error, candidate=value, schema=CFGWire.model_json_schema()).diagnostics)
+        for row in diagnostics:
+            row.setdefault("context", {})["cfg_validation_barrier"] = "wire_schema"
         raise StructuralValidationError(diagnostics) from error
-    if diagnostics:
-        raise StructuralValidationError(diagnostics)
     raw = parsed.model_dump(mode="json", exclude_unset=True)
     contexts, serial = [], 0
     for block in raw["blocks"]:
@@ -129,4 +141,21 @@ def normalize_cfg_wire(value):
     raw["declared_context_keys"] = contexts
     # Preserve omission versus explicit null. The canonical validators reject
     # malformed literals, source blocks and invalid source/consumer relations.
-    return IRAnalysisCandidate.model_validate(deepcopy(raw)).model_dump(mode="json", exclude_unset=True)
+    try:
+        candidate = IRAnalysisCandidate.model_validate(deepcopy(raw)).model_dump(mode="json", exclude_unset=True)
+    except ValidationError as error:
+        if not diagnostics:
+            raise
+        diagnostics.extend(schema_error(error, candidate=raw, schema=IRAnalysisCandidate.model_json_schema()).diagnostics)
+        for row in diagnostics:
+            row.setdefault("context", {})["cfg_validation_barrier"] = "canonical_schema"
+        raise StructuralValidationError(diagnostics) from error
+    return candidate, diagnostics
+
+
+def normalize_cfg_wire(value):
+    """Strict public normalization: application errors still reject the value."""
+    candidate, diagnostics = prepare_cfg_wire(value)
+    if diagnostics:
+        raise StructuralValidationError(diagnostics)
+    return candidate

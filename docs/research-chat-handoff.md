@@ -1,5 +1,51 @@
 # SkillFlow research and conversation handoff
 
+Latest closure (2026-11-14): strict source-review locality is implemented and
+offline accepted (886 distinct latest scoped passes, not a whole-repository
+all-green run). The sole fresh GA4 and its sole replay are closed. Initial review
+retained 273 usable checks / 922 scopes, isolated two paired obligations / six
+scopes and routed 49 findings into the existing repair. Revision-processing then
+exceeded its 2700-second native deadline; no propagation or DOE ran. Actual cost
+is 15 native starts and 2,862,874 known public tokens plus unknown failed-request
+usage; outer retries zero. Replay matched with zero new starts and frozen
+implementation unchanged. See [current version](current-version.md) and
+`output/verification/online-ga4-source-review-locality-20261113/run-summary.json`.
+No restart, second replay, probe, Skill execution, old-process resume or historical
+rewrite is authorized by this closure. All earlier launch notes are consumed.
+
+Latest closure (2026-11-13): shared-v2 generic review delivery and offline acceptance are complete. The sole fresh GA4 and replay are closed, partial, with no deletable input. Input size is fixed; three malformed missing-field findings prevented accepted source review. See [current version](current-version.md) and `output/verification/online-ga4-review-shared-v2-20261112/run-summary.json`. No extra run/replay, old resume, Skill execution or frozen artifact rewrite is authorized by this closure. Earlier active notes are history.
+
+Current follow-up authorization (2026-11-12): implement a general lossless
+source-review display to fix input-size overflow without truncating source or
+omitting contracts. Keep seven normal requests, two workers and existing budgets.
+The reusable implementation uses guided run v12 / shared-v2; see
+[design and bounds](doe/review-input-size.md) and
+`output/verification/review-input-size-20261112/continuation-state.json`.
+After offline acceptance, root alone owns exactly one new GA4 and its sole
+zero-call replay under `output/verification/online-ga4-review-shared-v2-20261112/`.
+Read that directory's preparation/dispatch/state before action. Historical runs
+remain closed; no additional cases, probes, Skill execution or staged import.
+
+Current status (2026-11-12): the fresh corrected GA4 replacement and its sole
+zero-call replay are closed, with partial diagnostic results and no deletable
+input established. Source review hit the adapter input cap before native launch.
+See [Current version](current-version.md) and
+`output/verification/online-ga4-input-necessity-corrected-r2-20261112/`.
+The earlier user-confirmed network-outage attempt remains separately aborted;
+neither attempt may be resumed or replayed again. No new model/Skill run, probe,
+implementation change or staged-worktree import is authorized by this closure.
+
+Current status (2026-11-11): use [Current version](current-version.md). The sole
+input-necessity GA4/001/010/013 real batch and all four sole replays are closed.
+GA4 failed before propagation; the three small generated graphs propagated but
+DOE remains partial. The original cost/source audits were sealed before later
+offline implementation corrections. Reports and provenance are under
+`output/verification/online-input-necessity-20261111/`; follow-up implementation
+and separate offline acceptance are under
+`output/verification/input-necessity-completeness-20261111/`. Do not restart,
+replay, execute Skills, resume old processes, or infer new launch permission from
+the dated notes below. No code was imported from the historical staged worktree.
+
 Current status (2026-11-09): the main worktree contains the accepted interface-r4
 implementation and the completed November 4 four-case validation. Start with
 [Current version](current-version.md). All four generated graphs propagated and
@@ -448,3 +494,26 @@ available sharing/export facilities.
 The immediate deliverable is a reviewed Git snapshot and a reliable continuation
 record. Neither successful synchronization nor offline test completion establishes
 semantic correctness, research superiority, or an absence of DOE.
+# Closed handoff: 2026-11-14 source-review locality
+
+The requested strict locator/local-isolation fix is offline accepted at
+`ae3df129739a9471521b8b19be65faa8e085f1e92efcacaac1e0c5e3d42f3cbb`.
+There are 886 distinct latest scoped passing tests, zero unresolved failures;
+the initial final-scope inventory-test failure and its correction remain saved.
+See `output/verification/source-review-locality-20261113/offline-acceptance.json`.
+
+Exactly one user-authorized new GA4 and its sole replay have CLOSED:
+`experiments/doe/runs/document-guided-ga4-source-review-locality-high-20261113-203902`.
+Controller 11904 and wrapper 1996 exited. It started November 13 at 20:39 and
+closed November 14 at 00:27 China time. Revision-processing timed out before
+propagation or DOE; replay reproduced the failed lifecycle with zero new starts.
+Read the run's terminal markers and
+`output/verification/online-ga4-source-review-locality-20261113/continuation-state.json`
+before action. The single launch/replay authorization is consumed. Do not start
+another run, replay again, resume historical processes, execute Skills or add
+probes/cases. Preserve frozen inputs, implementation snapshots and raw failures.
+Seven normal calls, two workers and existing budgets were retained. Public logs
+show internal stream/connection/request failures before the final native-process
+deadline; they are not extra native starts or proof of one exclusive latency cause.
+Final English/Chinese assessments and the machine-readable summary are saved in
+the online verification directory.

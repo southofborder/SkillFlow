@@ -100,6 +100,16 @@ def boundary_rows(solved, kind="external_tool", *, node_kind="op_input"):
         if solved["derivations"][key]["node"]["kind"] == node_kind]
 
 
+def assert_unreviewed_contracts(solved):
+    """These teaching candidates intentionally contain no semantic contract review."""
+    assert solved["status"] == "partial"
+    blockers = [row for row in solved["diagnostics"] if row["blocking"]]
+    assert blockers and {row["code"] for row in blockers} == {"input_contract_unavailable"}
+    assert all(row["operation_id"] and "/ir_semantics/" in row["reason"]
+               and "no accepted input-requirement review" in row["reason"] for row in blockers)
+    return blockers
+
+
 def label_operations(producer="select_part", *, producer_seed=False,
                      receiver_seed=False, action_seed=False):
     selected = {"op": "select_part", "input": inp(), "path": ["display"], "output": "formatted"}
@@ -133,8 +143,12 @@ def test_producer_output_seed_does_not_establish_the_receiver_input(producer):
 def test_delivery_action_preserves_occurrence_without_preserving_payload():
     _, solved = solve_fixture(synthetic_fixture(label_operations(action_seed=True)))
     assert boundary_rows(solved, node_kind="action")
-    assert not boundary_rows(solved)
-    assert solved["sinks"][0]["unestablished_ranges"][0]["scope"] == "whole_slot"
+    assert_unreviewed_contracts(solved)
+    retained = boundary_rows(solved)
+    assert retained and all(row["conservative"] and row["path"] == [] for row in retained)
+    assert all(any(rule.startswith("input_contract_gap:") for rule in row["rules"]) for row in retained)
+    # An action without reviewed interface semantics does not prove exact values.
+    assert not any(not row["conservative"] for row in retained)
 
 
 def test_actual_delivery_input_seed_reaches_only_its_original_field():
@@ -273,8 +287,11 @@ def test_construction_input_values_and_receiver_action_shape_do_not_imply_receiv
         inputs=[literal("board-C"), literal("wide")],
         source="An isolated local renderer constructs display_code and spacing from the supplied original values and delivers the request to the label receiver; it returns no content to the agent.")
     engine, solved = solve_fixture(fixture)
-    receiver = boundary_rows(solved)
+    assert_unreviewed_contracts(solved)
+    receiver = [row for row in boundary_rows(solved) if not row["conservative"]]
     assert receiver and {row["property"] for row in receiver} == {"shape"}
+    assert any(row["conservative"] and row["property"] == "value" and row["path"] == []
+               for row in boundary_rows(solved))
     assert boundary_rows(solved, node_kind="action")
     build = next(op for op in engine.ops.values() if op["spec"]["op"] == "build")
     upstream = [row for row in solved["derivations"].values()
@@ -292,7 +309,10 @@ def test_receiver_path_demands_have_own_seeds_and_do_not_move_to_another_receive
     engine, solved = solve_fixture(fixture)
     deliveries = {op["spec"]["target"]: op for op in engine.ops.values() if op["spec"]["op"] == "deliver"}
     assert deliveries["label_receiver"]["record"]["inputs"] == deliveries["secondary_receiver"]["record"]["inputs"]
-    rows = boundary_rows(solved)
+    assert_unreviewed_contracts(solved)
+    retained = [row for row in boundary_rows(solved) if row["conservative"]]
+    assert retained and {row["node"]["operation_id"] for row in retained} == {deliveries["label_receiver"]["key"]}
+    rows = [row for row in boundary_rows(solved) if not row["conservative"]]
     assert {tuple(row["path"]) for row in rows} == {("display_code",), ("spacing",)}
     assert {row["node"]["operation_id"] for row in rows} == {deliveries["label_receiver"]["key"]}
     seeds = {row["goal_id"]: row["raw_pointer"] for row in solved["traceability"]["requirements"][0]["seeds"]}

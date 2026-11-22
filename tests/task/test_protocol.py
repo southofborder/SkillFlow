@@ -223,6 +223,9 @@ def test_source_material_closed_and_revision_rejects_free_text_graph_and_payload
         TaskRepairObjection.model_validate({**objection, "source_spans": [span()]})
     prompt = build_task_prompt(material, revision)
     assert "COMPLETE_ORIGINAL_SOURCE" in prompt and "ISOLATED_REVISION_DATA" in prompt
+    for candidate_prompt in (prompt, build_task_prompt(material)):
+        assert "Missing implementation, interface-field or serialization details alone do not create a Task ambiguity" in candidate_prompt
+        assert "competing source-supported interpretations change the required obligation" in candidate_prompt
     data = json.JSONDecoder().raw_decode(prompt.split("COMPLETE_ORIGINAL_SOURCE\n\n", 1)[1])[0]
     assert set(data) == {"source_files"}
 

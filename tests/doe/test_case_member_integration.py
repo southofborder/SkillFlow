@@ -142,7 +142,8 @@ def test_throw_only_may_write_does_not_define_normal_read_or_implicit_context_in
     material, wire = case_fixture(catch=False, state=False)
     failed = wire["ir_semantics"]["ir_call"]["segments"][0]["body"][0]["cases"][1]
     failed["segments"][0]["ops"].extend([
-        {"op": "compute", "inputs": [local("error")], "output": "failed_handle"},
+        {"op": "compute", "inputs": [local("error")], "output": "failed_handle",
+         "expression": {"expression": {"op": "ref", "value": local("error")}}},
         {"op": "write", "target": "cache", "mode": "replace", "input": local("failed_handle"), "may": True}])
     wire["ir_semantics"]["ir_call"]["segments"][1]["ops"].insert(0,
         {"op": "read", "location": "cache", "output": "normal_handle", "demands": [

@@ -8,7 +8,7 @@ from skillflow.common.structural_correction import ResponseChain
 from skillflow.document_guided import runner
 from skillflow.document_guided.online import CONFIG, analysis_config, read, run_step
 from tests.document_guided.test_client import fake_processes, message, pending
-from tests.document_guided.test_parallel_runner import Harness, freeze_producer
+from tests.document_guided.test_parallel_runner import Harness, freeze_producer, graph_facts_fixture, prompt_scope
 from tools.doe import document_guided_client as transport
 
 
@@ -57,7 +57,7 @@ def test_default_max_and_high_seven_steps_full_backend_and_offline_replay(tmp_pa
 
 
 def test_high_shared_mixed_repair_and_each_structural_correction_keep_config(tmp_path, observed_configs):
-    harness = Harness(tmp_path / "run", domains=("task", "cfg", "annotation"))
+    harness = Harness(tmp_path / "run", domains=("task", "cfg", "annotation"), precise_repair=True)
     expected = analysis_config({"reasoning_effort": "high"})
     prepared(harness, tmp_path / "package", "high")
     attempts = {}
@@ -66,9 +66,19 @@ def test_high_shared_mixed_repair_and_each_structural_correction_keep_config(tmp
         class InvalidOnce:
             def complete(self, prompt):
                 attempts[stage] = attempts.get(stage, 0) + 1
-                if attempts[stage] == 1:
-                    return {"unexpected": True}  # Empty sensitivity is valid; this object is invalid in every stage.
-                return harness.complete(stage, prompt)
+                if stage in {"task", "revision/task"} and attempts[stage] == 1:
+                    return {"unexpected": True}
+                if stage == "graph" and attempts[stage] == 1:
+                    facts = graph_facts_fixture(harness.graph)
+                    del facts["entry"]
+                    return facts
+                answer = harness.complete(stage, prompt)
+                if stage == "graph":
+                    plan = prompt_scope(prompt)
+                    slot, = plan["slots"].values()
+                    return {"plan_sha256": plan["plan_sha256"], "updates": [
+                        {"slot_id": slot["slot_id"], "value": answer["entry"]}]}
+                return answer
         return InvalidOnce()
 
     def before_backend(state):
@@ -78,9 +88,10 @@ def test_high_shared_mixed_repair_and_each_structural_correction_keep_config(tmp
     result = runner.run(harness.directory, client_factory=factory, progress=before_backend)
     assert result["status"] == "interrupted", result
     assert result["repair_used"] and result["selected_annotation"] == "revision/annotation"
-    assert len(harness.calls) == 13 and set(attempts.values()) == {2}
-    assert result["counts"]["logical_calls"] == 26
-    assert result["counts"]["structural_corrections"] == 13
+    assert len(harness.calls) == 13
+    assert {stage for stage, count in attempts.items() if count == 2} == {"task", "graph", "revision/task"}
+    assert result["counts"]["logical_calls"] == 16
+    assert result["counts"]["structural_corrections"] == 3
     for path in harness.directory.rglob("manifest.json"):
         manifest = read(path)
         if "config" in manifest:

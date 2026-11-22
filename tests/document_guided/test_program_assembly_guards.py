@@ -86,11 +86,11 @@ def test_empty_sensitivity_scope_can_route_an_omission_without_rebuilding_proces
     from skillflow.document_guided.source_review import prepare_review_material, _annotation_owner
     material, wire = sample()
     fragments = split_fragments(wire)
-    assembled, _, compiled, mapping = assemble_fragments(fragments["processing"],
+    assembled, raw, compiled, mapping = assemble_fragments(fragments["processing"],
         fragments["task-correspondence"], {"declarations": []}, material)
     files = {"skill/" + row["path"]: row["content"] for row in material["source"]["files"]}
     reviewed = prepare_review_material(files=files, task=material["task"], cfg=material["cfg"],
-        annotation=assembled, compiled=compiled, mapping=mapping, generation="fragment-v1")
+        annotation=assembled, raw_annotation=raw, compiled=compiled, mapping=mapping, generation="fragment-v1")
     target = next(row for row in reviewed["target_index"]
                   if row["id"] == "annotation:/ir_semantics/ir_call/sensitivity")
     assert target["owner"] == "sensitivity"

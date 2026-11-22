@@ -95,7 +95,7 @@ def checked_demand_material(facts, task, annotation):
     return facts, parsed, accepted, files
 
 
-def prepare_demand_review(facts, task, annotation, candidate, *, queue_order="fifo") -> DemandReview:
+def prepare_demand_review(facts, task, annotation, candidate, *, queue_order="fifo", input_contract_review=None) -> DemandReview:
     """Compute supported preservation demands, without API calls or input edits.
 
     queue_order is a deterministic verification hook, not a change in semantics.
@@ -107,11 +107,12 @@ def prepare_demand_review(facts, task, annotation, candidate, *, queue_order="fi
     targets = build_demand_target_index(facts.cfg, annotation["raw_annotation"])
     candidate = candidate.model_dump(mode="json") if hasattr(candidate, "model_dump") else _read_object(candidate)
     parsed = validate_demand_candidate(candidate, task=task, source_files=files, targets=targets)
-    engine = DemandEngine(facts, task, annotation, parsed.model_dump(mode="json"), targets)
+    engine = DemandEngine(facts, task, annotation, parsed.model_dump(mode="json"), targets,
+                          input_contract_review=input_contract_review)
     result = engine.solve(queue_order=queue_order)
     validate_demand_result(result)
     from .demand_results import validate_result_references
-    validate_result_references(result, facts, targets)
+    validate_result_references(result, facts, targets, input_contract_review=input_contract_review, engine=engine)
     return DemandReview(deepcopy(result), {"targets": deepcopy(targets)})
 
 
@@ -119,9 +120,9 @@ def validate_demand_result(result):
     """Validate a stored business result; recomputation is the replay's job."""
     from .demand_results import validate_result_shape
     result = validate_result_shape(result)
-    if set(result) != {"schema_version", "status", "goals", "derivations", "sinks", "diagnostics", "coverage", "traceability"}:
+    if set(result) != {"schema_version", "status", "goals", "derivations", "sinks", "diagnostics", "coverage", "traceability", "input_assessments", "input_findings", "input_contract_review_sha256"}:
         raise ValueError("Demand result fields differ")
-    if result["schema_version"] != "skillflow-demand-v7" or result["status"] not in {"complete", "partial"}:
+    if result["schema_version"] != "skillflow-demand-v12" or result["status"] not in {"complete", "partial"}:
         raise ValueError("Unsupported demand result version or status")
     if not isinstance(result["derivations"], dict) or not isinstance(result["sinks"], list):
         raise ValueError("Invalid demand collections")

@@ -154,7 +154,7 @@ def test_resealed_declaration_index_rejects_boolean_position(propagation_run, tm
 def test_interrupted_marker_rejects_same_valued_float_version(propagation_run, tmp_path, monkeypatch):
     directory = tmp_path / "doe"
     with monkeypatch.context() as patch:
-        def interrupt(*_args):
+        def interrupt(*_args, **_kwargs):
             raise KeyboardInterrupt()
         patch.setattr(runner, "prepare_joint_sensitivity_review", interrupt)
         with pytest.raises(KeyboardInterrupt):

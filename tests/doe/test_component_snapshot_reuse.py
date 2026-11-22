@@ -107,6 +107,25 @@ def test_index_and_returned_candidates_preserve_public_copy_isolation(monkeypatc
     assert all(getattr(facts, name) == value for name, value in before.items())
 
 
+def test_review_receipt_and_edit_locations_reuse_the_detached_cfg(monkeypatch):
+    from tests.doe.test_reviewed_input_necessity import receipt
+    values = owned_fixture(monkeypatch)
+    facts, task, annotation, targets = values
+    reviewed = receipt(values)
+    getter = PropagationMaterials.cfg.fget
+    calls = []
+
+    def counted(owner):
+        calls.append(owner)
+        return getter(owner)
+
+    monkeypatch.setattr(PropagationMaterials, "cfg", property(counted))
+    engine = DemandEngine(facts, task, annotation, fixtures.candidate(targets), targets,
+                          input_contract_review=reviewed)
+    result = engine.solve()
+    assert result["input_assessments"] and len(calls) == 1
+
+
 def test_task_review_reads_cfg_once_for_multiple_realization_bindings(monkeypatch):
     facts, task, _annotation, _targets = owned_fixture(monkeypatch, with_bindings=True)
     getter, calls = PropagationMaterials.cfg.fget, []

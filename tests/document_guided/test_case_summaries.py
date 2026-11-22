@@ -20,11 +20,20 @@ def local(name):
     return {"kind": "local", "name": name}
 
 
+def tool_contract(paths, *, evidences=None, reason="The source interface requires the stated request parameters."):
+    return {"inputs": [{"input_index": index, "required": [{"property": "value", "path": path}],
+                        "remainder": "independent", "reason": reason} for index, path in enumerate(paths)],
+            "reason": reason, "evidences": evidences or [evidence()]}
+
+
 def case_fixture(values=None, *, catch=True, state=True):
     values = ["same", "same"] if values is None else values
     fixture = _fixture("cases", "Each member has a source-supported normal or caught-error outcome.",
         "For each URL, call the service. Catch failures and keep their actual error values. "
-        "A successful local client creation may retain its handle. Save the completed collection.",
+        "A successful local client creation may retain its handle, determined only by its creation credential. "
+        "The service requires each URL unchanged; a zero-argument tool variant has no request operands. "
+        "Protected exception acquisition has no separate request operands, and a failure-prefix handle copies the error unchanged. "
+        "Save the completed collection.",
         [instruction("ir_call", "invoke", [literal(values)], "response"),
          instruction("ir_return", "return", [result("response")])], {})
     material = example_material(fixture)
@@ -32,15 +41,20 @@ def case_fixture(values=None, *, catch=True, state=True):
     if state:
         normal_ops += [
             {"op": "read", "location": "cache", "output": "old_handle"},
-            {"op": "compute", "inputs": [{"kind": "literal", "value": "creation-credential"}], "output": "handle"},
+            {"op": "compute", "inputs": [{"kind": "literal", "value": "creation-credential"}], "output": "handle",
+             "demand_transfer": {"rules": [{"output": {"property": "value", "path": []},
+                 "inputs": tool_contract([[]])["inputs"],
+                 "reason": "The authored client creation depends only on its supplied credential.", "evidences": [evidence()]}]}},
             {"op": "write", "target": "cache", "mode": "replace", "input": local("handle"), "may": True}]
     normal_ops += [
-        {"op": "call", "location": "service", "inputs": [local("url")], "output": "reply"},
+        {"op": "call", "location": "service", "inputs": [local("url")], "output": "reply",
+         "input_contract": tool_contract([[]], reason="The service requires the original URL parameter.")},
         {"op": "build", "container": "object", "parts": [
             {"path": ["url"], "value": local("url")},
             {"path": ["value"], "value": local("reply")}], "output": "row"}]
     error_ops = [
-        {"op": "receive", "location": "call_error", "inputs": [], "output": "error"},
+        {"op": "receive", "location": "call_error", "inputs": [], "output": "error",
+         "input_contract": tool_contract([], reason="This protected exception acquisition has no separately supplied request operands.")},
         {"op": "build", "container": "object", "parts": [
             {"path": ["url"], "value": local("url")},
             {"path": ["error"], "value": local("error")}], "output": "row"}]
@@ -124,7 +138,8 @@ def test_symbolic_case_collection_keeps_unknown_count_and_alternative_member_yie
     segments = wire["ir_semantics"]["ir_call"]["segments"]
     segments[0]["collection"] = local("unknown_urls")
     segments.insert(0, {"mode": "local", "returns": [], "ops": [
-        {"op": "receive", "location": "call_error", "inputs": [], "output": "unknown_urls"}]})
+        {"op": "receive", "location": "call_error", "inputs": [], "output": "unknown_urls",
+         "input_contract": tool_contract([], reason="The zero-input acquisition has no separately supplied request operands.")}]})
     _, _, compiled, _ = compile_flat_response(wire, material)
     solved = propagate(material["cfg"], to_payload(compiled))
     assert solved.status == "complete", solved.diagnostics
@@ -147,6 +162,7 @@ def test_zero_argument_case_calls_still_have_distinct_member_response_identities
     wire["locations"]["service"]["kind"] = "tool"
     normal = wire["ir_semantics"]["ir_call"]["segments"][0]["body"][0]["cases"][0]
     normal["segments"][0]["ops"][0]["inputs"] = []
+    normal["segments"][0]["ops"][0]["input_contract"] = tool_contract([], reason="The authored zero-argument tool variant has no request operands.")
     _, _, compiled, _ = compile_flat_response(wire, material)
     solved = propagate(material["cfg"], to_payload(compiled))
     assert solved.status == "complete", solved.diagnostics
@@ -207,7 +223,8 @@ def test_thrown_prefix_state_remains_recorded_but_cannot_reach_normal_out():
     material, wire = case_fixture(catch=False, state=False)
     failed = wire["ir_semantics"]["ir_call"]["segments"][0]["body"][0]["cases"][1]
     failed["segments"][0]["ops"].extend([
-        {"op": "compute", "inputs": [local("error")], "output": "failed_handle"},
+        {"op": "compute", "inputs": [local("error")], "output": "failed_handle",
+         "expression": {"expression": {"op": "ref", "value": local("error")}}},
         {"op": "write", "target": "cache", "mode": "replace", "input": local("failed_handle"), "may": True}])
     _, _, compiled, _ = compile_flat_response(wire, material)
     solved = propagate(material["cfg"], to_payload(compiled))
@@ -251,6 +268,17 @@ def ga4_fixture(path):
     # fixture does not mislabel its result projection as a raw remote response.
     wire["locations"]["service"].update(kind="tool", name="inspectUrl" if path == "status" else "requestIndexing")
     normal["segments"][0]["ops"][0]["inputs"].append({"kind": "literal", "value": {"save": False}})
+    interface_line = 146 if path == "status" else 57
+    interface_evidence = {"file": "skill/scripts/src/api/indexing.ts", "start_line": interface_line,
+        "end_line": interface_line + 2, "reason": "The helper signature requires url and reads the optional save setting from options."}
+    options_evidence = {"file": "skill/scripts/src/api/indexing.ts", "start_line": 11, "end_line": 13,
+        "reason": "IndexingOptions declares save as its optional interface field."}
+    normal["segments"][0]["ops"][0]["input_contract"] = tool_contract([[], ["save"]],
+        evidences=[citation, interface_evidence, options_evidence],
+        reason="The helper interface requires url and preserves its optional save setting; other option fields are not declared requirements.")
+    normal["segments"][0]["ops"][0]["input_contract"]["inputs"][1]["required"][0]["if_present"] = True
+    summary["cases"][1]["segments"][0]["ops"][0]["input_contract"] = tool_contract([], evidences=[citation],
+        reason="The caught exception is acquired without separately supplied request operands; no argument or hidden-state independence is inferred.")
     normal["segments"][0]["ops"] = normal["segments"][0]["ops"][:1]
     if path == "batch":
         normal["yield"] = local("reply")
@@ -267,7 +295,16 @@ def ga4_fixture(path):
         normal["yield"] = local("row")
     if path != "batch":
         failure = summary["cases"][1]["segments"][0]["ops"]
-        failure[1:1] = [{"op": "compute", "inputs": [local("error")], "dependencies": ["derived"], "output": "error_string"}]
+        failure[1:1] = [{"op": "compute", "inputs": [local("error")], "dependencies": ["derived"], "output": "error_string",
+            "demand_transfer": {"rules": [{"output": {"property": "value", "path": []}, "inputs": [{
+                "input_index": 0, "required": [], "remainder": "unresolved",
+                "reason": "The caught value is stringified, but its concrete type and conversion dependencies are not supplied.",
+                "gap": {"code": "missing_interface",
+                    "reason": "The source calls String(error) on an unconstrained caught value without describing that value's conversion behavior.",
+                    "missing": "The caught error type and which information its string conversion reads.",
+                    "resolution": "Provide the caught-value type and its source-backed conversion dependency relation.",
+                    "evidences": [citation]}}],
+                "reason": "Preserve the actual string conversion and expose the missing input-field relation.", "evidences": [citation]}]}}]
         failure[-1]["parts"] = [
             {"path": ["url"], "value": local("url")},
             {"path": ["error"] if path == "reindex" else ["status", "error"], "value": local("error_string")},

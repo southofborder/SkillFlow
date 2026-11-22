@@ -103,7 +103,9 @@ processing_gap 锚定真实 instruction_id，可指明 outputs、locations、con
 
 ### 通用精简与生成自查
 
-新运行的 compact-v1 审查模型视图不发送展开的 target_index 与 annotation._fragment_origins；完整目录与归属关系仍保存于本地，供引用校验及修复路由使用。其余源文、Task、CFG、语义对象、观察、运行时契约及缺口保持。target_ids 沿用现有路径语法；错误定位只返回错误目标和最近有效父对象，不回传整个目录，也不自动改写目标。
+当前新运行 v12 默认使用 shared-v2；原 compact-v1 视图继续按原身份读取。两种视图均不发送展开的 target_index 与 annotation._fragment_origins；完整目录与归属关系仍保存于本地，供引用校验及修复路由使用。其余源文、Task、CFG、语义对象、观察、运行时契约及缺口保持。target_ids 沿用现有路径语法；错误定位只返回错误目标和最近有效父对象，不回传整个目录，也不自动改写目标。
+
+shared-v2 进一步以通用共享值和契约清单列式记录减少重复字符，保留完整源文、每项契约和每个范围；仅在连同说明仍更短时启用，否则发送原 JSON。修复与重审使用相同策略，不增加模型阶段。详见[源文审查输入大小](review-input-size.md)与[中文说明](review-input-size.zh.md)。
 
 规则适用于任意 Skill，不设置 GA4、文件名、节点数或 IR 数特例。不同版本、条件、接收方和 occurrence 不因长度合并；不把真实语义截断称为精简。各生成阶段针对已提供材料及自身职责在提交前自查并直接修正，复用现有 Task 自查，不输出检查过程、通过表或隐藏推理；初次生成与语义重建均适用。Task 与 sensitivity 的输入隔离不变，自查不是额外模型调用或准确性证明。
 

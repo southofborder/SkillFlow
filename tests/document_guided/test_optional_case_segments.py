@@ -112,21 +112,29 @@ def ga4_processing_fixture():
     return material, wire
 
 
-def test_exact_ga4_failed_case_compiles_without_editing_extracted_answer():
+def test_exact_historical_ga4_case_keeps_omitted_segments_but_requires_current_contracts():
     material, wire = ga4_processing_fixture()
     before = deepcopy(wire)
     cases = wire["ir_semantics"]["ir_027"]["segments"][0]["cases"]
     assert "segments" not in cases[2]
     assert cases[2]["disposition"] == "throw"
-    saved, backend, compiled, _ = compile_flat_response(wire, material)
     explicit = deepcopy(wire)
     explicit["ir_semantics"]["ir_027"]["segments"][0]["cases"][2]["segments"] = []
-    assert compile_flat_response(explicit, material)[1:3] == (backend, compiled)
+    failures = []
+    for candidate in (wire, explicit):
+        with pytest.raises(StructuralValidationError) as caught:
+            compile_flat_response(candidate, material)
+        assert {row["code"] for row in caught.value.diagnostics} == {"input_contract_required"}
+        failures.append(caught.value.diagnostics)
+    assert failures[0] == failures[1]
     fragments = split_fragments(wire)
-    assert assemble_fragments(fragments["processing"], fragments["task-correspondence"], fragments["sensitivity"], material)[1:3] == (backend, compiled)
-    failure = next(row for row in backend["ir_semantics"]["ir_027"]["events"] if row["case"]["name"] == "failure")
-    assert failure["events"][0]["atomic_ops"] == []
-    assert saved == wire == before
+    with pytest.raises(StructuralValidationError) as caught:
+        assemble_fragments(fragments["processing"], fragments["task-correspondence"], fragments["sensitivity"], material)
+    assert {row["code"] for row in caught.value.diagnostics} == {"input_contract_required"}
+    # The exact historical answer is preserved, not silently upgraded to the
+    # current mandatory-contract route. Current synthetic cases above still
+    # prove omitted segments equal explicit empty segments through compilation.
+    assert wire == before
 
 
 @pytest.mark.parametrize("invalid", ["throw-yield", "empty-processing", "null-segments"])

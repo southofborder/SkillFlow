@@ -82,6 +82,19 @@ def base_wire(graph, citation):
             "preserve": "value", "reason": "Preserve the function result in this boundary projection."}]}
 
 
+def interface_contract(citation, required_paths, reason):
+    return {"inputs": [{"input_index": index,
+        "required": [{"property": "value", "path": path} for path in paths],
+        "remainder": "independent", "reason": reason}
+        for index, paths in enumerate(required_paths)], "reason": reason, "evidences": [citation]}
+
+
+def unresolved_input(index, citation, *, reason, missing, resolution):
+    return {"input_index": index, "required": [], "remainder": "unresolved", "reason": reason,
+        "gap": {"code": "unsupported_relation", "reason": reason, "missing": missing,
+                "resolution": resolution, "evidences": [citation]}}
+
+
 def test_ga4_imported_interface_and_initialized_handle_have_distinct_versions():
     graph = compile_graph([
         {"block_ref": "import", "data_source_kind": "external", "instructions": [
@@ -94,9 +107,27 @@ def test_ga4_imported_interface_and_initialized_handle_have_distinct_versions():
     wire = base_wire(graph, citation)
     ids = {row["opcode"]: row["id"] for block in graph["blocks"].values() for row in block["instructions"]}
     wire["locations"]["module"] = {"kind": "tool", "name": "@googleapis/indexing", "evidences": [citation]}
-    wire["ir_semantics"][ids["import_module"]] = spec(citation, [{"op": "receive", "location": "module", "inputs": [], "output": "interface"}], "interface")
+    wire["ir_semantics"][ids["import_module"]] = spec(citation, [{"op": "receive", "location": "module", "inputs": [], "output": "interface",
+        "input_contract": interface_contract({**citation, "start_line": 8, "end_line": 8}, [],
+            "The static module import has no dynamic argument operands.")}], "interface")
+    construction_evidence = {**citation, "start_line": 67, "end_line": 78,
+        "reason": "The source forwards credentials into GoogleAuth, whose implementation is outside this source snapshot."}
+    factory_evidence = {**citation, "start_line": 119, "end_line": 120,
+        "reason": "The returned client is created by the imported indexing factory with the constructed auth handle."}
+    construction_rows = [unresolved_input(0, factory_evidence,
+        reason="The projection does not expose which imported factory information determines the returned SDK client identity and content.",
+        missing="The indexing SDK factory's dependency relation from its callable value to the returned client.",
+        resolution="Supply the indexing factory's construction contract for the returned client identity and content."),
+        unresolved_input(1, construction_evidence,
+        reason="The projection omits how GoogleAuth and the indexing SDK encode the supplied credentials into the returned client.",
+        missing="The composed credential-to-client dependency relation through GoogleAuth and indexing construction.",
+        resolution="Supply the constructor contracts mapping client_email and private_key through auth to the returned client.")]
     wire["ir_semantics"][ids["initialize_client"]] = spec(citation, [{"op": "compute", "inputs": [inp(0), inp(1)],
-        "dependencies": ["possible", "possible"], "output": "client"}], "client")
+        "dependencies": ["possible", "possible"], "output": "client",
+        "demand_transfer": {"rules": [{"output": {"property": "value", "path": []},
+            "inputs": construction_rows,
+            "reason": "This boundary projection preserves the external construction dependencies as explicit source-specific gaps.",
+            "evidences": [construction_evidence, factory_evidence]}]}}], "client")
     _, _, compiled, _ = compile_flat_response(wire, material)
     solved = propagate(graph, to_payload(compiled))
     assert solved.status == "complete", solved.diagnostics
@@ -151,7 +182,9 @@ def test_ga4_condition_operands_and_distinct_branch_actions_compile(kind):
         "console": {"kind": "tool", "name": "console.log", "evidences": [citation]},
         "exists": {"kind": "tool", "name": "existsSync", "evidences": [citation]},
         "report": {"kind": "remote", "name": "GA4 runReport", "evidences": [citation]}}
-    condition_ops = ([{"op": "call", "location": "exists", "inputs": [inp()], "output": "exists"},
+    condition_ops = ([{"op": "call", "location": "exists", "inputs": [inp()], "output": "exists",
+        "input_contract": interface_contract(citation, [[[]]],
+            "existsSync checks the complete supplied filepath value.")},
         {"op": "compute", "inputs": [local("exists")], "dependencies": ["derived"], "output": "decision",
          "expression": {"expression": {"op": "not", "arg": {"op": "ref", "value": local("exists")}}, "evidences": [citation]}}]
         if expression is None else [{"op": "compute", "inputs": [inp(i) for i in range(len(arguments))],
@@ -160,14 +193,26 @@ def test_ga4_condition_operands_and_distinct_branch_actions_compile(kind):
     wire["ir_semantics"][ids["condition"]] = spec(citation, condition_ops, "decision")
     selected, other = [], []
     if kind == "help":
-        selected = [{"op": "deliver", "target": "console", "inputs": [inp()]}]
+        selected = [{"op": "deliver", "target": "console", "inputs": [inp()],
+            "input_contract": interface_contract(citation, [[[]]],
+                "console.log displays the complete authored help string.")}]
     elif kind == "default_date":
-        selected = [{"op": "call", "location": "settings", "inputs": [], "output": "settings"},
+        selected = [{"op": "call", "location": "settings", "inputs": [], "output": "settings",
+                    "input_contract": interface_contract(citation, [],
+                        "The source invokes getSettings() without arguments.")},
                     {"op": "select_part", "input": local("settings"), "path": ["defaultDateRange"], "output": "value"}]
     elif kind == "optional_save":
         selected = [{"op": "write", "target": "result", "mode": "replace", "input": inp()}]
     elif kind == "empty_urls":
-        other = [{"op": "call", "location": "report", "inputs": [inp()], "output": "value"}]
+        request_evidence = {**citation, "start_line": 166, "end_line": 183,
+            "reason": "The source builds a filtered request object before runReport; this branch fixture carries only the URL operand."}
+        other = [{"op": "call", "location": "report", "inputs": [inp()], "output": "value",
+            "input_contract": {"inputs": [unresolved_input(0, request_evidence,
+                reason="This branch projection supplies a URL list instead of the source's constructed runReport request object.",
+                missing="The mapping from the projected URL operand through dimensionFilter into the required runReport request fields.",
+                resolution="Represent the source request construction and provide the runReport interface's required field relation.")],
+                "reason": "The projected operand alone does not establish the remote request's required field ranges.",
+                "evidences": [request_evidence]}}]
     elif kind == "file_exists":
         other = [{"op": "read", "location": "result", "output": "value"}]
     for name, ops in (("selected", selected), ("other", other)):

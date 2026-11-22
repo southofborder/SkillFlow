@@ -346,7 +346,9 @@ def test_symbolic_location_writes_preserve_possible_aliases(target, expected_upd
     cfg, annotation = linear([instruction("write")], {
         "write": (["context_write"], [(0, [{"op": "write", "target": target,
             "mode": "replace", "input": literal("new")}])], []),
-    }, {"known": ("runtime_context", "cache"), "unknown": ("runtime_context", "symbolic:slot")})
+    }, {"known": ("runtime_context", "cache"), "unknown": ("runtime_context", "runtime-selected slot")})
+    annotation["locations"]["unknown"].update(address_kind="unidentified",
+        address_reason="This authored fixture writes through a genuinely unknown runtime address.")
     registry = DataRegistry("alias")
     old = registry.register_source("old", acquired_from="cache")
     cache = location("cache", "runtime_context")

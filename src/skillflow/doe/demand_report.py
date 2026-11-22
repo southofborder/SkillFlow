@@ -1,4 +1,4 @@
-"""English views of task-driven demand; neither necessity nor DOE verdicts.
+"""English views of task-preserving demand and reviewed input assessments.
 
 Both renderers consume one isolated presentation model. Array order is retained
 for payload slots and scope instances; display never rewrites input identities.
@@ -9,12 +9,14 @@ from copy import deepcopy
 from hashlib import sha256
 from html import escape
 import json
+from .input_report import render_input_edits
 
 
 NOTICE = (
-    "Backward demand describes information retained under the recorded processing "
-    "relationships. It does not prove irreplaceability, global minimality, "
-    "sensitivity, or absence of data over-exposure."
+    "Backward demand retains information required by the sealed Task and accepted "
+    "processing or semantic input contracts. Fully assessed ranges with no demand "
+    "are deletable under these contracts; concrete unresolved ranges retain their evidence. "
+    "These static judgments do not claim global minimality or runtime observations."
 )
 
 
@@ -89,6 +91,8 @@ def build_view(review, *, metadata=None):
                 for req, value in result.get("coverage", {}).get("requirements", {}).items()
                 if value["status"] != "expressed" or value["gaps"]],
             "traceability": deepcopy(result.get("traceability", {})),
+            "input_assessments": deepcopy(result.get("input_assessments", [])),
+            "input_findings": deepcopy(result.get("input_findings", [])),
             "restriction_notice": "Retained review context; not executable or verified predicates. "
                 "These task restrictions remain available for review across sink comparisons. "
                 "Their listing does not establish a per-sink scope or that a restriction was satisfied.",
@@ -155,8 +159,10 @@ def render_html(review, *, metadata=None):
             for goal in view["retained_restrictions"]) + '</ul>')
     else:
         out.append('<p>No retained-only or partially expressed task limitations.</p>')
-    out.append('</section><section id="sinks"><h2>Sink comparisons</h2><p>Payload slots retain order and candidate identity. '
-        'A range with no established demand is not automatically removable, especially when limitations apply.</p>')
+    out.append('</section><section id="input-assessments" class="card"><h2>Input necessity and deletion assessments</h2>'
+        + render_input_edits(view["input_assessments"]) + _pre(view["input_assessments"]) + '<h3>Input semantic findings</h3>' + _pre(view["input_findings"]) + '</section>'
+        '<section id="sinks"><h2>Sink comparisons</h2><p>Payload slots retain order and candidate identity. '
+        'See input assessments for required, deletable and evidence-backed unresolved ranges.</p>')
     for sink in view["sinks"]:
         out.append('<article class="card" id="' + sink["anchor"] + '"><h3>' + escape(str(sink["id"]))
             + '</h3><p><a href="#restrictions">Shared retained task restrictions</a></p>'
@@ -210,8 +216,10 @@ def render_markdown(review, *, metadata=None):
             + _md(goal["requirement"].get("text", "")) for goal in view["retained_restrictions"]))
     else:
         out.append('No retained-only or partially expressed task limitations.')
-    out += ['## Sink comparisons', 'Payload slots retain parameter order and candidate identity. '
-            'No established demand does not automatically authorize deletion.']
+    out += ['## Input necessity and deletion assessments', render_input_edits(view['input_assessments']), _pre(view['input_assessments']),
+            '## Input semantic findings', _pre(view['input_findings']),
+            '## Sink comparisons', 'Payload slots retain parameter order and candidate identity. '
+            'Completed input assessments authorize deletion of ranges with no task demand.']
     for sink in view["sinks"]:
         out.extend(['<a id="' + sink["anchor"] + '"></a>', '### ' + _md(sink["id"]),
                     '[Shared retained task restrictions](#restrictions)',

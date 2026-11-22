@@ -13,6 +13,8 @@ import math
 from pathlib import Path
 import re
 
+from tools.doe.document_guided_observation import observation_summary
+
 
 FIELDS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
           "reasoning_output_tokens", "total_tokens")
@@ -223,8 +225,11 @@ def transport_metrics(run_dir):
                "native_process_started": (True if type(pid) is int and pid > 0 else
                                           False if process.get("status") == "launch_error" else None),
                "accepted_answer_present": answer is not None, "ambiguous_final": ambiguous,
+               "accepted_answer_characters": len(answer) if answer is not None else None,
+               "accepted_answer_utf8_bytes": len(answer.encode("utf-8")) if answer is not None else None,
                "public_turns": [], "complete_token_usage": {}, "partial_token_usage": {},
                "duplicate_usage_events": 0, "monitor_warnings": local_warnings}
+        row["public_observations"] = observation_summary(attempt, local_warnings)
         native_index = re.fullmatch(r"attempt-(\d+)", attempt.name)
         logical_index = re.search(r"(?:^|/)a(\d+)/call\.json$", request.get("logical_call") or "")
         row["network_attempt_index"] = int(native_index[1]) if native_index else None

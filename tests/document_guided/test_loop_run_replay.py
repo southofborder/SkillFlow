@@ -7,7 +7,8 @@ from skillflow.document_guided.fragments import split_fragments
 from skillflow.document_guided.online import read
 from skillflow.graph.extraction.compiler import compile_candidate
 from tests.document_guided.test_ga4_explicit_loops import batch_projection
-from tests.document_guided.test_parallel_runner import _cfg_wire, freeze_producer
+from tests.document_guided.test_parallel_runner import _cfg_wire, freeze_producer, graph_facts_fixture
+from tests.doe.input_review_helpers import accepted_prompt_review
 
 
 def loop_answers():
@@ -21,9 +22,11 @@ def loop_answers():
             "instructions": [{"instruction_ref": ir["id"],
                 **{k: deepcopy(v) for k, v in ir.items() if k != "id"}}
                 for ir in block["instructions"]]})
+    guard_labels = {"body": "has remaining member", "exit": "no remaining member"}
     candidate["edges"] = [{"source_block_ref": edge["source_block_id"],
-        "target_block_ref": edge["target_block_id"], "condition_text": edge.get("condition_text")}
-        for edge in cfg["edges"]]
+        "target_block_ref": edge["target_block_id"],
+        "condition_text": (guard_labels[edge["target_block_id"]] if edge["source_block_id"] == "head"
+                           else edge.get("condition_text"))} for edge in cfg["edges"]]
     result = compile_candidate(candidate)
     assert result.ok, result.diagnostics
     identities = dict(zip(cfg["blocks"], result.cfg.blocks))
@@ -39,13 +42,16 @@ def loop_answers():
         return identities.get(value, value) if isinstance(value, str) else value
 
     task = {key: material["task"][key] for key in ("purpose", "requirements", "issues")}
-    return material["source"], _cfg_wire(candidate), task, split_fragments(remap(wire))
+    span = {"file": "skill/scripts/src/api/indexing.ts", "start_line": 89, "end_line": 105}
+    return material["source"], graph_facts_fixture(_cfg_wire(candidate), span=span), task, split_fragments(remap(wire))
 
 
 def test_loop_seven_calls_saved_outputs_and_zero_model_replay(tmp_path, monkeypatch):
     freeze_producer(monkeypatch)
     monkeypatch.setattr(runner, "_certificate", lambda *args, **kwargs: None)
     source, graph, task, fragments = loop_answers()
+    interface_evidences = [{"file": "skill/scripts/src/api/indexing.ts", "start_line": 53, "end_line": 67,
+        "reason": "The projected request requires the URL and forwards its value in requestBody.url."}]
     package, directory = tmp_path / "package", tmp_path / "run"
     package.mkdir()
     for row in source["files"]:
@@ -64,7 +70,8 @@ def test_loop_seven_calls_saved_outputs_and_zero_model_replay(tmp_path, monkeypa
             if self.stage == "flow":
                 return "# Flow\nTraverse the supplied URL occurrences, call the API, and collect normal results."
             value = task if self.stage == "task" else graph if self.stage == "graph" else (
-                {"outcome": "completed", "findings": []} if self.stage == "review" else fragments[self.stage])
+                accepted_prompt_review(prompt, evidences=interface_evidences)
+                if self.stage == "review" else fragments[self.stage])
             return json.dumps(value, ensure_ascii=False)
 
     result = runner.run(directory, client_factory=lambda stage, owner: Client(stage))

@@ -13,12 +13,13 @@ from skillflow.document_guided.annotation_wire import (
 )
 from skillflow.document_guided.fragments import assemble_fragments, validate_fragment
 from skillflow.document_guided.prompts import build_fragment_prompt
+from skillflow.document_guided.fragment_display import fragment_prompt_parts
 from skillflow.propagation.material import prepare_material
 from skillflow.propagation.contracts.references import target_key
+from tests.document_guided.current_interface_fixtures import current_contract_copy
 
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/online_interface_r4/expressions"
-VIEW_TITLE = "EXISTING EXPRESSION REFERENCES (program-generated from processing)"
 FAILED_REQUIREMENTS = {"010": {"R4", "R6"}, "013": {"R3"}}
 
 
@@ -61,9 +62,13 @@ def assert_display_references_compile(references, compiled, mapping):
 def test_exact_failed_candidates_are_rejected_without_automatic_reference_rewrite(case):
     value, material = saved_case(case)
     original = deepcopy(value)
+    with pytest.raises(StructuralValidationError) as historical:
+        validate_fragment("processing", value["processing"], material)
+    assert any(row["code"] == "input_contract_required" for row in historical.value.diagnostics)
+    processing = current_contract_copy(value["processing"], case)
     with pytest.raises(StructuralValidationError) as caught:
         validate_fragment("task-correspondence", value["failed_correspondence"], material,
-                          value["processing"])
+                          processing)
     actual = {(row["code"], row["path"]) for row in caught.value.diagnostics}
     expected = ({("constraint_expression", "/realizations/3/constraints/0/condition"),
                  ("constraint_expression", "/realizations/5/constraints/0/condition")}
@@ -85,10 +90,11 @@ def test_copying_displayed_targets_compiles_saved_fragments_and_checks_real_cons
     from skillflow.doe.constraint_engine import ConstraintEngine
 
     value, material = saved_case(case)
+    processing = current_contract_copy(value["processing"], case)
     mapping_fragment = reference_corrected_copy(value, case)
     assert validate_fragment("task-correspondence", mapping_fragment, material,
-                             value["processing"]) == mapping_fragment
-    wire, raw, compiled, mapping = assemble_fragments(value["processing"], mapping_fragment,
+                             processing) == mapping_fragment
+    wire, raw, compiled, mapping = assemble_fragments(processing, mapping_fragment,
                                                      value["sensitivity"], material)
     assert compile_flat_response(wire, material) == (wire, raw, compiled, mapping)
     references = expression_reference_view(value["processing"])
@@ -134,9 +140,8 @@ def test_initial_and_repair_mapping_receive_same_compact_view_and_full_source(ca
                                    repair_context={"source_rechecks": [{"target_ids": ["R3"]}]})
     expected = expression_reference_view(value["processing"])
     for prompt in (initial, repair):
-        shown = prompt.split(VIEW_TITLE + "\n", 1)[1].split("\n\n", 1)[0]
-        assert json.loads(shown) == expected
-        assert compact_json(expected) == shown
+        shown = fragment_prompt_parts(prompt)[1]["expression_references"]
+        assert shown == expected
         assert "copy its target exactly" in prompt
         assert "output slot and a path ending in expression/expression" in prompt
         assert 'path=[{"kind":"each"},"access_token"]' in prompt
@@ -177,7 +182,7 @@ def test_case_member_expression_reference_uses_existing_lexical_path_and_omitted
 
 def test_existing_cfg_expression_supplement_retains_its_exact_cfg_target():
     value, material = saved_case("010")
-    p = value["processing"]
+    p = current_contract_copy(value["processing"], "010")
     expression = deepcopy(p["ir_semantics"]["ir_005"]["segments"][0]["ops"][0]["expression"])
     expression["evidences"] = deepcopy(p["ir_semantics"]["ir_005"]["evidences"])
     p["expressions"] = [{"target": {"instruction_id": "ir_005", "path": []}, **expression}]

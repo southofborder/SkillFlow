@@ -17,10 +17,12 @@ import time
 
 from skillflow.common.runs import exclusive_run
 from skillflow.common.llm.request_errors import InputTooLarge, ModelRequestFailure
+from skillflow.common.delivery_size import inspect_delivery
 from skillflow.document_guided.online import analysis_config
+from tools.doe.document_guided_observation import PublicObserver
 
 
-IDENTITY = "skillflow-document-cli-v3"
+IDENTITY = "skillflow-document-cli-v4"
 MAX_INPUT_CHARS = 1_048_576
 EXPECTED = {"model": "gpt-6.1-sol", "effort": "max", "provider": "openai"}
 ENVELOPE = ("Use only the supplied material for this isolated static analysis. Do not use tools, "
@@ -202,9 +204,14 @@ class Client:
         _write(directory / "launch.json", {"command": argv, "cwd": str(cwd), "stdin_sha256": _digest(delivery)})
         _write(directory / "started.json", {"started_at": _now()})
         start, process, warnings, interrupted = time.perf_counter(), None, [], False
+        observer = None
         result = {"status": "launch_error", "exited": False, "returncode": None}
         with (directory / "stdout.jsonl").open("wb") as stdout, (directory / "stderr.txt").open("wb") as stderr:
             try:
+                try:
+                    observer = PublicObserver(directory, start, delivery)
+                except Exception as error:
+                    warnings.append("Public observation setup unavailable: " + type(error).__name__ + ": " + str(error))
                 process = (self.popen or subprocess.Popen)(argv, cwd=cwd, stdin=subprocess.PIPE,
                     stdout=stdout, stderr=stderr, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 _monitor(directory / "pid.json", {"pid": process.pid}, warnings)
@@ -219,7 +226,8 @@ class Client:
                         result["status"] = "exited"
                         break
                     except subprocess.TimeoutExpired:
-                        pass
+                        if observer is not None:
+                            observer.observe(warnings)
                     finally:
                         first = False
             except KeyboardInterrupt:
@@ -237,6 +245,8 @@ class Client:
                         result.update(exited=process.poll() is not None, returncode=process.returncode)
                     except Exception as error:
                         warnings.append("Process exit remains unconfirmed: " + str(error))
+                if observer is not None:
+                    observer.observe(warnings, terminal=result.get("exited") is True or process is None)
                 result.update(elapsed_seconds=time.perf_counter() - start, finished_at=_now())
                 if warnings:
                     result["monitor_warnings"] = warnings
@@ -244,6 +254,10 @@ class Client:
         if interrupted:
             raise KeyboardInterrupt("User interrupted this CLI process")
         return result
+
+    def preflight(self, prompt):
+        """Inspect final delivery size locally, without a call owner or process."""
+        return inspect_delivery(prompt, prefix=ENVELOPE, max_characters=MAX_INPUT_CHARS)
 
     def complete(self, prompt):
         if type(prompt) is not str or not prompt.strip():
@@ -271,14 +285,22 @@ class Client:
                 if read(accepted).get("answer_sha256") != _digest(answer):
                     raise ValueError("Saved CLI answer changed")
                 return answer
+            preflight = self.preflight(prompt)
+            inspection = target / "preflight.json"
+            if inspection.exists():
+                if read(inspection) != preflight:
+                    raise ValueError("Saved delivery preflight differs from the complete request")
+            else:
+                _write(inspection, preflight)
             # Preserve the complete input before rejecting it. This is the
             # turn/start text limit, not a model token-context estimate. It is
             # checked before any CLI attempt and never triggers a resend.
-            if len(delivery) > MAX_INPUT_CHARS:
+            if preflight["status"] == "input_too_large":
                 details = {"status": "input_too_large", "stage": self.directory.name,
                            "logical_call": logical_call, "actual_chars": len(delivery),
                            "max_chars": MAX_INPUT_CHARS, "metric": "unicode_codepoints",
                            "process_started": False, "usage": None}
+                details["preflight_sha256"] = _digest(inspection.read_bytes().decode("utf-8"))
                 _write(target / "input-rejection.json", details)
                 raise InputTooLarge(
                     f"CLI input_too_large at {self.directory.name}/{logical_call}: "

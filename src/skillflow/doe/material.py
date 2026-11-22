@@ -620,9 +620,9 @@ def validate_doe_material(raw, *, facts=None) -> DoeMaterial:
     value = parsed.model_dump(mode="json")
     shared, contract = value["shared_info"], value["runtime_contract"]
     _checked_source(value["source"])
-    if set(contract) != {"version", "rules", "sha256"}:
-        raise ValueError("runtime contract must bind its complete rule text")
-    checked_contract = validate_runtime_contract({key: contract[key] for key in ("version", "rules")})
+    if set(contract) != {"version", "rules", "operation_contract", "sha256"}:
+        raise ValueError("runtime contract must bind its complete rules and operation contract")
+    checked_contract = validate_runtime_contract({key: value for key, value in contract.items() if key != "sha256"})
     if contract["sha256"] != runtime_contract_binding(checked_contract)["sha256"]:
         raise ValueError("runtime contract digest mismatch")
     validate_data_records(list(shared["data"].values()))

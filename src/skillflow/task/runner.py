@@ -352,7 +352,7 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
         except Exception as error:
             typ = error.error_type if isinstance(error, SavedCallFailure) else type(error).__name__
             result.update(status="interrupted" if typ == "KeyboardInterrupt" else "execution_error",
-                          reason=writer.clean(str(error)), error_kind=typ)
+                          reason=writer.clean(str(error)), error_kind="interrupted" if typ == "KeyboardInterrupt" else typ)
         if chain is not None:
             result.update(accepted_call=chain.accepted_call, response_chain=chain.snapshot(),
                           request_validation=chain.request_validation)

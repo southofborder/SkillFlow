@@ -16,6 +16,7 @@ from skillflow.doe.report import render_html, render_markdown
 from skillflow.doe.sensitivity_material import prepare_joint_sensitivity_review
 from skillflow.doe.sensitivity_report import render_html as sensitivity_html, render_markdown as sensitivity_markdown
 from tests.document_guided.test_case_summaries import case_fixture, local
+from tests.doe.test_input_contract_preservation import accepted_receipt
 
 
 def roundtrip(value):
@@ -25,6 +26,15 @@ def roundtrip(value):
 @pytest.mark.parametrize("catch", [True, False])
 def test_case_collection_roundtrip_demand_sensitivity_and_reports(catch):
     material, wire = case_fixture(catch=catch)
+    normal = wire["ir_semantics"]["ir_call"]["segments"][0]["body"][0]["cases"][0]["segments"][0]
+    call = next(op for op in normal["ops"] if op["op"] == "call")
+    # Authored interface: the source says to invoke this service for each URL.
+    # It does not require the client's independent cached handle as payload.
+    call["input_contract"] = {"inputs": [{"input_index": 0,
+        "required": [{"property": "value", "path": []}], "remainder": "independent",
+        "reason": "The service invocation requires the current member URL as its scalar argument."}],
+        "reason": "The source specifies one service call for each supplied URL; errors remain separate outcomes.",
+        "evidences": [evidence()]}
     wire["ir_semantics"]["ir_call"]["segments"][0]["sensitivity"] = [{
         "value": local("reply"), "label": "Private response", "evidences": [evidence()],
         "case_path": ["segments", 0, "body", 0, "cases", 0]}]
@@ -46,7 +56,8 @@ def test_case_collection_roundtrip_demand_sensitivity_and_reports(catch):
     markdown, html = render_markdown(doe), render_html(doe)
     assert "mapped" in markdown.lower() and "mapped" in html.lower()
     assert "alternative" in markdown.lower() and "alternative" in html.lower()
-    review = prepare_joint_sensitivity_review(facts, facts.annotation)
+    receipt = accepted_receipt(facts, facts.annotation)
+    review = prepare_joint_sensitivity_review(facts, facts.annotation, input_contract_review=receipt)
     result = review.to_dict()
     assert result["status"] == "complete"
     assert result["coverage"]["declarations"] > 0

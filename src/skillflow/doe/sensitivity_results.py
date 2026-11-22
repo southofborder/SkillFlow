@@ -44,7 +44,12 @@ class SensitivityDerivation(Strict):
 
 class FieldReduction(Strict):
     kind: Literal["exclude_field"]
-    path: RangePath
+    path: Annotated[RangePath, Field(min_length=1)]
+
+
+class InputReduction(Strict):
+    """Remove this supplied input, without representing it as an empty field."""
+    kind: Literal["remove_input"]
 
 
 class DataReview(Strict):
@@ -56,7 +61,18 @@ class DataReview(Strict):
     reason: Text
     demand_refs: list[Text]
     constraint_refs: list[Text]
-    reduction: FieldReduction | None
+    assessment_refs: list[Text] = Field(default_factory=list)
+    limitation_refs: list[Text] | None = None
+    reduction: Annotated[FieldReduction | InputReduction, Field(discriminator="kind")] | None
+
+    @model_serializer(mode="wrap")
+    def omit_empty_assessment_refs(self, handler):
+        value = handler(self)
+        if not self.assessment_refs:
+            value.pop("assessment_refs", None)
+        if self.limitation_refs is None:
+            value.pop("limitation_refs", None)
+        return value
 
 
 class SinkReview(Strict):
@@ -109,7 +125,7 @@ class Coverage(Strict):
 
 
 class SensitivityResult(Strict):
-    schema_version: Literal["skillflow-sensitivity-review-v6"]
+    schema_version: Literal["skillflow-sensitivity-review-v10"]
     status: Literal["complete", "partial"]
     sinks: list[SinkReview]
     derivations: SharedDerivations
@@ -122,14 +138,18 @@ def resolve_data_review(review: dict, sink: dict, derivations: dict) -> dict:
     """Resolve a compact row for checks and display without mutating wire data.
 
     The original input_index is an operation slot, not an index in the filtered
-    payload list. Range truth belongs to the referenced derivation; applicable
-    limitations belong to the sink. Neither can be overridden on a review.
+    payload list. Range truth belongs to the referenced derivation. Current
+    comparisons retain their recomputed local limitation references; legacy
+    display-only rows without this field retain the boundary's complete list.
     """
     checked = DataReview.model_validate(review).model_dump(mode="json")
     identity = checked["derivation_id"]
     if identity not in derivations:
         raise ValueError("Dangling sensitivity review derivation")
     signal = SensitivityDerivation.model_validate(derivations[identity]).model_dump(mode="json")
+    limitations = checked.get("limitation_refs", sink["limitations"])
+    if len(limitations) != len(set(limitations)) or not set(limitations) <= set(sink["limitations"]):
+        raise ValueError("Comparison limitations must reference distinct existing boundary limitations")
     return {**deepcopy(checked), **{key: deepcopy(signal[key]) for key in (
         "data_id", "label", "property", "path", "excluded_paths", "relation", "declaration_id")},
-        "limitations": deepcopy(sink["limitations"])}
+        "limitations": deepcopy(limitations)}

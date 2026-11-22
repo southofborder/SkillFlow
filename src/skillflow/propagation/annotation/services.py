@@ -80,6 +80,8 @@ def to_payload(response: AnnotationResponse | dict) -> dict[str, Any]:
         ("ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")}
     if parsed.get("processing_gaps"):
         fields["processing_gaps"] = parsed["processing_gaps"]
+    if parsed.get("input_contracts"):
+        fields["input_contracts"] = parsed["input_contracts"]
     return AnnotationPayload.model_validate(fields).model_dump(mode="json")
 
 

@@ -19,6 +19,7 @@ from skillflow.propagation.data import SubsetViewContent
 from skillflow.propagation.data import MappedCollectionContent, MappedMember
 from skillflow.propagation.data import SelectionContent, AccumulatedCollectionContent, LoopSummaryContent
 from skillflow.propagation.data.registry import DataReferenceError
+from skillflow.propagation.data.registry import DataDomainError
 from skillflow.common.recording import canonical_sha256
 from skillflow.propagation.models import AtomicOpRecord
 from skillflow.propagation.models import EffectEvent
@@ -34,8 +35,10 @@ from skillflow.propagation.contracts.specs import IRSemantics
 from skillflow.propagation.contracts.specs import value_refs
 from skillflow.propagation.contracts.specs import iter_effect_events
 from skillflow.propagation.contracts.specs import iter_scoped_events
-from skillflow.propagation.conditions import guard_truths
+from skillflow.propagation.conditions import guard_truths, ConditionDomainError
 from skillflow.propagation.contracts.uses import active_value_uses
+from skillflow.propagation.execution_errors import OperandDomainError, OperationExecutionError
+from skillflow.propagation.contracts.locations import address_is_unknown, locations_may_alias
 
 class PendingValue(ValueError):
     """No current candidate, not an unknown external source or an empty value."""
@@ -96,6 +99,18 @@ class TransferInterpreter:
             name: FlowLocation(kind=loc["kind"], name=loc["name"])
             for name, loc in annotation["locations"].items()
         }
+        self.address_policies = {
+            self.locations[name]: loc for name, loc in annotation["locations"].items()
+        }
+        # Implicit context-key slots are identified locations too. A genuinely
+        # unknown runtime address must retain them in its conservative domain.
+        for block in cfg["blocks"].values():
+            for ir in block["instructions"]:
+                for operand in ir.get("inputs", []):
+                    if operand["type"] == "context_key":
+                        location = FlowLocation(kind="runtime_context", name=operand["identifier"])
+                        self.address_policies.setdefault(location, {
+                            "kind": location.kind, "name": location.name, "address_kind": "identified"})
         self.operand_locations = {}
         for name, loc in annotation["locations"].items():
             for ref in loc["operand_refs"]:
@@ -136,11 +151,17 @@ class TransferInterpreter:
         return deepcopy(self._last_diagnostics)
 
     def aliases(self, location):
-        symbolic = location.name.startswith("symbolic:")
+        policy = self.address_policies.get(location, {
+            "kind": location.kind, "name": location.name, "address_kind": "identified"})
         return sorted({location, *(
-            loc for loc in self.locations.values()
-            if loc.kind == location.kind and (symbolic or loc.name.startswith("symbolic:"))
+            loc for loc, other in self.address_policies.items()
+            if locations_may_alias(policy, other)
         )}, key=lambda loc: (loc.kind, loc.name))
+
+    def is_unknown_address(self, location):
+        policy = self.address_policies.get(location, {
+            "kind": location.kind, "name": location.name, "address_kind": "identified"})
+        return address_is_unknown(policy)
 
     def read_location(self, location, state):
         return frozenset().union(*(state.get(loc, frozenset()) for loc in self.aliases(location)))
@@ -398,7 +419,7 @@ class TransferInterpreter:
                 or (form == "known_parts" and any(type(part["path"][0]) is str for part in content["parts"]))
                 or (form == "field_updates" and any(type(part["path"][0]) is str for part in content["updates"])))
             if invalid:
-                raise DataConflictError("subset_view requires a collection, not a known object or scalar")
+                raise OperandDomainError("subset_view requires a collection, not a known object or scalar")
             if form in {"whole_except", "subset_view", "field_updates"}:
                 self._require_collection_operand(content["base"], seen | {identity})
 
@@ -420,6 +441,7 @@ class TransferInterpreter:
                 ids = guard_values[guard_key]
                 if not ids:
                     raise PendingValue(f"{pos}: member[{i}] condition has no candidates")
+                self._active_operation_inputs = [*inputs, ids]
                 truths = guard_truths(self.registry, ids)
                 guard_index = len(inputs)
                 inputs.append(ids)
@@ -474,6 +496,37 @@ class TransferInterpreter:
         return inputs, members, variants
 
     def execute(self, ir, event_index, op_index, operation, state, locals_, *, uncertain=False, body_event_index=None, request_inputs=None, member_token=None):
+        position = {"instruction_id": ir["id"], "event_index": event_index, "op_index": op_index}
+        if body_event_index is not None:
+            position["body_event_index"] = body_event_index
+        self._active_operation_inputs = []
+        try:
+            record = self._execute(ir, event_index, op_index, operation, state, locals_,
+                uncertain=uncertain, body_event_index=body_event_index,
+                request_inputs=request_inputs, member_token=member_token)
+        except (OperandDomainError, DataDomainError, ConditionDomainError) as error:
+            raise self._execution_error(error, position, self._active_operation_inputs) from error
+        if hasattr(self, "_operation_observations"):
+            self._operation_observations.append({"position": position, "record": plain(record)})
+        return record
+
+    def _execution_error(self, error, position, inputs):
+        # Capture before the solver rolls back the enclosing IR transaction.
+        # These are failed-attempt observations, never committed output facts.
+        observations = getattr(self, "_operation_observations", [])
+        input_ids = {identity for slot in inputs for identity in slot}
+        identities = set(input_ids)
+        for observation in observations:
+            record = observation["record"]
+            identities.update(identity for side in ("inputs", "outputs")
+                              for slot in record[side] for identity in slot)
+            identities.update(identity for change in record["changes"]
+                              for side in ("before", "after") for identity in change[side])
+        data = {identity: plain(self.registry.get(identity)) for identity in sorted(identities)}
+        return OperationExecutionError(error, position=position, input_data_ids=input_ids, input_data=data,
+                                       observed_operations=observations)
+
+    def _execute(self, ir, event_index, op_index, operation, state, locals_, *, uncertain=False, body_event_index=None, request_inputs=None, member_token=None):
         self._step_diagnostics = []
         op = plain(operation)
         pos = ([ir["id"], event_index, op_index] if body_event_index is None
@@ -503,6 +556,7 @@ class TransferInterpreter:
             guard = self.resolve(op["when"], ir, state, locals_, [pos, "when"])
             if not guard:
                 raise PendingValue(f"{pos}: observation condition has no candidates")
+            self._active_operation_inputs = [guard]
             inputs = ([self.resolve(ref, ir, state, locals_, [pos, "input", i])
                        for i, ref in enumerate(op["inputs"])] if True in guard_truths(self.registry, guard) else [])
             when_input_index = len(inputs)
@@ -516,6 +570,7 @@ class TransferInterpreter:
             inputs = [self.resolve(r, ir, state, locals_, [pos, "input", i]) for i, r in enumerate(refs)]
         if kind != "merge" and any(not ids for ids in inputs):
             raise PendingValue(f"{pos}: input has no available data candidates")
+        self._active_operation_inputs = inputs
         outputs = set()
         output_inputs = {}
 
@@ -540,10 +595,8 @@ class TransferInterpreter:
         elif kind == "member":
             scope = static_key(self.rule_identity, ir["id"], event_index, op_index, "member")
             for collection in sorted(inputs[0]):
-                try:
-                    entries = self.registry.resolve_iteration_entries(collection, scope)
-                except DataReferenceError as error:
-                    raise UnsupportedLoopDomain("Unsupported collection domain: " + str(error)) from error
+                self._require_collection_operand(collection)
+                entries = self.registry.resolve_iteration_entries(collection, scope)
                 for entry in entries:
                     selector = plain(entry.selector)
                     source_key = (self.registry.family_producer(collection)
@@ -568,7 +621,7 @@ class TransferInterpreter:
                     valid.add(identity)
                     alternatives.append(OperationAlternative(inputs=[frozenset([identity])], bindings=bindings, branch_targets=targets))
             if not valid:
-                raise UnsupportedLoopDomain("Unsupported typed guard domain: " + "; ".join(sorted(set(invalid))))
+                raise OperandDomainError("Unsupported typed guard domain: " + "; ".join(sorted(set(invalid))))
             if invalid:
                 self._step_diagnostics.append({"code": "unresolved_path", "instruction_id": ir["id"],
                     "reason": "Unsupported typed guard candidates were not routed: " + "; ".join(sorted(set(invalid)))})
@@ -600,7 +653,7 @@ class TransferInterpreter:
             targets = self.aliases(location)
             for target in targets:
                 before = state.get(target, frozenset())
-                weak = op.get("may", False) or uncertain or target != location or location.name.startswith("symbolic:")
+                weak = op.get("may", False) or uncertain or target != location or self.is_unknown_address(location)
                 if op["mode"] == "delete":
                     after = before if weak else frozenset()
                 elif op["mode"] == "replace":
@@ -716,7 +769,13 @@ class TransferInterpreter:
             members = {}
             # Unknown collections have one scoped representative. Known finite
             # lists retain each real member; an explicit empty list has none.
-            entries = self.registry.resolve_iteration_entries(collection, scope)
+            try:
+                self._require_collection_operand(collection)
+                entries = self.registry.resolve_iteration_entries(collection, scope)
+            except (OperandDomainError, DataDomainError) as error:
+                raise self._execution_error(error,
+                    {"instruction_id": ir["id"], "event_index": event_index, "scope": "element"},
+                    [collections]) from error
             repeated = len({entry.element.id for entry in entries}) != len(entries)
             for entry in entries:
                 element = entry.element
@@ -884,6 +943,7 @@ class TransferInterpreter:
         return AtomicOpRecord.model_validate(data)
 
     def evaluate(self, ir, typed_spec, entry_state):
+        self._operation_observations = []
         self._last_diagnostics = []
         self._failed_diagnostics = []
         self._attempts = 0

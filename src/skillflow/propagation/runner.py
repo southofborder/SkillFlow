@@ -21,9 +21,10 @@ from skillflow.propagation.models import FlowState
 from skillflow.propagation.records import PropagationRecords, SCHEMA_VERSION as RECORD_VERSION, LEGACY_SCHEMA_VERSION
 from skillflow.propagation.report import write_reports
 
-IDENTITY = "skill-ir-propagation-v21"
-FORMAT_VERSION = 21
+IDENTITY = "skill-ir-propagation-v23"
+FORMAT_VERSION = 23
 _READABLE_VERSIONS = ((IDENTITY, FORMAT_VERSION, RECORD_VERSION),
+                      ("skill-ir-propagation-v22", 22, RECORD_VERSION),
                       ("skill-ir-propagation-v20", 20, LEGACY_SCHEMA_VERSION))
 POLICY = {"offline": True, "model_calls": 0, "execute_skill": False}
 ARTIFACTS = frozenset({"data.json", "records.json", "sinks.json", "audit/requested-data.json",

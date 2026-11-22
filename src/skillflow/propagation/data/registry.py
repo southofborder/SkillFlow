@@ -59,6 +59,14 @@ class DataReferenceError(DataRegistryError):
     """A data reference or requested part is missing or excluded."""
 
 
+class DataDomainError(DataReferenceError):
+    """A known descriptor does not support the requested collection domain.
+
+    Missing identities and conflicting immutable records deliberately retain
+    their distinct errors; an evaluator must not isolate those as user data.
+    """
+
+
 class _MissingPart(DataReferenceError):
     """No registered identity is known, without asserting absence."""
 
@@ -487,7 +495,7 @@ class DataRegistry:
         if isinstance(content, SubsetViewContent):
             return self.resolve_element(content.base, scope)
         if isinstance(content, KnownPartsContent) and any(type(part.path[0]) is str for part in content.parts):
-            raise DataReferenceError("object fields cannot be treated as collection elements")
+            raise DataDomainError("object fields cannot be treated as collection elements")
         return self.resolve_part(collection_id, [ElementStep(scope=scope)])
 
     def resolve_elements(self, collection_id: str, scope: str) -> tuple[Data, ...]:
@@ -561,29 +569,29 @@ class DataRegistry:
             return DataRegistry._collection_layout_data(records, content.base)
         if isinstance(content, LiteralContent):
             if type(content.value) is not list:
-                raise DataReferenceError("only a literal list has collection elements")
+                raise DataDomainError("only a literal list has collection elements")
             return tuple(range(len(content.value))), False
         if isinstance(content, KnownPartsContent):
             if any(type(part.path[0]) is str for part in content.parts):
-                raise DataReferenceError("object fields cannot be treated as collection elements")
+                raise DataDomainError("object fields cannot be treated as collection elements")
             indices = tuple(sorted({part.path[0] for part in content.parts if type(part.path[0]) is int}))
             if content.parts_complete and (not indices or indices != tuple(range(len(indices)))):
-                raise DataReferenceError("complete collection requires contiguous integer list positions")
+                raise DataDomainError("complete collection requires contiguous integer list positions")
             return indices, not content.parts_complete
         if isinstance(content, WholeExceptContent):
             return DataRegistry._collection_layout_data(records, content.base)
         if isinstance(content, FieldUpdatesContent):
             if any(type(part.path[0]) is str for part in content.updates):
-                raise DataReferenceError("object fields cannot be treated as collection elements")
+                raise DataDomainError("object fields cannot be treated as collection elements")
             indices, open_members = DataRegistry._collection_layout_data(records, content.base)
             indices = tuple(sorted({*indices, *(part.path[0] for part in content.updates if type(part.path[0]) is int)}))
             if not open_members and indices != tuple(range(len(indices))):
-                raise DataReferenceError("complete collection update leaves unbound integer positions")
+                raise DataDomainError("complete collection update leaves unbound integer positions")
             return indices, open_members
         if isinstance(content, SubsetViewContent):
             # Direct subset iteration delegates to its base above. A positional
             # update *after* filtering cannot borrow original array offsets.
-            raise DataReferenceError("fixed member positions cannot be inferred through a subset_view")
+            raise DataDomainError("fixed member positions cannot be inferred through a subset_view")
         return (), True
 
     @staticmethod

@@ -9,12 +9,24 @@ from skillflow.common.recording import ResponseIntegrityError, canonical_sha256
 from skillflow.common.validation import StructuralValidationError
 from skillflow.document_guided.source import render_source, source_packet
 from skillflow.document_guided.source_review import (
-    build_source_review_prompt, prepare_review_material, replay_saved_review,
-    run_source_review, validate_source_review,
+    build_source_review_prompt, prepare_review_material as _prepare_review_material, replay_saved_review,
+    run_source_review as _run_source_review, validate_source_review,
 )
 from skillflow.propagation.contracts.task import validate_task_candidate
 from tests.document_guided.test_case_source_review import reviewed_cases
 from tests.document_guided.test_source_review import Client, finding, fixture
+from tests.doe.input_review_helpers import source_review_response, review_prompt_payload
+
+
+def prepare_review_material(*args, **kwargs):
+    # This module pins the original compact generation, including saved failures.
+    kwargs.setdefault("prompt_view", "compact-v1")
+    return _prepare_review_material(*args, **kwargs)
+
+
+def run_source_review(*args, **kwargs):
+    kwargs.setdefault("prompt_view", "compact-v1")
+    return _run_source_review(*args, **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +37,7 @@ def stable_producer(monkeypatch):
 
 
 def payload(prompt):
-    return json.loads(prompt.split("\nINPUT_JSON\n", 1)[1].split("\nCOMPLETE SOURCE\n", 1)[0])
+    return review_prompt_payload(prompt)
 
 
 @pytest.mark.parametrize("count", [1, 25, 500])
@@ -71,13 +83,14 @@ def test_compact_display_is_generic_and_preserves_all_semantic_material(count):
     target = "annotation:/ir_semantics/source~10~0record/segments/0/ops/0"
     item = {"domain": "annotation", "target_ids": [target], "explanation": "Check the response identity.",
             "source_refs": [], "suggestion": "Preserve the actual response identity."}
-    checked = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    checked = validate_source_review(source_review_response(material, [item]), material)
     assert checked["findings"][0]["owner"] == "processing"
 
 
 @pytest.mark.parametrize("partial", [False, True])
 def test_compact_case_and_partial_targets_remain_locally_valid(partial):
     material = reviewed_cases(partial=partial)
+    material["prompt_view"] = "compact-v1"
     shown = payload(build_source_review_prompt(material))
     assert "target_index" not in shown
     if partial:
@@ -86,7 +99,7 @@ def test_compact_case_and_partial_targets_remain_locally_valid(partial):
         "/ir_semantics/ir_call/segments/0/body/0/cases/0/segments/0/ops/0")
     item = {"domain": "annotation", "target_ids": [target], "explanation": "Check this actual case.",
             "source_refs": [], "suggestion": "Retain the source-supported boundary."}
-    assert validate_source_review({"outcome": "completed", "findings": [item]}, material)["findings"][0]["owner"] == "processing"
+    assert validate_source_review(source_review_response(material, [item]), material)["findings"][0]["owner"] == "processing"
 
 
 def test_unknown_target_diagnostic_has_only_exact_parent_not_full_table_or_guessed_name():
@@ -111,7 +124,8 @@ def test_record_correction_does_not_reinsert_expanded_target_table(tmp_path):
     bad["target_ids"] = ["annotation:/rows/999/invented"]
     good = deepcopy(bad)
     good["target_ids"] = ["annotation:/rows/999"]
-    client = Client({"outcome": "completed", "findings": [bad]},
+    client = Client({"outcome": "completed", "findings": [bad], "input_contract_checks": [],
+                     "input_projection_checks": [], "source_input_findings": []},
                     {"replacements": [{"record_id": "/findings/0", "value": good}]})
     result = run_source_review(tmp_path, files=files, task=task, cfg=cfg, annotation=annotation,
                                generation="fragment-v1", client=client)

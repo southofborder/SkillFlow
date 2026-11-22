@@ -1,5 +1,6 @@
 """Seven-call orchestration with injected fragments and the real offline backend."""
 from copy import deepcopy
+import json
 from threading import Event, Lock
 
 import pytest
@@ -52,14 +53,61 @@ def _cfg_wire(candidate):
     return wire
 
 
+def graph_facts_fixture(wire, *, span=None):
+    """Author the new wire from this offline fixture's known semantic facts."""
+    def operand(row):
+        return ({row["type"]: row["identifier"]} if row["type"] != "literal"
+                else {"literal": row["literal_value"]})
+
+    span = span or {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}
+    facts = {"entry": wire["entry_block_ref"], "blocks": [], "constraints": wire.get("constraints", [])}
+    for block in wire["blocks"]:
+        ref = block["block_ref"]
+        final = block["instructions"][-1]
+        links = [edge for edge in wire.get("edges", []) if edge["source_block_ref"] == ref]
+        if final["opcode"] == "return":
+            exit = {"kind": "return", "values": [operand(row) for row in final.get("inputs", [])]}
+        elif len(links) == 1 and links[0].get("condition_text") is None:
+            exit = {"kind": "jump", "target": links[0]["target_block_ref"]}
+        else:
+            exit = {"kind": "branch", "conditions": [operand(row) for row in final.get("inputs", [])],
+                    "arms": [{"target": edge["target_block_ref"], "condition": edge["condition_text"]}
+                             for edge in links]}
+        facts["blocks"].append({"ref": ref, "name": block.get("block_name", ref),
+            "source_kind": block.get("data_source_kind") or "normal", "constraints": block.get("constraints", []),
+            "operations": [{"ref": f"action-{index}", "opcode": row["opcode"],
+                            "inputs": [operand(item) for item in row.get("inputs", [])],
+                            "outputs": [item["identifier"] for item in row.get("outputs", [])],
+                            "source": deepcopy(span), "constraints": row.get("constraints", []),
+                            "metadata": {key: value for key, value in row.get("metadata", {}).items()
+                                         if key not in {"script_content", "_source_span", "source_span"}}}
+                           for index, row in enumerate(block["instructions"][:-1])],
+            "exit": {**exit, "source": deepcopy(span), "constraints": final.get("constraints", [])}})
+    return facts
+
+
 def freeze_producer(monkeypatch):
     # These tests exercise orchestration, not producer-code mutation detection.
     # The real provenance shape is frozen to avoid unrelated concurrent edits.
     frozen = implementation_provenance()
     for module in ("skillflow.document_guided.runner", "skillflow.document_guided.online",
+                   "skillflow.document_guided.accepted_upstream",
                    "skillflow.document_guided.source_review", "skillflow.task.runner",
                    "skillflow.propagation.runner", "skillflow.doe.formal_runner"):
         monkeypatch.setattr(module + ".implementation_provenance", lambda: deepcopy(frozen))
+
+
+def prompt_scope(prompt):
+    """Decode current scope inputs and retained synthetic historical displays."""
+    from skillflow.document_guided.fragment_display import fragment_prompt_parts
+    displayed = fragment_prompt_parts(prompt)
+    if displayed is not None and "scope" in displayed[1]:
+        return displayed[1]["scope"]
+    for marker in ("AUTHORIZED GRAPH SLOTS", "PROCESSING REVISION SLOTS",
+                   "SENSITIVITY REVISION SLOTS", "TASK REQUIREMENT SLOTS"):
+        if "\n" + marker + "\n" in prompt:
+            return json.JSONDecoder().raw_decode(prompt.split(marker + "\n", 1)[1])[0]
+    raise ValueError("The injected request contains no declared revision scope")
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +118,7 @@ def independent_offline_producer(monkeypatch):
 
 class Harness:
     def __init__(self, directory, *, domains=(), annotation_failure=False, canaries=False,
-                 repair_failure=None, final_failure=False):
+                 repair_failure=None, final_failure=False, precise_repair=False):
         self.directory = directory
         self.example, candidate = _fixture()
         self.graph = _cfg_wire(candidate)
@@ -86,6 +134,7 @@ class Harness:
                     "reason": "Synthetic sensitivity declaration checks input isolation; not an empirical source assessment."}]})
         self.domains, self.annotation_failure = domains, annotation_failure
         self.repair_failure, self.final_failure = repair_failure, final_failure
+        self.precise_repair = precise_repair
         self.canaries = canaries
         self.calls, self.prompts = [], {}
         self.attempts = {}
@@ -100,6 +149,9 @@ class Harness:
         return Client()
 
     def complete(self, stage, prompt):
+        from skillflow.document_guided.fragment_display import fragment_prompt_parts
+        displayed = fragment_prompt_parts(prompt)
+        scope = displayed[1].get("scope") if displayed is not None else None
         with self.lock:
             self.attempts[stage] = self.attempts.get(stage, 0) + 1
             if self.attempts[stage] > 1:
@@ -131,13 +183,35 @@ class Harness:
             fragment = deepcopy(self.fragments[base])
             if base == "sensitivity" and self.canaries and fragment.get("declarations"):
                 fragment["declarations"][0]["label"] += " SENSITIVITY_DOCUMENT_CANARY"
+            if stage == "revision-processing" and scope is not None:
+                slots = []
+                for ir in scope["slots"]:
+                    body = fragment["ir_semantics"][ir]
+                    if "annotation" in self.domains:
+                        body["evidences"][0]["reason"] += " Rechecked the supported source range."
+                    slots.append({"instruction_id": ir, "modeled": body})
+                return {"coverage_slots": slots}
+            if stage == "revision-sensitivity" and scope is not None:
+                return {"slots": [{"instruction_id": identity, "declarations": slot["declarations"]}
+                                  for identity, slot in scope["slots"].items()]}
+            if stage == "revision-task-correspondence" and scope is not None:
+                from skillflow.document_guided.fragment_revision import _correspondence_groups
+                groups = _correspondence_groups(fragment)
+                return {"slots": [{"requirement_id": identity, **deepcopy(groups[identity])}
+                                  for identity in scope["slots"]]}
             return fragment
         if base == "graph":
             self.graph_started.set()
             if self.repair_failure == "cfg" and stage.startswith("revision"):
                 return {"outcome": "cannot_assess", "failure": {"reason": "Injected source representation barrier.",
                     "evidences": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1, "reason": "The source identifies the behavior."}]}}
-            return deepcopy(self.graph)
+            if self.precise_repair and stage == "revision-graph":
+                plan = scope
+                assert plan is not None
+                slot, = plan["slots"].values()
+                return {"plan_sha256": plan["plan_sha256"], "updates": [
+                    {"slot_id": slot["slot_id"], "value": [*slot["old_value"], "Preserve the original field."]}]}
+            return graph_facts_fixture(self.graph)
         if base == "annotation":
             if self.annotation_failure or (self.repair_failure == "annotation" and stage.startswith("revision")):
                 return {"outcome": "cannot_assess", "failure": {"reason": "Injected supported capability failure.",
@@ -158,8 +232,20 @@ class Harness:
                     if domain == "task":
                         item["task_objection"] = {"code": "atomicity", "requirement_ids": ["R1"],
                             "source_spans": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}]}
+                    if self.precise_repair and domain == "cfg":
+                        item["target_ids"] = ["cfg:/blocks/block_001/instructions/0/constraints"]
+                    if self.precise_repair and domain == "annotation" and not self.annotation_failure:
+                        item["target_ids"] = ["annotation:/ir_semantics/ir_001"]
                     findings.append(item)
-            return {"outcome": "completed", "findings": findings}
+            from tests.doe.input_review_helpers import checks_for_inventory, projection_checks, review_prompt_payload
+            payload = review_prompt_payload(prompt)
+            inventory = payload["input_contract_inventory"]
+            evidences = [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
+                          "reason": "The synthetic source specifies these operation relationships."}]
+            checks = checks_for_inventory(inventory, evidences,
+                status="rejected" if any(f["domain"] in {"cfg", "annotation"} for f in findings) else "accepted")
+            return {"outcome": "completed", "findings": findings, "input_contract_checks": checks,
+                    "input_projection_checks": projection_checks(inventory, evidences), "source_input_findings": []}
         raise AssertionError("Unexpected stage: " + stage)
 
     def prepare(self, package):
@@ -215,7 +301,7 @@ def test_seven_calls_dependency_parallelism_true_backend_and_zero_call_replay(tm
     (("task", "cfg", "annotation"), 13, {"task", "graph", "processing", "task-correspondence", "sensitivity"}),
 ])
 def test_one_shared_repair_regenerates_only_dependency_closure(tmp_path, domains, count, regenerated):
-    harness = Harness(tmp_path / "run", domains=domains)
+    harness = Harness(tmp_path / "run", domains=domains, precise_repair=True)
     harness.prepare(tmp_path / "package")
     def stop_at_backend(state):
         if state["stage"] == "propagation":
@@ -257,7 +343,7 @@ def test_legal_annotation_failure_still_has_partial_review_without_backend_or_re
 
 @pytest.mark.parametrize("domain", ["cfg", "annotation"])
 def test_failed_shared_repair_keeps_original_consistent_bundle(tmp_path, domain):
-    harness = Harness(tmp_path / "run", domains=("task", domain), repair_failure=domain)
+    harness = Harness(tmp_path / "run", domains=("task", domain), repair_failure=domain, precise_repair=True)
     harness.prepare(tmp_path / "package")
     def stop_at_backend(state):
         if state["stage"] == "propagation":
@@ -273,7 +359,7 @@ def test_failed_shared_repair_keeps_original_consistent_bundle(tmp_path, domain)
 
 
 def test_new_valid_bundle_survives_final_cannot_assess_with_diagnostic_status(tmp_path):
-    harness = Harness(tmp_path / "run", domains=("annotation",), final_failure=True)
+    harness = Harness(tmp_path / "run", domains=("annotation",), final_failure=True, precise_repair=True)
     harness.prepare(tmp_path / "package")
     def stop_at_backend(state):
         if state["stage"] == "propagation":

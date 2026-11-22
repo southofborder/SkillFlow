@@ -530,7 +530,10 @@ class ResponseChain:
                 validation = self._validation(call_dir, row, "structural_invalid",
                                               **diagnostic_materials(error.diagnostics))
                 self._stop("after_validation", call)
-                if self.max_corrections is not None and number > self.max_corrections:
+                can_correct = getattr(self.correction_strategy, "can_correct", None)
+                if ((self.max_corrections is not None and number > self.max_corrections)
+                        or (callable(can_correct) and not can_correct(
+                            deepcopy(self.candidate), deepcopy(error.diagnostics)))):
                     self._final()
                     raise StructuralCorrectionLimitReached(self.max_corrections, error.diagnostics) from error
                 previous = {"call": call, "response": deepcopy(recovered),

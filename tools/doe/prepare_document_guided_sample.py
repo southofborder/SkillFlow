@@ -95,7 +95,25 @@ def _write(root, name, value, *, refresh=False):
 def synthetic_material(root, *, refresh=False):
     """Author current model wire and expanded synthetic artifacts, never GA4 answers."""
     root = Path(root)
+    from skillflow.common.paths import project_root
+    if root.resolve() == (project_root() / "examples/document-guided").resolve():
+        raise ValueError("The delivered historical sample is immutable; generate current materials in a new directory")
     fixture = deepcopy(endpoint_example())
+    # This new authored example states its interface contract explicitly. The
+    # original endpoint lesson and delivered historical artifacts stay intact.
+    fixture["source"] += ("\nThe calibration interface requires badge and accepts offset as an optional field; "
+        "when offset is present its value is required. No other record fields are interface inputs.")
+    interface_evidence = {"file": "skill/SKILL.md", "start_line": 2, "end_line": 2,
+        "reason": "The authored synthetic interface explicitly requires badge and optional offset only."}
+    delivery = fixture["annotation"]
+    for part in fixture["positions"]["deliver"]:
+        delivery = delivery[part]
+    delivery["input_contract"] = {"inputs": [{"input_index": 0, "required": [
+        {"property": "value", "path": ["badge"]},
+        {"property": "value", "path": ["offset"], "if_present": True}],
+        "remainder": "independent", "reason": "The declared interface accepts no other record information."}],
+        "reason": "The explicit synthetic interface requires badge and the optional offset value when supplied.",
+        "evidences": [deepcopy(interface_evidence)]}
     original = fixture["cfg"]
     wire = {"entry_block_ref": original["entry_block_id"],
         "constraints": original["constraints"], "blocks": [], "edges": []}
@@ -165,12 +183,17 @@ def synthetic_material(root, *, refresh=False):
     files = {"skill/" + row["path"]: row["content"] for row in material["source"]["files"]}
     global_text = "Preserve all obligations and unresolved statements in the supplied source; do not invent missing requirements or local mechanisms."
     flow = "# Flow understanding\nRead the session packet, prepare one calibration record, deliver it, and return internally. The interface deployment is unspecified (skill/SKILL.md:1).\nThe request uses the same acquired packet: preserve badge and conditionally include offset when adjustment is true. The acquisition result is consumed by the preparation step, not reacquired from another source (skill/SKILL.md:1)."
-    # Reproduce the delivered v6 format fixture byte-for-byte. New v7 runs
-    # explicitly select compact-v1; do not migrate this stored example.
+    # Generate the current protocol into a new directory. The delivered v6
+    # format fixture remains immutable and retains its original producer.
     review_material = prepare_review_material(files=files, task=material["task"], cfg=cfg,
-        annotation=saved_wire, compiled=compiled, mapping=mapping, runtime_contract=material["runtime_contract"],
+        annotation=saved_wire, raw_annotation=checked, compiled=compiled, mapping=mapping, runtime_contract=material["runtime_contract"],
         generation="fragment-v1", prompt_view=None)
-    review_wire = {"outcome": "completed", "findings": []}
+    review_wire = {"outcome": "completed", "findings": [], "input_contract_checks": [
+        {"obligation_id": row["id"], "contract_id": row["contract_id"], "status": "accepted",
+         "reason": "The authored interface requires badge and optional offset only; other fields are independent.",
+         "evidences": [deepcopy(interface_evidence)], "scope_checks": []}
+        for row in review_material["input_contract_inventory"]["obligations"]],
+        "input_projection_checks": [], "source_input_findings": []}
     review = validate_source_review(review_wire, review_material)
     prompts = {
         "01-task": build_task_prompt(prepare_task_material(material["source"]), allow_cannot_assess=False),
@@ -220,7 +243,7 @@ def synthetic_material(root, *, refresh=False):
             "assembled-annotation.json": "program assembly of the three typed fragments",
             "flat-annotation.json": "same program assembly, compatibility filename; not a model response",
             "backend-annotation.json": "program expansion", "annotation.json": "same program expansion, compatibility filename",
-            "source-review-wire.json": "authored empty-finding shape demonstration, not a semantic pass"}}
+            "source-review-wire.json": "authored scoped-review protocol demonstration, not an independent semantic pass"}}
 
 
 def audit_sizes(run):

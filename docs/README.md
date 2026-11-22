@@ -1,5 +1,37 @@
 # 文档导航
 
+2026-11-19 [语义阶段的通用无损交付与提交前体积检查](doe/lossless-delivery.zh.md)已通过离线验收，详见[当前版本](current-version.md)。
+
+2026-11-17 当前工作：[共享输出协议与依赖范围纠错](doe/processing-correction.zh.md)
+（[英文设计](doe/processing-correction.md)）。补全既有共享输出语法，同次纠错报告有依据的
+格式错误，并按实际控制／结果依赖选择 CFG 纠错范围；保持严格整体验证、完整源文与契约、
+七次正常请求、两个 worker 和既有预算。离线最新去重验收为 2367 通过、1 项 Windows
+权限跳过、0 未解决失败；原始失败保留，不是一次全绿或全仓库执行。root 已启动唯一
+新 GA4 `document-guided-ga4-processing-correction-high-20261117-110830`，现与唯一回放一并关闭。
+结果为结构失败，未发生原生超时：前置校验隐藏了两个循环错误，审查目标约定及缺 CFG
+的修订入口另有缺口。Processing／DOE 未运行；6 次启动、636027 已公开 tokens，回放
+一致且零新增调用。见[本轮中文结果](../output/verification/online-ga4-processing-correction-20261117/assessment.zh.md)
+和[后续建议](../output/verification/online-ga4-processing-correction-20261117/followup-plan.zh.md)，没有追加修复或实验。
+实时状态以[版本导航](current-version.md)及本轮 continuation-state 为准，旧实验仍封存。
+
+2026-11-14 最新完成：[源文审查严格定位与局部隔离](doe/source-review-locality.zh.md)
+（[英文设计](doe/source-review-locality.md)），886 个不同 scoped 测试有最新通过凭据。
+唯一一轮新 GA4 已关闭：局部隔离及修复路由得到真实证据，但修订 processing 达到
+2700 秒进程时限，传播与 DOE 未运行；唯一回放匹配、零新增调用。见
+[中文验收](../output/verification/online-ga4-source-review-locality-20261113/assessment.zh.md)
+和[英文报告](../output/verification/online-ga4-source-review-locality-20261113/assessment.en.md)。
+完整源文与契约、七次正常请求、两个 worker 和原预算均保留。本轮授权已使用完毕，
+历史记录不能作为重启、追加实验或再次回放的许可。
+
+2026-11-13 最新结果：[通用源文审查展示修复](doe/review-input-size.zh.md)通过 511 项分范围测试；新 GA4 与唯一零调用重放已关闭。完整审查请求均未超限，但三条字段定位格式错误使审查未被接纳，最终仍为 partial，未建立可删除输入。见[本轮中文报告](../output/verification/online-ga4-review-shared-v2-20261112/assessment.zh.md)。本轮启动／重放授权已用完，下列活动描述保留为历史。
+
+2026-11-12 当前后续工作：[源文审查通用无损展示修复](doe/review-input-size.zh.md)
+（[英文设计](doe/review-input-size.md)）。新运行 v12 默认使用 `shared-v2`，
+完整源文与契约不裁剪，保持七次正常请求和两个 worker；本轮离线验收通过后，
+仅 root 可按用户新授权启动一轮新的 GA4。先前运行仍封存。
+
+当前状态以[版本导航](current-version.md)为准。2026-11-11 的[字段级输入必要性](doe/input-necessity.md)已完成初版验收及唯一授权真实批次：GA4 在修复阶段失败，三个小 Skill 传播完成但 DOE 均为 partial，全部零调用重放一致。见[原批次报告](../output/verification/online-input-necessity-20261111/assessment.en.md)。封存原证据后的契约覆盖、局部审查、源输入错误和删除定位修正，见[补充设计与离线验收](doe/input-necessity-completeness.zh.md)。新旧版本证据分开；下列较早阶段的验收和授权保持各自日期的历史含义，不据此恢复旧运行或另开真实批次。
+
 Current offline backend work: [design](doe/backend-sparse-design.zh.md), [acceptance and bounded GA4 results](doe/backend-sparse-offline.zh.md), and [English computation contract](propagation/backend-computation-contract.md). Record v16 uses projected states; historical v15 remains read-only. Seven model calls are unchanged; the online controller and queue stay paused.
 
 当前通用循环与输出契约扩展见 [设计与边界](doe/general-loop-analysis.md)。GA4 与三个小 Skill 的线上结果见 [四轮报告](../output/verification/general-loops-v8-online-20261101/assessment.en.md)；后续材料复用精简见 [实现说明](doe/material-reuse.md)与[离线验收](doe/material-reuse-offline.zh.md)。

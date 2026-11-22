@@ -27,6 +27,8 @@ from skillflow.propagation.contracts.specs import value_refs
 from skillflow.propagation.contracts.specs import iter_scoped_events
 from skillflow.propagation.contracts.specs import precedence_closure
 from skillflow.propagation.contracts.limitations import unmodeled_ids, reachable_instructions
+from skillflow.propagation.execution_errors import OperationExecutionError
+from skillflow.propagation.failure_scope import FailureRow, row_failure_key, dependencies, poison, reconvergences
 
 
 @dataclass
@@ -64,26 +66,59 @@ def _join_ir_records(variants):
         exit_state=FlowState.from_mapping(join_states(mapping(record.exit_state) for record in variants)), events=events)
 
 
+def _guard_operand_origin(ir, spec, record, event_index, op_index):
+    """Prove a local field guard reads a particular immutable result version."""
+    ops = [plain(op) for op in spec.events[event_index].atomic_ops]
+    ref = ops[op_index]["input"]
+    if ref["kind"] != "local":
+        return None
+    # A condition can alias an unrelated Data object with the same content.
+    # Follow the typed producer and its recorded paired inputs, not content.
+    for index in range(op_index - 1, -1, -1):
+        producer = ops[index]
+        if producer.get("output") != ref["name"]:
+            continue
+        if producer["op"] != "select_part" or producer["input"]["kind"] != "input":
+            return None
+        operand = ir["inputs"][producer["input"]["index"]]
+        if operand["type"] != "result":
+            return None
+        actual = record.events[event_index].atomic_ops[index]
+        return FlowLocation(kind="result", name=operand["identifier"]), actual.alternatives
+    return None
+
+
 def _guarded_outgoing(state, successors, decisions, registry, max_variants):
     """Route only the member/operand candidates admitted by each typed guard."""
     routes = [(target, state) for target in successors]
-    for ir, spec, event_index, op_index, operation in decisions:
+    for ir, spec, record, event_index, op_index, operation in decisions:
         raw = plain(spec.events[event_index].atomic_ops[op_index])
         ref, condition_location = raw["input"], None
         if ref["kind"] == "input":
             operand = ir["inputs"][ref["index"]]
-            kind = {"result": "result", "context_key": "runtime_context"}.get(operand["type"])
-            if kind:
-                condition_location = FlowLocation(kind=kind, name=operand["identifier"])
+            # A context operand can alias several runtime locations and was
+            # evaluated at IR entry. It does not prove a block-exit version.
+            if operand["type"] == "result":
+                condition_location = FlowLocation(kind="result", name=operand["identifier"])
         elif ref["kind"] == "local":
             for binding in spec.output_bindings:
                 if plain(binding.value) == ref:
                     condition_location = FlowLocation(kind="result", name=ir["outputs"][binding.output_index]["identifier"])
+        origin = _guard_operand_origin(ir, spec, record, event_index, op_index)
         selected = {}
         for target, before in routes:
             for alternative in operation.alternatives:
                 if target not in alternative.branch_targets:
                     continue
+                roots_by_origin = None
+                if origin is not None:
+                    pairs = [row for row in origin[1] if row.outputs[0] & alternative.inputs[0]
+                             and all(key not in alternative.bindings or alternative.bindings[key] == value
+                                     for key, value in row.bindings.items())]
+                    # The producing result may be dead on this edge; absence
+                    # is no reason to reject a route.
+                    if pairs and origin[0] in before:
+                        roots_by_origin = frozenset(identity for row in pairs for identity in row.inputs[0])
                 after = {}
                 for location, values in before.items():
                     # Stored versions survive other members. Their creation
@@ -106,9 +141,12 @@ def _guarded_outgoing(state, successors, decisions, registry, max_variants):
                             pending.extend(item["base"] for item in options
                                            if item["form"] == "selection" and not item["path"])
                         compatible &= roots
+                    if roots_by_origin is not None and location == origin[0]:
+                        compatible &= roots_by_origin
                     if compatible:
                         after[location] = compatible
-                if condition_location is not None and condition_location not in after:
+                if ((condition_location in before and condition_location not in after)
+                        or (roots_by_origin is not None and origin[0] not in after)):
                     continue
                 key = (target, tuple(sorted((location.kind, location.name, tuple(sorted(values))) for location, values in after.items())))
                 selected[key] = (target, after)
@@ -243,7 +281,7 @@ def _reaching_memory(cfg, annotation, interpreter, reachable, roots, predecessor
                 if op.op == "write":
                     target = interpreter.locations[op.target]
                     for loc in interpreter.aliases(target):
-                        weak = uncertain or op.may or loc != target or target.name.startswith("symbolic:")
+                        weak = uncertain or op.may or loc != target or interpreter.is_unknown_address(target)
                         if op.mode == "delete":
                             if not weak:
                                 state.pop(loc, None)
@@ -464,8 +502,8 @@ def propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
 
 def _row_key(state):
     """A relation row, never a pointwise union of unrelated alternatives."""
-    return tuple(sorted((loc.kind, loc.name, tuple(sorted(ids)))
-                        for loc, ids in state.items() if ids))
+    return (tuple(sorted((loc.kind, loc.name, tuple(sorted(ids)))
+                         for loc, ids in state.items() if ids)), *row_failure_key(state))
 
 
 def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
@@ -497,6 +535,8 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
     cyclic_owner = {block: owner for owner, component in cyclic_components.items() for block in component}
     rebuild_queue, rebuild_queued = deque(), set()
     rebuilding = set()
+    fault_evidence = {}
+    control_joins = reconvergences(successors)
     stats = result.stats
     stats.update(max_active_relation_rows=0, max_partition_rows=0,
                  max_edge_relation_rows=0, max_block_relation_rows=0,
@@ -505,7 +545,7 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                  scc_rebuilds=0, registry_changed_keys=0, block_evaluation_counts={})
 
     def project(state, keep):
-        value = {loc: ids for loc, ids in state.items() if loc in keep and ids}
+        value = (state if isinstance(state, FailureRow) else FailureRow(state)).project(keep)
         stats["projected_locations_removed"] += len(state) - len(value)
         return value
 
@@ -620,7 +660,8 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
         rows = inputs[part]
         stats["max_partition_rows"] = max(stats["max_partition_rows"], len(rows))
         current = {"records": {}, "outgoing": defaultdict(dict), "failed": {},
-                   "attempted": set(), "unmodeled": set(), "diagnostics": []}
+                   "attempted": set(), "unmodeled": set(), "diagnostics": [],
+                   "errors": set(), "blocked": defaultdict(set)}
         candidates = defaultdict(list)
         with registry.observe_reads() as observed:
             try:
@@ -633,7 +674,8 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                                                        if predecessor is not None else {})
                     interpreter.active_predecessor = predecessor
                     interpreter.loop_backedge_available = backedge
-                    state = dict(incoming)
+                    state = FailureRow(incoming, unavailable=incoming.unavailable,
+                        controls={cause: join for cause, join in incoming.controls.items() if join != block})
                     allowed, decisions = set(successors[block]), []
                     complete = True
                     for ir in cfg["blocks"][block]["instructions"]:
@@ -643,11 +685,42 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                             current["unmodeled"].add(identity)
                             complete = False
                             break
+                        evaluated = False
+                        attempt_diagnostics = None
                         try:
                             state = project(state, live.before[identity])
-                            record = interpreter.evaluate(ir, annotation.ir_semantics[identity],
-                                                          FlowState.from_mapping(state))
-                            state = project(mapping(record.exit_state), live.after[identity])
+                            spec = annotation.ir_semantics[identity]
+                            reads, writes, clears, evidence_reads, controls = dependencies(
+                                ir, spec, interpreter, block, predecessor, state)
+                            causes = set(state.controls) | set().union(
+                                *(state.unavailable.get(loc, ()) for loc in reads))
+                            if causes:
+                                current["blocked"][identity].update(causes)
+                                poison(state, writes, causes)
+                                if controls:
+                                    for cause in causes:
+                                        state.controls.setdefault(cause, control_joins[block])
+                                state = project(state, live.after[identity])
+                                continue
+                            # Old state is evidence even when a definite overwrite
+                            # does not consume it. Keep that limitation local while
+                            # allowing the new independently known value onward.
+                            evidence_causes = set().union(*(state.unavailable.get(loc, ()) for loc in evidence_reads))
+                            with registry._transaction():
+                                evaluated = True
+                                try:
+                                    record = interpreter.evaluate(ir, spec, FlowState.from_mapping(state))
+                                except (PendingValue, OperationExecutionError, PropagationLimitError):
+                                    attempt_diagnostics = interpreter.last_diagnostics
+                                    for diagnostic in attempt_diagnostics:
+                                        if diagnostic["code"] == "missing_part":
+                                            diagnostic["observed_data"] = plain(registry.get(diagnostic["data_id"]))
+                                    raise
+                            current["blocked"][identity].update(evidence_causes)
+                            state = state.with_state(mapping(record.exit_state))
+                            for loc in clears:
+                                state.unavailable.pop(loc, None)
+                            state = project(state, live.after[identity])
                             record = record.model_copy(update={"exit_state": FlowState.from_mapping(state)})
                             candidates[identity].append(record)
                             for event_index, event in enumerate(record.events):
@@ -655,17 +728,29 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                                     for op_index, op in enumerate(event.atomic_ops):
                                         if op.op == "branch":
                                             allowed &= set(op.branch_targets)
-                                            decisions.append((ir, annotation.ir_semantics[identity],
+                                            decisions.append((ir, annotation.ir_semantics[identity], record,
                                                               event_index, op_index, op))
+                        except OperationExecutionError as error:
+                            diagnostic = error.diagnostic
+                            cause = canonical_sha256(diagnostic)
+                            fault_evidence[cause] = diagnostic
+                            current["errors"].add(cause)
+                            current["blocked"][identity].add(cause)
+                            poison(state, writes, {cause})
+                            if controls:
+                                state.controls[cause] = control_joins[block]
+                            state = project(state, live.after[identity])
                         except PendingValue as error:
                             current["failed"][identity] = str(error)
                             complete = False
                             break
                         finally:
-                            current["diagnostics"].extend(interpreter.last_diagnostics)
+                            if evaluated:
+                                current["diagnostics"].extend(interpreter.last_diagnostics
+                                    if attempt_diagnostics is None else attempt_diagnostics)
                     if complete:
                         for target, guarded in _guarded_outgoing(state, allowed, decisions, registry, max_variants):
-                            projected = project(guarded, live.block_in[target])
+                            projected = project(state.with_state(guarded), live.block_in[target])
                             current["outgoing"][target][_row_key(projected)] = projected
             finally:
                 current["records"] = {ir: _join_ir_records(values) for ir, values in candidates.items()}
@@ -712,11 +797,8 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
     except PropagationLimitError as error:
         result.status = "resource_limit"
         result.diagnostics.append({"code": "resource_limit", "reason": str(error)})
-    except (ValueError, KeyError) as error:
-        result.status = "execution_error"
-        result.diagnostics.append({"code": "execution_error", "reason": f"{type(error).__name__}: {error}"})
-
     candidates, failures, stopped = defaultdict(list), {}, set()
+    error_scopes = defaultdict(set)
     for part in sorted(outcomes, key=repr):
         item = outcomes[part]
         for ir in item["attempted"]:
@@ -725,9 +807,19 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
             candidates[ir].append(record)
         failures.update(item["failed"])
         stopped.update(item["unmodeled"])
+        for cause in item["errors"]:
+            error_scopes[cause].add(fault_evidence[cause]["instruction_id"])
+        for ir, causes in item["blocked"].items():
+            for cause in causes:
+                error_scopes[cause].add(ir)
         result.diagnostics.extend(item["diagnostics"])
     for ir in candidates:
         result.coverage[ir] = "processed"
+    for cause, affected in sorted(error_scopes.items()):
+        diagnostic = fault_evidence[cause]
+        result.diagnostics.append({**diagnostic, "affected_instruction_ids": sorted(affected)})
+        for ir in affected - candidates.keys():
+            result.coverage[ir] = ("execution_error" if ir == diagnostic["instruction_id"] else "blocked")
     for ir, error in sorted(failures.items()):
         code = "unresolved_path" if ir in candidates else "unresolved_binding"
         if ir not in candidates:
@@ -742,9 +834,19 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
         for ir in reachable_instructions(cfg, source):
             if result.coverage[ir] in {"not_reached", "not_solved"}:
                 result.coverage[ir] = "blocked"
-    if result.status == "complete" and (failures or stopped or any(
+    if result.status == "complete" and (failures or stopped or error_scopes or any(
             item["code"] == "unresolved_path" for item in result.diagnostics)):
         result.status = "incomplete"
+    # Absence of a worklist visit is not a path exclusion proof. Recompute
+    # admitted paths from the actual successful guard records, even on abort.
+    from skillflow.propagation.loop_guards import admitted_instructions
+    uncertain = set().union(*error_scopes.values()) | failures.keys()
+    uncertain.update(item["instruction_id"] for item in result.diagnostics if item["code"] == "unresolved_path")
+    admitted = admitted_instructions(cfg, interpreter.annotation,
+        {ir: _join_ir_records(values) for ir, values in candidates.items() if ir not in uncertain}, registry)
+    for ir, state in result.coverage.items():
+        if state == "not_reached":
+            result.coverage[ir] = "infeasible" if ir not in admitted else "not_solved"
     stats["description_revision"] = registry.revision
     if hasattr(registry, "seal"):
         stats["loop_families"] = len(registry.facts)

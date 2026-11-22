@@ -355,7 +355,7 @@ def test_final_data_and_records_only_saved_once(annotation_run, tmp_path):
         for event in record["events"]:
             assert set(event) == {"effect", "atomic_ops"}
             for op in event["atomic_ops"]:
-                assert set(op) == {"op", "inputs", "outputs", "endpoints", "changes"}
+                assert set(op) == {"op", "inputs", "outputs", "endpoints", "changes", "alternatives"}
                 assert all(isinstance(candidates, list) for candidates in op["inputs"] + op["outputs"])
 
 

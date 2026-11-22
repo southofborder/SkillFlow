@@ -54,9 +54,18 @@ def test_fragment_checks_apply_to_initial_and_rebuild_without_cross_owner_input(
     assert PRE_SUBMIT_CHECK not in old
     assert prompt.count(PRE_SUBMIT_CHECK) == 1
     assert owner_rule in prompt.split("PRE-SUBMIT CHECK\n")[1]
-    assert ("SEALED_TASK\n" in prompt) == (step == "task-correspondence")
-    assert ("RUNTIME_CONTRACT\n" in prompt) == (step == "processing")
-    assert ("SOURCE REVIEW REPAIR\n" in prompt) is repair
+    if step == "processing":
+        from skillflow.document_guided.processing_display import _parts
+        _, logical, _ = _parts(prompt)
+        assert logical["runtime_contract"] == runtime_contract()
+        assert ("repair_context" in logical) is repair
+        assert "task" not in logical
+    else:
+        from skillflow.document_guided.fragment_display import fragment_prompt_parts
+        _, logical, _ = fragment_prompt_parts(prompt)
+        assert ("task" in logical) == (step == "task-correspondence")
+        assert "RUNTIME_CONTRACT\n" not in prompt
+        assert ("repair_context" in logical) is repair
 
 
 def _task_candidate():

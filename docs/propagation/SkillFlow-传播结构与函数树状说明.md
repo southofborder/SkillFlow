@@ -25,14 +25,14 @@
 ├─ 输入二：CFG                               第一阶段产生的原图
 │  └─ IRInstruction                          图中的一条动作及其操作数
 ├─ 模型产物：RawAnnotationResponse           一次联合标注的原始响应
-│  ├─ task / demands / expressions           全局要求与独立需求、计算语义
+│  ├─ task_ref / realizations / demands / expressions 冻结任务引用、对应关系、需求与计算语义
 │  ├─ locations[位置别名]                     位置身份、访问范围、留存及操作数关联
 │  ├─ ir_semantics[IR ID]                    谁执行，以及怎样取得、处理、交付数据
 │  │  ├─ events[].processing / for_each      唯一处理顺序；段内使用符号 atomic_ops
 │  │  └─ output_bindings[]                   把已有值登记为原 IR 的公开结果
 │  └─ location_evidences[位置别名]           位置依据审计表，校验后独立保存
 ├─ 程序编译：sink_boundaries[]               交付／保存点的类型、等级及真实操作坐标
-├─ 程序转换：to_payload(response)            显式取六项业务字段为 AnnotationPayload
+├─ 程序转换：to_payload(response)            显式取业务字段及非空缺口／输入契约
 │                                            这是传播输入，不含位置依据审计表
 ├─ 程序管理的数据：DataRegistry
 │  └─ Data                                  一份数据的身份、内容关系、来源与说明
@@ -41,9 +41,9 @@
 └─ 程序产物：PropagationResult
    ├─ registry                              求解后的全部 Data
    ├─ records[IR ID]                         每条 IR 的最终静态记录
-   │  ├─ entry_state                        执行该 IR 之前的完整状态
+   │  ├─ entry_state                        IR 入口的计算／证据所需状态投影
    │  ├─ events[].atomic_ops[]               符号已解析成实际 Data ID
-   │  └─ exit_state                         执行该 IR 之后的完整状态
+   │  └─ exit_state                         IR 出口的计算／证据所需状态投影
    ├─ coverage                              哪些 IR 已处理、未处理或缺少绑定
    └─ diagnostics                           实际绑定错误、算法范围限制
 ```
@@ -68,7 +68,7 @@
 
 `kind`、`form`、`op` 都是“选择具体类型”的标记，所处结构不同：ValueRef.kind 选择引用方式，FlowLocation.kind 选择位置类别，Data.content.form 选择内容形态，AtomicOp.op 选择固定操作。
 
-`Data.annotations` 是数据本身的描述／已有敏感性标记；传播里的 `annotation` 是六项业务载荷 AnnotationPayload。原始模型响应没有 sink 清单；程序编译后的完整 AnnotationResponse 还包含 completed 状态和位置审计表，不直接传给求解器。
+`Data.annotations` 是数据本身的描述／已有敏感性标记；传播里的 `annotation` 是当前模式明确限定的业务载荷 AnnotationPayload。原始模型响应没有 sink 清单；程序编译后的完整 AnnotationResponse 还包含 completed 状态和位置审计表，不直接传给求解器。
 
 下面 `T[]` 表示列表；`?` 表示允许 null；`{D_A,D_B}` 表示候选集合。索引全部从 0 开始，源文行号从 1 开始。能为空的字段不一定能省略；每段会说明默认值。
 
@@ -239,7 +239,7 @@ SourceEvidence                         CFGEvidence                RuleEvidence
 
 证据用文件行范围、直接 CFG target 或 EM rule_id 区分，原文按真实文件行提取，模型不再抄 quote、basis 或摘要。operator_evidences 只额外填写 value；空主体使用 null。null 效果没有效果依据，但数据操作依据仍必需。无非空效果的 IR 仍须解释，不等于 NOP 或 IN/OUT 相同。
 
-传播业务 `AnnotationPayload` 严格只含 task、demands、expressions、ir_semantics、locations、sink_boundaries；完整响应的 outcome 与位置证据通过显式投影剥离，不能由求解器静默忽略。Task bindings 保留图中对应关系，不自动成为需求起点。真实源文可支持错误解释；引用通过不等于语义正确。
+传播业务 `AnnotationPayload` 严格包含 task_ref、realizations、demands、expressions、ir_semantics、locations、sink_boundaries，以及非空时保留的 processing_gaps、input_contracts。完整响应的 outcome 与位置证据通过显式投影剥离，不能由求解器静默忽略。Task 对应关系不自动成为需求起点。引用通过不等于语义正确。
 
 **5．位置声明与符号引用：传播前先把“哪里”和“哪个值”说清楚**
 
@@ -248,7 +248,9 @@ LocationSpec
 ├─ kind: runtime_context/storage/model_context/remote/tool/user
 │                                        边界类别，同名跨类别不会合并
 ├─ name: str                            稳定位置名称，如 config.json
-│                                        symbolic: 前缀表示具体身份未确定
+│                                        名字不承担别名语法，内容未知仍可保持明确身份
+├─ address_kind: identified/unidentified 默认 identified；地址关系未知才 unidentified
+├─ address_reason: str/null             unidentified 必须解释具体未知关系并有物理源文依据
 ├─ operand_refs: OperandRef[]            必填，可为 []；关联实际 IR 操作数
 │  ├─ instruction_id: str               原图哪条 IR
 │  ├─ side: input/output                该 IR 的输入侧还是输出侧
@@ -416,12 +418,12 @@ frozenset 内只有 ID 字符串，不放可变 Data 对象。一个位置的候
 
 ```text
 IRFlowRecord                            一条 IR 的最终静态记录
-├─ entry_state: FlowState               当前动作之前的完整状态
+├─ entry_state: FlowState               当前动作之前的计算／证据状态投影
 ├─ events: EffectEvent[]                按原规格位置排列
 │  └─ EffectEvent
 │     ├─ effect: Effect/null            当前标签；无标签保守计算或工具获取为 null
 │     └─ atomic_ops: AtomicOpRecord[]   与规格逐项对应，顺序由数组表达
-│        ├─ op: 固定操作名              read、compute、deliver 等十选一
+│        ├─ op: 固定操作名              read、compute、deliver 等十四选一
 │        ├─ inputs: frozenset[Data ID][] 原子操作的实际输入，保留参数次序和重复
 │        ├─ outputs: frozenset[Data ID][]阶段结果，保留输出位置
 │        ├─ endpoints: FlowLocation[]   来源／接收边界
@@ -431,7 +433,7 @@ IRFlowRecord                            一条 IR 的最终静态记录
 │        │  ├─ value_input_index       值输入槽位；确定省略为 null
 │        │  └─ when_input_index        控制输入槽位；无条件为 null
 │        └─ when_input_index           仅编译条件观察：不属于观察载荷
-└─ exit_state: FlowState                当前动作之后的完整状态
+└─ exit_state: FlowState                当前动作之后的计算／证据状态投影
 
 输入／输出的 JSON 示例
 └─ [["D_A", "D_B"], ["D_A"]]
@@ -508,7 +510,7 @@ annotate_skill(source, cfg, *, client)
     ├─ validate_specs(cfg, annotation)   效果位置、操作数、local、输出覆盖等合法
     └─ check_evidence(...)              引文确实存在于所指源文／图／执行规则
 
-to_payload(checked_response)            显式生成 AnnotationPayload 六项业务载荷
+to_payload(checked_response)            按当前模式显式生成 AnnotationPayload
                                        不自行复核引文，也不把位置审计表送入求解器
 
 propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
@@ -517,22 +519,35 @@ propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
 ├─ 复制 initial_registry                隔离调用者已有数据
 ├─ _seed_state(...)                     运行前登记必要初始来源；明确传空状态就保持空
 ├─ _graph(...)                          建前驱、后继、入口与可到达块关系
-├─ _generation_feedback(...)            检查本版不能支持的生成数据反馈
-├─ 工作队列                              FIFO 或 LIFO，状态变化后重新处理相关块
-│  ├─ join_states(...)                  按位置合并前驱候选集合
+├─ 有限循环关系与活跃位置                 保留实际成员配对，投影计算及证据所需状态
+├─ 工作队列                              FIFO 或 LIFO，按实际依赖调度关联分区
+│  ├─ 关系行汇合                         不把不同前驱／成员的值独立取并集
 │  └─ TransferInterpreter.evaluate(...) 求值一条完整 IR
 │     ├─ resolve(...)                   把 input/local/literal/alternatives 解析到 ID
 │     ├─ execute(...)                   执行一个固定抽象操作
 │     │  ├─ 调用 DataRegistry            复用已有身份或登记新结果／部分
 │     │  └─ 构造 AtomicOpRecord         保存阶段值、边界和位置变化
 │     └─ bind_outputs(...)              将 local／已有值登记到公开 result 位置
-├─ PropagationRecords.put(...)          提交每条 IR 的最终整份记录
+├─ 局部操作失败                          回滚试探更新，保存独立错误证据并传播依赖缺口
+├─ PropagationRecords.put_computed(...) 提交每条 IR 的最终已计算记录
 └─ 返回 PropagationResult               数据、记录、覆盖、诊断和统计
 ```
 
 `initial_state=None` 才会自动准备相关读取来源。显式空 FlowState 是调用者提供的完整空状态，不会在读不到值时偷偷重建来源。`max_variants` 限制候选组合或部分顺序的枚举；超限返回资源限制，不宣称已经收敛。它不是循环执行次数。
 
 普通未知 compute 仍会传播。缺少实际 result 候选则等待；该块未完成时不发布出口，也不跳过写入继续执行后面的读。最终仍未绑定，记录 incomplete。每次重新求值替换静态记录，不追加成一长串运行日志。
+
+明确来源的未知异常值不会污染无关调用参数；真正 `unidentified` 的地址继续与同类位置保守别名，
+写入保持弱更新。`symbolic:` 不再自动形成别名；旧前缀声明必须明确填写地址策略。
+物理证据的结构检查不能代替源文审查对该未知关系的核验。
+
+局部操作类型／数据域失败与普通未绑定分开：失败位置及其依赖标为 `execution_error`／`blocked`，
+独立工作仍可计算；未知程序／完整性异常不被宽泛吞掉。`infeasible` 必须有实际路径排除证明，
+未访问或失败不等于无需求。公开状态是投影，未展示位置也不等于已删除。
+
+运行时 v12 的有限清单覆盖 14 个原子操作、flat call、processing／for_each／cases 三种结构，
+以及 14 个结构化需求表达式操作符。清单复用模式和解释器，不增加新的执行器，也不声称覆盖
+任意 Skill 或外部工具的所有语义。源文超出支持域时保留有依据的局部缺口。
 
 **10．阶段产物与运行引用**
 
@@ -607,4 +622,4 @@ PropagationResult（内存）
 当前可选参数以[Sink 标注收紧与可选参数规范](SkillFlow-Sink标注收紧与可选参数.md)为准。when 属于操作消费条件，不修改 Data，也不成为任意路径条件语言。
 
 
-联合标注自身也按所有权保存：原始 package＋snapshot 冻结源文件，cfg/runtime-contract/user-request 分片各保存一次，内存 material 不另落盘。annotation/result.json 仅为状态、验证、计数、请求链及编译证书；六项业务事实只在 audit/compiled-response.json 中。加载器验证后重建业务结果，单独的 ir-semantics/locations/sink-boundaries 导出已删除。审查与修复通过显式上游引用读取这些事实，只保存本阶段拥有的显式候选、定位、观察、实际请求及结论；修复 context 根据已有所有者和初审重建并检查清单摘要，不再落盘复制。
+联合标注自身也按所有权保存：原始 package＋snapshot 冻结源文件，cfg/runtime-contract/user-request 分片各保存一次，内存 material 不另落盘。annotation/result.json 仅为状态、验证、计数、请求链及编译证书；业务事实保存在 audit/compiled-response.json 中。加载器验证后重建业务结果，单独的 ir-semantics/locations/sink-boundaries 导出已删除。审查与修复通过显式上游引用读取这些事实，只保存本阶段拥有的显式候选、定位、观察、实际请求及结论；修复 context 根据已有所有者和初审重建并检查清单摘要，不再落盘复制。

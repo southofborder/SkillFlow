@@ -8,7 +8,9 @@ import json
 
 from skillflow.common.artifacts import ArtifactWriter
 from skillflow.common.inputs.snapshot import freeze_input, read_snapshot
-from skillflow.common.recording import canonical_sha256, implementation_provenance, now, SavedCallFailure
+from skillflow.common.llm.request_errors import ModelRequestFailure
+from skillflow.common.recording import (canonical_sha256, implementation_provenance, now,
+                                       SavedCallFailure, SavedResponseClient, sha_file, validated_trace)
 from skillflow.common.runs import exclusive_run
 from skillflow.common.semantic_failure import SemanticFailure
 from skillflow.common.structural_correction import chain_counts, StructuralCorrectionLimitReached
@@ -16,7 +18,7 @@ from skillflow.common.upstream import checked_run_path
 from .online import (analysis_config, checked_manifest, file_reference, inventory, prepare_step,
                      read, resolve_file, run_step, save_assembled_annotation, seal)
 
-IDENTITY = "skillflow-document-guided-run-v9"
+IDENTITY = "skillflow-document-guided-run-v19"
 SOURCE_IDENTITY = "skillflow-document-source-v6"
 POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_calls": 7,
           "annotation_assembly": "program", "whole_analysis_refusal": False,
@@ -24,8 +26,26 @@ POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_
           "source_only_task": True, "task_mapping_reads_sensitivity": False,
           "abstraction": "finite_loop_summaries", "member_demand_markers": "scoped_nested",
           "semantic_source_view": "complete_frozen_source",
+          "downstream_presentation": "exact-shared-fragment-input-v1",
+          "delivery_preflight": "final-adapter-prefix-and-sections-v1",
           "dispatch_successors": "binary", "ordinary_write_default": "replace",
-          "review_protocol": "compact-v1", "review_request_failure": "diagnostic_continue",
+          "review_protocol": "shared-v2", "review_request_failure": "bound_prior_record_retention_v1",
+          "review_correction_scope": "known_slots_conflict_closure_v1",
+          "address_identity": "typed_value_address_separation_v1",
+          "execution_failure_scope": "actual_dependency_rows_v1",
+          "accepted_upstream": "immutable_selected_cfg_v1",
+          "review_validation": "strict-record-isolation-v1",
+          "processing_presentation": "exact-shared-values-v1",
+          "processing_wire_guidance": "complete-grammar-v1",
+          "processing_format_diagnostics": "bounded-raw-pairs-v1",
+          "cfg_correction_scope": "program-facts-finite-slots-v1",
+          "cfg_assembly": "program",
+          "cfg_validation": "aggregate_preflight_compiler_v1",
+          "failed_stage_review": "bound_failure_targets_v1",
+          "shared_repair_admission": "bound_missing_cfg_v1",
+          "repair_request_failure": "retain_original_bound_bundle_v1",
+          "fatal_phase_replay": "recorded_artifact_bound_frontier_v3",
+          "input_contract_review": "required_obligations_scoped_checks_v2",
           "submission_self_check": True,
           "monitor_model_calls": 0, "usage_required": False}
 WRITER = ArtifactWriter(())
@@ -46,6 +66,55 @@ def _failure_reason(error):
     """Replay preserves the original request failure, not its saved-call wrapper."""
     kind = error.error_type if isinstance(error, SavedCallFailure) else type(error).__name__
     return kind + ": " + str(error)
+
+
+def _confirmed_request_failure(error):
+    """Known-ended delivery failures only; never process or record uncertainty."""
+    return (not getattr(error, "recording_failed", False)
+            and (isinstance(error, ModelRequestFailure)
+                 or (isinstance(error, SavedCallFailure)
+                     and error.error_type in {"ModelRequestFailure", "InputTooLarge"})))
+
+
+def _recorded_task_request_failure(owner, outcome):
+    """Recover a typed delivery failure from Task v5's verified failure receipt.
+
+    Task keeps its independent result protocol. Its error_kind alone cannot
+    authorize continuation: require the bound failed call and intact transport,
+    then use the existing saved-response reader without creating a live client.
+    """
+    if (outcome.get("status") != "execution_error"
+            or outcome.get("error_kind") not in {"ModelRequestFailure", "InputTooLarge"}
+            or outcome.get("accepted_call") is not None):
+        return None
+    attempts = (outcome.get("response_chain") or {}).get("attempts", [])
+    if not attempts:
+        return None
+    last = attempts[-1]
+    directory = (owner / last["call"]).resolve()
+    if not directory.is_relative_to(owner.resolve()):
+        raise ValueError("Task failure receipt is outside its owner")
+    path = directory / "call.json"
+    if not path.is_file() or last.get("call_sha256") != sha_file(path):
+        return None
+    record = read(path)
+    trace = validated_trace(directory / "transport.json")
+    if (record.get("status") != "error" or record.get("recording_failed")
+            or record.get("response_rejected") or len(trace) != 1
+            or trace[0].get("status") != "error" or trace[0].get("recording_failed")
+            or record.get("error_type") != outcome["error_kind"]
+            or trace[0].get("error_type") != outcome["error_kind"]
+            or record.get("error") != outcome.get("reason")
+            or trace[0].get("error") != outcome.get("reason")
+            or trace[0].get("prompt") != record.get("prompt")):
+        return None
+    try:
+        SavedResponseClient(directory, WRITER).complete((directory / "prompt.txt").read_bytes().decode("utf-8"))
+    except SavedCallFailure as error:
+        if _confirmed_request_failure(error):
+            return error
+        raise
+    raise ValueError("Task failure receipt unexpectedly contains a completed answer")
 
 
 def _counts(run):
@@ -118,6 +187,12 @@ def prepare(input, *, run_dir, config=None):
     return manifest
 
 
+def prepare_from_accepted_cfg(parent, *, run_dir, config=None):
+    """Prepare a separate run from bound accepted upstream values, without new calls."""
+    from .accepted_upstream import prepare_from_accepted_cfg as prepare_accepted
+    return prepare_accepted(parent, run_dir=run_dir, config=config)
+
+
 def _verify(run):
     manifest = checked_manifest(run, IDENTITY, recompute=True)
     config = analysis_config(manifest["config"])
@@ -176,6 +251,18 @@ def _replay_interrupted(run, saved, config):
         except StructuralCorrectionLimitReached:
             if expected.get("status") != "structural_failure":
                 raise
+        except Exception as error:
+            if (isinstance(error, SavedCallFailure) and error.error_type == "KeyboardInterrupt"
+                    and expected.get("status") == "interrupted"
+                    and not getattr(error, "recording_failed", False)):
+                continue
+            retained = saved.get("stages", {}).get(owner.name, {})
+            if not (owner.name.startswith("revision-")
+                    and retained.get("status") == "request_failure"
+                    and saved.get("selected_annotation") == "annotation"
+                    and _confirmed_request_failure(error)
+                    and retained.get("reason") == _failure_reason(error)):
+                raise
     for owner in (run / "annotation", run / "revision/annotation"):
         if (owner / "manifest.json").exists():
             load_annotation(owner)
@@ -207,18 +294,33 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
     from skillflow.task.runner import prepare_task_run, run_task, load_task_run
     from skillflow.propagation.contracts.runtime_contract import runtime_contract
     from skillflow.propagation.material import prepare_material
-    from .prompts import build_flow_prompt, build_compact_graph_prompt, build_fragment_prompt
+    from .prompts import (build_flow_prompt, build_graph_facts_prompt,
+                          build_graph_updates_prompt, build_fragment_prompt,
+                          build_processing_revision_prompt, build_sensitivity_revision_prompt,
+                          build_correspondence_revision_prompt)
+    from .graph_steps import FACTS, UPDATES, rejected_facts, repair_input, repair_slots
     from .source_review import run_source_review
     run = checked_run_path(run_dir)
     if replay and client_factory is not None:
         raise ValueError("Offline replay cannot accept a live client")
     with exclusive_run(run):
         config = _verify(run)
+        from .accepted_upstream import load_accepted_upstream
+        inherited_values = load_accepted_upstream(run)
+        if inherited_values:
+            _certificate(run, "initial", inherited_values["graph"]["value"], replay, renderer)
         saved = read(run / "result.json")
         if saved["status"] not in {"prepared", "running", "interrupted"} and not replay:
             replay, client_factory = True, None
         if replay and saved["status"] == "interrupted":
             return _replay_interrupted(run, saved, config)
+        if replay and saved.get("fatal_frontier_error"):
+            raise ValueError("The terminal failure lacks a complete fatal frontier: " + saved["fatal_frontier_error"])
+        if replay and saved.get("status") == "failed":
+            from .fatal_frontier import replay_fatal_frontier, requires_fatal_frontier
+            if (saved.get("fatal_frontier") is not None or (run / "audit/fatal-semantic-frontier.json").exists()
+                    or requires_fatal_frontier(run, saved)):
+                return replay_fatal_frontier(run, saved, config, renderer=renderer)
         result, stopping, events = _initial(), Event(), Queue()
         result["status"] = "running"
         source = read_snapshot(run / "source")[1]
@@ -257,24 +359,30 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 raise ValueError("A live run requires an explicit isolated client factory")
             return client_factory(name, owner)
 
-        def step(name, prompt, *, kind="document", context=None, dependencies=()):
+        def step(name, prompt, *, kind="document", context=None, dependencies=(), max_corrections=1, program=False):
             target = run / "steps" / name
             if not (target / "manifest.json").exists():
                 if replay:
                     raise ValueError("Missing prepared stage: " + name)
                 prepare_step(target, prompt, kind=kind,
                     context={"source_owner": run / "source", **(context or {})},
-                    dependencies=[run / "source/manifest.json", *dependencies], max_corrections=1, config=config)
+                    dependencies=[run / "source/manifest.json", *dependencies],
+                    max_corrections=max_corrections, config=config)
             elif (target / "prompt.txt").read_bytes().decode("utf-8") != prompt:
                 raise ValueError("Prepared stage differs from current upstream: " + name)
-            value = run_step(target, client=client(name, target), replay=replay, stop_event=stopping, config=config)
+            value = run_step(target, client=None if program else client(name, target), replay=replay,
+                             stop_event=stopping, config=config)
             return {"value": value, "path": target / "result.json", "step": target,
                     "partial": read(target / "result.json").get("status") == "partial"}
 
-        def phase(base=None, domains=(), feedback=None, prior_errors=None):
-            values = dict(base or {})
+        def phase(base=None, domains=(), feedback=None, prior_errors=None,
+                  retain_prior_on_request_failure=False):
+            values = dict(inherited_values if base is None else base)
             revision = base is not None
-            invalid = set() if revision else set(NAMES)
+            invalid = set() if revision else set(NAMES) - set(values)
+            if not revision:
+                for inherited_name in values:
+                    mark(inherited_name, "complete", origin="accepted_upstream")
             values.pop("annotation", None)
             if revision:
                 invalid.add("assembly")
@@ -282,11 +390,9 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 invalid.update(row.get("owner", "processing") for row in feedback["review"]["findings"]
                                if row["domain"] == "annotation")
             if "cfg" in domains:
-                invalid.update(("graph", "processing", "task-correspondence", "sensitivity"))
+                invalid.add("graph")
             if "task" in domains:
                 invalid.update(("task", "task-correspondence"))
-            if "processing" in invalid:
-                invalid.update(("task-correspondence", "sensitivity"))
             errors = {name: deepcopy(detail) for name, detail in (prior_errors or {}).items()
                       if name not in invalid}
             for key in invalid:
@@ -315,6 +421,10 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                         raise KeyboardInterrupt(outcome.get("reason", "Task interrupted"))
                     if outcome["status"] != "complete":
                         if outcome["status"] not in {"semantic_failure", "structural_failure"}:
+                            if revision and retain_prior_on_request_failure:
+                                failure = _recorded_task_request_failure(owner, outcome)
+                                if failure is not None:
+                                    raise failure
                             raise RuntimeError(outcome.get("reason", "Task execution failed"))
                         raise _StageFailure(outcome["status"], outcome.get("reason", "Task failed"), outcome.get("failure"))
                     return {"value": load_task_run(owner)["task"], "path": owner / "task.json", "owner": owner}
@@ -322,20 +432,47 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     return step(name, build_flow_prompt(files=files, global_requirements=rules,
                         self_check=POLICY["submission_self_check"]), kind="flow_document")
                 if key == "graph":
-                    graph_feedback = None
+                    graph_dependencies = [values["flow"]["path"]]
                     if revision:
-                        graph_feedback = {"cfg": base["graph"]["value"], "findings": [
-                            row for row in feedback["review"]["findings"] if row["domain"] == "cfg"]}
-                    item = step(name, build_compact_graph_prompt(files=files,
-                        documents={"flow": values["flow"]["value"]}, global_requirements=rules,
-                        feedback=graph_feedback, self_check=POLICY["submission_self_check"]),
-                        kind="cfg_wire_v5", dependencies=[values["flow"]["path"]])
-                    from skillflow.graph.extraction.compiler import compile_candidate
-                    graph = json.loads(compile_candidate(item["value"]).cfg.to_json())
+                        old = base.get("graph")
+                        if old is not None:
+                            previous, previous_path = old["value"], old["path"]
+                        else:
+                            from .failed_stage_material import checked_structural_failure
+                            failure = (prior_errors or {}).get("graph", {})
+                            if not checked_structural_failure(failure.get("evidence"), stage="graph", files=files):
+                                raise ValueError("Missing-CFG revision has no bound rejected original material")
+                            previous = rejected_facts(failure["evidence"])
+                            previous_path = run / "audit/failed-stages/graph.json"
+                        repair = repair_input(files=files, previous=previous, accepted=old is not None,
+                            findings=[row for row in feedback["review"]["findings"] if row["domain"] == "cfg"])
+                        path = _stable(run / "graph/revision-input.json", {"repair": repair}, replay)
+                        if repair is None or not repair_slots(repair["plan"]):
+                            return {"deferred": True, "prior": old,
+                                    "reason": "No source-bound editable graph slots for the recorded findings"}
+                        item = step(name, build_graph_updates_prompt(files=files, plan=repair["plan"]),
+                            kind=UPDATES, context={"graph_repair_path": path},
+                            dependencies=[*graph_dependencies, previous_path, run / "review/result.json", path],
+                            max_corrections=0)
+                    else:
+                        item = step(name, build_graph_facts_prompt(files=files,
+                            documents={"flow": values["flow"]["value"]}, global_requirements=rules,
+                            self_check=POLICY["submission_self_check"]), kind=FACTS, dependencies=graph_dependencies)
+                    graph = item["value"]["cfg"]
+                    patch_diagnostics = item["value"]["assembly"].get("patch_diagnostics", [])
+                    local_gap = ("Graph updates quarantined: " + "; ".join(
+                        f"{row['path']} {row['message']}" for row in patch_diagnostics)) if patch_diagnostics else None
+                    if revision and repair["plan"].get("unaddressable_findings"):
+                        text = "Graph findings without a finite slot: " + ", ".join(
+                            repair["plan"]["unaddressable_findings"])
+                        local_gap = (local_gap + "; " if local_gap else "") + text
+                    footprint = {"local_gap": local_gap} if local_gap else {}
+                    if revision and old is not None and graph == old["value"]:
+                        return {**old, **footprint}
                     label = "revision" if revision else "initial"
                     _certificate(run, label, graph, replay, renderer)
                     path = _stable(run / "graph" / (label + ".json"), {"cfg": graph}, replay)
-                    return {"value": graph, "path": path}
+                    return {"value": graph, "path": path, **footprint}
                 graph = values["graph"]
                 if key in {"processing", "task-correspondence", "sensitivity"}:
                     docs = ({"flow": values["flow"]["value"]} if key == "processing"
@@ -344,12 +481,85 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     extra, context = {}, {"cfg_path": graph["path"]}
                     if key == "processing":
                         extra["runtime_contract"] = runtime_contract()
+                        if revision and "processing" in base and "graph" in base:
+                            from .fragment_revision import processing_scope
+                            old = base["processing"]
+                            previous_gaps = read(old["path"]).get("validation_gaps", [])
+                            scope = processing_scope(base["graph"]["value"], graph["value"],
+                                feedback["review"]["findings"], old["value"], validation_gaps=previous_gaps)
+                            if scope is not None and scope["slots"]:
+                                path = _stable(run / "revision/processing-scope.json", scope, replay)
+                                item = step(name, build_processing_revision_prompt(files=files,
+                                    flow=values["flow"]["value"], runtime_contract=extra["runtime_contract"],
+                                    scope=scope, global_requirements=rules), kind="processing_fragment",
+                                    context={**context, "processing_scope_path": path},
+                                    dependencies=[*dependencies, old["path"], base["graph"]["path"],
+                                                  run / "review/result.json", path], max_corrections=0)
+                                if (not scope.get("unresolved_targets")
+                                        and graph["value"] == base["graph"]["value"]
+                                        and item["value"] == old["value"]
+                                        and read(item["path"]).get("validation_gaps", []) == previous_gaps):
+                                    return old
+                                if scope.get("unresolved_targets"):
+                                    item["local_gap"] = "No finite processing scope for: " + ", ".join(
+                                        scope["unresolved_targets"])
+                                return item
+                            return {"deferred": True, "prior": (old if graph["path"] == base["graph"]["path"] else None),
+                                    "reason": "The challenged processing dependencies have no verified finite revision scope"}
                     if key == "task-correspondence":
                         extra["task"] = values["task"]["value"]
                         dependencies.append(values["task"]["path"])
                         context["task_run"] = values["task"]["owner"]
                     if key != "processing":
                         context["processing_step"] = values["processing"]["step"]
+                    if key == "task-correspondence" and revision and {"task-correspondence", "processing", "task", "graph"} <= base.keys():
+                        from .fragment_revision import correspondence_scope
+                        old, prior = base["task-correspondence"], base["processing"]
+                        current = values["processing"]
+                        scope = correspondence_scope(base["graph"]["value"], graph["value"], prior["value"],
+                            current["value"], base["task"]["value"], values["task"]["value"],
+                            feedback["review"]["findings"], old["value"],
+                            old_validation_gaps=read(prior["path"]).get("validation_gaps", []),
+                            new_validation_gaps=read(current["path"]).get("validation_gaps", []))
+                        if scope is not None:
+                            if (not scope["slots"] and not scope["removed_requirement_ids"] and
+                                    all(values[dep]["path"] == base[dep]["path"] for dep in DEPS[key])):
+                                return old
+                            path = _stable(run / "revision/task-correspondence-scope.json", scope, replay)
+                            prompt = (build_correspondence_revision_prompt(files=files, scope=scope, cfg=graph["value"],
+                                processing=current["value"], global_requirements=rules) if scope["slots"]
+                                else "Program-carried Task correspondence; no semantic request.")
+                            item = step(name, prompt, kind="task-correspondence_fragment", program=not scope["slots"],
+                                context={**context, "task-correspondence_scope_path": path},
+                                dependencies=[*dependencies, old["path"], prior["path"], base["graph"]["path"],
+                                              run / "review/result.json", path], max_corrections=0)
+                            if (item["value"] == old["value"] and
+                                    all(values[dep]["path"] == base[dep]["path"] for dep in DEPS[key])):
+                                return old
+                            return item
+                        if all(values[dep]["path"] == base[dep]["path"] for dep in DEPS[key]):
+                            return {"deferred": True, "prior": old,
+                                    "reason": "The Task correspondence finding has no exact requirement owner"}
+                    if key == "sensitivity" and revision and {"sensitivity", "processing", "graph"} <= base.keys():
+                        from .fragment_revision import sensitivity_scope
+                        old, prior = base["sensitivity"], base["processing"]
+                        scope = sensitivity_scope(base["graph"]["value"], graph["value"], prior["value"],
+                            values["processing"]["value"], feedback["review"]["findings"], old["value"])
+                        if not scope["slots"] and not scope["removed_instruction_ids"] and graph["path"] == base["graph"]["path"] and prior["path"] == values["processing"]["path"]:
+                            if scope["unresolved_targets"]:
+                                return {"deferred": True, "prior": old,
+                                        "reason": "The challenged sensitivity declarations have no exact retained owner"}
+                            return old
+                        path = _stable(run / "revision/sensitivity-scope.json", scope, replay)
+                        prompt = (build_sensitivity_revision_prompt(files=files, scope=scope, global_requirements=rules)
+                                  if scope["slots"] else "Program-carried sensitivity; no semantic request.")
+                        item = step(name, prompt, kind="sensitivity_fragment", program=not scope["slots"],
+                            context={**context, "sensitivity_scope_path": path},
+                            dependencies=[*dependencies, old["path"], prior["path"], base["graph"]["path"],
+                                          run / "review/result.json", path], max_corrections=0)
+                        if scope["unresolved_targets"]:
+                            item["local_gap"] = "No finite sensitivity scope for: " + ", ".join(scope["unresolved_targets"])
+                        return item
                     if revision:
                         extra["repair_context"] = {"previous_fragment": base.get(key, {}).get("value"),
                             "source_rechecks": _fragment_repair_findings(feedback["review"], key)}
@@ -371,7 +581,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                             try:
                                 name, status, extra = events.get_nowait()
                                 if result["stages"].get(name, {}).get("status") not in {
-                                        "complete", "partial", "semantic_failure", "structural_failure"}:
+                                        "complete", "partial", "semantic_failure", "structural_failure", "request_failure", "deferred"}:
                                     mark(name, status, **extra)
                             except Empty:
                                 break
@@ -381,25 +591,60 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                         for future in done:
                             key = futures.pop(future)
                             try:
-                                values[key] = future.result()
-                                partial = values[key].get("partial", False)
+                                value = future.result()
+                                if value.get("deferred"):
+                                    errors[key] = {"status": "deferred", "reason": value["reason"]}
+                                    if value["prior"] is not None:
+                                        values[key] = value["prior"]
+                                    mark(stage_name(key), **errors[key])
+                                    continue
+                                if (key == "graph" and revision
+                                        and value["path"] != base.get("graph", {}).get("path")):
+                                    for child in ("processing", "task-correspondence", "sensitivity"):
+                                        values.pop(child, None)
+                                        errors.pop(child, None)
+                                        attempted.discard(child)
+                                if (key == "processing" and revision
+                                        and value["path"] != base.get("processing", {}).get("path")):
+                                    for child in ("task-correspondence", "sensitivity"):
+                                        values.pop(child, None)
+                                        errors.pop(child, None)
+                                        attempted.discard(child)
+                                values[key] = value
+                                partial = values[key].get("partial", False) or bool(value.get("local_gap"))
                                 if partial:
-                                    errors[key] = {"status": "partial", "reason": "Invalid records retained as explicit local validation gaps"}
+                                    errors[key] = {"status": "partial", "reason": value.get("local_gap") or
+                                                   "Invalid records retained as explicit local validation gaps"}
                                 mark(stage_name(key), "partial" if partial else "complete")
                             except (SemanticFailure, StructuralCorrectionLimitReached, _StageFailure) as error:
-                                status = ("structural_failure" if isinstance(error, SemanticFailure) else
+                                status = ("semantic_failure" if isinstance(error, SemanticFailure) else
                                           "structural_failure" if isinstance(error, StructuralCorrectionLimitReached) else error.status)
                                 detail = {"status": status, "reason": str(error)}
                                 if getattr(error, "failure", None) is not None:
                                     detail["failure"] = error.failure
                                 if getattr(error, "diagnostics", None) is not None:
                                     detail["diagnostics"] = error.diagnostics
+                                from .failed_stage_material import capture_failed_stage
+                                evidence = capture_failed_stage(run, stage=key, attempt=stage_name(key),
+                                    files=files, failure=detail)
+                                _stable(run / "audit/failed-stages" / (stage_name(key).replace("/", "-") + ".json"),
+                                    evidence, replay)
+                                detail["evidence"] = evidence
                                 errors[key] = detail
                                 mark(stage_name(key), status, reason=str(error))
                             except KeyboardInterrupt as error:
                                 mark(stage_name(key), "interrupted", reason=str(error))
                                 raise
                             except Exception as error:
+                                if (revision and retain_prior_on_request_failure
+                                        and _confirmed_request_failure(error)):
+                                    # No failed stage value is synthesized. Its dependent
+                                    # stages remain unavailable; the caller can retain only
+                                    # the complete original bundle and its original review.
+                                    detail = {"status": "request_failure", "reason": _failure_reason(error)}
+                                    errors[key] = detail
+                                    mark(stage_name(key), **detail)
+                                    continue
                                 mark(stage_name(key), "failed", reason=_failure_reason(error))
                                 raise
                 except BaseException:
@@ -410,7 +655,12 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             for key in NAMES:
                 if key not in attempted:
                     mark(stage_name(key), "skipped", reason="A required upstream object is unavailable")
-            if {"task", "graph", "processing", "task-correspondence", "sensitivity"} <= values.keys():
+            assembly_inputs = {"task", "graph", "processing", "task-correspondence", "sensitivity"}
+            if (revision and "annotation" in base and assembly_inputs <= values.keys()
+                    and all(values[key]["path"] == base[key]["path"] for key in assembly_inputs)):
+                values["annotation"] = base["annotation"]
+                mark("revision/assembly", "skipped", reason="The published assembly inputs are unchanged")
+            elif assembly_inputs <= values.keys():
                 name = "revision/assembly" if revision else "assembly"
                 mark(name)
                 owner = run / ("revision/annotation" if revision else "annotation")
@@ -426,6 +676,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     mark(name, "structural_failure", reason=str(error))
             return values, errors
 
+        review_materials = {}
+
         def source_review(values, errors, revision=False):
             name = "revision/review" if revision else "review"
             mark(name)
@@ -433,6 +685,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             reviewed = run_source_review(run / name, files=files,
                 task=values.get("task", {}).get("value"), cfg=values.get("graph", {}).get("value"),
                 annotation=None if annotation is None else annotation["wire_annotation"],
+                raw_annotation=None if annotation is None else annotation["raw_annotation"],
                 compiled=None if annotation is None else annotation["compiled_annotation"],
                 mapping=None if annotation is None else annotation["mapping"], runtime_contract=runtime_contract(),
                 stage_failures=errors, client=client(name, run / name),
@@ -441,6 +694,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 partial=bool(errors) or annotation is None,
                 fragments=None if annotation is not None else {
                     key: values[key]["value"] for key in ("processing", "task-correspondence", "sensitivity") if key in values})
+            review_materials[id(reviewed)] = read(run / name / "inputs.json")
             if reviewed["status"] == "interrupted":
                 raise KeyboardInterrupt(reviewed.get("reason", "Source review interrupted"))
             mark(name, reviewed["status"], **({"reason": reviewed["reason"]} if reviewed.get("reason") else {}))
@@ -464,25 +718,47 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             if "annotation" in values:
                 selected = select(values)
             findings = (reviewed.get("review") or {}).get("findings", [])
-            # A capability barrier alone is not another quality sample. A real
-            # source-supported upstream defect can use the shared repair round.
-            domains = {row["domain"] for row in findings}
-            repairable_upstream = {"task", "graph"} <= set(values) and bool(domains & {"cfg", "task"})
-            repairable_fragments = ({"task", "graph"} <= set(values)
-                and any(key in values for key in ("processing", "task-correspondence", "sensitivity"))
-                and any(row["domain"] == "annotation" and row.get("owner") in
-                        {"processing", "task-correspondence", "sensitivity"} for row in findings))
-            if (selected is not None or repairable_upstream or repairable_fragments) and reviewed["status"] == "complete" and findings:
+            from .shared_repair import repair_decision
+            decision = repair_decision(files=files, values=values, errors=errors,
+                reviewed=reviewed, selected=selected, graph_facts_only=True)
+            _stable(run / "audit/shared-repair-decision.json", decision, replay)
+            if decision["eligible"]:
                 result["repair_used"] = True
-                revised, repair_errors = phase(base=values, domains=domains,
-                    feedback=reviewed, prior_errors=errors)
-                revised_review = source_review(revised, repair_errors, revision=True)
-                if revised_review["status"] != "complete":
+                prior_errors = dict(errors)
+                if decision["deferred_cfg"]:
+                    prior_errors.setdefault("graph", {"status": "deferred",
+                        "reason": "The original CFG findings have no source-bound writable slot"})
+                revised, repair_errors = phase(base=values, domains=set(decision["domains"]),
+                    feedback=reviewed, prior_errors=prior_errors,
+                    retain_prior_on_request_failure=selected is not None)
+                unchanged = (selected is not None and revised.get("annotation") is values["annotation"])
+                if unchanged:
+                    reason = "No assembly input changed; the original source review and its findings remain bound."
+                    mark("revision/review", "skipped", reason=reason)
+                    revised_review = {"status": "not_run"}
                     result["repair_review"] = {"status": "unconfirmed", "prior_review": "review/result.json",
-                        "rereview": "revision/review/result.json", "prior_finding_count": len(findings)}
+                        "rereview": None, "prior_finding_count": len(findings), "reason": reason}
+                    result["limitations"].append(reason)
+                elif "annotation" not in revised and selected is not None:
+                    reason = ("The shared repair did not produce a consistent revised "
+                              "annotation. The original Task, CFG, annotation and their bound review "
+                              "remain selected together; all original findings remain unresolved by this repair.")
+                    mark("revision/review", "skipped", reason=reason)
+                    revised_review = {"status": "not_run"}
+                    result["repair_review"] = {"status": "unconfirmed", "prior_review": "review/result.json",
+                        "rereview": None, "prior_finding_count": len(findings), "reason": reason}
+                    result["limitations"].append(reason)
+                else:
+                    revised_review = source_review(revised, repair_errors, revision=True)
+                if revised_review["status"] != "complete":
+                    if revised_review["status"] != "not_run":
+                        result["repair_review"] = {"status": "unconfirmed", "prior_review": "review/result.json",
+                            "rereview": "revision/review/result.json", "prior_finding_count": len(findings)}
                     result["limitations"].append("The shared repair was not confirmed by a completed source re-review; "
                         "prior findings remain recorded in review/result.json and are not marked resolved.")
-                if "annotation" in revised:
+                if unchanged:
+                    errors = {**errors, **repair_errors}
+                elif "annotation" in revised:
                     chosen, selected, reviewed = revised, select(revised), revised_review
                     errors = repair_errors
                 else:
@@ -491,7 +767,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     errors = {**errors, **repair_errors}
             findings = (reviewed.get("review") or {}).get("findings", [])
             result["graph_review"] = ("audit_passed" if reviewed["status"] == "complete"
-                and not any(row["domain"] == "cfg" for row in findings) and "graph" in chosen else "incomplete")
+                and not any(row["domain"] == "cfg" for row in findings)
+                and "graph" in chosen and "graph" not in errors else "incomplete")
             result["annotation_review"] = ("review_passed" if selected is not None
                 and reviewed["status"] == "complete" and not findings and not reviewed.get("diagnostic_only") else "incomplete")
             result["limitations"] += [name + ": " + detail["reason"] for name, detail in sorted(errors.items())]
@@ -499,7 +776,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 result["limitations"].append("Unified source review did not complete ("
                     + reviewed.get("error_type", reviewed["status"]) + "): "
                     + reviewed.get("reason", "No validated review is available")
-                    + "; the selected candidate remains unreviewed.")
+                    + ("; independently validated records are retained with explicit local validation barriers."
+                       if reviewed["status"] == "partial" else "; the selected candidate remains unreviewed."))
             elif reviewed.get("diagnostic_only"):
                 result["limitations"].append("Unified source review is partial or retains material issues.")
             result["diagnostic_only"] = bool(result["limitations"])
@@ -529,15 +807,19 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     result["diagnostic_only"] = True
                 mark("doe")
                 from skillflow.doe.formal_runner import run_doe, replay_doe, verify_uncommitted_doe
+                from skillflow.doe.input_contract_review import build_input_contract_review
+                receipt = build_input_contract_review(files=files, cfg=facts.cfg, annotation=facts.annotation,
+                    review=reviewed, review_material=review_materials[id(reviewed)])
+                _stable(run / "audit/input-contract-review.json", receipt, replay)
                 if replay and not (run / "doe/manifest.json").exists():
                     if saved.get("status") != "failed" or saved.get("stage") != "doe":
                         raise ValueError("Missing DOE manifest without a recorded DOE failure")
-                    verify_uncommitted_doe(run / "propagation", run_dir=run / "doe")
+                    verify_uncommitted_doe(run / "propagation", run_dir=run / "doe", input_contract_review=receipt)
                     raise ValueError("Previously failed DOE computation now succeeds")
                 elif replay:
                     replay_doe(run / "doe")
                 else:
-                    run_doe(run / "propagation", run_dir=run / "doe")
+                    run_doe(run / "propagation", run_dir=run / "doe", input_contract_review=receipt)
                 doe_status = read(run / "doe/doe-result.json")["status"]
                 mark("doe", doe_status)
                 if doe_status != "complete":
@@ -553,6 +835,18 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             reason = _failure_reason(error)
             finish_running("aborted", reason, current_status="failed")
             result.update(status="failed", reason=reason)
+            if not replay:
+                from .fatal_frontier import capture_fatal_frontier
+                try:
+                    frontier = capture_fatal_frontier(run, result, writer=WRITER, error=error)
+                except Exception as frontier_error:
+                    # Preserve the actual primary failure even if its audit
+                    # receipt cannot be completed. This boundary is explicitly
+                    # non-replayable; it never authorizes backend continuation.
+                    result["fatal_frontier_error"] = _failure_reason(frontier_error)
+                else:
+                    if frontier is not None:
+                        result["fatal_frontier"] = frontier
         return _save(run, result, replay=replay)
 
 

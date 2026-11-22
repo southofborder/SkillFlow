@@ -10,10 +10,17 @@ from skillflow.common.prompt_format import compact_json
 
 SOURCE = (
     "For each requested URL, use the supplied cached reply when available; otherwise call Service with that URL. "
-    "Return the reply list preserving repeated URLs. Cached replies may contain credentials."
+    "Return the reply list preserving repeated URLs. Cached replies may contain credentials. "
+    "Service requires the complete URL string as its sole argument."
 )
 EVIDENCE = {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}
 CALL_PATH = ["segments", 0, "body", 0, "cases", 1, "segments", 0, "ops", 0]
+
+
+def _single_argument_contract(reason):
+    return {"inputs": [{"input_index": 0,
+        "required": [{"property": "value", "path": []}], "remainder": "independent", "reason": reason}],
+        "reason": reason, "evidences": [{**EVIDENCE, "reason": reason}]}
 
 
 def example_fragments():
@@ -31,7 +38,9 @@ def example_fragments():
                          "condition": "No cached reply is available; the call returns normally.",
                          "segments": [{"mode": "local", "returns": [], "ops": [
                              {"op": "call", "location": "service", "inputs": [{"kind": "local", "name": "url"}],
-                              "output": "reply"}]}], "yield": {"kind": "local", "name": "reply"}}]}],
+                              "output": "reply", "input_contract": _single_argument_contract(
+                                  "The source interface requires the complete URL string.")}]}],
+                         "yield": {"kind": "local", "name": "reply"}}]}],
                     "yield": {"kind": "local", "name": "chosen"}, "output": "replies"}],
                 "output_bindings": [{"output_index": 0, "value": {"kind": "local", "name": "replies"}}]},
             "ir_return": {"evidences": [deepcopy(EVIDENCE)]}}}
@@ -144,8 +153,10 @@ def alignment_examples():
                     f"ir_{index + 1:03d}": value for index, value in enumerate(specifications)}}}
 
     service = {"service": {"kind": "tool", "name": "Service", "evidences": [deepcopy(EVIDENCE)]}}
-    call = {"op": "call", "location": "service", "inputs": [inp()], "output": "response"}
-    caller = pair("Acquire request from context; helper(request) calls Service(request) and returns its actual response.", [
+    call = {"op": "call", "location": "service", "inputs": [inp()], "output": "response",
+        "input_contract": _single_argument_contract("Service requires the complete supplied string as its sole argument.")}
+    caller = pair("Acquire a request string from context; helper(request) calls Service(request) and returns its actual response. "
+        "Service requires the complete request string as its sole argument.", [
         {"block_ref": "entry", "data_source_kind": "context", "instructions": [
             ir("acquire_request", [{"type": "context_key", "identifier": "request"}], "request_value"), ir("dispatch")]},
         {"block_ref": "caller", "instructions": [ir("helper_call", [result("request_value")], "reply"), ir("return", [result("reply")])]}],
@@ -154,7 +165,8 @@ def alignment_examples():
             spec(), spec([deepcopy(call)], {"kind": "local", "name": "response"}), spec()],
         {**deepcopy(service), "request": {"kind": "runtime_context", "name": "request", "access_scope": "task",
             "retention": "task", "evidences": [deepcopy(EVIDENCE)]}})
-    traversal = pair("For each URL in ['same','same'], call Service(URL); return the original URL list after traversal.", [
+    traversal = pair("For each URL in ['same','same'], call Service(URL); return the original URL list after traversal. "
+        "Service requires the complete URL string as its sole argument.", [
         {"block_ref": "entry", "instructions": [ir("urls", [literal(["same", "same"])], "urls"), ir("dispatch")]},
         {"block_ref": "head", "instructions": [ir("dispatch", [result("urls")])]},
         {"block_ref": "body", "instructions": [ir("current_member", [result("urls")], "url"),

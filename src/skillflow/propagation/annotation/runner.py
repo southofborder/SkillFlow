@@ -58,8 +58,8 @@ from skillflow.propagation.annotation.requests import (validate_repair_context, 
 from skillflow.propagation.annotation.inputs import (write_material_parts, load_prepared_material,
     read_component, resolve_material_owner)
 
-IDENTITY = "skill-ir-security-profile-v21"
-FORMAT_VERSION = 21
+IDENTITY = "skill-ir-security-profile-v24"
+FORMAT_VERSION = 23
 CALL_PREFIX = "calls/annotation"
 CALL_PATH = CALL_PREFIX + "/a001"
 POLICY = {"structural_correction": STRUCTURAL_VERSION, "structural_attempt_limit": None,
@@ -285,7 +285,7 @@ def _base_result(manifest):
     }
 
 
-BUSINESS_FIELDS = frozenset({"task_ref", "realizations", "demands", "expressions", "ir_semantics", "locations", "sink_boundaries", "processing_gaps"})
+BUSINESS_FIELDS = frozenset({"task_ref", "realizations", "demands", "expressions", "ir_semantics", "locations", "sink_boundaries", "processing_gaps", "input_contracts"})
 
 
 def result_snapshot(result):

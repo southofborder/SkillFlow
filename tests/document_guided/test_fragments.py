@@ -115,7 +115,8 @@ def test_cfg_reports_acquisition_and_dispatch_at_actual_wire_inputs():
 def test_record_correction_real_chain_reuses_other_records_and_replays(tmp_path):
     material, _, fragments = fixture()
     p = fragments["processing"]
-    p["ir_semantics"]["ir_call"]["segments"].append({"mode": "local", "ops": [{"op": "compute", "inputs": [], "output": "unused"}]})
+    p["ir_semantics"]["ir_call"]["segments"].append({"mode": "local", "ops": [{"op": "compute", "inputs": [], "output": "unused",
+        "expression": {"expression": {"op": "literal", "value": None}}}]})
     corrected = deepcopy(p["ir_semantics"]["ir_call"])
     corrected["segments"][-1]["returns"] = []
     replies = [json.dumps(p), json.dumps({"replacements": [{"record_id": "/ir_semantics/ir_call", "value": corrected}]})]

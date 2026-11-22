@@ -19,6 +19,7 @@ from skillflow.propagation.material import prepare_material
 from skillflow.propagation.runner import save_propagation_run, load_propagation_materials
 from skillflow.doe.formal_runner import run_doe
 from tests.propagation.component_helpers import accepted_annotation
+from tests.document_guided.current_interface_fixtures import current_contract_copy
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/online_interface_r4/013"
@@ -55,7 +56,9 @@ def candidate(*, corrected=True):
     suffix = "corrected" if corrected else "failed"
     material = material_for(read(f"cfg.{suffix}.json")["cfg"],
         (FIXTURE / "source/SKILL.md").read_bytes(), read("task.candidate.json"))
-    return material, read(f"annotation.{suffix}.json")
+    # Author current contracts on a fresh in-memory regression copy. The
+    # archived answers keep their original missing-contract protocol identity.
+    return material, current_contract_copy(read(f"annotation.{suffix}.json"), "013")
 
 
 def ops(solved, identity, kind):

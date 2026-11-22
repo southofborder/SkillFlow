@@ -13,7 +13,7 @@ def test_uncommitted_computation_failure_replays_without_publishing(tmp_path, mo
     harness.prepare(tmp_path / "package")
     evaluations = []
 
-    def failed_review(*args):
+    def failed_review(*args, **kwargs):
         evaluations.append("compute")
         raise ValueError("Synthetic unresolved collection relation")
 

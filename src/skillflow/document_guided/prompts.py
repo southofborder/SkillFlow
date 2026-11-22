@@ -182,26 +182,40 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
         raise ValueError("Fragment dependency isolation differs")
     if (runtime_contract is not None) != (step == "processing"):
         raise ValueError("Only processing receives the runtime contract")
-    texts = {key: value if isinstance(value, str) else compact_json(value)
-             for key, value in documents.items()}
     # Earlier documents are fallible semantic inputs, never a source visibility
     # filter. The same complete package is used for initial and repair requests.
     packet = source_packet(files)
-    previous = ["DOCUMENT " + key + "\n" + value for key, value in texts.items()]
-    previous.append("CFG\n" + compact_json(prompt_cfg(cfg, packet=packet)))
-    if task is not None:
-        previous.append("SEALED_TASK\n" + compact_json(task))
-    if step == "task-correspondence" and isinstance(documents["processing"], dict):
-        from .annotation_wire import expression_reference_view
-        previous.append("EXISTING EXPRESSION REFERENCES (program-generated from processing)\n"
-                        + compact_json(expression_reference_view(documents["processing"])))
-    if runtime_contract is not None:
-        previous.append("RUNTIME_CONTRACT\n" + compact_json(runtime_contract))
-    if repair_context is not None:
-        previous.append("Return one COMPLETE replacement fragment for the CURRENT CFG and Task version. "
-            "Review targets identify where to recheck, not the permitted output subset. Preserve every still-supported record. "
-            "The old fragment is reference material, not an implicit merge or a source of current coordinates. "
-            "Only an explicitly requested structural correction uses the replacements envelope.\nSOURCE REVIEW REPAIR\n" + compact_json(repair_context))
+    display_cfg = prompt_cfg(cfg, packet=packet)
+    if step == "processing":
+        from .processing_display import render_processing_material
+        texts = {key: value if isinstance(value, str) else compact_json(value)
+                 for key, value in documents.items()}
+        material = {"documents": texts, "cfg": display_cfg, "runtime_contract": runtime_contract}
+        notice = ""
+        if repair_context is not None:
+            material["repair_context"] = repair_context
+            notice = ("Return one COMPLETE replacement fragment for the CURRENT CFG and Task version. "
+                "repair_context.source_rechecks identifies where to recheck, not the permitted output subset. "
+                "Preserve every still-supported record. repair_context.previous_fragment is reference material, "
+                "not an implicit merge or a source of current coordinates. Only an explicitly requested "
+                "structural correction uses the replacements envelope.\n")
+        previous = [notice + render_processing_material(material)]
+    else:
+        from .fragment_display import render_fragment_material
+        material = {"documents": documents, "cfg": display_cfg}
+        if task is not None:
+            material["task"] = task
+        if step == "task-correspondence" and isinstance(documents["processing"], dict):
+            from .annotation_wire import expression_reference_view
+            material["expression_references"] = expression_reference_view(documents["processing"])
+        notice = ""
+        if repair_context is not None:
+            material["repair_context"] = repair_context
+            notice = ("Return one COMPLETE replacement fragment for the current stage inputs. "
+                "Review targets identify where to recheck, not the permitted output subset. Preserve every still-supported record. "
+                "The old fragment is reference material, not an implicit merge or a source of current coordinates. "
+                "Only an explicitly requested structural correction uses the replacements envelope.\n")
+        previous = [notice + render_fragment_material(step, material)]
     common = ("Return only the requested compact JSON semantic fragment. There is no whole-analysis failure outcome. "
         "Submit supported declarations and specific source-located unresolved relationships. "
         "The program assembles annotation; never repeat another owner's fields, Task text, code, internal IDs or pass ledgers. "
@@ -210,8 +224,8 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
         "Source evidence is a citation, not proof of semantic completeness.\n" + BOUNDARY_GRANULARITY)
     necessity = NECESSITY_EXAMPLE if step == "task-correspondence" else ""
     if step == "task-correspondence":
-        necessity += ("\nFor a constraint condition or success, choose a source-supported Boolean expression from EXISTING "
-            'EXPRESSION REFERENCES and copy its target exactly. Inline expressions belong to slot={"kind":"self"}, '
+        necessity += ("\nFor a constraint condition or success, choose a source-supported Boolean expression from the supplied "
+            'expression_references and copy its target exactly. Inline expressions belong to slot={"kind":"self"}, '
             "even when the operation produces a Boolean output. The output slot and a path ending in "
             "expression/expression do not reference that expression. Do not invent a missing predicate or choose an unrelated one.\n"
             "Receiver restrictions belong in realization constraints. A task-scope forbid_information may reference an "
@@ -226,6 +240,9 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
             "REQUIRED_IR_IDS\n" + compact_json(ids) + "\n")
     output = (common + necessity + coverage + "FRAGMENT FORMAT\n" + render_prompt_format(fragment_adapter(step).json_schema())
               + "\n" + fragment_contract_rules(step) + "\n" + phase_examples(step))
+    if step == "processing":
+        from .fragment_wire import output_wire_instructions
+        output += "\n" + output_wire_instructions()
     return _render(_STEPS[step][1], "\n\n".join(previous), global_requirements, packet, _pre_submit(output, step, self_check))
 
 
@@ -239,6 +256,14 @@ def build_compact_graph_prompt(**kwargs):
         feedback = dict(kwargs["feedback"])
         if "cfg" in feedback:
             feedback["cfg"] = prompt_cfg(feedback["cfg"], packet=packet)
+        if "rejected_stage" in feedback:
+            previous += ("\n\nREBUILD A REQUIRED CFG FROM REJECTED EVIDENCE\n"
+                "No accepted CFG exists. rejected_stage contains the original recorded failure, "
+                "candidate and exact diagnostics, not an executable or trusted graph. Use the complete "
+                "source and accepted flow to return one complete source-faithful CFG. Repair the recorded "
+                "structural defects while retaining real dependencies, branch conditions and boundary pairing; "
+                "do not invent missing semantics or relax validation. This consumes the existing single shared "
+                "repair round, with the same one-correction limit for this revised stage.\n")
         previous += "\n\nCURRENT REVIEW FEEDBACK\n" + compact_json(feedback)
     rules = ("Fill one complete CFG from source. The flow document is fallible working material. "
              "Retain supported relationships and source-located diagnostics for open details; do not return a whole-analysis refusal. "
@@ -247,6 +272,75 @@ def build_compact_graph_prompt(**kwargs):
               + "\n" + cfg_contract_rules() + "\n" + phase_examples("cfg"))
     return _render("Fill the complete CFG from source; preserve real versions and receiving boundaries.",
         previous, kwargs["global_requirements"], packet, _pre_submit(output, "cfg", kwargs.get("self_check", False)))
+
+
+def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False):
+    from .graph_facts import GRAPH_FACTS_SCHEMA
+    output = ("Return source-located GraphFacts. The program builds and validates the CFG. "
+              "Use stable local references to the actual producer and result version; do not use a nearby "
+              "replacement value. Identify the entry, each operation's operands and results, and every exit's "
+              "target, conditions or return values. An empty list asserts absence; do not use it to hide uncertainty. "
+              "Localize unknown required facts, keep other supported facts, and cite exact physical source lines. "
+              "Do not include source text as a generated value, blocks of machine-authored CFG structure, or a whole-analysis refusal.\n"
+              + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n" + render_prompt_format(GRAPH_FACTS_SCHEMA))
+    return _render("Identify the control and data facts in the frozen Skill.",
+        _working_documents(documents, ("flow",)), global_requirements, source_packet(files),
+        _pre_submit(output, "cfg", self_check))
+
+
+def build_graph_updates_prompt(*, files, plan):
+    from .graph_slots import GRAPH_UPDATES_SCHEMA
+    from .fragment_display import render_fragment_material
+    return _render("Supply only the listed, missing or challenged graph facts.",
+        render_fragment_material("cfg", {"scope": plan}),
+        "Inputs, outputs, conditions and effects at the region boundary are frozen. Check the complete source. "
+        "Return updates only for facts supported by the source. Leave unsupported slots unfilled; never rewrite "
+        "the graph, change an unlisted slot, or invent an effect.",
+        source_packet(files), "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA))
+
+
+def build_processing_revision_prompt(*, files, flow, runtime_contract, scope, global_requirements):
+    from .fragments import fragment_adapter
+    from .fragment_display import render_fragment_material
+    _working_documents({"flow": flow}, ("flow",))
+    previous = render_fragment_material("processing",
+        {"documents": {"flow": flow}, "scope": scope, "runtime_contract": runtime_contract})
+    return _render("Review only the authorized processing records.",
+        previous, global_requirements, source_packet(files),
+        'Return {"coverage_slots":[...]}. Each row names instruction_id and exactly one of '
+        'modeled (a ProcessingIR), unmodeled_gaps (source-backed gaps of this IR), or keep ("modeled" or '
+        '"unmodeled", only for an unchanged retained record where allowed). Return all required slots. '
+        "Retired IDs and shared declarations are program-owned in this scope. The program keeps other records "
+        "and strictly validates the whole composition. The schema below defines the slot value types; "
+        "do not submit the complete fragment.\n" + render_prompt_format(fragment_adapter("processing").json_schema()))
+
+
+def build_sensitivity_revision_prompt(*, files, scope, global_requirements):
+    from .fragments import fragment_adapter
+    from .fragment_display import render_fragment_material
+    return _render("Recheck sensitivity declarations only at the authorized instructions.",
+        render_fragment_material("sensitivity", {"scope": scope}), global_requirements, source_packet(files),
+        'Return {"slots":[{"instruction_id":"...","declarations":[...]}]}. Every listed instruction '
+        "requires one slot, with [] when it has no source-supported declaration. The program retains "
+        "all unrelated declarations. Use only the listed processing values and evidence; the Task is not part of this stage.\n"
+        + render_prompt_format(fragment_adapter("sensitivity").json_schema()))
+
+
+def build_correspondence_revision_prompt(*, files, scope, cfg, processing, global_requirements):
+    from .fragments import fragment_adapter
+    from .annotation_wire import expression_reference_view
+    from .fragment_display import render_fragment_material
+    packet = source_packet(files)
+    previous = render_fragment_material("task-correspondence",
+        {"scope": scope, "cfg": prompt_cfg(cfg, packet=packet), "processing": processing,
+         "expression_references": expression_reference_view(processing)})
+    return _render("Recheck only the listed sealed requirements against the current targets.",
+        previous, global_requirements, packet,
+        'Return {"slots":[{"requirement_id":"...","realization":{...},"demands":[...],"operation_demands":[...]}]}. '
+        "Only a slot marked keepable may use keep:true instead. Preserve each requirement's full constraints "
+        "and actual receiver, field, and operation identities. A permitted requirement can use any supported "
+        "current target. The program retains every other requirement and validates the merged fragment.\n"
+        + render_prompt_format(fragment_adapter("task-correspondence").json_schema()))
 
 
 def build_annotation_prompt(material, *, documents, spans=None, global_requirements,

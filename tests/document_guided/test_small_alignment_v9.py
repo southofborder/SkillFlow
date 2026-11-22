@@ -22,7 +22,7 @@ from skillflow.doe.formal_runner import run_doe
 from skillflow.doe.sensitivity_material import prepare_joint_sensitivity_review
 from tests.propagation.component_helpers import accepted_annotation
 from tests.document_guided.small_alignment_cases import (
-    ROOT, UNKNOWN, catalog_fixture, catalog_sensitive_variant, notification_fixture, fallback_fixture, lit, local, inp,
+    ROOT, UNKNOWN, catalog_fixture, catalog_sensitive_variant, notification_fixture, fallback_fixture, lit, local, inp, evidence,
 )
 
 
@@ -37,8 +37,14 @@ def fixed_test_producer(monkeypatch):
     monkeypatch.setattr("skillflow.propagation.annotation.runner.implementation_provenance", lambda: deepcopy(frozen))
 
 
+def with_source_tool_contracts(candidate):
+    """Copy current source-authored contracts without specializing optionality to test inputs."""
+    material, original, seeds = candidate
+    return material, deepcopy(original), seeds
+
+
 def solve(candidate):
-    material, wire, seeds = candidate
+    material, wire, seeds = with_source_tool_contracts(candidate)
     saved, raw, compiled, mapping = compile_flat_response(wire, material)
     registry = DataRegistry("source-derived-small-v9")
     bindings = {}
@@ -58,7 +64,9 @@ def persist_doe(tmp_path, values, *, expected_status="complete"):
     facts = save_propagation_run(tmp_path / "propagation", annotation_run=origin, solved=solved,
         requested_data=solved.initial_data, requested_state=solved.initial_state)
     assert facts.records == load_propagation_materials(tmp_path / "propagation").records
-    result = run_doe(tmp_path / "propagation", run_dir=tmp_path / "doe")
+    from tests.doe.test_input_contract_preservation import accepted_receipt
+    receipt = accepted_receipt(facts, facts.annotation) if compiled.get("input_contracts") else None
+    result = run_doe(tmp_path / "propagation", run_dir=tmp_path / "doe", input_contract_review=receipt)
     actual = json.loads((tmp_path / "doe/doe-result.json").read_text(encoding="utf-8"))
     assert actual["status"] == expected_status, actual.get("diagnostics")
     assert (tmp_path / "propagation/report.md").is_file()
@@ -191,7 +199,7 @@ def test_001_guard_member_duplicate_pairing_and_count_ambiguity_survive_saved_do
 def test_001_known_empty_filtered_collection_has_no_notification(tmp_path):
     values = solve(notification_fixture([]))
     *_, solved = values
-    assert solved.coverage["ir_member"] == solved.coverage["ir_notify"] == "not_reached"
+    assert solved.coverage["ir_member"] == solved.coverage["ir_notify"] == "infeasible"
     assert solved.coverage["ir_save"] == "processed"
     _, doe = persist_doe(tmp_path, values, expected_status="partial")
     assert any(item["code"] == "task_source_issue" for item in doe["diagnostics"])
@@ -233,10 +241,10 @@ def test_013_binary_decisions_real_exception_sources_and_final_status(tmp_path, 
     values = solve(fallback_fixture(**options))
     *_, solved = values
     for name in ("fast", "retry", "archive"):
-        assert solved.coverage["ir_" + name] == ("processed" if name in called else "not_reached")
+        assert solved.coverage["ir_" + name] == ("processed" if name in called else "infeasible")
     for name in ("first_done", "retry_done", "archive_done", "archive_failed"):
-        assert solved.coverage["ir_" + name + "_status"] == ("processed" if name == terminal else "not_reached")
-        assert solved.coverage["ir_" + name + "_return"] == ("processed" if name == terminal else "not_reached")
+        assert solved.coverage["ir_" + name + "_status"] == ("processed" if name == terminal else "infeasible")
+        assert solved.coverage["ir_" + name + "_return"] == ("processed" if name == terminal else "infeasible")
     actual_key = set(operations(solved, "ir_context", "read")[1].outputs[0])
     for name in called:
         delivery = operations(solved, "ir_" + name, "deliver")[0]
@@ -279,7 +287,7 @@ def test_013_binary_decisions_real_exception_sources_and_final_status(tmp_path, 
     assert doe["coverage"]["declarations"] == 1
     inactive = [item for item in doe["diagnostics"] if item["code"] == "inactive_goal"]
     assert inactive and all(item.get("id") and not item["blocking"] for item in inactive)
-    assert all(solved.coverage[item["instruction_id"]] == "not_reached" for item in inactive)
+    assert all(solved.coverage[item["instruction_id"]] == "infeasible" for item in inactive)
     assert not any(item["code"] in {"unbound_goal", "missing_local_record"} for item in doe["diagnostics"])
 
 
@@ -288,9 +296,17 @@ def _guided_fixture(material, wire):
     from skillflow.document_guided.cfg_wire import normalize_cfg_wire
     from skillflow.graph.extraction.compiler import compile_candidate
     blocks = material["cfg"]["blocks"]
-    candidate = {"entry_block_ref": material["cfg"]["entry_block_id"], "blocks": [], "edges": [
-        {"source_block_ref": edge["source_block_id"], "target_block_ref": edge["target_block_id"]}
-        for edge in material["cfg"]["edges"]]}
+    candidate = {"entry_block_ref": material["cfg"]["entry_block_id"], "blocks": [], "edges": []}
+    for edge in material["cfg"]["edges"]:
+        source, destination = edge["source_block_id"], edge["target_block_id"]
+        terminal = wire["ir_semantics"][blocks[source]["instructions"][-1]["id"]]
+        branch = next((op for segment in terminal["segments"] for op in segment["ops"] if op["op"] == "branch"), None)
+        condition = None
+        if branch is not None:
+            assert destination in {branch["true_target"], branch["false_target"]}
+            condition = "true" if destination == branch["true_target"] else "false"
+        candidate["edges"].append({"source_block_ref": source, "target_block_ref": destination,
+                                   "condition_text": condition})
     for name, block in blocks.items():
         candidate["blocks"].append({"block_ref": name, "block_name": name,
             "data_source_kind": block.get("data_source_kind"), "instructions": [
@@ -315,12 +331,12 @@ def _guided_fixture(material, wire):
     return candidate, rename(wire)
 
 
-def test_013_source_cfg_finding_rebuilds_its_real_dependency_closure_and_finishes_doe(tmp_path, monkeypatch):
+def test_013_unanchored_cfg_finding_keeps_original_bundle_and_finishes_doe(tmp_path, monkeypatch):
     from skillflow.document_guided import runner
     from skillflow.document_guided.fragments import split_fragments
     from tests.document_guided.test_parallel_runner import Harness
     monkeypatch.setattr(runner, "_certificate", lambda *args, **kwargs: None)
-    material, corrected, _ = fallback_fixture(first=False, transient=False, archive=True)
+    material, corrected, _ = with_source_tool_contracts(fallback_fixture(first=False, transient=False, archive=True))
     before_material, before_wire = deepcopy(material), deepcopy(corrected)
     # A valid binary graph can still omit the separate transient-error test.
     # This is a CFG omission: processing cannot add the absent control block.
@@ -332,7 +348,6 @@ def test_013_source_cfg_finding_rebuilds_its_real_dependency_closure_and_finishe
     before_wire["ir_semantics"].pop("ir_transient_guard")
     before_wire["ir_semantics"]["ir_first_guard"]["segments"][0]["ops"][0]["false_target"] = "retry"
     initial_graph, initial_wire = _guided_fixture(before_material, before_wire)
-    corrected_graph, corrected_wire = _guided_fixture(material, corrected)
 
     class FallbackHarness(Harness):
         def __init__(self, directory):
@@ -348,26 +363,35 @@ def test_013_source_cfg_finding_rebuilds_its_real_dependency_closure_and_finishe
             runner.prepare(package, run_dir=self.directory)
 
         def complete(self, stage, prompt):
-            if stage.startswith("revision-"):
-                self.graph = corrected_graph
-                self.fragments = split_fragments(corrected_wire)
             answer = super().complete(stage, prompt)
             if stage == "review":
-                return {"outcome": "completed", "findings": [{"domain": "cfg", "target_ids": ["cfg:"],
+                from tests.doe.input_review_helpers import checks_for_inventory, review_prompt_payload
+                payload = review_prompt_payload(prompt)
+                cited = [{"file": "skill/SKILL.md", "start_line": 9, "end_line": 12,
+                          "reason": "The protected-call interfaces require the actual documented arguments."}]
+                answer["input_contract_checks"] = checks_for_inventory(payload["input_contract_inventory"], cited)
+                answer["findings"] = [{"domain": "cfg", "target_ids": ["cfg:/edges"],
                     "source_refs": [{"file": "skill/SKILL.md", "start_line": 10, "end_line": 11}],
                     "explanation": "The first failure directly reaches retry. The source retries only transient errors, requiring a separate conditional block consuming the first error classification.",
-                    "suggestion": "Keep the success/failure decision and add a second binary transient/non-transient decision; route non-transient failure to archive."}]}
+                    "suggestion": "Keep the success/failure decision and add a second binary transient/non-transient decision; route non-transient failure to archive."}]
             return answer
 
     harness = FallbackHarness(tmp_path / "guided")
     harness.prepare(tmp_path / "package")
     result = runner.run(harness.directory, client_factory=harness.factory)
-    assert result["status"] == "complete", result
-    assert result["repair_used"] and result["selected_annotation"] == "revision/annotation"
-    assert len(harness.calls) == 12
+    assert result["status"] == "partial", result
+    assert not result["repair_used"] and result["selected_annotation"] == "annotation"
+    assert len(harness.calls) == 7
     assert harness.calls.count("task") == harness.calls.count("flow") == 1
-    assert {name for name in harness.calls if name.startswith("revision")} == {
-        "revision-graph", "revision-processing", "revision-task-correspondence", "revision-sensitivity", "revision/review"}
+    assert not any(name.startswith("revision") for name in harness.calls)
+    initial = json.loads((harness.directory / "graph/initial.json").read_text(encoding="utf-8"))
+    selected = json.loads((harness.directory / "graph/selected.json").read_text(encoding="utf-8"))
+    assert selected == initial
+    decision = json.loads((harness.directory / "audit/shared-repair-decision.json").read_text(encoding="utf-8"))
+    assert decision["deferred_cfg"] and not decision["eligible"]
+    assert any("no source-bound editable slot" in barrier for barrier in decision["barriers"])
+    review = json.loads((harness.directory / "review/result.json").read_text(encoding="utf-8"))
+    assert any("first error classification" in row["explanation"] for row in review["review"]["findings"])
     facts = load_propagation_materials(harness.directory / "propagation")
     assert facts.status == "complete"
     doe = json.loads((harness.directory / "doe/doe-result.json").read_text(encoding="utf-8"))

@@ -77,7 +77,7 @@ def test_program_assembly_diagnostic_continuation_and_zero_call_replay(tmp_path,
 def _check_repair_route(tmp_path, repair_domain, monkeypatch):
     from tests.document_guided.test_parallel_runner import Harness
     monkeypatch.setattr(runner, "_certificate", lambda *args, **kwargs: None)
-    harness = Harness(tmp_path / "run", domains=(repair_domain,))
+    harness = Harness(tmp_path / "run", domains=(repair_domain,), precise_repair=True)
     harness.prepare(tmp_path / "package")
     def stop_before_backend(state):
         if state["stage"] == "propagation":
@@ -149,10 +149,10 @@ def test_recorded_review_request_failure_keeps_compiled_doe_and_replays(tmp_path
     assert read(harness.directory / "review/execution-boundary.json")["kind"] == "finished"
     assert len(harness.calls) == result["counts"]["logical_calls"] == 7
     manifest = read(harness.directory / "manifest.json")
-    assert manifest["identity"] == "skillflow-document-guided-run-v9"
-    assert manifest["policy"]["review_protocol"] == "compact-v1"
-    assert manifest["policy"]["review_request_failure"] == "diagnostic_continue"
-    assert read(harness.directory / "review/inputs.json")["prompt_view"] == "compact-v1"
+    assert manifest["identity"] == "skillflow-document-guided-run-v19"
+    assert manifest["policy"]["review_protocol"] == "shared-v2"
+    assert manifest["policy"]["review_request_failure"] == "bound_prior_record_retention_v1"
+    assert read(harness.directory / "review/inputs.json")["prompt_view"] == "shared-v2"
     assert (harness.directory / "report.md").read_text(encoding="utf-8").startswith("# Document-guided analysis")
     saved_calls = {str(path.relative_to(harness.directory)): path.read_bytes()
                    for path in harness.directory.rglob("call.json")}

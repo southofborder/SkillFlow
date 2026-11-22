@@ -11,6 +11,10 @@ from collections.abc import Iterable, Mapping
 from skillflow.propagation.data import DataRegistry
 
 
+class ConditionDomainError(ValueError):
+    """A known condition descriptor is not in the checked Boolean domain."""
+
+
 def _plain(value):
     return value.model_dump(mode="python") if hasattr(value, "model_dump") else value
 
@@ -41,7 +45,7 @@ def guard_truths(data: DataRegistry | Iterable | Mapping, data_ids) -> frozenset
         elif form == "literal" and type(content["value"]) is bool:
             truths.add(content["value"])
         else:
-            raise ValueError("condition must be Boolean or an opaque abstract Boolean")
+            raise ConditionDomainError("condition must be Boolean or an opaque abstract Boolean")
     return frozenset(truths)
 
 

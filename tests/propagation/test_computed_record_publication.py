@@ -99,7 +99,7 @@ def test_current_publication_reuses_computed_materials(annotation_run, tmp_path,
         save.setattr(loading, "validate_propagation_facts", repeated)
         saved = runner.save_propagation_run(tmp_path / "computed", annotation_run=annotation_run,
                                             solved=solved, _loaded_annotation=loaded)
-    assert saved.manifest["identity"] == "skill-ir-propagation-v21"
+    assert saved.manifest["identity"] == "skill-ir-propagation-v23"
     assert saved.manifest["records_schema_version"] == "skillflow-propagation-record-v16"
     assert components(load_propagation_materials(tmp_path / "computed")) == components(saved)
 

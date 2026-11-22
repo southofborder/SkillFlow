@@ -87,6 +87,32 @@ def demand(path=None, *, target=None, requirement="R1", preserve="value"):
             "reason": "Preserve the exact source-declared result at this particular boundary."}
 
 
+def required(path=(), *, property="value", if_present=False):
+    return {"property": property, "path": list(path), **({"if_present": True} if if_present else {})}
+
+
+def input_contract(ev, requirements, reason):
+    return {"inputs": [{"input_index": index, "required": fields,
+        "remainder": "independent", "reason": reason} for index, fields in enumerate(requirements)],
+        "reason": reason, "evidences": [ev]}
+
+
+def transfer(ev, requirements, reason):
+    return {"rules": [{"output": {"property": "value", "path": []},
+        **input_contract(ev, requirements, reason)}]}
+
+
+def scalar_transfer(ev, count, reason):
+    return transfer(ev, [[required()] for _ in range(count)], reason)
+
+
+def interface_gap(ev, count, reason, missing, resolution):
+    return {"inputs": [{"input_index": index, "required": [], "remainder": "unresolved", "reason": reason,
+        "gap": {"code": "unsupported_relation", "reason": reason, "missing": missing,
+                "resolution": resolution, "evidences": [ev]}} for index in range(count)],
+        "reason": reason, "evidences": [ev]}
+
+
 def prepare(cfg, semantics, locations, ev, task_text, *, requirements=None, extra_source=None):
     source = source_bundle(extra_source)
     candidate = {"purpose": {"text": task_text, "evidences": [ev]}, "issues": [],
@@ -145,7 +171,9 @@ def bulk_fixture(urls):
     semantics = {
         "ir_args": spec(bulk, binding=inp()), "ir_start": spec(bulk),
         "ir_normalize": spec(norm, {"kind": "for_each", "collection": inp(), "item": "url",
-            "body": [segment({"op": "compute", "inputs": [local("url")], "output": "normalized_url"})],
+            "body": [segment({"op": "compute", "inputs": [local("url")], "output": "normalized_url",
+                "demand_transfer": scalar_transfer(norm, 1,
+                    "Normalization trims the URL string and conditionally adds its leading slash.")})],
             "yield": local("normalized_url"), "output": "normalized"}, output="normalized"),
         "ir_guard": spec(bulk, segment({"op": "branch", "input": inp(), "predicate": "nonempty",
             "true_target": "nonempty", "false_target": "empty"})),
@@ -155,7 +183,11 @@ def bulk_fixture(urls):
             {"path": ["filter", "inListFilter", "caseSensitive"], "value": value(False)}], "output": "filter"}), output="filter"),
         # This fixture projects the normal already-initialized-client boundary.
         "ir_client": spec(bulk, segment({"op": "read", "location": "client", "output": "handle"}), output="handle"),
-        "ir_report": spec(bulk, segment({"op": "call", "location": "api", "inputs": [inp(0), inp(1)], "output": "response"}), output="response"),
+        "ir_report": spec(bulk, segment({"op": "call", "location": "api", "inputs": [inp(0), inp(1)], "output": "response",
+            "input_contract": interface_gap(bulk, 2,
+                "This projection passes a filter and client handle instead of the complete source runReport request.",
+                "The mapping from filter and client operands into the SDK method receiver and its required request fields.",
+                "Supply the projected-to-SDK binding and the required fields of the source request built before runReport.")}), output="response"),
         "ir_save": spec(bulk, segment({"op": "write", "target": "saved", "mode": "replace", "input": inp(),
             "demands": [demand()]}, {"op": "read", "location": "saved", "output": "actual_saved"}), output="actual_saved"),
         "ir_return": spec(bulk), "ir_empty": spec(bulk)}
@@ -174,21 +206,32 @@ def inspection_fixture():
     ops = [{"op": "build", "container": "object", "parts": [
         {"path": ["requestBody", "inspectionUrl"], "value": inp()},
         {"path": ["requestBody", "siteUrl"], "value": inp(1)}], "output": "request"},
-        {"op": "call", "location": "api", "inputs": [local("request")], "output": "response"},
+        {"op": "call", "location": "api", "inputs": [local("request")], "output": "response",
+         "input_contract": input_contract(ev, [[required(["requestBody", "inspectionUrl"]), required(["requestBody", "siteUrl"])]],
+            "The inspection request supplies the URL and site identifier in requestBody.")},
         {"op": "select_part", "input": local("response"), "path": ["data", "inspectionResult"], "output": "inspection"}]
     for field in fields:
         ops.append({"op": "select_part", "input": local("inspection"), "path": [field], "output": field})
-    ops += [{"op": "compute", "inputs": [], "output": "js_undefined", "evidences": [undefined]}]
+    ops += [{"op": "compute", "inputs": [], "output": "js_undefined", "evidences": [undefined],
+        "demand_transfer": scalar_transfer(undefined, 0, "The JavaScript undefined constant has no input dependencies.")}]
     status_fields = ["verdict", "coverageState", "robotsTxtState", "indexingState", "lastCrawlTime",
                      "pageFetchState", "googleCanonical", "userCanonical", "crawledAs"]
     for field in status_fields:
         fallback = value("NEUTRAL" if field == "verdict" else "Unknown") if field in {"verdict", "coverageState"} else local("js_undefined")
         ops += [{"op": "select_part", "input": local("indexStatusResult"), "path": [field], "output": "status_" + field},
-            {"op": "compute", "inputs": [local("status_" + field), fallback], "output": "final_" + field}]
+            {"op": "compute", "inputs": [local("status_" + field), fallback], "output": "final_" + field,
+             "demand_transfer": scalar_transfer(ev, 2,
+                 "The scalar status field uses the source value when truthy and the stated fallback otherwise.")}]
     ops += [{"op": "build", "container": "object", "parts": [
                 {"path": [field], "value": local("final_" + field)} for field in status_fields], "output": "index_status"},
-            {"op": "compute", "inputs": [local("mobileUsabilityResult"), local("js_undefined")], "output": "mobile"},
-            {"op": "compute", "inputs": [local("richResultsResult"), local("js_undefined")], "output": "rich"},
+            {"op": "compute", "inputs": [local("mobileUsabilityResult"), local("js_undefined")], "output": "mobile",
+             "demand_transfer": transfer(undefined, [[required(property="truth"), required(["verdict"], if_present=True),
+                 required(["issues"], if_present=True)], [required()]],
+                 "The mobile result checks object truth and uses only verdict and issues; absent objects yield undefined.")},
+            {"op": "compute", "inputs": [local("richResultsResult"), local("js_undefined")], "output": "rich",
+             "demand_transfer": transfer(undefined, [[required(property="truth"), required(["verdict"], if_present=True),
+                 required(["detectedItems"], if_present=True)], [required()]],
+                 "The rich result checks object truth and uses only verdict and detectedItems; absent objects yield undefined.")},
             {"op": "build", "container": "object", "parts": [
                 {"path": ["inspectionResultLink"], "value": local("inspectionResultLink")},
                 {"path": ["indexStatus"], "value": local("index_status")},
@@ -209,20 +252,30 @@ def environment_fixture():
     field_pairs = [("GA4_PROPERTY_ID", "propertyId"), ("GA4_CLIENT_EMAIL", "clientEmail"),
         ("GA4_PRIVATE_KEY", "privateKey"), ("GA4_DEFAULT_DATE_RANGE", "defaultDateRange"), ("SEARCH_CONSOLE_SITE_URL", "siteUrl")]
     settings_ops = [{"op": "read", "location": "env", "output": "current_env"},
-                    {"op": "call", "location": "cwd", "inputs": [], "output": "cwd"}]
+                    {"op": "call", "location": "cwd", "inputs": [], "output": "cwd",
+                     "input_contract": input_contract(ev, [], "The source invokes process.cwd() without arguments.")}]
     for field, output in field_pairs:
         settings_ops += [{"op": "select_part", "input": local("current_env"), "path": [field], "output": field},
-            {"op": "compute", "inputs": [local(field), value("30d" if output == "defaultDateRange" else "")], "output": output}]
-    settings_ops += [{"op": "compute", "inputs": [local("cwd"), value("results")], "output": "resultsDir"},
+            {"op": "compute", "inputs": [local(field), value("30d" if output == "defaultDateRange" else "")], "output": output,
+             "demand_transfer": scalar_transfer(ev, 2,
+                 "The environment string uses its supplied value or the stated default, including private-key newline replacement.")}]
+    settings_ops += [{"op": "compute", "inputs": [local("cwd"), value("results")], "output": "resultsDir",
+        "demand_transfer": scalar_transfer(ev, 2, "The results directory joins the current directory and results path segment.")},
         {"op": "build", "container": "object", "parts": [
             {"path": [field], "value": local(field)} for field in [out for _, out in field_pairs] + ["resultsDir"]], "output": "settings"}]
     semantics = {
         "ir_init": spec(init, segment({"op": "read", "location": "env", "output": "before"}),
             {"kind": "cases", "output": "config_result", "cases": [{"name": "config_normal", "phase": "normal",
                 "condition": "dotenv config returns; the exact overwritten keys and precedence remain unknown.", "disposition": "return",
-                "segments": [segment({"op": "call", "location": "dotenv", "inputs": [], "output": "returned"},
+                "segments": [segment({"op": "call", "location": "dotenv", "inputs": [], "output": "returned",
+                    "input_contract": input_contract(init, [], "The source invokes dotenv config() without arguments.")},
                     {"op": "read", "location": "dotenv_file", "output": "file"},
-                    {"op": "compute", "inputs": [local("before"), local("file")], "output": "possible_post"},
+                    {"op": "compute", "inputs": [local("before"), local("file")], "output": "possible_post",
+                     "demand_transfer": {"rules": [{"output": {"property": "value", "path": []},
+                         **interface_gap(init, 2,
+                            "The source calls dotenv without defining the overwritten environment keys or precedence between existing and file values.",
+                            "The parsed .env key set and dotenv's merge and override relation for this call.",
+                            "Supply the dotenv configuration contract and file-key mapping to identify retained and overwritten environment ranges.")}]}},
                     {"op": "write", "target": "env", "input": local("possible_post"), "mode": "replace", "may": True})],
                 "yield": local("returned")}]}, output="config_result"),
         "ir_settings": spec(ev, segment(*settings_ops), output="settings"), "ir_return": spec(ev)}
@@ -244,22 +297,29 @@ def cache_clock_fixture():
         ops = [{"op": "read", "location": "indexing_cache", "output": "prior"}]
         if name == "created":
             ops += [{"op": "read", "location": "credentials", "output": "credentials"},
-                    {"op": "compute", "inputs": [local("credentials")], "output": "new_handle", "evidences": [auth_ev]},
+                    {"op": "compute", "inputs": [local("credentials")], "output": "new_handle", "evidences": [auth_ev],
+                     "demand_transfer": transfer(auth_ev, [[required(["clientEmail"]), required(["privateKey"])]],
+                        "Only the current clientEmail and privateKey settings are forwarded into auth construction.")},
                     {"op": "write", "target": "indexing_cache", "mode": "replace", "input": local("new_handle"), "may": True}]
         cases.append({"name": name, "phase": "normal", "condition": "The indexing singleton is " + ("already present." if name == "existing" else "absent and created from current credentials."),
             "disposition": "return", "segments": [segment(*ops)], "yield": local("prior" if name == "existing" else "new_handle")})
     notify_ops = [{"op": "build", "container": "object", "parts": [
         {"path": ["requestBody", "url"], "value": inp()}, {"path": ["requestBody", "type"], "value": value("URL_UPDATED")}], "output": "request"},
-        {"op": "call", "location": "publish", "inputs": [local("handle"), local("request")], "output": "response"},
+        {"op": "call", "location": "publish", "inputs": [local("handle"), local("request")], "output": "response",
+         "input_contract": input_contract(call_ev, [[required()], [required(["requestBody", "url"]), required(["requestBody", "type"])]],
+             "The publish boundary needs its selected client identity and the URL and notification type fields.")},
         {"op": "select_part", "input": local("response"), "path": ["data", "urlNotificationMetadata", "latestUpdate", "notifyTime"], "output": "remote_time"},
         {"op": "select_part", "input": local("response"), "path": ["data", "urlNotificationMetadata", "url"], "output": "remote_url"},
-        {"op": "compute", "inputs": [local("remote_url"), inp()], "output": "final_url"}]
+        {"op": "compute", "inputs": [local("remote_url"), inp()], "output": "final_url",
+         "demand_transfer": scalar_transfer(call_ev, 2, "The result URL uses the response URL when truthy and the original URL otherwise.")}]
     timestamp = {"kind": "cases", "output": "notify_time", "cases": [
         {"name": "remote_time", "phase": "normal", "condition": "The actual response has a truthy notification timestamp.",
          "disposition": "return", "segments": [], "yield": local("remote_time")},
         {"name": "clock_fallback", "phase": "normal", "condition": "The response has no truthy notification timestamp.",
-         "disposition": "return", "segments": [segment({"op": "call", "location": "clock", "inputs": [], "output": "now"},
-            {"op": "compute", "inputs": [local("now")], "output": "iso"})], "yield": local("iso")}]}
+         "disposition": "return", "segments": [segment({"op": "call", "location": "clock", "inputs": [], "output": "now",
+            "input_contract": input_contract(call_ev, [], "The fallback obtains the current date with no arguments.")},
+            {"op": "compute", "inputs": [local("now")], "output": "iso",
+             "demand_transfer": scalar_transfer(call_ev, 1, "The fallback ISO string is formatted from the acquired date value.")})], "yield": local("iso")}]}
     semantics = {"ir_notify": spec(call_ev, {"kind": "cases", "cases": cases, "output": "handle", "evidences": [cache_ev]},
         segment(*notify_ops), timestamp, segment({"op": "build", "container": "object", "parts": [
             {"path": ["url"], "value": local("final_url")}, {"path": ["type"], "value": value("URL_UPDATED")},
@@ -281,7 +341,9 @@ def metadata_fixture(*, whole=False, sensitive_variant=False):
     cfg = graph([instruction("ir_metadata", "invoke", [literal({"name": "properties/fixture/metadata"})], "metadata"),
         instruction("ir_save", "invoke", [result("metadata")]), instruction("ir_return", "return", [result("metadata")])])
     paths = [[]] if whole else [["dimensions", EACH, name] for name in ("apiName", "uiName", "description")]
-    semantics = {"ir_metadata": spec(ev, segment({"op": "call", "location": "api", "inputs": [inp()], "output": "response"}), output="response"),
+    semantics = {"ir_metadata": spec(ev, segment({"op": "call", "location": "api", "inputs": [inp()], "output": "response",
+        "input_contract": input_contract(ev, [[required(["name"])]],
+            "The getMetadata request selects the metadata resource by its name field.")}), output="response"),
         "ir_save": spec(ev, segment({"op": "write", "target": "saved", "mode": "replace", "input": inp(),
             "demands": [demand(path) for path in paths]})), "ir_return": spec(ev)}
     if not whole:
@@ -305,7 +367,13 @@ def report_rows_fixture():
     cfg = graph([instruction("ir_report", "invoke", [literal({"property": "properties/fixture"})], "response"),
         instruction("ir_summary", "invoke", [result("response")]), instruction("ir_raw_save", "invoke", [result("response")]),
         instruction("ir_return", "return", [result("response")])])
-    semantics = {"ir_report": spec(ev, segment({"op": "call", "location": "api", "inputs": [inp()], "output": "response"}), output="response"),
+    request_ev = citation("scripts/src/api/reports.ts", 77, 100,
+        "The source constructs a runReport request with more fields than this property-only boundary placeholder.")
+    semantics = {"ir_report": spec(ev, segment({"op": "call", "location": "api", "inputs": [inp()], "output": "response",
+        "input_contract": interface_gap(request_ev, 1,
+            "The property-only fixture omits the source's dateRanges, dimensions and metrics request construction.",
+            "The complete SDK request interface and binding of the omitted constructed fields.",
+            "Supply the actual request-field bindings and SDK interface requirements before certifying input necessity.")}), output="response"),
         "ir_summary": spec(ev, segment({"op": "deliver", "target": "summary", "inputs": [inp()], "demands": [
             demand(["rows", EACH, field, EACH, "value"]) for field in ("dimensionValues", "metricValues")]})),
         "ir_raw_save": spec(ev, segment({"op": "write", "target": "saved", "mode": "replace", "input": inp(), "demands": [demand()]})),
@@ -315,6 +383,9 @@ def report_rows_fixture():
     variant = "Independent boundary variant: a report consumer needs only every rows[].dimensionValues[].value and rows[].metricValues[].value; a separate raw-result save requires the entire response.\n"
     variant_ev = citation("ROW-CONSUMER-VARIANT.md", 1, 1, "The separate test consumer declares the field-only requirement; the original report defines the nested row shape.")
     semantics["ir_summary"]["evidences"] = [variant_ev]
+    semantics["ir_summary"]["segments"][0]["ops"][0]["input_contract"] = input_contract(variant_ev,
+        [[required(["rows", EACH, field, EACH, "value"]) for field in ("dimensionValues", "metricValues")]],
+        "The authored consumer interface requires only the nested dimension and metric value fields.")
     return solve(*prepare(cfg, semantics, {"api": location("remote", "runReport", ev),
         "summary": location("tool", "Explicit test report consumer", variant_ev), "saved": location("storage", "raw-report.json", ev)},
         variant_ev, "Preserve row dimension and metric values for the declared test consumer and the complete raw response for a raw-result save.",
@@ -330,6 +401,8 @@ def comparison_save_fixture():
     """
     ev = citation("scripts/src/index.ts", 171, 203, "Comparison preserves the actual independently acquired period responses with their own date ranges.")
     saved_ev = citation("scripts/src/core/storage.ts", 55, 92, "saveResult binds its caller's data, reads settings and clock, writes a metadata wrapper, and returns a filepath.")
+    helper_ev = citation("scripts/src/api/reports.ts", 77, 108,
+        "The local report helper consumes dimensions, metrics, dateRange, limit and save; filters and orderBy are not forwarded.")
     cfg = graph([
         instruction("ir_compare", "invoke", [literal({"startDate": "7daysAgo", "endDate": "today"}),
             literal({"startDate": "14daysAgo", "endDate": "7daysAgo"})], "comparison"),
@@ -342,16 +415,23 @@ def comparison_save_fixture():
             {"path": ["dimensions"], "value": value(["date"])},
             {"path": ["metrics"], "value": value(["activeUsers", "sessions", "screenPageViews"])},
             {"path": ["save"], "value": value(False)}], "output": "request" + str(number)},
-            {"op": "call", "location": "report_helper", "inputs": [local("request" + str(number))], "output": "response" + str(number)}]
+            {"op": "call", "location": "report_helper", "inputs": [local("request" + str(number))], "output": "response" + str(number),
+             "input_contract": input_contract(helper_ev, [[required(["dimensions"]), required(["metrics"]),
+                 required(["dateRange"], if_present=True), required(["limit"], if_present=True), required(["save"], if_present=True)]],
+                 "The helper requires dimensions and metrics and preserves its optional date range, limit and save settings.")}]
     comparison_ops.append({"op": "build", "container": "object", "parts": [
         {"path": ["period" + str(number + 1), field], "value": inp(number) if field == "dateRange" else local("response" + str(number))}
         for number in (0, 1) for field in ("dateRange", "data")], "output": "comparison"})
     save_ops = [{"op": "read", "location": "settings", "output": "settings"},
         {"op": "select_part", "input": local("settings"), "path": ["resultsDir"], "output": "directory"},
         {"op": "select_part", "input": local("settings"), "path": ["propertyId"], "output": "property"},
-        {"op": "call", "location": "clock", "inputs": [], "output": "now"},
-        {"op": "compute", "inputs": [local("now")], "output": "iso_time"},
-        {"op": "compute", "inputs": [local("directory"), inp(1), inp(2), local("now")], "output": "filepath"},
+        {"op": "call", "location": "clock", "inputs": [], "output": "now",
+         "input_contract": input_contract(saved_ev, [], "The save metadata obtains the current date without arguments.")},
+        {"op": "compute", "inputs": [local("now")], "output": "iso_time",
+         "demand_transfer": scalar_transfer(saved_ev, 1, "The savedAt ISO string is formatted from the acquired date.")},
+        {"op": "compute", "inputs": [local("directory"), inp(1), inp(2), local("now")], "output": "filepath",
+         "demand_transfer": scalar_transfer(saved_ev, 4,
+             "The filepath combines the results directory, category, sanitized operation and formatted timestamp.")},
         {"op": "build", "container": "object", "parts": [
             {"path": ["metadata", "savedAt"], "value": local("iso_time")},
             {"path": ["metadata", "propertyId"], "value": local("property")},
@@ -364,4 +444,6 @@ def comparison_save_fixture():
     locations = {"report_helper": location("tool", "runReport return boundary", ev),
         "settings": location("runtime_context", "getSettings current result", saved_ev),
         "clock": location("tool", "Date clock", saved_ev), "saved": location("storage", "symbolic:generated-result-path", saved_ev)}
+    locations["saved"].update(address_kind="unidentified",
+        address_reason="The target filepath combines runtime settings and timestamp; its address relation to other storage paths is unavailable in this projection.")
     return solve(*prepare(cfg, semantics, locations, ev, "Save and return comparison results containing both actual period reports."))

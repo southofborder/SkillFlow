@@ -1,5 +1,15 @@
 # Task preservation and per-seed backward demand v4
 
+Latest amendment (2026-11-11): [semantic input necessity](input-necessity.md)
+adds reviewed field-level compute/tool contracts and complete input assessments.
+After completed semantic demand analysis and applicable constraint preservation,
+an uncovered input range is `deletable`, not merely a candidate. Missing task
+requirements, incomplete coverage and concrete unresolved relations remain
+blockers. This supersedes the older blanket no-demand/no-deletion wording below
+for the new implementation; frozen historical results retain their original
+meaning. **OFFLINE ACCEPTANCE IN PROGRESS**; interface-r4 remains the latest
+closed real validation.
+
 Current amendment (2026-10-19): the sealed Task remains v3. Supported constraints
 are declared beside positive demands in realizations; they do not seed backward
 demand. Their baseline checks and candidate preservation belong to the separate

@@ -159,7 +159,8 @@ def test_fragment_review_corrects_one_finding_or_outcome_with_other_records_unch
     files, task, cfg = review_fixture()
     first, second = finding(), finding()
     second["explanation"] = "A second independent source-supported relationship is absent."
-    good = {"outcome": "completed", "findings": [first, second]}
+    good = {"outcome": "completed", "findings": [first, second], "input_contract_checks": [],
+            "input_projection_checks": [], "source_input_findings": []}
     bad = deepcopy(good)
     if bad_singleton:
         bad["outcome"] = "invalid_outcome"

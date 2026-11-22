@@ -16,7 +16,9 @@ from skillflow.propagation.contracts.references import cfg_instructions
 from skillflow.propagation.contracts.demand import OperationTaskGoal, RawDemandGoal
 from . import annotation_wire as flat
 
-VERSION = "skillflow-document-fragments-v3"
+VERSION = "skillflow-document-fragments-v9"
+# Independent Task extraction keeps its unchanged v5 correction contract.
+TASK_CORRECTION_VERSION = "skillflow-document-fragments-v8"
 
 FRAGMENT_RULES = {
     "processing": {
@@ -162,9 +164,28 @@ def fragment_adapter(kind):
     return TypeAdapter(_MODELS[_kind(kind)])
 
 
+def _fragment_object(kind, raw):
+    if _kind(kind) == "processing":
+        from .fragment_wire import ProcessingWireError, expand_processing_response
+        from .processing_wire_diagnostics import processing_wire_diagnostics
+        try:
+            return expand_processing_response(raw)
+        except ProcessingWireError as error:
+            primary = structural_error("processing_wire", error.path, str(error))
+            raise StructuralValidationError(primary.diagnostics + processing_wire_diagnostics(raw)) from error
+        except (ValueError, TypeError) as error:
+            # The original strict failure remains authoritative. Raw-pair
+            # diagnostics never provide a parsed candidate or a salvage scope.
+            primary = structural_error("json_format", "", str(error))
+            raise StructuralValidationError(primary.diagnostics + processing_wire_diagnostics(raw)) from error
+    return _json_object(raw)
+
+
 def _parse(kind, raw, processing=None, *, diagnostics=None):
     try:
-        value = _json_object(raw)
+        value = _fragment_object(kind, raw)
+    except StructuralValidationError:
+        raise
     except (ValueError, TypeError) as error:
         raise structural_error("json_format", "", str(error)) from error
     found = flat.format_diagnostics(value)
@@ -370,32 +391,87 @@ def validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(
     return _validate_fragment(kind, raw, material, processing, validation_gaps=validation_gaps)[0]
 
 
+def _processing_probe(value, material, diagnostics, validation_gaps, expected):
+    """Inspect independent typed records behind a diagnosed prerequisite error."""
+    from skillflow.propagation.contracts.limitations import validation_gap, unmodeled_ids
+    from .processing_correction import gap_positions
+
+    hard_errors = [row for row in diagnostics if row["code"] != "instruction_coverage"]
+    blocked_paths = {row["path"] for row in hard_errors}
+    reported = list(diagnostics)
+    records = _records("processing", value)
+    original_locations = value.get("locations", {})
+    fixed = unmodeled_ids({"processing_gaps": validation_gaps})
+    positions = gap_positions(value)
+    modeled = value.get("ir_semantics", {})
+    overlaps = positions.keys() & modeled.keys() if isinstance(modeled, dict) else set()
+    # Keep the modeled side for reference diagnostics. The coverage conflict
+    # itself remains a rejection. Neither side is accepted by this probe.
+    blocked_paths.update(json_pointer("processing_gaps", index) for ir in overlaps for index in positions[ir])
+    blocked_paths.update(json_pointer("ir_semantics", ir) for ir in fixed)
+    while True:
+        projected, origins = _checkable_records("processing", value,
+            unavailable=[{"path": path} for path in sorted(blocked_paths)])
+        # Expressions whose local operations disappeared in the diagnostic
+        # projection cannot establish an independent invalid target.
+        surviving, expression_origins = [], {}
+        for index, expression in enumerate(projected["expressions"]):
+            target = expression.get("target", {})
+            if "operation_path" in target and target["instruction_id"] not in projected["ir_semantics"]:
+                continue
+            expression_origins[json_pointer("expressions", len(surviving))] = origins[json_pointer("expressions", index)]
+            surviving.append(expression)
+        projected["expressions"] = surviving
+        origins = {key: original for key, original in origins.items() if not key.startswith("/expressions/")}
+        origins.update(expression_origins)
+        unavailable = expected - set(projected["ir_semantics"]) - unmodeled_ids(projected) - fixed
+        probe_gaps = [*validation_gaps, *(validation_gap(ir, [{"code": "record_diagnostic_only",
+            "path": json_pointer("ir_semantics", ir), "message": "A missing sibling is excluded from this diagnostic-only check."}])
+            for ir in sorted(unavailable))]
+        try:
+            flat.expand_processing(_base_wire(projected), material, validation_gaps=probe_gaps)
+        except StructuralValidationError as error:
+            rows = [row for row in error.diagnostics if any(row["path"] == prefix
+                or row["path"].startswith(prefix + "/") for prefix in origins)]
+            found = _reindex_diagnostics(rows, origins)
+        else:
+            return reported
+        new_owners = set()
+        for row in found:
+            owner = next((key for key in records if row["path"] == key or row["path"].startswith(key + "/")), None)
+            if owner is None:
+                continue  # a projection-level rejection cannot license edits
+            new_owners.add(owner)
+            location = row.get("context", {}).get("current")
+            unavailable_location = (row["message"].startswith("undefined location:") and isinstance(location, str)
+                and isinstance(original_locations, dict) and location in original_locations
+                and location not in projected["locations"])
+            if not unavailable_location:
+                reported.append(row)
+        if not new_owners - blocked_paths:
+            return reported
+        blocked_paths.update(new_owners)
+
+
 def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(), processing_expansion=None):
     """Share checked processing only within this validation/assembly operation."""
     kind, diagnostics = _kind(kind), []
     value = _parse(kind, raw, processing, diagnostics=diagnostics)
     if kind == "processing":
+        from skillflow.propagation.contracts.limitations import unmodeled_ids
+        from .processing_correction import coverage_diagnostics
+        expected = set(cfg_instructions(material["cfg"]))
+        diagnostics.extend(coverage_diagnostics(value, expected,
+            fixed_unmodeled=unmodeled_ids({"processing_gaps": validation_gaps})))
         if not diagnostics:
             try:
                 processing_expansion = flat._processing_expansion(_base_wire(value), material,
                                                                  validation_gaps=validation_gaps)
             except StructuralValidationError as error:
-                raise _fragment_error(kind, value, error.diagnostics) from error
-            return value, processing_expansion
-        projected, origins = _checkable_records(kind, value, unavailable=diagnostics)
-        expected = set(cfg_instructions(material["cfg"]))
-        from skillflow.propagation.contracts.limitations import validation_gap, unmodeled_ids
-        unavailable = (expected - set(projected["ir_semantics"]) - unmodeled_ids(projected)
-            - unmodeled_ids({"processing_gaps": validation_gaps}))
-        # Diagnostic probes cannot publish OUT or an accepted annotation. These
-        # temporary barriers let independent, typed IR records be checked.
-        probe_gaps = [*validation_gaps, *(validation_gap(ir, [{"code": "record_diagnostic_only",
-            "path": json_pointer("ir_semantics", ir), "message": "The unavailable sibling is excluded from this diagnostic-only check."}])
-            for ir in sorted(unavailable))]
-        try:
-            flat.expand_processing(_base_wire(projected), material, validation_gaps=probe_gaps)
-        except StructuralValidationError as error:
-            diagnostics.extend(_reindex_diagnostics(error.diagnostics, origins))
+                diagnostics.extend(error.diagnostics)
+            else:
+                return value, processing_expansion
+        diagnostics = _processing_probe(value, material, diagnostics, validation_gaps, expected)
         raise _fragment_error(kind, value, diagnostics)
     if processing is None:
         raise ValueError(kind + " requires the accepted processing fragment")
@@ -539,7 +615,8 @@ def _records(kind, candidate):
     fields = {"processing": ("ir_semantics", "locations", "expressions", "processing_gaps"),
               "task-correspondence": ("realizations", "demands", "operation_demands"),
               "sensitivity": ("declarations",), "task": ("requirements", "issues"),
-              "cfg": ("blocks", "edges"), "review": ("findings",)}[_kind(kind)]
+              "cfg": ("blocks", "edges"), "review": ("findings", "input_contract_checks",
+                  "input_projection_checks", "source_input_findings")}[_kind(kind)]
     result = {}
     if isinstance(candidate, dict):
         for name in fields:
@@ -558,52 +635,245 @@ class FragmentCorrectionStrategy:
     kind: str
     identity: str = field(init=False)
     selected: dict = field(default_factory=dict, init=False)
+    cfg_scope: dict = field(default_factory=dict, init=False)
+    cfg_diagnostics: list = field(default_factory=list, init=False)
+    review_diagnostics: list = field(default_factory=list, init=False)
+    processing_scope: dict | None = field(default=None, init=False)
+    processing_diagnostics: list = field(default_factory=list, init=False)
 
     def __post_init__(self):
         self.kind = _kind(self.kind)
-        self.identity = VERSION + ":" + self.kind + ":record-replacement-v1"
+        version = TASK_CORRECTION_VERSION if self.kind == "task" else VERSION
+        if self.kind == "processing":
+            from .processing_correction import VERSION as processing_version
+            correction = processing_version
+        else:
+            correction = "review-correction-v2" if self.kind == "review" else "record-replacement-v1"
+        self.identity = f"{version}:{self.kind}:{correction}"
+
+    def can_correct(self, candidate, diagnostics):
+        if self.kind != "processing":
+            return True
+        from .processing_correction import correction_scope
+        try:
+            parsed = _fragment_object(self.kind, candidate)
+        except (ValueError, TypeError):
+            return True  # The strict wire has no independent retainable candidate.
+        scope = correction_scope(parsed, diagnostics, _records(self.kind, parsed))
+        return bool(scope["records"] or scope["coverage_slots"] or scope["field_slots"])
 
     def build_prompt(self, base_prompt, candidate, diagnostics):
         from skillflow.common.structural_correction import correction_base_prompt, correction_prompt
         from skillflow.common.prompt_format import compact_json
-        if self.kind == "cfg" and any(row.get("code") == "binary_dispatch" for row in diagnostics):
-            # Splitting a dispatch changes the block/edge set. Existing-slot
-            # replacement cannot express it; use the existing whole correction
-            # within the same one-correction budget, never a new patch grammar.
-            self.selected = {}
-            return correction_prompt(base_prompt, candidate, diagnostics)
+
+        self.selected, self.cfg_scope, self.cfg_diagnostics = {}, {}, []
+        self.processing_scope = None
+        self.processing_diagnostics = []
+        self.review_diagnostics = deepcopy(diagnostics) if self.kind == "review" else []
+
+        if self.kind == "processing":
+            from .fragment_wire import output_wire_instructions
+            # A caller may supply a short custom base prompt. Do not treat a
+            # marker embedded in source text as proof that grammar was taught.
+            # This program-owned correction suffix carries the full grammar on
+            # both complete and existing-record replacement paths.
+            base_prompt = base_prompt + "\n\nPROCESSING CORRECTION RESPONSE GRAMMAR\n" + output_wire_instructions()
+
+        def full_fragment():
+            if self.kind != "processing":
+                fallback = correction_prompt(base_prompt, candidate, diagnostics)
+                if self.kind not in {"sensitivity", "task-correspondence"}:
+                    return fallback
+                from .fragment_display import compact_fragment_correction
+                from skillflow.common.structural_correction import VERSION as CORRECTION_VERSION, _current_diagnostics
+                try:
+                    displayed = _json_object(candidate)
+                except (ValueError, TypeError):
+                    displayed = candidate
+                current, examples = _current_diagnostics(diagnostics)
+                context = {"protocol": CORRECTION_VERSION, "candidate": displayed,
+                           "diagnostics": current, "format_examples": examples}
+                return compact_fragment_correction(base_prompt, fallback, context)
+            from skillflow.common.structural_correction import VERSION as CORRECTION_VERSION, _current_diagnostics
+            from .processing_display import compact_processing_correction
+            try:
+                displayed = _fragment_object(self.kind, candidate)
+            except (ValueError, TypeError):
+                try:
+                    displayed = _json_object(candidate)
+                except (ValueError, TypeError):
+                    displayed = candidate
+            # Diagnostics name the expanded logical candidate. Using that same
+            # value in both the fallback and shared context keeps the complete
+            # correction packable while the recorded raw response stays intact.
+            fallback = correction_prompt(base_prompt, displayed, diagnostics)
+            current, examples = _current_diagnostics(diagnostics)
+            context = {"protocol": CORRECTION_VERSION, "candidate": displayed,
+                       "diagnostics": current, "format_examples": examples}
+            return compact_processing_correction(base_prompt, fallback, context)
+
+        if self.kind == "review":
+            from skillflow.common.validation import diagnostic_materials
+            from skillflow.common.structural_correction import VERSION as CORRECTION_VERSION, _current_diagnostics
+            from .review_correction import compact_review_correction
+            # Raw validator provenance stays in the immutable validation audit.
+            # Grouped displays retain every explicit relationship, without
+            # sending a second verbatim copy through audit.raw_diagnostics.
+            diagnostics = diagnostic_materials(diagnostics)["diagnostics"]
+
+            def full_review():
+                self.selected = {}
+                fallback = correction_prompt(base_prompt, candidate, diagnostics)
+                base = correction_base_prompt(base_prompt)
+                fallback = base + (
+                    "\nREVIEW CORRECTION SCOPE\n"
+                    "Preserve each source-supported prior allegation. Correct its actual locator when the source "
+                    "establishes it; otherwise retain the concrete unestablished relationship in an allowed typed "
+                    "contract gap, or use an evidenced ordinary finding only for an actual representation defect. "
+                    "Do not invent a field encoding, recast a faithful source defect as mistranscription, or delete "
+                    "an allegation merely to pass validation. Conflicts may require either implicated record to "
+                    "change; reassess its exact target and all affected checks without silently narrowing a valid defect.\n"
+                ) + fallback[len(base):]
+                try:
+                    displayed = _json_object(candidate)
+                except (ValueError, TypeError):
+                    displayed = candidate
+                current, examples = _current_diagnostics(diagnostics)
+                context = {"protocol": CORRECTION_VERSION, "candidate": displayed,
+                           "diagnostics": current, "format_examples": examples}
+                return compact_review_correction(base_prompt, fallback, context)
+
+            if any(row["path"] == "/source_input_findings"
+                   or row["path"].startswith("/source_input_findings/")
+                   or row.get("code") == "input_contract_review_conflict" for row in diagnostics):
+                # A source claim may require another allowed review section;
+                # a conflict can require either side to change. Existing-slot
+                # replacement cannot express that correction. Use the same
+                # single whole-response correction and unchanged validator.
+                return full_review()
         try:
-            parsed = _json_object(candidate)
+            parsed = _fragment_object(self.kind, candidate)
         except (ValueError, TypeError):
             self.selected = {}
-            return correction_prompt(base_prompt, candidate, diagnostics)
-        records = _records(self.kind, parsed)
-        self.selected = {key: value for key, value in records.items() if any(
-            row["path"] == key or row["path"].startswith(key + "/") for row in diagnostics)}
-        if not self.selected or any(not any(row["path"] == key or row["path"].startswith(key + "/") for key in records) for row in diagnostics):
-            self.selected = {}
-            return correction_prompt(base_prompt, candidate, diagnostics)
-        return correction_base_prompt(base_prompt) + "\nMECHANICAL RECORD CORRECTION\n" + (
+            return full_review() if self.kind == "review" else full_fragment()
+        if self.kind == "processing":
+            from .processing_correction import correction_scope
+            from .processing_display import compact_processing_correction
+            self.processing_scope = correction_scope(parsed, diagnostics, _records(self.kind, parsed))
+            self.processing_diagnostics = deepcopy(diagnostics)
+            self.selected = deepcopy(self.processing_scope["records"])
+            context = {**self.processing_scope, "diagnostics": diagnostics}
+            fallback = correction_base_prompt(base_prompt) + (
+                "\nMECHANICAL RECORD CORRECTION\n"
+                'The correction payload is an object containing one or more of replacements, fields and coverage_slots. '
+                'For replacements use [{"record_id":"<key in records>","value":<replacement record>}]. '
+                'For fields use [{"path":"<key in field_slots>","value":<replacement for that exact field>}]. '
+                'read_only_records provide context for field corrections and are not eligible for replacement. '
+                'For coverage_slots use [{"instruction_id":"<key in coverage_slots>","modeled":<complete ProcessingIR>}] '
+                'or [{"instruction_id":"<key in coverage_slots>","unmodeled_gaps":[<source-backed gaps>]}]. '
+                'If one existing side is already supported, use {"instruction_id":"<key>","keep":"modeled"} '
+                'or {"instruction_id":"<key>","keep":"unmodeled"} without restating its contents. '
+                "Each coverage slot selects exactly one disposition. Every gap in an unmodeled replacement must name "
+                "that instruction_id and have unmodeled=true. Use each authorized slot at most once. The program retains "
+                "every unlisted record and checks the complete merged fragment. Return only the supplied slots that can be "
+                "corrected with evidence. Do not produce a full replacement or touch a slot outside the allowed tables.\n"
+                "SCOPED_PROCESSING_CORRECTION_JSON\n"
+            ) + compact_json(context)
+            return compact_processing_correction(base_prompt, fallback, context)
+        if self.kind == "cfg":
+            from .cfg_correction import select_cfg_correction
+            scope = select_cfg_correction(parsed, diagnostics)
+            self.cfg_scope, self.cfg_diagnostics = deepcopy(scope), deepcopy(diagnostics)
+            if scope["mode"] != "records":
+                # Preserve unexplained global/topology errors and the complete
+                # original candidate. This uses the same single correction.
+                scoped_base = (base_prompt + "\n\nCFG CORRECTION SCOPE\n"
+                    "Return a complete replacement because existing-record correction is not sufficient. "
+                    "The following program-generated scope evidence does not waive any original diagnostic.\n"
+                    + compact_json(scope["evidence"]))
+                return correction_prompt(scoped_base, candidate, diagnostics)
+            self.selected = deepcopy(scope["records"])
+            # The original graph was generated after the base prompt. Supply
+            # every current record once as read-only reference context, not
+            # just the records permitted for replacement.
+            context = {"candidate": parsed, "allowed_record_ids": list(self.selected),
+                       "diagnostics": diagnostics, "correction_scope": scope["evidence"]}
+        else:
+            records = _records(self.kind, parsed)
+            self.selected = {key: value for key, value in records.items() if any(
+                row["path"] == key or row["path"].startswith(key + "/") for row in diagnostics)}
+            if not self.selected or any(not any(row["path"] == key or row["path"].startswith(key + "/") for key in records) for row in diagnostics):
+                self.selected = {}
+                return full_review() if self.kind == "review" else full_fragment()
+            context = {"records": self.selected, "diagnostics": diagnostics}
+        fallback = correction_base_prompt(base_prompt) + "\nMECHANICAL RECORD CORRECTION\n" + (
             'Reply only {"replacements":[{"record_id":"<exact supplied record_id>","value":<one complete replacement record>}]}. '
             "Replace only supplied existing record_id slots. Do not add/delete records or return generic patches. "
             "The slot record_id stays unchanged; erroneous instruction_id/requirement_id references inside its value may be corrected. "
             "All corrected references, source evidence, coverage and ownership are validated again. "
-            "The program reuses every unlisted record unchanged. Preserve source-supported relationships and do not guess semantic fixes.\n") + compact_json(
-                {"records": self.selected, "diagnostics": diagnostics})
+            "The program reuses every unlisted record unchanged. Preserve source-supported relationships and do not guess semantic fixes.\n")
+        if self.kind == "cfg":
+            fallback += (
+                "CFG CORRECTION SCOPE\nThe complete candidate is reference context. Only allowed_record_ids are editable. "
+                "Return complete replacements for records that need changes; allowed dependency records may remain unchanged. "
+                "A replacement block may contain corrected or additional source-supported instructions and result identities; "
+                "this does not permit adding or deleting block records. Follow the recorded topology_policy when present: "
+                "block_ref identities, all edges and the entry then remain unchanged. Keep source restrictions, actual "
+                "predecessor/producer relationships and every unchanged boundary. The entire merged CFG is validated again; "
+                "causal diagnostics authorize editing scope only and never waive an error.\n")
+        fallback += compact_json(context)
+        if self.kind == "review":
+            return compact_review_correction(base_prompt, fallback, context)
+        if self.kind in {"sensitivity", "task-correspondence"}:
+            from .fragment_display import compact_fragment_correction
+            return compact_fragment_correction(base_prompt, fallback, context)
+        return fallback
 
     def merge(self, candidate, correction):
         try:
-            value = _json_object(correction)
+            value = _fragment_object(self.kind, correction)
         except (ValueError, TypeError) as error:
             raise structural_error("correction_json", "", str(error)) from error
+        if self.kind == "review":
+            from .failed_stage_targets import correction_guard
+            correction_guard(candidate, self.review_diagnostics, value)
+        if self.kind == "processing" and self.processing_scope is not None:
+            from .processing_correction import correction_scope, merge_slots
+
+            def validate_gap(gap, pointer):
+                try:
+                    flat.FlatProcessingGap.model_validate(gap)
+                except ValidationError as error:
+                    raise schema_error(error, pointer, candidate=gap,
+                        schema=flat.FlatProcessingGap.model_json_schema()) from error
+
+            try:
+                original = _fragment_object(self.kind, candidate)
+            except (ValueError, TypeError) as error:
+                raise structural_error("correction_candidate", "", str(error)) from error
+            scope = correction_scope(original, self.processing_diagnostics, _records(self.kind, original))
+            if scope != self.processing_scope:
+                raise structural_error("processing_correction_scope", "", "Correction scope must match the exact prior processing candidate and diagnostics.")
+            return merge_slots(original, value, self.processing_scope, validate_gap=validate_gap)
         if not self.selected:
+            if self.kind == "review":
+                tables = {"findings", "input_contract_checks", "input_projection_checks", "source_input_findings"}
+                if (set(value) != {"outcome", *tables} or value["outcome"] != "completed"
+                        or any(not isinstance(value[name], list) for name in tables)):
+                    raise structural_error("review_correction_envelope", "",
+                        "A whole review correction requires outcome=completed and exactly the four declared review arrays; replacements or partial envelopes are not allowed")
             return value
         if set(value) != {"replacements"} or not isinstance(value["replacements"], list):
             raise structural_error("record_replacement", "", "return only the requested existing-record replacements")
         try:
-            result = deepcopy(_json_object(candidate))
+            result = deepcopy(_fragment_object(self.kind, candidate))
         except (ValueError, TypeError) as error:
             raise structural_error("correction_candidate", "", str(error)) from error
+        if self.kind == "cfg":
+            from .cfg_correction import select_cfg_correction
+            checked_scope = select_cfg_correction(result, self.cfg_diagnostics)
+            if checked_scope != self.cfg_scope or checked_scope["mode"] != "records" or checked_scope["records"] != self.selected:
+                raise structural_error("cfg_correction_identity", "", "CFG correction scope must match the exact original candidate and diagnostic dependencies")
         seen = set()
         for i, replacement in enumerate(value["replacements"]):
             if not isinstance(replacement, dict) or set(replacement) != {"record_id", "value"}:
@@ -616,6 +886,12 @@ class FragmentCorrectionStrategy:
             container = resolve_pointer(result, parent)
             key = int(token) if isinstance(container, list) else token.replace("~1", "/").replace("~0", "~")
             updated = replacement["value"]
+            if (self.kind == "cfg" and self.cfg_scope["evidence"].get("topology_policy")
+                    and identity.startswith("/blocks/")
+                    and (not isinstance(updated, dict)
+                         or updated.get("block_ref") != container[key].get("block_ref"))):
+                raise structural_error("cfg_correction_topology", f"/replacements/{i}/value",
+                    "Dependency-scoped correction must preserve each existing block_ref; topology changes require a complete CFG response")
             container[key] = deepcopy(updated)
         return result
 
@@ -629,7 +905,7 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
     from skillflow.propagation.contracts.limitations import validation_gap
     kind = _kind(kind)
     try:
-        value = _json_object(raw)
+        value = _fragment_object(kind, raw)
     except (ValueError, TypeError):
         return None, []
     if not _records(kind, value) or value.get("outcome") == "cannot_assess":
@@ -662,6 +938,20 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
             return validated, gaps
         except StructuralValidationError as error:
             records = _records(kind, value)
+            if kind == "processing":
+                from .processing_correction import remove_coverage_claims
+                conflicts = {row["context"]["coverage_slot"]["instruction_id"]: row
+                    for row in error.diagnostics if row["code"] == "instruction_coverage"
+                    and row.get("context", {}).get("coverage_slot", {}).get("problem") == "conflict"}
+                if conflicts:
+                    # Contradictory modeled and unmodeled claims do not certify
+                    # either disposition. Quarantine both rather than selecting
+                    # the text from one side as the accepted representation.
+                    remove_coverage_claims(value, conflicts.keys())
+                    for ir, row in conflicts.items():
+                        if not row["context"]["coverage_slot"]["fixed_unmodeled"]:
+                            add_gap(ir, [row])
+                    continue
             invalid = {key for key in records if any(row["path"] == key or row["path"].startswith(key + "/") for row in error.diagnostics)}
             if not invalid:
                 return None, gaps

@@ -8,7 +8,7 @@ establish whether the graph covers every behavior in the original Skill.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 class CFGIssue:
     code: str
     message: str
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 class CFGIntegrityError(ValueError):
@@ -313,6 +314,7 @@ def structure_issues(graph: ControlFlowGraph) -> list[CFGIssue]:
                     CFGIssue(
                         "EDGE_ENDPOINT_NOT_FOUND",
                         f"edge[{index}] {role} block {block_id!r} does not exist",
+                        {"edge_index": index, "role": role, "block_id": block_id},
                     )
                 )
         if edge.source_block_id in outgoing:
@@ -346,6 +348,7 @@ def structure_issues(graph: ControlFlowGraph) -> list[CFGIssue]:
                 CFGIssue(
                     "DISPATCH_INPUTS_MISSING",
                     f"block {block_id!r}: guarded or branching DISPATCH must declare condition dependencies in inputs",
+                    {"block_id": block_id, "instruction_id": terminator.id},
                 )
             )
     return issues

@@ -144,7 +144,9 @@ DIAGNOSTIC_RULES = {
     "dispatch_inputs": "dispatch_inputs", "external_acquisition_inputs": "external_acquisition_inputs",
     "binary_dispatch": "binary_dispatch",
 }
-CORRECTION_OR_JSON = {"json_format", "correction_candidate", "correction_json", "record_identity", "record_replacement"}
+CORRECTION_OR_JSON = {"json_format", "correction_candidate", "correction_json", "record_identity", "record_replacement",
+                      "review_correction_envelope", "processing_wire", "processing_wire_raw_diagnostics",
+                      "cfg_correction_identity", "cfg_correction_topology", "processing_correction_scope"}
 
 
 def test_every_interface_custom_diagnostic_has_a_visible_rule_or_correction_contract():

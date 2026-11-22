@@ -1,4 +1,4 @@
-"""Read-only forward effects of a boundary-local field exclusion.
+"""Read-only forward effects of a boundary-local input reduction.
 
 The worklist describes possible change, not hypothetical replacement Data or
 positive preservation demands. An intersecting influence is not necessity.
@@ -28,6 +28,7 @@ class ForwardInfluence:
         self.member_sources = defaultdict(set)
         self.map_edges = defaultdict(list)
         self.incomplete = False
+        self.gaps = set()
         self.limited_instructions = set().union(*processing_impacts(engine.index.cfg, engine.compiled).values())
         self._setup()
 
@@ -37,6 +38,7 @@ class ForwardInfluence:
         result = self.engine.resolve(ref, ir, scope)
         if not result or set(self.engine.diagnostics) != before:
             self.incomplete = True
+            self.gaps.add(f"Unresolved symbolic reference at instruction {ir}, scope {scope}: {ref}.")
         return result
 
     def _setup(self):
@@ -76,6 +78,7 @@ class ForwardInfluence:
             events = e.index.records.get(ir, {}).get("events", [])
             if event_index >= len(events):
                 self.incomplete = True
+                self.gaps.add(f"Collection output at {ir}/events/{event_index} has no evaluated yield record.")
                 continue
             record = events[event_index]
             for number, instance in enumerate(record.get("instances", [])):
@@ -88,6 +91,8 @@ class ForwardInfluence:
     def run(self, operation, slot, path, *, queue_order="fifo"):
         e, rows, queue = self.engine, {}, deque()
         affected, instructions, behavior, control_instructions, missing = set(), set(), set(), set(), self.incomplete
+        gaps = set(self.gaps)
+        review_barriers = set()
         changed_scopes = set()
         ir = e.ops[operation]["position"]["instruction_id"]
         initial = e.node_at("op_input", ir, operation, slot)
@@ -96,6 +101,7 @@ class ForwardInfluence:
             nonlocal missing
             if node is None:
                 missing = True
+                gaps.add(f"Change rule {rule} has no bound value node for input {operation}/{slot} at path {changed}.")
                 return
             # Finite static paths; widen rather than truncate an unbounded path.
             if len(changed) > e.path_budget:
@@ -114,6 +120,17 @@ class ForwardInfluence:
             if "output" in info["spec"]:
                 emit(e.node_at("op_output", info["position"]["instruction_id"], key, 0), changed, rule, parent)
 
+        def contract_outputs(key, input_slot, changed):
+            """Only the reviewed inverse contract may narrow an opaque change.
+
+            An empty list establishes independence. None retains the existing
+            conservative relation; absence of a contract never proves absence
+            of influence. The resolver owns review and exact range checks.
+            """
+            contracts = getattr(e, "contracts", None)
+            return (contracts.influenced_outputs(key, input_slot, changed)
+                    if contracts is not None else None)
+
         def whole_operation(key, parent, rule):
             affected.add(key)
             behavior.add(key)
@@ -131,6 +148,7 @@ class ForwardInfluence:
                 # V1 cannot reconstruct changed member identities or lengths
                 # from the baseline instances. Preserve this explicit gap.
                 missing = True
+                gaps.add(f"Changed collection can alter member occurrences at {sorted(self.member_sources[row['node']])}.")
             for target in sorted(self.edges.get(row["node"], ())):
                 emit(target, changed, "symbolic_use", identity)
             for target, prefix in self.map_edges.get(row["node"], ()):
@@ -140,6 +158,7 @@ class ForwardInfluence:
                 instructions.add(current_ir)
                 if current_ir in self.limited_instructions:
                     missing = True
+                    gaps.add(f"Changed instruction {current_ir} is inside a recorded processing-gap impact range.")
             if kind == "element":
                 # Membership/shape can change. Never pair this with another element.
                 for other, info in e.ops.items():
@@ -158,6 +177,13 @@ class ForwardInfluence:
                 continue
             affected.add(key)
             info, input_slot = e.ops[key], node["slot"]
+            from .review_barriers import operation_barriers, barrier_reason
+            barriers = operation_barriers(e, key)
+            if barriers:
+                missing = True
+                review_barriers.update(barrier["id"] for barrier in barriers)
+                gaps.update(barrier_reason(barrier) for barrier in barriers)
+                whole_operation(key, identity, "review_validation_barrier")
             if e.slots(key).get(input_slot, (None, None))[1] == "control":
                 behavior.add(key)
             spec, record = info["spec"], info["record"]
@@ -189,6 +215,7 @@ class ForwardInfluence:
                     # baseline finite members do not establish a new count.
                     changed_scopes.add((current_ir, -1))
                     missing = True
+                    gaps.add(f"Whole collection change at {key} can create member occurrences absent from the baseline record.")
                 output(key, changed[1:] if changed and type(changed[0]) is not str else [],
                        identity, "explicit_member_change")
             elif op == "append":
@@ -208,7 +235,14 @@ class ForwardInfluence:
                         output(key, projected, identity, "accumulated_items_change")
             elif op == "branch":
                 behavior.add(key)
-            elif op in {"compute", "filter_items", "receive"}:
+            elif op in {"compute", "receive"}:
+                selectors = contract_outputs(key, input_slot, changed)
+                if selectors is None:
+                    output(key, [], identity, "conservative_processing_change")
+                else:
+                    for selector in selectors:
+                        output(key, selector["path"], identity, "reviewed_input_contract_change")
+            elif op == "filter_items":
                 output(key, [], identity, "conservative_processing_change")
             elif op == "read":
                 output(key, changed, identity, "read_change")
@@ -243,6 +277,12 @@ class ForwardInfluence:
                             emit(e.node_at("ir_output", current_ir, slot=binding["output_index"]), changed,
                                  "returned_observation_change", identity)
             elif op == "deliver":
+                selectors = contract_outputs(key, input_slot, changed)
+                if selectors == []:
+                    # The real request still contained this input. Its reviewed
+                    # interface contract establishes that removing this range
+                    # cannot change the response or call behavior.
+                    continue
                 paired = [link["target"] for link in e.index.links.values()
                           if link["kind"] == "request_response" and link["source"] == key]
                 for receipt in paired:
@@ -252,12 +292,16 @@ class ForwardInfluence:
                 # No response record does not certify isolation of an opaque boundary.
                 if not paired and target["kind"] in {"tool", "remote"}:
                     missing = True
+                    gaps.add(f"Delivery {key} to {target['name']} has no recorded response pairing; its response effect cannot be followed.")
             if len(rows) > 100000:
                 missing = True
+                gaps.add(f"Input change at {operation}/{slot} exceeded the 100000-step influence budget.")
                 break
         return {"steps": {k: rows[k] for k in sorted(rows)}, "affected": affected, "instructions": instructions,
                 "behavior": behavior, "control_instructions": control_instructions,
                 "changed_scopes": changed_scopes,
+                "review_validation_barriers": sorted(review_barriers),
+                "limitations": sorted(gaps | self.gaps),
                 "complete": not (missing or self.incomplete), "root": initial}
 
 
@@ -284,7 +328,7 @@ class ConstraintAnalysis:
         refs = []
         for constraint_id, check in sorted(self.checks.items()):
             preserved, rule = False, "not_established"
-            reason = "A complete preservation argument has not been established; this does not prove necessity or a violation."
+            reason = ""
             complete_scope = self.checker.complete_scope(constraint_id)
             info = self.engine.ops[operation]
             declaration = resolve_pointer(self.engine.raw, check["raw_pointer"])
@@ -302,7 +346,8 @@ class ConstraintAnalysis:
                         if owner is not None:
                             conditions.add(owner)
             # Structural checks quantify over all controls, not just baseline values.
-            if complete_scope and check["structural"] and info["scope"] is None and not closure["changed_scopes"]:
+            if (complete_scope and check["structural"] and info["scope"] is None
+                    and not closure["changed_scopes"] and not closure["review_validation_barriers"]):
                 preserved, rule = True, "structural"
                 reason = "The complete structural check is independent of affected value and guard choices; event identity and task scope remain fixed."
             elif complete_scope and closure["complete"]:
@@ -312,6 +357,13 @@ class ConstraintAnalysis:
                     and info["spec"]["op"] == "deliver" and not info["generated"]):
                     preserved, rule = True, "terminal_subset"
                     reason = "This terminal delivery only loses content; its complete modeled effects introduce no later content or behavior change. Baseline findings remain visible."
+                elif (check["kind"] == "forbid_information" and info["spec"]["op"] == "deliver"
+                    and not other.intersection(relevant) and not closure["behavior"].intersection(relevant)
+                    and not closure["changed_scopes"]):
+                    preserved, rule = True, "receiver_subset"
+                    reason = ("This receiving input only loses content; the complete change closure reaches no other "
+                              "protected receiver or behavior. Local processing may be affected, but its reviewed "
+                              "or explicit relations stop every route to another protected input. Baseline findings remain visible.")
                 elif check["kind"] != "forbid_information" and (
                     not closure["behavior"].intersection(relevant)
                     and not closure["control_instructions"].intersection(protected_ir)
@@ -323,6 +375,21 @@ class ConstraintAnalysis:
                     reason = "The complete forward influence closure is disjoint from the constraint's applicable events and checked observations."
             if not preserved and closure["changed_scopes"]:
                 reason += " The changed collection may create or change member occurrences; baseline instances do not certify their absence or identity."
+            if not preserved:
+                if not complete_scope:
+                    reason = (f"Constraint {check['raw_pointer']} has an incomplete checked scope: "
+                              + "; ".join(check["reasons"]) + reason)
+                elif not closure["complete"]:
+                    reason = (f"The change to {operation}/input/{slot} at {path} cannot be closed for "
+                              f"constraint {check['raw_pointer']}: " + "; ".join(closure["limitations"]) + reason)
+                else:
+                    witnesses = sorted(closure["affected"].intersection(check["operations"]))
+                    condition_witnesses = sorted(closure["instructions"].intersection(conditions)
+                                                 | closure["control_instructions"].intersection(protected_ir))
+                    reason = (f"The change to {operation}/input/{slot} at {path} reaches protected information or "
+                              f"behavior for {check['raw_pointer']}; affected operations={witnesses}, "
+                              f"condition/control instructions={condition_witnesses}. "
+                              "The recorded relationships do not establish preservation of this specific restriction." + reason)
             row = {"constraint_id": constraint_id, "operation_id": operation, "input_index": slot,
                 "data_id": data_id, "path": deepcopy(path), "preserved": preserved, "rule": rule,
                 "reason": reason, "influence_refs": sorted(closure["steps"]) if rule != "structural" else []}

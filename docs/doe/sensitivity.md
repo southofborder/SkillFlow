@@ -1,5 +1,15 @@
 # Sensitive ranges and recipient-boundary comparison v4
 
+Latest amendment (2026-11-11): [semantic input necessity](input-necessity.md)
+adds reviewed field-level compute/tool contracts and complete input assessments.
+After completed semantic demand analysis and applicable constraint preservation,
+an uncovered input range is `deletable`, not merely a candidate. Missing task
+requirements, incomplete coverage and concrete unresolved relations remain
+blockers. This supersedes the older blanket no-demand/no-deletion wording below
+for the new implementation; frozen historical results retain their original
+meaning. **OFFLINE ACCEPTANCE IN PROGRESS**; interface-r4 remains the latest
+closed real validation.
+
 Current amendment (2026-10-19): an otherwise eligible `exclude_field` candidate
 must also pass the shared [constraint-preservation gate](constraint-implementation.md).
 Baseline checks are retained separately, including violations and unsupported

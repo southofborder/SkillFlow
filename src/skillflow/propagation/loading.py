@@ -138,6 +138,7 @@ def materials_from_result(solved, *, material, raw_annotation, compiled_annotati
     payload = ({name: compiled[name] for name in (
         "ir_semantics", "locations", "sink_boundaries", "task_ref", "realizations", "demands", "expressions")}
         | ({"processing_gaps": compiled["processing_gaps"]} if compiled.get("processing_gaps") else {})
+        | ({"input_contracts": compiled["input_contracts"]} if compiled.get("input_contracts") else {})
         if _validated_annotation else to_payload(compiled))
     if (canonical_sha256(solved.records.cfg) != canonical_sha256(_normalized_cfg(material["cfg"]))
             or canonical_sha256(solved.records.annotation) != canonical_sha256(payload)

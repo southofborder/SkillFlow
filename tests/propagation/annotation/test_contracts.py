@@ -34,7 +34,7 @@ def test_complete_payload_preserves_exact_source_and_raw_graph():
     }
     assert "targets" not in payload
     assert payload["runtime_contract"] == runtime_contract()
-    assert SCHEMA_VERSION == "security-profile-v21"
+    assert SCHEMA_VERSION == "security-profile-v24"
 
 
 @pytest.mark.parametrize("extra", ["oracle", "old_audit", "propagated_data", "risk", "feedback"])
@@ -295,7 +295,7 @@ def test_prompt_explicitly_distinguishes_critical_semantic_boundaries():
         assert phrase in authoritative
     assert not re.search(r"[\u4e00-\u9fff]", INSTRUCTIONS)
     assert all(not re.search(r"[\u4e00-\u9fff]", rule["text"]) for rule in runtime_contract()["rules"])
-    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v11"
+    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v12"
 
 
 def test_source_and_execution_references_are_checked_at_their_location():

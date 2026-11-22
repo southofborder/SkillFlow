@@ -51,7 +51,7 @@ def test_known_empty_traversal_never_records_member_or_acquisition():
     cfg, annotation = explicit_loop_fixture(())
     result = propagate(cfg, annotation)
     assert result.status == "complete", result.diagnostics
-    assert result.coverage["ir_fetch"] == "not_reached"
+    assert result.coverage["ir_fetch"] == "infeasible"
     assert result.coverage["ir_return"] == "processed"
     assert not any(entry["data"]["origin"].get("acquired_from") == "remote:api" for entry in result.registry.to_dict()["records"])
 
@@ -158,7 +158,7 @@ def test_nested_empty_member_views_skip_all_inner_effects():
     cfg, annotation = nested_loop_fixture([{"rows": []}, {"rows": []}])
     result = propagate(cfg, annotation)
     assert result.status == "complete", result.diagnostics
-    assert result.coverage["ir_send"] == "not_reached"
+    assert result.coverage["ir_send"] == "infeasible"
     assert result.coverage["ir_return"] == "processed"
     assert result.records.is_complete
 
@@ -216,7 +216,7 @@ def test_unsupported_typed_guard_does_not_stop_independent_sink_root():
     annotation["sink_boundaries"] = [value.model_dump(mode="json") for value in derive_sink_boundaries(annotation["locations"], annotation["ir_semantics"])]
     result = propagate(cfg, annotation)
     assert result.status == "incomplete", result.diagnostics
-    assert result.coverage["ir_guard"] == "unresolved_binding"
+    assert result.coverage["ir_guard"] == "execution_error"
     assert result.coverage["ir_independent"] == "processed"
     assert result.records.get("ir_independent").events[0].atomic_ops[0].inputs[0]
 

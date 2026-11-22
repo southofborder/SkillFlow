@@ -119,11 +119,21 @@ class Derivation(Strict):
     requirement_id: Text
     seed_goal_id: Text
     conservative: bool
+    information_bound: bool = False
     rules: Annotated[list[Text], Field(min_length=1)]
     parents: list[Text]
 
+    @model_serializer(mode="wrap")
+    def omit_unbounded_default(self, handler):
+        value = handler(self)
+        if not self.information_bound:
+            value.pop("information_bound", None)
+        return value
+
     @model_validator(mode="after")
     def member_paths(self):
+        if self.information_bound and not self.conservative:
+            raise ValueError("A bounded uncertain information scope must remain conservative")
         _check_goal_path(self.path)
         for path in self.excluded_paths:
             _check_goal_path(path)
@@ -246,7 +256,7 @@ class Coverage(Strict):
     requirements: dict[Text, RequirementCoverage]
     sinks: Index
     expected_sinks: Index
-    upstream: dict[Text, Literal["processed", "not_reached", "not_solved", "unresolved_binding", "unmodeled", "blocked"]]
+    upstream: dict[Text, Literal["processed", "not_reached", "infeasible", "not_solved", "unresolved_binding", "unmodeled", "blocked", "execution_error"]]
     unresolved_boundaries: list[SinkBoundary] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -257,8 +267,11 @@ class Coverage(Strict):
         return result
 
 
+from .input_assessments import InputAssessment, InputSemanticFinding
+
+
 class DemandResult(Strict):
-    schema_version: Literal["skillflow-demand-v7"]
+    schema_version: Literal["skillflow-demand-v12"]
     status: Literal["complete", "partial"]
     goals: list[DemandGoal]
     traceability: Traceability
@@ -266,6 +279,9 @@ class DemandResult(Strict):
     sinks: list[SinkComparison]
     diagnostics: list[Diagnostic]
     coverage: Coverage
+    input_assessments: list[InputAssessment]
+    input_findings: list[InputSemanticFinding]
+    input_contract_review_sha256: Text | None
 
     @model_validator(mode="after")
     def references(self):
@@ -296,6 +312,61 @@ class DemandResult(Strict):
                     raise ValueError("Traceability derivation projection differs")
         diagnostics = {item.id: item for item in self.diagnostics}
         unique([item.id for item in self.diagnostics], "demand diagnostic")
+        if any(row.information_bound for row in self.derivations.values()):
+            _validate_information_bounds({key: row.model_dump(mode="json") for key, row in self.derivations.items()},
+                {key: row.model_dump(mode="json") for key, row in diagnostics.items()}, self.input_contract_review_sha256)
+        unique([item.id for item in self.input_assessments], "input assessment")
+        assessments = {item.id: item for item in self.input_assessments}
+        from collections import defaultdict
+        derived_by_use, serialized_derivations = defaultdict(list), {}
+        for key, derivation in self.derivations.items():
+            node = derivation.node
+            derived_by_use[(node.kind, node.instruction_id, node.operation_id, node.slot)].append(key)
+        for item in self.input_assessments:
+            if item.instruction_id not in self.coverage.upstream or item.coverage != self.coverage.upstream[item.instruction_id]:
+                raise ValueError("Input assessment coverage differs from its instruction")
+            if item.coverage == "infeasible" and item.ranges:
+                raise ValueError("An inactive input cannot claim a deletion or need")
+            for row in item.ranges:
+                if row.contract_refs and self.input_contract_review_sha256 is None:
+                    raise ValueError("Reviewed input contracts require a bound review receipt identity")
+                if not set(row.demand_refs) <= self.derivations.keys() or not set(row.diagnostic_refs) <= diagnostics.keys():
+                    raise ValueError("Input assessment has dangling evidence references")
+                if row.status == "deletable" and (row.diagnostic_refs or item.coverage != "processed"):
+                    raise ValueError("An incomplete input assessment cannot authorize deletion")
+                if row.status != "deletable" and (row.modification is not None or row.modification_limit is not None):
+                    raise ValueError("Only an established deletion may have a modification recipe or edit limitation")
+                if row.status == "deletable" and (row.modification is None) == (row.modification_limit is None):
+                    raise ValueError("A deletion requires either a concrete semantic recipe or an explicit edit limitation")
+                node_kind = "op_output" if item.node_kind == "acquisition_output" else item.node_kind
+                for ref in row.demand_refs:
+                    node = self.derivations[ref].node
+                    if (node.kind, node.instruction_id, node.operation_id, node.slot) != (
+                            node_kind, item.instruction_id, item.operation_id, item.input_index):
+                        raise ValueError("Input assessment demand belongs to another actual use")
+                if row.status == "deletable":
+                    from .sensitivity_engine import demand_overlap
+                    signal = {"property": row.property, "path": row.model_dump(mode="json")["path"],
+                              "excluded_paths": row.model_dump(mode="json")["excluded_paths"]}
+                    for key in derived_by_use[(node_kind, item.instruction_id, item.operation_id, item.input_index)]:
+                        if key not in serialized_derivations:
+                            serialized_derivations[key] = self.derivations[key].model_dump(mode="json")
+                        if demand_overlap(signal, serialized_derivations[key]) != "none":
+                            raise ValueError("Input deletion overlaps retained information at this actual use")
+        unique([item.id for item in self.input_findings], "input semantic finding")
+        for item in self.input_findings:
+            if (not set(item.assessment_refs) <= assessments.keys() or not set(item.diagnostic_refs) <= diagnostics.keys()
+                    or item.instruction_id not in self.coverage.upstream):
+                raise ValueError("Input semantic finding has dangling evidence references")
+            if item.origin == "source_review":
+                if (self.input_contract_review_sha256 is None or item.source_finding is None
+                        or item.source_review_refs != [item.id] or item.source_finding.id != item.id):
+                    raise ValueError("Source-input findings require a bound immutable source-review identity")
+                actual = item.source_finding.actual
+                if item.input_index != getattr(actual, "input_index", None) or item.path != getattr(actual, "path", []):
+                    raise ValueError("Source-input finding changes or invents the actual operand")
+            elif item.source_review_refs or item.source_finding is not None:
+                raise ValueError("Demand-derived findings cannot claim an authored source-review defect")
         if any(item.requirement_id is not None and item.requirement_id not in requirements for item in self.diagnostics):
             raise ValueError("Diagnostic refers to an uncovered requirement")
         for key, item in self.derivations.items():
@@ -337,6 +408,48 @@ class DemandResult(Strict):
         return self
 
 
+def _validate_information_bounds(derivations, diagnostics, receipt_sha256):
+    """Check finite scope ancestry, without re-proving semantic inference."""
+    from .demand_engine import EXACT_INFORMATION_BOUND_RULES
+    bounded = {key: row for key, row in derivations.items() if row.get("information_bound")}
+    if bounded and receipt_sha256 is None:
+        raise ValueError("A bounded uncertain information scope requires its review receipt")
+    origins = set()
+    for key, row in bounded.items():
+        if not row["conservative"]:
+            raise ValueError("A bounded uncertain information scope must remain conservative")
+        for rule in row["rules"]:
+            if rule in EXACT_INFORMATION_BOUND_RULES:
+                continue
+            if rule.startswith("input_contract_gap:"):
+                diagnostic = diagnostics.get(rule.split(":", 1)[1], {})
+                node = row["node"]
+                if (diagnostic.get("code") == "input_contract_semantic_gap" and node["kind"] == "op_input"
+                        and diagnostic.get("operation_id") == node["operation_id"]
+                        and diagnostic.get("instruction_id") == node["instruction_id"]
+                        and diagnostic.get("requirement_id") == row["requirement_id"]
+                        and diagnostic.get("affected_instruction_ids") == [node["instruction_id"]]):
+                    origins.add(key)
+                    continue
+            raise ValueError("Bounded information cannot pass through generic or unmodeled processing")
+        if key not in origins and not any(parent in bounded for parent in row["parents"]):
+            raise ValueError("A bounded information transfer requires a bounded exact-transfer parent")
+    # Cycles cannot certify one another without reaching an actual scoped gap.
+    from collections import defaultdict, deque
+    children = defaultdict(set)
+    for key, row in bounded.items():
+        for parent in row["parents"]:
+            children[parent].add(key)
+    reached, pending = set(origins), deque(origins)
+    while pending:
+        for child in children[pending.popleft()]:
+            if child not in reached:
+                reached.add(child)
+                pending.append(child)
+    if reached != bounded.keys():
+        raise ValueError("A bounded information scope lacks ancestry to a reviewed scoped gap")
+
+
 def validate_result_shape(value):
     """Strict fields and internal references only; replay checks derivation truth."""
     _require_json(value, "")
@@ -346,14 +459,17 @@ def validate_result_shape(value):
     return deepcopy(checked)
 
 
-def validate_result_references(value, facts, targets):
+def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None):
     """Bind saved references to facts without re-solving preservation semantics."""
-    from .material import _Index, payload_alternatives
+    from types import SimpleNamespace
+    from .material import _Index, _id, payload_alternatives
     from skillflow.propagation.conditions import payload_inputs
     checked = validate_result_shape(value)
     index = _Index(facts)
     annotation = facts.annotation
     task = annotation["task"]
+    if checked["input_contract_review_sha256"] != (input_contract_review or {}).get("receipt_sha256"):
+        raise ValueError("Demand input-contract review identity differs from the validated review receipt")
     if checked["traceability"]["task_ref"] != annotation["compiled_annotation"]["task_ref"]:
         raise ValueError("Demand traceability Task revision differs")
     expected_requirements = {r["id"] for r in task["requirements"]}
@@ -392,11 +508,29 @@ def validate_result_references(value, facts, targets):
     from skillflow.propagation.contracts.limitations import processing_impacts, gap_id, diagnostic_applies
     expected_gaps = processing_impacts(index.cfg, annotation["compiled_annotation"])
     gaps = {gap_id(g): g for g in annotation["compiled_annotation"].get("processing_gaps", [])
-            if index.coverage[g["instruction_id"]] != "not_reached"}
+            if index.coverage[g["instruction_id"]] != "infeasible"}
     actual_gaps = {}
     for diagnostic in checked["diagnostics"]:
         affected = diagnostic.get("affected_instruction_ids")
         if affected is not None:
+            if diagnostic["code"] == "upstream_diagnostic":
+                if not any(row.get("affected_instruction_ids") == affected
+                           and row.get("instruction_id") == diagnostic["instruction_id"]
+                           and row.get("reason") == diagnostic["reason"] for row in index.diagnostics):
+                    raise ValueError("Upstream diagnostic scope differs from its recorded execution evidence")
+                continue
+            if diagnostic["code"].startswith("input_contract_"):
+                if (diagnostic["code"] == "input_contract_review_validation"
+                        and diagnostic["operation_id"] is None
+                        and diagnostic["instruction_id"] in index.instructions
+                        and affected == [diagnostic["instruction_id"]]):
+                    # An actual CFG operand may alias a quarantined consumer.
+                    # The exact barrier/operand proof is rechecked below.
+                    continue
+                if (affected != [diagnostic["instruction_id"]] or diagnostic["operation_id"] not in index.operations
+                        or index.operations[diagnostic["operation_id"]]["position"]["instruction_id"] != diagnostic["instruction_id"]):
+                    raise ValueError("Input-contract diagnostic has an unsupported local footprint")
+                continue
             if diagnostic["code"] != "processing_gap" or not set(affected) <= set(index.instructions):
                 raise ValueError("Demand diagnostic has an unsupported scoped footprint")
             identity = diagnostic["reason"].split(": ", 1)[0]
@@ -411,6 +545,28 @@ def validate_result_references(value, facts, targets):
         raise ValueError("Demand result drops declared processing limitations")
     if any(target_key(goal["target"]) not in targets for goal in checked["goals"]):
         raise ValueError("Demand goal target is absent")
+    expected_inputs = {("ir_input", ir, None, slot) for ir, instruction in index.instructions.items()
+                       for slot in range(len(instruction["inputs"]))}
+    for key, operation in index.operations.items():
+        ir, record = operation["position"]["instruction_id"], operation["record"]
+        expected_inputs.update(("op_input", ir, key, slot) for slot in range(len(record["inputs"])))
+        if record["op"] in {"read", "receive"}:
+            expected_inputs.update(("acquisition_output", ir, key, slot) for slot in range(len(record["outputs"])))
+    actual_inputs = {(a["node_kind"], a["instruction_id"], a["operation_id"], a["input_index"])
+                     for a in checked["input_assessments"]}
+    if actual_inputs != expected_inputs or len(actual_inputs) != len(checked["input_assessments"]):
+        raise ValueError("Input assessments must cover the exact complete input inventory")
+    contract_ids = {entry["id"] for entry in annotation["compiled_annotation"].get("input_contracts", [])}
+    for item in checked["input_assessments"]:
+        if not set(item["data_ids"]) <= data_ids:
+            raise ValueError("Input assessment references absent Data")
+        if item["operation_id"] is not None:
+            record = index.operations[item["operation_id"]]["record"]
+            side = "outputs" if item["node_kind"] == "acquisition_output" else "inputs"
+            if item["data_ids"] != sorted(set(record[side][item["input_index"]])):
+                raise ValueError("Input assessment changes actual operand candidates")
+        if any(not set(row["contract_refs"]) <= contract_ids for row in item["ranges"]):
+            raise ValueError("Input assessment references an absent semantic contract")
     for derivation in checked["derivations"].values():
         node = derivation["node"]
         if not set(node["data_ids"]) <= data_ids:
@@ -449,8 +605,12 @@ def validate_result_references(value, facts, targets):
         sliced = index.slice(sink["boundary"])
         relevant = set(sliced["usage_context"]["instructions"])
         relevant.update(index.operations[key]["position"]["instruction_id"] for key in sliced["backward_slice"]["operations"])
-        expected_limits = sorted(d["id"] for d in checked["diagnostics"] if d["blocking"] and diagnostic_applies(d, relevant,
-                                scoped_instructions=sliced["usage_context"]["instructions"]))
+        from .input_assessments import applicable_contract_diagnostics
+        contract_limits = applicable_contract_diagnostics(checked["derivations"],
+            sink["demanded_information"] + sink["conservative_retention"])
+        expected_limits = sorted(d["id"] for d in checked["diagnostics"] if d["blocking"] and (
+            d["id"] in contract_limits if d["code"].startswith("input_contract_") else diagnostic_applies(d, relevant,
+                                scoped_instructions=sliced["usage_context"]["instructions"])))
         if sink["limitations"] != expected_limits:
             raise ValueError("Demand sink changes relevant analysis limitations")
         operations = index.sink_operations(sink["boundary"])
@@ -466,4 +626,104 @@ def validate_result_references(value, facts, targets):
             if (slot >= len(record["inputs"]) or slot == record.get("when_input_index")
                     or item["data_ids"] != record["inputs"][slot]):
                 raise ValueError("Demand unestablished range differs from its actual payload slot")
+    # Reconstruct only the actual coordinate index when not already supplied by
+    # preparation. Never solve demands again or turn a saved result into a seed.
+    if engine is None:
+        from .demand_engine import DemandEngine
+        from skillflow.propagation.contracts.task import Task
+        engine = DemandEngine(facts, Task.model_validate(task), annotation,
+            {"goals": checked["goals"], "expressions": []}, targets, input_contract_review=input_contract_review)
+    elif (engine.facts is not facts
+            or (engine.contracts.receipt or {}).get("receipt_sha256") != checked["input_contract_review_sha256"]):
+        raise ValueError("Reused demand index belongs to different facts or source-review material")
+    from .input_assessments import InputReviewBarrierIndex
+    from .review_barriers import barrier_reason, barrier_diagnostic_value, operation_barriers
+    barriers = InputReviewBarrierIndex(engine)
+    diagnostics = {row["id"]: row for row in checked["diagnostics"]}
+    unavailable = {}
+    for goal in checked["goals"]:
+        target = targets[target_key(goal["target"])]
+        evidence = engine.unavailable_dependencies.evidence(goal, target)
+        if evidence is not None:
+            identity = _id("diagnostic_", evidence)
+            unavailable[goal["id"]] = identity
+            if diagnostics.get(identity) != {"id": identity, **evidence}:
+                raise ValueError("Demand result omits or changes a required action's unavailable occurrence")
+    if set(unavailable.values()) != {key for key, row in diagnostics.items()
+                                     if row["code"] == "unavailable_required_action"}:
+        raise ValueError("Demand result invents an unavailable required action")
+    linked = set()
+    for row in checked["derivations"].values():
+        seed = row["seed_goal_id"]
+        expected = unavailable.get(seed)
+        for rule in row["rules"]:
+            if not rule.startswith("unavailable_dependency:"):
+                continue
+            node = row["node"]
+            if (expected is None or rule != "unavailable_dependency:" + expected
+                    or node["kind"] != "action" or node["operation_id"] is not None or not row["conservative"]
+                    or node["instruction_id"] != diagnostics[expected]["instruction_id"] or row["parents"]):
+                raise ValueError("Required action uncertainty must begin at its actual declared target, without a fabricated occurrence")
+            linked.add(seed)
+    if linked != set(unavailable):
+        raise ValueError("Demand result omits an unavailable required action's protection root")
+    if unavailable:
+        from .input_assessments import derivation_problem_refs
+        ancestry = derivation_problem_refs(SimpleNamespace(derivations=checked["derivations"]))
+        by_use = {(item["node_kind"] if item["node_kind"] != "acquisition_output" else "op_output",
+                   item["instruction_id"], item["operation_id"], item["input_index"]): item
+                  for item in checked["input_assessments"]}
+        evidence_ids = set(unavailable.values())
+        for ref, references in ancestry.items():
+            expected = references & evidence_ids
+            if not expected:
+                continue
+            derive = checked["derivations"][ref]
+            node = derive["node"]
+            assessment = by_use.get((node["kind"], node["instruction_id"], node["operation_id"], node["slot"]))
+            if assessment is None or assessment["coverage"] == "infeasible":
+                continue
+            if not any(row["status"] == ("unresolved" if derive["conservative"] else "required")
+                       and ref in row["demand_refs"] and expected <= set(row["diagnostic_refs"])
+                       for row in assessment["ranges"]):
+                raise ValueError("Input assessment omits its unavailable required action's dependency evidence")
+    expected_barrier_diagnostics = set()
+    for assessment in checked["input_assessments"]:
+        if assessment["coverage"] == "infeasible":
+            continue
+        applicable = barriers.for_assessment(assessment)
+        if not applicable:
+            continue
+        expected = set()
+        for barrier in applicable:
+            expected_diagnostic = barrier_diagnostic_value(barrier, assessment["instruction_id"], assessment["operation_id"])
+            identity = expected_diagnostic["id"]
+            if diagnostics.get(identity) != expected_diagnostic:
+                raise ValueError("Input assessment omits or changes an applicable source-review validation barrier")
+            expected.add(identity)
+        expected_barrier_diagnostics.update(expected)
+        if (any(row["status"] == "deletable" for row in assessment["ranges"])
+                or not any(row["status"] == "unresolved" and row["property"] == "value"
+                    and row["path"] == [] and row["excluded_paths"] == []
+                    and expected <= set(row["diagnostic_refs"]) for row in assessment["ranges"])):
+            raise ValueError("Input assessment clears an unvalidated actual-operation range")
+    for diagnostic in checked["diagnostics"]:
+        if diagnostic["code"] != "input_contract_review_validation" or diagnostic["id"] in expected_barrier_diagnostics:
+            continue
+        operation = diagnostic["operation_id"]
+        if operation is None or not any(diagnostic["reason"] == barrier_reason(barrier)
+                                       for barrier in operation_barriers(engine, operation)):
+            raise ValueError("Source-review diagnostic lacks its exact validated operation barrier")
+    from .input_locations import InputLocationBuilder
+    builder = getattr(engine, "input_location_builder", None) or InputLocationBuilder(engine)
+    enriched = builder.enrich(deepcopy(checked["input_assessments"]))
+    if enriched != checked["input_assessments"]:
+        raise ValueError("Input assessment modification or location differs from its bound actual use")
+    from .input_assessments import source_input_semantic_findings
+    from .source_input_findings import SourceInputMismatchIndex
+    source_view = SimpleNamespace(source_input_mismatches=SourceInputMismatchIndex(input_contract_review),
+        ops=engine.ops, diagnostics={d["id"]: d for d in checked["diagnostics"]})
+    expected_findings = source_input_semantic_findings(source_view, checked["input_assessments"])
+    if sorted(expected_findings, key=lambda r:r["id"]) != [r for r in checked["input_findings"] if r["origin"] == "source_review"]:
+        raise ValueError("Source-input findings differ from the immutable reviewed source and actual inputs")
     return checked

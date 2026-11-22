@@ -197,10 +197,11 @@ def processing_impacts(cfg, annotation):
             if declaration["kind"] == "runtime_context" and any(value["type"] == "context_key"
                     and value["identifier"] == declaration["name"] for value in instruction["inputs"]):
                 readers.setdefault(location, set()).add(ir)
-    # Runtime-context/property locations with the same actual name may alias.
+    from skillflow.propagation.contracts.locations import locations_may_alias
+
+    # Address uncertainty is explicit; unknown value content is not an alias.
     aliases = {name: {other for other, value in locations.items()
-                      if value["kind"] == location["kind"] and (value["name"] == location["name"]
-                          or value["name"].startswith("symbolic:") or location["name"].startswith("symbolic:"))}
+                      if locations_may_alias(value, location)}
                for name, location in locations.items()}
     result = {}
     for gap in annotation.get("processing_gaps", []):

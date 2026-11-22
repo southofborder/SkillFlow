@@ -31,11 +31,11 @@ def test_verified_inactive_demands_are_retained_without_missing_producer_errors(
     assert facts.status == "complete"
     inactive = [row for row in demand["diagnostics"] if row["code"] == "inactive_goal"]
     assert inactive and all(not row["blocking"] for row in inactive)
-    assert all(facts.coverage[row["instruction_id"]] == "not_reached" for row in inactive)
+    assert all(facts.coverage[row["instruction_id"]] == "infeasible" for row in inactive)
     assert demand["goals"]  # No Task/goal declarations are silently discarded.
     assert not [row for row in demand["diagnostics"]
                 if row["code"] in {"unbound_goal", "missing_local_record"}
-                and row.get("instruction_id") and facts.coverage[row["instruction_id"]] == "not_reached"]
+                and row.get("instruction_id") and facts.coverage[row["instruction_id"]] == "infeasible"]
     for req, row in demand["coverage"]["requirements"].items():
         if not row["has_applicable_goal"]:
             assert any(item["code"] == "unbound_requirement" and item["requirement_id"] == req

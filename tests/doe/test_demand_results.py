@@ -6,9 +6,49 @@ import pytest
 from skillflow.doe.demand_results import validate_result_shape
 
 
+def test_information_bound_preserves_named_conservative_scope_without_changing_legacy_default():
+    from skillflow.doe.demand_results import Derivation
+    from skillflow.doe.sensitivity_results import SharedDerivations
+    original = result()["derivations"]["d1"]
+    assert "information_bound" not in Derivation.model_validate(original).model_dump(mode="json")
+    bounded = {**original, "conservative": True, "information_bound": True}
+    assert Derivation.model_validate(bounded).model_dump(mode="json") == bounded
+    shared = {"sensitivity": {}, "demand": {"d1": bounded}}
+    assert SharedDerivations.model_validate(shared).model_dump(mode="json") == shared
+    with pytest.raises(ValueError, match="remain conservative"):
+        Derivation.model_validate({**bounded, "conservative": False})
+
+
+def test_bounded_information_requires_scoped_review_origin_and_exact_ancestry():
+    from skillflow.doe.demand_results import _validate_information_bounds
+    origin = {**result()["derivations"]["d1"], "conservative": True, "information_bound": True,
+              "rules": ["input_contract_gap:gap"], "parents": []}
+    child = {**deepcopy(origin), "rules": ["actual_operand"], "parents": ["origin"]}
+    records = {"origin": origin, "child": child}
+    diagnostics = {"gap": {"code": "input_contract_semantic_gap", "operation_id": "op_send", "instruction_id": "send",
+                           "requirement_id": "R1", "affected_instruction_ids": ["send"]}}
+    _validate_information_bounds(records, diagnostics, "bound-receipt")
+    merged = {**deepcopy(records), "deterministic": result()["derivations"]["d1"]}
+    merged["child"]["parents"].append("deterministic")
+    _validate_information_bounds(merged, diagnostics, "bound-receipt")
+    with pytest.raises(ValueError, match="review receipt"):
+        _validate_information_bounds(records, diagnostics, None)
+    for code in ("input_contract_unavailable", "input_contract_review_gap", "unmodeled_processing"):
+        with pytest.raises(ValueError, match="generic or unmodeled"):
+            _validate_information_bounds(records, {"gap": {**diagnostics["gap"], "code": code}}, "bound-receipt")
+    changed = deepcopy(records); changed["child"]["rules"] = ["conservative_processing"]
+    with pytest.raises(ValueError, match="generic or unmodeled"):
+        _validate_information_bounds(changed, diagnostics, "bound-receipt")
+    changed = {"a": {**child, "parents": ["b"]}, "b": {**child, "parents": ["a"]}}
+    with pytest.raises(ValueError, match="lacks ancestry"):
+        _validate_information_bounds(changed, {}, "bound-receipt")
+
+
 def result():
     return {
-        "schema_version": "skillflow-demand-v7", "status": "complete",
+        "schema_version": "skillflow-demand-v12", "status": "complete",
+        "input_assessments": [], "input_findings": [],
+        "input_contract_review_sha256": None,
         "goals": [{"id": "G1", "requirement_id": "R1", "target": {"instruction_id": "send", "side": "input", "index": 0},
                    "preserve": "value", "path": [], "expected": None, "expected_path": [],
                    "reason": "Preserve the specified original payload."}],

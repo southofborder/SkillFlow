@@ -66,7 +66,7 @@ def test_two_member_levels_preserve_exclusion_identity():
     assert overlap(1, 1) == "retain"
 
 
-@pytest.mark.parametrize("coverage,unresolved", [("not_solved", True), ("not_reached", False)])
+@pytest.mark.parametrize("coverage,unresolved", [("not_solved", True), ("not_reached", True), ("infeasible", False)])
 def test_declared_but_unevaluated_collection_does_not_fabricate_member_node(coverage, unresolved):
     facts, task, annotation, candidate, original = map_fixture()
     facts.records = {}

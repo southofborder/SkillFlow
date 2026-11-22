@@ -97,6 +97,20 @@ def _demand_range(demand):
     return [*start, *demand["path"]], [[*start, *p] for p in demand["excluded_paths"]]
 
 
+def comparison_limitations(signal, demands, limitations, diagnostics, problem_refs):
+    """Keep local contract gaps only on overlapping actual demand ancestry.
+
+    The boundary retains its complete limitation inventory. Generic material
+    limitations remain applicable; this narrows only already scoped contracts.
+    """
+    applicable = set()
+    for identity, demand in demands:
+        if demand_overlap(signal, demand) != "none":
+            applicable.update(problem_refs.get(identity, ()))
+    return sorted(identity for identity in limitations
+                  if not diagnostics[identity]["code"].startswith("input_contract_") or identity in applicable)
+
+
 def unstable_collection_offsets(data, identity, seen=None):
     seen = set() if seen is None else seen
     if identity in seen:
@@ -136,12 +150,17 @@ def demand_overlap(signal, demand):
         return "none"
     if not (prefix(path, sensitive) or prefix(sensitive, path)):
         return "none"
-    if demand["conservative"]:
+    if demand["conservative"] and not demand.get("information_bound", False):
         return "retain"
     prop, wanted = signal["property"], demand["property"]
     if wanted == "value":
         return "retain"
     if wanted == "action":
+        return "none"
+    if wanted == "presence" and prefix(path, sensitive) and len(sensitive) > len(path):
+        # Removing a descendant field leaves the containing value present.
+        # This also applies to uncertain necessity when review certifies this
+        # exact information bound; generic conservative dependencies stay broad.
         return "none"
     if wanted == "cardinality" and prefix(path, sensitive) and len(sensitive) > len(path) + 1:
         # A nested field is not a member of the counted container. Removing
@@ -480,7 +499,7 @@ class SensitivityEngine:
     def seed(self):
         for identity, row in self.declarations.items():
             declaration = row["declaration"]
-            if self.engine.index.coverage.get(row["instruction_id"]) == "not_reached":
+            if self.engine.index.coverage.get(row["instruction_id"]) == "infeasible":
                 # The loader verifies typed-guard pruning. This is absence of
                 # an occurrence, not a missing member record or an empty value.
                 self.resolved.add(identity)
@@ -619,7 +638,7 @@ class SensitivityEngine:
         return False
 
     @staticmethod
-    def _compare(signal, demands, limits):
+    def _compare(signal, demands, limits, reduction=None):
         overlap = [(identity, demand_overlap(signal, demand)) for identity, demand in demands]
         if limits:
             return "no_excess_established", "Relevant analysis limitations leave this comparison unresolved; this is neither a safe verdict nor evidence of removable content.", overlap
@@ -627,17 +646,22 @@ class SensitivityEngine:
             return "no_excess_established", "A task-preservation demand retains this information property or conservatively retains the overlapping range. This is not irreplacability.", overlap
         if signal["relation"] != "direct":
             return "possible_excess", "Only a derived or possible relation to declared sensitive information is established. This does not establish the original sensitive value as payload content or independently establish that this subpart is sensitive.", overlap
-        if not demands:
-            return "no_excess_established", "No positive task-preservation demand was established for this payload slot. Absence of a demand is not a deletion certificate.", overlap
         if any(kind == "structure" for _, kind in overlap):
             return "no_excess_established", "The current demand preserves presence or collection structure. Removing the field or element is not supported; reducing its value needs a property-preserving representation.", overlap
+        if reduction is not None:
+            return "excess_supported", "The completed input assessment establishes this supplied range has no task-preservation demand. The specified input or field removal preserves the reviewed output requirements; actual exposure remains recorded.", overlap
+        if not demands:
+            return "no_excess_established", "This payload slot has no positive demand, but no completed input assessment establishes its removable range. Inspect the input assessment's specific coverage or semantic-review reason.", overlap
         if not signal["path"] or signal["property"] != "value" or type(signal["path"][-1]) is not str or signal["excluded_paths"]:
             return "no_excess_established", "The declaration describes a whole, member or structural information range. No supported disjoint field-value reduction has been established.", overlap
         return "excess_supported", "The declared field value is directly present at this boundary and is disjoint from all applicable task-preservation demands under the supported relations. Preserve every demanded field, structure and condition; this does not remove the whole action.", overlap
 
     def solve(self):
         from .constraint_preservation import ConstraintAnalysis
+        from .input_assessments import deletable_reduction, derivation_problem_refs
+        from types import SimpleNamespace
         constraints = ConstraintAnalysis(self.engine)
+        problem_refs = derivation_problem_refs(SimpleNamespace(derivations=self.demand["derivations"]))
         self.track()
         for diagnostic in self.demand["diagnostics"]:
             self.diagnostics[diagnostic["id"]] = {k: diagnostic[k] for k in
@@ -650,7 +674,8 @@ class SensitivityEngine:
             relevant.update(self.engine.ops[key]["position"]["instruction_id"] for key in
                 self.engine.index.slice(sink["boundary"])["backward_slice"]["operations"])
             limits = sorted(set(sink["limitations"]) | {identity for identity, diagnostic in self.diagnostics.items()
-                if diagnostic["blocking"] and diagnostic_applies(diagnostic, relevant,
+                if diagnostic["blocking"] and not diagnostic["code"].startswith("input_contract_")
+                and diagnostic_applies(diagnostic, relevant,
                     scoped_instructions=self.engine.index.slice(sink["boundary"])["usage_context"]["instructions"])})
             reviews = []
             for payload in sink["actual_payload"]:
@@ -673,18 +698,25 @@ class SensitivityEngine:
                             candidates.append(identity)
                         for identity in candidates:
                             signal = self.rows[identity]
-                            conclusion, reason, overlaps = self._compare(signal, demands, limits)
+                            reduction, assessment_refs = deletable_reduction(self.demand, key, slot, data_id, signal["path"])
+                            local_limits = comparison_limitations(signal, demands, limits, self.diagnostics, problem_refs)
+                            conclusion, reason, overlaps = self._compare(signal, demands, local_limits, reduction)
+                            if conclusion == "excess_supported" and reduction is None:
+                                reduction = {"kind": "exclude_field", "path": deepcopy(signal["path"])}
                             constraint_refs = []
                             if conclusion == "excess_supported":
-                                constraint_refs, preserved = constraints.evaluate(key, slot, data_id, signal["path"])
+                                changed_path = [] if reduction["kind"] == "remove_input" else reduction["path"]
+                                constraint_refs, preserved = constraints.evaluate(key, slot, data_id, changed_path)
                                 if not preserved:
                                     conclusion = "no_excess_established"
                                     reason = "Task demands permit this field reduction, but preservation of every applicable constraint has not been established. This is not a necessity or violation proof."
                             row = {"operation_id": key, "input_index": slot,
                                    "derivation_id": identity, "conclusion": conclusion, "reason": reason,
                                    "demand_refs": sorted(d for d, _ in overlaps),
+                                   "limitation_refs": local_limits,
                                    "constraint_refs": constraint_refs,
-                                   "reduction": {"kind": "exclude_field", "path": deepcopy(signal["path"])} if conclusion == "excess_supported" else None}
+                                   **({"assessment_refs": assessment_refs} if assessment_refs else {}),
+                                   "reduction": reduction if conclusion == "excess_supported" else None}
                             reviews.append({"id": _id("data_review_", [sink["id"], key, slot, identity]), **row})
                             used_sensitivity.add(identity)
                             used_demands.update(row["demand_refs"])
@@ -700,7 +732,7 @@ class SensitivityEngine:
                         if field != "id"} for k in sorted(ids)}
         partial = (self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
                    or any(c["status"] == "not_established" for c in constraints.checks.values()))
-        return {"schema_version": "skillflow-sensitivity-review-v6", "status": "partial" if partial else "complete",
+        return {"schema_version": "skillflow-sensitivity-review-v10", "status": "partial" if partial else "complete",
             "sinks": sinks, "derivations": {"sensitivity": closure(used_sensitivity, self.rows),
                 "demand": closure(used_demands, self.demand["derivations"])},
             "constraints": constraints.to_dict(),

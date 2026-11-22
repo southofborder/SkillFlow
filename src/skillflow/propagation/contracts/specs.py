@@ -19,6 +19,7 @@ from skillflow.propagation.contracts.compatibility import validate_event_operati
 from skillflow.propagation.contracts.compatibility import validate_operation_boundary
 from skillflow.propagation.contracts.sensitivity import SensitivityDeclaration
 from skillflow.propagation.contracts.demand import OperationTaskGoal, OperationExpression
+from skillflow.propagation.contracts.input_requirements import DemandTransfer, ToolInputContract, check_input_coverage
 from skillflow.propagation.contracts.evidence import (
     SpecEvidence, Evidences, Operator, OperatorEvidence, Effect, RawEffect,
 )
@@ -33,9 +34,10 @@ SpecPath = Annotated[list[StrictStr | Index], BeforeValidator(_require_list), Fi
 LocationKind = Literal["runtime_context", "storage", "model_context", "remote", "tool", "user"]
 
 from skillflow.propagation.contracts.references import OperandRef
+from skillflow.propagation.contracts.locations import AddressPolicy
 
 
-class LocationSpec(StrictSpec):
+class LocationSpec(AddressPolicy):
     kind: LocationKind
     name: Text
     operand_refs: list[OperandRef]
@@ -69,6 +71,9 @@ class AtomicSpec(StrictSpec):
             result.pop("demands", None)
         if result.get("expression") is None:
             result.pop("expression", None)
+        for field in ("demand_transfer", "input_contract"):
+            if result.get(field) is None:
+                result.pop(field, None)
         return result
 
 
@@ -117,6 +122,13 @@ class RawDeliverOp(AtomicSpec):
     target: Text
     demands: list[OperationTaskGoal] = Field(default_factory=list)
     request_id: Text | None = None
+    input_contract: ToolInputContract | None = None
+
+    @model_validator(mode="after")
+    def contract_input_coverage(self):
+        if self.input_contract is not None:
+            check_input_coverage(self.input_contract.inputs, len(self.inputs))
+        return self
 
     @model_serializer(mode="wrap")
     def omit_absent_request_id(self, handler):
@@ -125,6 +137,8 @@ class RawDeliverOp(AtomicSpec):
             result.pop("request_id", None)
         if not result.get("demands"):
             result.pop("demands", None)
+        if self.input_contract is None:
+            result.pop("input_contract", None)
         return result
 
 
@@ -281,6 +295,22 @@ class RawReadOp(ReadOp):
 
 class RawReceiveOp(ReceiveOp):
     demands: list[OperationTaskGoal] = Field(default_factory=list)
+    input_contract: ToolInputContract | None = None
+
+    @model_validator(mode="after")
+    def contract_input_coverage(self):
+        if self.input_contract is not None:
+            check_input_coverage(self.input_contract.inputs, len(self.inputs))
+        return self
+
+    @model_serializer(mode="wrap")
+    def optional_contract(self, handler):
+        result = handler(self)
+        if self.request_id is None:
+            result.pop("request_id", None)
+        if self.input_contract is None:
+            result.pop("input_contract", None)
+        return result
 
 
 class RawWriteOp(WriteOp):
@@ -306,6 +336,16 @@ class RawBuildOp(BuildOp):
 class RawComputeOp(ComputeOp):
     demands: list[OperationTaskGoal] = Field(default_factory=list)
     expression: OperationExpression | None = None
+    demand_transfer: DemandTransfer | None = None
+
+    @model_validator(mode="after")
+    def contract_input_coverage(self):
+        if self.demand_transfer is not None:
+            if self.expression is not None:
+                raise ValueError("A compute must not supply both expression and demand_transfer")
+            for rule in self.demand_transfer.rules:
+                check_input_coverage(rule.inputs, len(self.inputs))
+        return self
 
 
 class RawFilterItemsOp(FilterItemsOp):
@@ -339,7 +379,7 @@ RawAtomicOp = Annotated[
 def compiled_operation(operation):
     """Task attachments are normalized once, not duplicated in compiled ops."""
     value = operation.model_dump(mode="json") if hasattr(operation, "model_dump") else dict(operation)
-    return {key: item for key, item in value.items() if key not in {"demands", "expression"}}
+    return {key: item for key, item in value.items() if key not in {"demands", "expression", "demand_transfer", "input_contract"}}
 
 
 class CaseLabel(StrictSpec):

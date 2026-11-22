@@ -111,6 +111,8 @@ def test_local_branch_output_is_kept_for_routing_without_a_future_reader():
 def test_reads_and_write_evidence_keep_symbolic_aliases_and_prior_versions():
     locations = {name: {"kind": "storage", "name": name, "operand_refs": []}
                  for name in ("cache", "symbolic:file")}
+    locations["symbolic:file"].update(address_kind="unidentified",
+        address_reason="This authored fixture reads through an unknown file address.")
     blocks = {"b": [ir("read"), ir("append"), ir("delete"), ir("tail")]}
     specs = {"read": spec([{"op": "read", "location": "cache", "output": "read"}]),
              "append": spec([{"op": "write", "target": "cache", "mode": "append", "input": literal("value")}]),

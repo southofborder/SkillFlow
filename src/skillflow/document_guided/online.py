@@ -23,10 +23,11 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 from skillflow.common.semantic_failure import SemanticFailure
 from .batches import validate_batch, batch_model, combine_annotation
 
-STEP_IDENTITY = "skillflow-document-step-v8"
-ANNOTATION_IDENTITY = "skillflow-document-annotation-v8"
+STEP_IDENTITY = "skillflow-document-step-v16"
+ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
 FRAGMENT_KINDS = {name + "_fragment": name for name in
                   ("processing", "task-correspondence", "sensitivity")}
+_SCOPED = ("processing_revision", "sensitivity_revision", "correspondence_revision")
 CONFIG = {"model": "gpt-6.1-sol", "reasoning_effort": "max", "response_format": "json_object"}
 
 
@@ -97,6 +98,14 @@ def resolve_file(owner, ref):
     return path
 
 
+def scoped_dependencies(run, kind):
+    graph, review = run / "graph/initial.json", run / "review/result.json"
+    step = run / "steps" / kind / "result.json"
+    prefix = [step] + ([run / "steps/processing/result.json"]
+                      if kind in {"sensitivity", "task-correspondence"} else [])
+    return [*prefix, graph, review, run / "revision" / (kind + "-scope.json")]
+
+
 def _step_context(directory, manifest):
     """Resolve explicit owners; never copy the full material into a step."""
     context = manifest.get("context", {})
@@ -104,7 +113,8 @@ def _step_context(directory, manifest):
     for name in ("source_owner", "task_run", "processing_step"):
         if name in context:
             value[name] = resolve_run_reference(directory, context[name])
-    for name in ("cfg_path", "controlled_path"):
+    for name in ("cfg_path", "controlled_path", "graph_repair_path", "processing_scope_path",
+                 "sensitivity_scope_path", "task-correspondence_scope_path"):
         if name in context:
             value[name] = resolve_file(directory, context[name])
     if "source_owner" in value:
@@ -116,9 +126,66 @@ def _step_context(directory, manifest):
     if "cfg_path" in value:
         graph = read(value["cfg_path"])
         value["cfg"] = graph.get("cfg", graph)
+    if "graph_repair_path" in value:
+        from .graph_steps import load_revision_input
+        value["graph_repair"] = load_revision_input(directory, value["graph_repair_path"], value["files"],
+            [resolve_file(directory, ref) for ref in manifest["dependencies"]])
+    if "processing_scope_path" in value:
+        from .fragment_revision import processing_scope
+        run = directory.parent.parent
+        old_step = run / "steps/processing"
+        expected_paths = scoped_dependencies(run, "processing")
+        _, old_graph, review, path = expected_paths
+        if (directory.name != "revision-processing" or value["processing_scope_path"] != path
+                or [resolve_file(directory, ref) for ref in manifest["dependencies"][-4:]]
+                   != expected_paths):
+            raise ValueError("Scoped processing does not bind its original record owners")
+        previous = load_step(old_step)
+        findings = (read(review).get("review") or {}).get("findings", [])
+        expected = processing_scope(read(old_graph)["cfg"], value["cfg"], findings, previous,
+            validation_gaps=read(old_step / "result.json").get("validation_gaps", []))
+        if expected is None or expected != read(path):
+            raise ValueError("Processing revision scope differs from its bound dependency proof")
+        value["processing_revision"] = {"scope": expected, "previous": previous}
+        value["validation_gaps"] = expected["retained_validation_gaps"]
     if "processing_step" in value:
         value["processing"] = load_step(value["processing_step"])
         value["validation_gaps"] = read(value["processing_step"] / "result.json").get("validation_gaps", [])
+    if "sensitivity_scope_path" in value:
+        from .fragment_revision import sensitivity_scope
+        run = directory.parent.parent
+        old_step, old_processing = run / "steps/sensitivity", run / "steps/processing"
+        expected_paths = scoped_dependencies(run, "sensitivity")
+        _, _, old_graph, review, path = expected_paths
+        if (directory.name != "revision-sensitivity" or value["sensitivity_scope_path"] != path
+                or [resolve_file(directory, ref) for ref in manifest["dependencies"][-5:]]
+                   != expected_paths):
+            raise ValueError("Scoped sensitivity does not bind its original record owners")
+        previous = load_step(old_step)
+        findings = (read(review).get("review") or {}).get("findings", [])
+        expected = sensitivity_scope(read(old_graph)["cfg"], value["cfg"], load_step(old_processing),
+                                     value["processing"], findings, previous)
+        if expected != read(path):
+            raise ValueError("Sensitivity revision scope differs from its bound dependency proof")
+        value["sensitivity_revision"] = {"scope": expected, "previous": previous}
+    if "task-correspondence_scope_path" in value:
+        from .fragment_revision import correspondence_scope
+        run = directory.parent.parent
+        old_step = run / "steps/task-correspondence"
+        expected_paths = scoped_dependencies(run, "task-correspondence")
+        _, _, old_graph, review, path = expected_paths
+        if (directory.name != "revision-task-correspondence" or value["task-correspondence_scope_path"] != path
+                or [resolve_file(directory, ref) for ref in manifest["dependencies"][-5:]] != expected_paths):
+            raise ValueError("Scoped Task correspondence does not bind its original record owners")
+        previous = load_step(old_step)
+        old_context = _step_context(old_step, checked_manifest(old_step, STEP_IDENTITY))
+        findings = (read(review).get("review") or {}).get("findings", [])
+        expected = correspondence_scope(read(old_graph)["cfg"], value["cfg"], old_context["processing"],
+            value["processing"], old_context["task"], value["task"], findings, previous,
+            old_validation_gaps=old_context["validation_gaps"], new_validation_gaps=value["validation_gaps"])
+        if expected is None or expected != read(path):
+            raise ValueError("Task correspondence revision scope differs from its bound dependency proof")
+        value["correspondence_revision"] = {"scope": expected, "previous": previous}
     if manifest["kind"] in {"full_annotation", "flat_annotation"}:
         from skillflow.propagation.material import prepare_material
         value["material"] = prepare_material(value["source"], value["cfg"],
@@ -139,22 +206,36 @@ def _fragment_material(context):
     return value
 
 
-def _correction_strategy(kind):
+def _correction_strategy(kind, context=None):
+    from .graph_steps import FACTS, GraphFactsCorrection
+    if kind == FACTS:
+        return GraphFactsCorrection((context or {})["files"])
     if kind == "cfg_wire_v5":
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy("cfg")
     if kind in FRAGMENT_KINDS:
+        if any((context or {}).get(key) for key in _SCOPED):
+            return None
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy(FRAGMENT_KINDS[kind])
     return None
 
 
+def _bind_strategy(kind, context):
+    from .graph_steps import FACTS
+    strategy = _correction_strategy(kind, context)
+    if kind == FACTS:
+        context["graph_facts_strategy"] = strategy
+    return strategy
+
+
 def _run_candidate(chain, kind, context):
     """Keep validated independent records without accepting a failed whole answer."""
     try:
-        return chain.run(), None
+        value = chain.run()
+        return value, (context.get("validation_gaps") or None) if context.get("processing_revision") else None
     except StructuralCorrectionLimitReached:
-        if kind not in FRAGMENT_KINDS:
+        if kind not in FRAGMENT_KINDS or any(context.get(key) for key in _SCOPED):
             raise
         from .fragments import salvage_fragment
         value, gaps = salvage_fragment(FRAGMENT_KINDS[kind], chain.last_candidate,
@@ -195,13 +276,27 @@ def _full_graph(value, context):
             "path": "" if row.path in {"candidate", "cfg"} else "/" + "/".join(
                 part.replace("~", "~0").replace("/", "~1")
                 for part in re.findall(r"[^.\[\]]+", row.path)),
-            "message": row.message} for row in result.diagnostics])
+            "message": row.message,
+            **({"context": deepcopy(row.context)} if getattr(row, "context", None) else {})}
+            for row in result.diagnostics])
     return candidate
 
 
 def validate_step(kind, response, *, context=None):
     if kind in FRAGMENT_KINDS:
         from .fragments import validate_fragment
+        revision = (context or {}).get("processing_revision")
+        if revision:
+            from .fragment_revision import merge_processing_revision
+            response = merge_processing_revision(revision["previous"], revision["scope"], response)
+        revision = (context or {}).get("sensitivity_revision")
+        if revision:
+            from .fragment_revision import merge_sensitivity_revision
+            response = merge_sensitivity_revision(revision["previous"], revision["scope"], response)
+        revision = (context or {}).get("correspondence_revision")
+        if revision:
+            from .fragment_revision import merge_correspondence_revision
+            response = merge_correspondence_revision(revision["previous"], revision["scope"], response)
         return validate_fragment(FRAGMENT_KINDS[kind], response, _fragment_material(context or {}),
                                  processing=(context or {}).get("processing"),
                                  validation_gaps=(context or {}).get("validation_gaps", []))
@@ -226,18 +321,50 @@ def validate_step(kind, response, *, context=None):
     except (ValueError, TypeError) as error:
         raise structural_error("json_format", "", str(error)) from error
     context = context or {}
+    from .graph_steps import FACTS, UPDATES, validate_graph
+    if kind in {FACTS, UPDATES}:
+        return validate_graph(kind, value, context)
     if kind in {"cfg_wire", "cfg_wire_v5"}:
         if kind == "cfg_wire_v5" and value.get("outcome") == "cannot_assess":
             raise structural_error("whole_failure_forbidden", "/outcome",
                 "Preserve supported CFG relationships and explicit diagnostics; no whole-analysis refusal")
         if value.get("outcome") == "cannot_assess":
             return _full_graph(value, context)
-        from .cfg_wire import CFGWire, normalize_cfg_wire
+        from .cfg_wire import CFGWire, prepare_cfg_wire
         try:
-            canonical = normalize_cfg_wire(value)
-        except ValidationError as error:
-            raise schema_error(error, candidate=value, schema=CFGWire.model_json_schema()) from error
-        return _full_graph(canonical, context)
+            try:
+                canonical, preflight = prepare_cfg_wire(value)
+            except ValidationError as error:
+                failure = schema_error(error, candidate=value, schema=CFGWire.model_json_schema())
+                for row in failure.diagnostics:
+                    row.setdefault("context", {})["cfg_validation_barrier"] = "candidate_schema"
+                raise failure from error
+            try:
+                accepted = _full_graph(canonical, context)
+            except StructuralValidationError as error:
+                compiled = deepcopy(error.diagnostics)
+                # Compiler owners refer to its own diagnostics. Prefixing the
+                # independent application errors must retain that exact link.
+                for row in compiled:
+                    cause = row.get("context", {}).get("cfg_rejected_block_cascade")
+                    if cause is not None:
+                        for owner in cause["rejected_blocks"]:
+                            owner["diagnostic_index"] += len(preflight)
+                    if row["code"] == "source_copy":
+                        row.setdefault("context", {})["cfg_validation_barrier"] = "source_copy"
+                raise StructuralValidationError(preflight + compiled) from error
+            if preflight:
+                # A successful compiler cannot override an application rule.
+                raise StructuralValidationError(preflight)
+            return accepted
+        except StructuralValidationError as error:
+            # Compiler candidates include deterministic bookkeeping/source
+            # copies. Bind corrective ownership back to the exact original
+            # wire object, whose record positions have been preserved.
+            rows = deepcopy(error.diagnostics)
+            for row in rows:
+                row.setdefault("context", {})["cfg_correction_candidate_sha256"] = canonical_sha256(value)
+            raise StructuralValidationError(rows) from error
     if kind == "full_graph":
         return _full_graph(value, context)
     if kind == "full_annotation":
@@ -270,7 +397,9 @@ def prepare_step(directory, prompt, *, kind, dependencies=(), context=None, max_
     directory, writer = checked_run_path(directory), ArtifactWriter(())
     config = analysis_config(config)
     context = context or {}
-    allowed = {"source_owner", "cfg_path", "task_run", "controlled_path", "processing_step"}
+    allowed = {"source_owner", "cfg_path", "task_run", "controlled_path", "processing_step",
+               "graph_repair_path", "processing_scope_path", "sensitivity_scope_path",
+               "task-correspondence_scope_path"}
     if set(context) - allowed:
         raise ValueError("Unknown document-step context")
     required = {"full_graph": {"source_owner"}, "cfg_wire": {"source_owner"},
@@ -278,18 +407,27 @@ def prepare_step(directory, prompt, *, kind, dependencies=(), context=None, max_
         "flat_annotation": {"source_owner", "cfg_path", "task_run"},
         "graph_audit": {"source_owner", "controlled_path"},
         "cfg_wire_v5": {"source_owner"},
+        "graph_facts_v1": {"source_owner"},
+        "graph_updates_v1": {"source_owner", "graph_repair_path"},
         "processing_fragment": {"source_owner", "cfg_path"},
         "task-correspondence_fragment": {"source_owner", "cfg_path", "task_run", "processing_step"},
         "sensitivity_fragment": {"source_owner", "cfg_path", "processing_step"}}.get(kind, set())
     if not required <= set(context):
         raise ValueError("Missing document-step context: " + ", ".join(sorted(required-set(context))))
+    if "processing_scope_path" in context and (kind != "processing_fragment" or max_corrections != 0):
+        raise ValueError("A scoped processing repair uses one bounded request")
+    if "sensitivity_scope_path" in context and (kind != "sensitivity_fragment" or max_corrections != 0):
+        raise ValueError("A scoped sensitivity repair uses at most one bounded request")
+    if "task-correspondence_scope_path" in context and (kind != "task-correspondence_fragment" or max_corrections != 0):
+        raise ValueError("A scoped Task correspondence repair uses at most one bounded request")
     refs = {}
     if kind in {"processing_fragment", "sensitivity_fragment"} and "task_run" in context:
         raise ValueError("Processing and sensitivity steps must not receive the Task")
     for name in ("source_owner", "task_run", "processing_step"):
         if name in context:
             refs[name] = make_run_reference(directory, context[name])
-    for name in ("cfg_path", "controlled_path"):
+    for name in ("cfg_path", "controlled_path", "graph_repair_path", "processing_scope_path",
+                 "sensitivity_scope_path", "task-correspondence_scope_path"):
         if name in context:
             refs[name] = file_reference(directory, context[name])
     directory.mkdir(parents=True, exist_ok=True)
@@ -309,6 +447,33 @@ def prepare_step(directory, prompt, *, kind, dependencies=(), context=None, max_
     return manifest
 
 
+def _program_scope(context):
+    revision = context.get("sensitivity_revision") or context.get("correspondence_revision")
+    if revision is not None and not revision["scope"]["slots"]:
+        return revision["scope"]
+    return None
+
+
+def _program_fragment(directory, manifest, context, writer, replay):
+    if (directory / "calls").exists():
+        raise ValueError("A program-only fragment cannot contain model calls")
+    value = validate_step(manifest["kind"], {"slots": []}, context=context)
+    path = directory / "value.json"
+    if replay:
+        if read(path) != value:
+            raise ValueError("Program-carried fragment differs")
+    else:
+        writer.json(path, value)
+    result = {"identity": STEP_IDENTITY, "value_file": "value.json", "value_sha256": sha_file(path),
+              "program_revision_sha256": _program_scope(context)["scope_sha256"]}
+    if replay:
+        if read(directory / "result.json") != result:
+            raise ValueError("Program-carried revision receipt differs")
+    else:
+        writer.json(directory / "result.json", result)
+    return value
+
+
 def run_step(directory, *, client=None, replay=False, stop_event=None, config=None):
     directory, writer = checked_run_path(directory), ArtifactWriter(())
     if replay and client is not None:
@@ -321,12 +486,16 @@ def run_step(directory, *, client=None, replay=False, stop_event=None, config=No
         context = _step_context(directory, manifest)
         for dep in manifest["dependencies"]:
             resolve_file(directory, dep)
+        if _program_scope(context) is not None:
+            if client is not None:
+                raise ValueError("A program-carried fragment does not take a model client")
+            return _program_fragment(directory, manifest, context, writer, replay)
         chain = ResponseChain(directory, prefix="calls", base_prompt=(directory / "prompt.txt").read_bytes().decode(),
             request_kind="document_guided_" + manifest["kind"], config=saved_config, writer=writer,
             validate=lambda raw: validate_step(manifest["kind"], raw, context=context),
             client_factory=None if client is None else injected_factory(client), replay=replay,
             max_corrections=manifest.get("max_corrections"), stop_event=stop_event,
-            correction_strategy=_correction_strategy(manifest["kind"]),
+            correction_strategy=_bind_strategy(manifest["kind"], context),
             interruption=(read(directory / "result.json").get("interruption")
                           if replay and (directory / "result.json").exists() else None))
         try:
@@ -383,7 +552,7 @@ def run_step(directory, *, client=None, replay=False, stop_event=None, config=No
         return value
 
 
-def _saved_step_value(directory, manifest):
+def _saved_step_value(directory, manifest, *, expected_identity=STEP_IDENTITY):
     """Read an already validated value without replaying semantic corrections.
 
     Bytes and terminal selection remain checked. Explicit recomputation below
@@ -393,7 +562,7 @@ def _saved_step_value(directory, manifest):
     result = read(directory / "result.json")
     chain = read(directory / "calls/chain.json")
     expected_name = "document.md" if manifest["kind"] in {"document", "flow_document"} else "value.json"
-    if (result.get("identity") != STEP_IDENTITY or result.get("value_file") != expected_name
+    if (result.get("identity") != expected_identity or result.get("value_file") != expected_name
             or result.get("value_sha256") != sha_file(directory / expected_name)
             or result.get("response_chain_sha256") != canonical_sha256(chain)
             or result.get("accepted_call") != chain.get("accepted_call")
@@ -437,13 +606,15 @@ def load_step(directory, *, recompute=False):
     context = _step_context(directory, manifest)
     for dep in manifest["dependencies"]:
         resolve_file(directory, dep)
+    if _program_scope(context) is not None:
+        return _program_fragment(directory, manifest, context, ArtifactWriter(()), True)
     if not recompute:
         return _saved_step_value(directory, manifest)
     chain = ResponseChain(directory, prefix="calls", base_prompt=(directory / "prompt.txt").read_bytes().decode(),
         request_kind="document_guided_" + manifest["kind"], config=config, writer=ArtifactWriter(()),
         validate=lambda raw: validate_step(manifest["kind"], raw, context=context), replay=True, read_only=True,
         max_corrections=manifest.get("max_corrections"),
-        correction_strategy=_correction_strategy(manifest["kind"]))
+        correction_strategy=_bind_strategy(manifest["kind"], context))
     value, salvage = _run_candidate(chain, manifest["kind"], context)
     result = read(directory / "result.json")
     if (result["value_sha256"] != sha_file(directory / result["value_file"])

@@ -8,8 +8,9 @@ from skillflow.document_guided import runner
 from skillflow.document_guided.fragments import split_fragments
 from skillflow.document_guided.online import read
 from skillflow.graph.extraction.compiler import compile_candidate
-from tests.document_guided.test_parallel_runner import _flat, _cfg_wire, freeze_producer
+from tests.document_guided.test_parallel_runner import _flat, _cfg_wire, freeze_producer, graph_facts_fixture
 from tests.doe.test_processing_limits import authored
+from tests.doe.input_review_helpers import accepted_prompt_review
 
 
 def fixture(shared_cache=False):
@@ -23,9 +24,11 @@ def fixture(shared_cache=False):
             "instructions": [{"instruction_ref": ir["id"],
                               **{k: deepcopy(v) for k, v in ir.items() if k != "id"}}
                              for ir in block["instructions"]]})
+    path_labels = {"unknown": "cache-update alternative", "independent": "independent document-body alternative"}
     for edge in cfg["edges"]:
         candidate["edges"].append({"source_block_ref": edge["source_block_id"],
-            "target_block_ref": edge["target_block_id"], "condition_text": edge["condition_text"]})
+            "target_block_ref": edge["target_block_id"],
+            "condition_text": path_labels[edge["target_block_id"]]})
     compiled = compile_candidate(candidate)
     assert compiled.ok, compiled.diagnostics
     before = [ir["id"] for block in cfg["blocks"].values() for ir in block["instructions"]]
@@ -43,7 +46,7 @@ def fixture(shared_cache=False):
     wire = _flat(raw)
     wire["processing_gaps"] = raw["processing_gaps"]
     task = {key: material["task"][key] for key in ("purpose", "requirements", "issues")}
-    return material["source"], _cfg_wire(candidate), task, split_fragments(wire), identities
+    return material["source"], graph_facts_fixture(_cfg_wire(candidate)), task, split_fragments(wire), identities
 
 
 @pytest.mark.parametrize("shared_cache", [False, True])
@@ -69,7 +72,7 @@ def test_source_gap_seven_text_answers_saved_backend_and_replay(tmp_path, monkey
             if self.name == "flow":
                 return "# Flow\nKeep the independent return and unsupported cache write. skill/SKILL.md:1-5"
             value = task if self.name == "task" else graph if self.name == "graph" else (
-                {"outcome": "completed", "findings": []} if self.name == "review" else fragments[self.name])
+                accepted_prompt_review(prompt) if self.name == "review" else fragments[self.name])
             return json.dumps(value, ensure_ascii=False)
 
     result = runner.run(directory, client_factory=lambda name, owner: Client(name))

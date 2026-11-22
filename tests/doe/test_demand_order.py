@@ -6,6 +6,11 @@ from tests.doe.test_demand_engine import set_operator
 
 
 def memory_case(*, partial=False, weak=False, delete=False):
+    source_text = ("# Authored storage-order fixture\n\n"
+        "Read config.json, then write its value to cache. A second write uses a runtime-selected "
+        "storage destination whose address is unresolved and may equal cache. Read cache afterward "
+        "and return its value. Preserve the declared partial order when specified.\n") if weak else None
+
     def change(prepared, raw, evidence):
         raw["locations"]["cache"] = {"kind": "storage", "name": "cache", "operand_refs": [],
                                       "access_scope": "task", "retention": "persistent"}
@@ -14,8 +19,10 @@ def memory_case(*, partial=False, weak=False, delete=False):
         if weak:
             second_target = "dynamic"
             raw["locations"]["dynamic"] = {"kind": "storage", "name": "symbolic:destination", "operand_refs": [],
-                                            "access_scope": "task", "retention": "persistent"}
-            raw["location_evidences"]["dynamic"] = deepcopy(evidence)
+                "access_scope": "task", "retention": "persistent", "address_kind": "unidentified",
+                "address_reason": "The runtime-selected storage destination is unresolved and may be the same address as cache."}
+            raw["location_evidences"]["dynamic"] = [{"file": "skill/SKILL.md", "start_line": 3, "end_line": 3,
+                "reason": "The authored source explicitly leaves the second write's storage address unresolved and permits overlap with cache."}]
         operations = [
             {"op": "write", "mode": "replace", "target": "cache", "input": inp()},
             ({"op": "write", "mode": "delete", "target": "cache"} if delete else
@@ -35,7 +42,7 @@ def memory_case(*, partial=False, weak=False, delete=False):
                           for i, op in enumerate(operations)]
         spec["output_bindings"][0]["value"] = literal("done") if delete else local("saved")
     return fixture([{"op": "compute", "inputs": [inp()], "dependencies": ["derived"], "output": "unused"}],
-                   mode="local", custom=change)
+                   mode="local", custom=change, source_text=source_text)
 
 
 def storage_sinks(result):

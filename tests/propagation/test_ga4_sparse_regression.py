@@ -1,18 +1,53 @@
-"""Selected v9 GA4 semantics, exercised offline without the paused controller."""
+"""Current authored regressions on immutable GA4 topology, not old-run replay.
+
+Only graph shape is retained. Current test operations explicitly exercise
+completion input liveness and repeated literals; no historical annotation is
+converted or evaluated under the current address policy.
+"""
+import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from skillflow.propagation import solver
+from skillflow.propagation.contracts.profiles import AnnotationPayload
 from skillflow.propagation.models import FlowLocation, FlowState
 from skillflow.propagation.data import LiteralContent, Origin
+from tests.propagation.test_solver import annotation_for, input_ref, local, literal
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "backend_sparse_ga4_v9"
 
 
 def load():
-    return tuple(json.loads((FIXTURE / name).read_text(encoding="utf-8"))
-                 for name in ("cfg.json", "payload.json"))
+    cfg = json.loads((FIXTURE / "cfg.json").read_text(encoding="utf-8"))
+    # Unrelated results are authored placeholders. Their original operands and
+    # graph edges still exercise the real history-versus-live-state topology.
+    plans = {ir["id"]: ([], [], [literal({"fixture_output": out["identifier"]}) for out in ir["outputs"]])
+             for block in cfg["blocks"].values() for ir in block["instructions"]}
+    operations = [{"op": "build", "container": "object", "parts": [
+        {"path": ["url"], "value": input_ref(1)},
+        {"path": ["status"], "value": literal("submitted")}], "output": f"record_{index}"}
+        for index in range(32)]
+    operations += [
+        {"op": "append", "input": input_ref(0), "value": local("record_31"), "mode": "item", "output": "updated"},
+        {"op": "build", "container": "object", "parts": [
+            {"path": ["normal"], "value": literal(True)},
+            {"path": ["value"], "value": local("updated")}], "output": "completion"},
+    ]
+    plans["ir_238"] = (["transform"] * len(operations),
+        [(index, [op]) for index, op in enumerate(operations)], [local("completion")])
+    return annotation_for(cfg, plans)
+
+
+def test_historical_sparse_payload_remains_pinned_and_rejected_without_address_policy():
+    provenance = json.loads((FIXTURE / "provenance.json").read_text(encoding="utf-8"))
+    original = {name: (FIXTURE / name).read_bytes() for name in provenance["fixture_sha256"]}
+    assert {name: hashlib.sha256(value).hexdigest() for name, value in original.items()} == provenance["fixture_sha256"]
+    with pytest.raises(ValueError, match="requires explicit address_kind"):
+        AnnotationPayload.model_validate(json.loads(original["payload.json"]))
+    assert all((FIXTURE / name).read_bytes() == value for name, value in original.items())
 
 
 def test_actual_ga4_cycle_liveness_retains_completion_inputs_without_all_history(monkeypatch):

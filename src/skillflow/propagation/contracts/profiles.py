@@ -11,9 +11,11 @@ from skillflow.propagation.contracts.task import TaskReference
 from skillflow.propagation.contracts.realizations import TaskRealization
 from skillflow.propagation.contracts.demand import DemandGoal, RawDemandGoal, DemandSupplement, RawDemandSupplement
 from skillflow.propagation.contracts.limitations import ProcessingGap
+from skillflow.propagation.contracts.input_requirements import CompiledInputContract
+from skillflow.propagation.contracts.locations import require_address_source_evidence
 
 Text = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
-SCHEMA_VERSION = "security-profile-v21"
+SCHEMA_VERSION = "security-profile-v24"
 
 
 class StrictRecord(BaseModel):
@@ -24,6 +26,8 @@ class StrictRecord(BaseModel):
         result = handler(self)
         if not result.get("processing_gaps"):
             result.pop("processing_gaps", None)
+        if not result.get("input_contracts"):
+            result.pop("input_contracts", None)
         return result
 
 
@@ -36,6 +40,7 @@ class AnnotationPayload(StrictRecord):
     locations: dict[Text, LocationSpec]
     sink_boundaries: list[SinkBoundary]
     processing_gaps: list[ProcessingGap] = Field(default_factory=list)
+    input_contracts: list[CompiledInputContract] = Field(default_factory=list)
 
 
 class AnnotationResponse(AnnotationPayload):
@@ -46,6 +51,8 @@ class AnnotationResponse(AnnotationPayload):
     def complete_location_evidence(self):
         if set(self.location_evidences) != set(self.locations):
             raise ValueError("location evidence coverage must match locations exactly")
+        for name, location in self.locations.items():
+            require_address_source_evidence(location, self.location_evidences[name])
         return self
 
 
@@ -64,6 +71,8 @@ class RawAnnotationResponse(StrictRecord):
     def complete_location_evidence(self):
         if set(self.location_evidences) != set(self.locations):
             raise ValueError("location evidence coverage must match locations exactly")
+        for name, location in self.locations.items():
+            require_address_source_evidence(location, self.location_evidences[name])
         return self
 
 

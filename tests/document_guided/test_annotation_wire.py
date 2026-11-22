@@ -14,7 +14,7 @@ from skillflow.propagation.contracts.uses import request_pairs
 
 def sample():
     fixture = _fixture("flat", "Explicit calls preserve response identity.",
-        "Call the service with the query and return its independently acquired response.",
+        "Call the service with the query and return its independently acquired response. The service requires the unchanged query. Optional illustration steps copy the response unchanged or construct an independent null literal.",
         [instruction("ir_call", "invoke", [literal("query")], "response"),
          instruction("ir_return", "return", [result("response")])], {})
     material = example_material(fixture)
@@ -23,6 +23,10 @@ def sample():
         "ir_semantics": {
             "ir_call": {"evidences": [evidence()], "segments": [{"ops": [
                 {"op": "call", "location": "service", "inputs": [{"kind": "input", "index": 0}],
+                 "input_contract": {"inputs": [{"input_index": 0,
+                     "required": [{"property": "value", "path": []}], "remainder": "independent",
+                     "reason": "The service requires the unchanged query parameter."}],
+                     "reason": "The source states the service query requirement.", "evidences": [evidence()]},
                  "output": "reply", "demands": [{"requirement_id": "R1", "target": {"kind": "output"},
                      "preserve": "value", "reason": "Return this response."}]}]}],
                 "output_bindings": [{"output_index": 0, "value": {"kind": "local", "name": "reply"}}]},
@@ -129,7 +133,8 @@ def test_pure_local_return_and_model_mode_operator_derivation():
     _, _, compiled, mapping = compile_flat_response(wire, material)
     assert any(row["instruction_id"] == "ir_return" and row["kind"] == "observation" for row in mapping["events"])
     spec["segments"] = [{"mode": "model", "ops": [{"op": "compute", "inputs": [{"kind": "input", "index": 0}],
-        "dependencies": ["possible"], "output": "copy"}]}]
+        "dependencies": ["possible"], "output": "copy", "expression": {
+            "expression": {"op": "ref", "value": {"kind": "input", "index": 0}}}}]}]
     raw = normalize_flat_annotation(wire, material)
     assert raw["ir_semantics"]["ir_return"]["operator"] == ["llm"]
 
@@ -137,7 +142,8 @@ def test_pure_local_return_and_model_mode_operator_derivation():
 def test_local_empty_returns_explicit_and_compute_effect_is_not_guessed():
     material, wire = sample()
     value = wire["ir_semantics"]["ir_return"]
-    op = {"op": "compute", "inputs": [{"kind": "input", "index": 0}], "dependencies": ["possible"], "output": "unused"}
+    op = {"op": "compute", "inputs": [{"kind": "input", "index": 0}], "dependencies": ["possible"], "output": "unused",
+          "expression": {"expression": {"op": "ref", "value": {"kind": "input", "index": 0}}}}
     value["segments"] = [{"mode": "local", "ops": [op]}]
     with pytest.raises(StructuralValidationError, match="returns"):
         normalize_flat_annotation(wire, material)
@@ -194,7 +200,8 @@ def test_noncall_constraint_phase_rejected_and_failed_shape_not_silently_repaire
 def test_multiple_segments_default_to_fixed_order_and_allow_explicit_partial():
     material, wire = sample()
     spec = wire["ir_semantics"]["ir_call"]
-    spec["segments"].append({"ops": [{"op": "compute", "inputs": [], "dependencies": [], "output": "unrelated"}]})
+    spec["segments"].append({"ops": [{"op": "compute", "inputs": [], "dependencies": [], "output": "unrelated",
+        "expression": {"expression": {"op": "literal", "value": None}}}]})
     assert normalize_flat_annotation(wire, material)["ir_semantics"]["ir_call"]["order"] == "fixed"
     spec["order"] = "partial"
     normalize_flat_annotation(wire, material)

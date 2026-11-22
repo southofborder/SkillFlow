@@ -1,11 +1,16 @@
 # SkillFlow 传播记录结构与更新规则
 
-当前记录身份为 `skillflow-propagation-record-v16`，传播运行是 `skill-ir-propagation-v21`。联合标注 v21／运行 v21，Data 为 v6。上游源文、CFG、规则和接受响应由明确运行引用关联，不复制进传播产物；当前完整版本见[字段收紧规范](../architecture/field-tightening.md)。v15 记录／v20 运行的完整状态快照仍可严格只读加载；不迁移、重写或用新实现重放历史结果。
+当前记录身份为 `skillflow-propagation-record-v16`，传播运行是 `skill-ir-propagation-v22`（格式 22）。profile 为 v24，独立标注运行 v24／格式 23，运行时契约 v12，Data 为 v6。上游源文、CFG、规则和接受响应由明确运行引用关联，不复制进传播产物；当前入口见[版本导航](../current-version.md)。历史记录保留原身份及快照含义，读取须符合其协议；不迁移、重写或用新实现重放历史结果。
 
 显式循环的记录保留前驱与成员绑定、操作候选及有类型分支允许的后继。它们是程序生成的
 静态对应，不是模型填写的循环管理表或逐轮执行日志。循环结果引用封存的有限 Data 摘要；
 不同 occurrence 的获取可以拥有相同参数，但不能据此合并响应身份。读取完整性时核验
 实际分支操作数，不能只凭一个 not_reached 标签免除覆盖。
+
+`execution_error` 定位支持的局部操作失败，`blocked` 标明其实际依赖范围；独立 IR 可以继续形成记录。
+失败尝试的输入和前缀操作是独立诊断证据，不混作成功记录或提交后的 Data。存在部分成功候选时，
+coverage 可以是 `processed`，但相应失败诊断仍限制下游需求／DOE 结论。只有 `infeasible`
+表示经过验证的路径排除；`not_reached`、`not_solved` 和缺少记录不能推导无需求或可删除。
 
 传播算法和模型规格见 [传播算法与 IR 传递规格](SkillFlow-传播算法与IR传递规格.md)。本规范只说明程序算出的记录、分阶段保存与恢复方式。
 
@@ -21,7 +26,7 @@ records[IR ID]
 ├─ events[]
 │  ├─ effect: 固定标签/null
 │  └─ atomic_ops[]
-│     ├─ op: 十种抽象操作之一（含 filter_items）
+│     ├─ op: 十四种原子操作之一（完整清单在运行时契约）
 │     ├─ inputs: list[frozenset[Data ID]]
 │     ├─ outputs: list[frozenset[Data ID]]
 │     ├─ endpoints: FlowLocation[]

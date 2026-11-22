@@ -24,6 +24,7 @@ from skillflow.propagation.contracts.sensitivity import (
     extract_sensitivity_candidate, validate_sensitivity_candidate,
 )
 from skillflow.propagation.contracts.constraints import validate_constraints
+from skillflow.propagation.contracts.input_requirements import normalize_input_contracts, validate_compiled_input_contracts
 
 
 def joint_source_files(material):
@@ -191,9 +192,12 @@ def normalize_joint_semantics(raw, material):
             diagnostics.extend(error.diagnostics)
     if diagnostics:
         raise StructuralValidationError(diagnostics)
+    contracts = normalize_input_contracts(targets, joint_source_files(material), raw["locations"],
+        exact_expression_targets={target_key(row.target) for row in candidate.expressions})
     return {"task_ref": task_reference(task), "realizations": realizations,
             "demands": [v.model_dump(mode="json") for v in candidate.goals],
-            "expressions": [v.model_dump(mode="json") for v in candidate.expressions]}
+            "expressions": [v.model_dump(mode="json") for v in candidate.expressions],
+            **({"input_contracts": contracts} if contracts else {})}
 
 
 def validate_compiled_joint_semantics(compiled, material):
@@ -215,9 +219,12 @@ def validate_compiled_joint_semantics(compiled, material):
                                    joint_source_files(material))
     realizations = validate_realizations(compiled["realizations"], task=task, cfg=material["cfg"],
                                          source_files=files, goals=demand.goals)
+    contracts = validate_compiled_input_contracts(compiled.get("input_contracts", []), files,
+        {ir["id"] for block in material["cfg"]["blocks"].values() for ir in block["instructions"]})
     return {"task_ref": task_reference(task), "realizations": realizations,
             "demands": [v.model_dump(mode="json") for v in demand.goals],
-            "expressions": [v.model_dump(mode="json") for v in demand.expressions]}
+            "expressions": [v.model_dump(mode="json") for v in demand.expressions],
+            **({"input_contracts": contracts} if contracts else {})}
 
 
 def goal_mapping(raw, normalized):

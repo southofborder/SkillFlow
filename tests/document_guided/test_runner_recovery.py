@@ -16,7 +16,7 @@ class Client:
 
 
 def test_accepted_document_boundary_recovers_and_replays_without_dispatch(tmp_path, monkeypatch):
-    from tests.document_guided.test_parallel_runner import freeze_producer
+    from tests.document_guided.test_parallel_runner import freeze_producer, graph_facts_fixture
     freeze_producer(monkeypatch)
     monkeypatch.setattr(runner, "_certificate", lambda *args, **kwargs: None)
     package = tmp_path / "package"
@@ -29,7 +29,7 @@ def test_accepted_document_boundary_recovers_and_replays_without_dispatch(tmp_pa
             "issues": []}
     clients = {"task": Client(task),
                "flow": Client("# Flow\nRead the input and return it unchanged. See skill/SKILL.md:1-1.\n"),
-               "graph": Client(cfg_wire())}
+               "graph": Client(graph_facts_fixture(cfg_wire()))}
     run = tmp_path / "run"
     runner.prepare(package, run_dir=run)
 
@@ -43,11 +43,15 @@ def test_accepted_document_boundary_recovers_and_replays_without_dispatch(tmp_pa
     first = runner.run(run, client_factory=factory, progress=stop_after("flow"))
     assert first["status"] == "interrupted", first
     assert first["stage"] == "flow"
-    assert clients["task"].calls == clients["flow"].calls == 1
+    assert clients["flow"].calls == 1
+    # Task and flow are independent workers. Flow can finish before Task has
+    # entered its client; resumption must send only the missing accepted step.
+    initial_task_calls = clients["task"].calls
+    assert initial_task_calls in {0, 1}
     saved = {path: path.read_bytes() for path in run.rglob("response.json")}
     assert runner.replay(run) == first
     assert all(path.read_bytes() == value for path, value in saved.items())
-    assert clients["task"].calls == clients["flow"].calls == 1
+    assert clients["task"].calls == initial_task_calls and clients["flow"].calls == 1
     second = runner.run(run, client_factory=factory, progress=stop_after("graph"))
     assert second["status"] == "interrupted", second
     assert second["stage"] == "graph"

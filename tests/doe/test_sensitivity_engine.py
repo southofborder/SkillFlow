@@ -251,8 +251,12 @@ def test_repeated_parameters_keep_receiver_slot_specific_demands():
     result = review(values, requested=cand)
     delivery = [r for sink in result["sinks"] if sink["boundary"]["sink_type"] == "external_tool" for r in sink["data_reviews"]]
     assert {r["input_index"] for r in delivery} == {0, 1}
-    assert {r["conclusion"] for r in delivery if r["input_index"] == 0} == {"no_excess_established"}
+    assert {r["conclusion"] for r in delivery if r["input_index"] == 0} == {"excess_supported"}
+    assert all(r["reduction"] == {"kind": "remove_input"} and r["assessment_refs"]
+               for r in delivery if r["input_index"] == 0)
     assert {r["conclusion"] for r in delivery if r["input_index"] == 1} == {"excess_supported"}
+    assert all(r["reduction"] == {"kind": "exclude_field", "path": ["token"]}
+               for r in delivery if r["input_index"] == 1)
 
 
 def test_filter_and_element_scope_keep_member_field_sensitive_without_tool_expansion():

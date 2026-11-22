@@ -48,13 +48,40 @@ relations, endpoints, and write evidence remain available to downstream DOE.
 Omission of a location is not evidence of deletion, empty content, unreachability,
 or safety. Actual writes and removals use explicit operation evidence.
 
-Current propagation runs use identity `skill-ir-propagation-v21`, format 21.
-Coherent saved v20 runs with v15 records remain readable with their old full-state
-meaning. They are not rewritten or replayed through the new version.
+Current propagation runs use identity `skill-ir-propagation-v22`, format 22,
+with profile v24 and runtime contract v12. Historical products retain their
+original identities and state meanings; loading must follow their own supported
+protocol, without rewriting them or replaying old runs through the new version.
 
 The dependency and liveness calculations do not use Task necessity to discard
 data. A necessary action can still expose unnecessary sensitive content. A
 completed fixed point does not prove source-model completeness or absence of DOE.
+
+Locations explicitly distinguish an identified address from unidentified address
+relations. Unknown values at known sources remain separate. Only a declared
+`address_kind=unidentified`, with a specific `address_reason` and physical source
+evidence, creates conservative same-kind aliases and weak writes. Names,
+including a `symbolic:` prefix, do not independently declare alias policy.
+
+Supported local operand/domain failures roll back attempted IR updates and retain
+the original error, exact operation/input identities and detached prefix evidence.
+Unavailable values and control travel through their actual dependency rows;
+independent work can continue. Failed-attempt observations are not successful
+records or committed Data. Unknown reference/integrity/program errors remain
+fatal, and resource limits retain their separate boundary. A partially successful
+IR can have `processed` coverage while its scoped failure still limits DOE.
+
+Only `infeasible` denotes a verified path exclusion. `not_reached`, `not_solved`,
+`execution_error` and missing records cannot justify an inactive demand or input
+deletion. Branch-control uncertainty is discharged only with a finite
+reconvergence proof; strict object-versus-collection guards remain unchanged.
+
+The complete runtime inventory covers the finite schema vocabulary: 14 atomic
+operations, the flat call form, three structures and 14 demand-expression
+operators. It records domains, identity, information properties, effects and
+failure/evidence obligations. This does not enumerate arbitrary Skill scenarios
+or establish external tool semantics. Unsupported source behavior remains a
+located, evidenced gap; successful schema checking is not source equivalence.
 
 ## Measurement terms
 

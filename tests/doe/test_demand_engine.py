@@ -43,8 +43,12 @@ def evidence():
             "reason": "The offline fixture associates this expression with the frozen source."}
 
 
-def fixture(operations, *, mode="default", returned=None, custom=None, graph_change=None):
-    prepared = material()
+def fixture(operations, *, mode="default", returned=None, custom=None, graph_change=None, source_text=None):
+    if source_text is None:
+        prepared = material()
+    else:
+        from tests.propagation.annotation.helpers import graph, source_bundle, prepare_material as fixture_material
+        prepared = fixture_material(source_bundle(source_text), graph())
     from tests.doe.helpers import source_task
     task = source_task(prepared["source"])
     prepared = prepare_material(prepared["source"], prepared["cfg"], task_baseline=task)

@@ -37,7 +37,7 @@ from skillflow.propagation.material import checked_material
 from skillflow.propagation.contracts.profiles import RawAnnotationResponse
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
 
-COMPILER_VERSION = "skillflow-processing-compiler-v12"
+COMPILER_VERSION = "skillflow-processing-compiler-v15"
 
 
 class InternalCompilationError(RuntimeError):
@@ -65,11 +65,14 @@ def compile_response(raw, material):
     compiled.pop("task_revision_id")
     compiled.update(normalized)
     compiled["ir_semantics"] = {}
-    mapping = {"schema_version": "skillflow-processing-compilation-v12",
+    mapping = {"schema_version": "skillflow-processing-compilation-v15",
                "compiler_version": COMPILER_VERSION,
                "runtime_contract": runtime_contract_binding(material["runtime_contract"]),
                "events": [], "goals": goal_mapping(raw, normalized),
                "constraints": constraint_mapping(raw, normalized["task_ref"])}
+    if normalized.get("input_contracts"):
+        mapping["input_contracts"] = [{"contract_id": row["id"], "raw_pointer": row["raw_pointer"]}
+                                      for row in normalized["input_contracts"]]
     rules = {rule["id"]: rule["text"] for rule in material["runtime_contract"]["rules"]}
     mechanism = {"rule_id": "EM10",
                  "reason": "The program compiles observations from declared processing modes and actual symbolic references; this does not prove the mode classification or that execution occurred."}

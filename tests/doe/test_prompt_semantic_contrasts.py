@@ -11,6 +11,7 @@ from skillflow.propagation.annotation.services import to_payload
 from skillflow.propagation.contracts.task import Task
 from skillflow.propagation.loading import materials_from_result
 from skillflow.propagation.solver import propagate
+from tests.doe.test_sink_payload_seeds import assert_unreviewed_contracts
 
 
 def solve(index, field):
@@ -53,8 +54,11 @@ def test_filter_shape_and_predicate_are_not_complete_members_or_collection_truth
 def test_second_submission_does_not_inherit_first_submission_demands():
     good_engine, good = solve(1, "annotation")
     bad_engine, bad = solve(1, "contrast")
-    good_rows = rows(good_engine, good, "deliver")
-    bad_rows = rows(bad_engine, bad, "deliver")
+    good_rows = [row for row in rows(good_engine, good, "deliver") if not row["conservative"]]
+    bad_rows = [row for row in rows(bad_engine, bad, "deliver") if not row["conservative"]]
+    assert_unreviewed_contracts(bad)
+    retained = [row for row in rows(bad_engine, bad, "deliver") if row["conservative"]]
+    assert retained and any(row["node"]["operation_id"] == "op_ir_device_second:e0:a0" for row in retained)
     assert len({row["node"]["operation_id"] for row in good_rows}) == 2
     assert len({row["node"]["operation_id"] for row in bad_rows}) == 1
     assert {row["node"]["slot"] for row in good_rows} == {0, 1}
@@ -65,7 +69,11 @@ def test_open_encoding_alone_adds_no_gap_while_current_append_content_is_preserv
     bad_engine, bad = solve(2, "contrast")
     assert rows(good_engine, good, "write")
     assert not rows(bad_engine, bad, "write")
-    assert good["status"] == bad["status"] == "complete"
+    assert_unreviewed_contracts(good)
+    # The omitted append seed never demands the encoding output, so its missing
+    # compute contract is not traversed or promoted to a global blocker.
+    assert bad["status"] == "complete" and bad["diagnostics"] == []
+    assert not any(row["code"] == "unexpressed_requirement" for row in good["diagnostics"] + bad["diagnostics"])
     assert any(row["conservative"] for row in good["derivations"].values())
     assert prompt_examples()[2]["annotation"]["realizations"][0]["gaps"] == []
 

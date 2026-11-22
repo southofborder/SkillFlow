@@ -27,13 +27,16 @@ CFG 与源文已证明等价，也不表示模型标注或数据暴露判断已�
 
 ## 1. 一次标注与单一阶段顺序
 
-联合标注 v13 的已编译业务 `AnnotationPayload` 严格包含：
+当前 profile v24 的已编译业务 `AnnotationPayload` 严格包含：
 
 ```text
-task / demands / expressions 全局任务与规范化反向需求
+task_ref / realizations      冻结 Task 引用及其在当前图中的对应关系
+demands / expressions        需求起点与结构化计算语义
 ir_semantics[ir_id]         执行主体、依据、事件、输出绑定、敏感声明与顺序
-locations[location_id]     kind、name、operand_refs、access_scope、retention
+locations[location_id]     kind、name、operand_refs、address_kind、address_reason、access_scope、retention
 sink_boundaries[]          编译操作位置、目标、类型和固定边界暴露等级
+processing_gaps[]          具体局部缺口；空表可省略
+input_contracts[]          编译后的输出—输入必要性关系；空表可省略
 ```
 
 原始模型响应使用处理段；程序校验后编译为直接事件并生成 sink 清单。完整响应还带 outcome 和独立 location_evidences；后者必须精确覆盖位置。通过 `to_payload` 显式投影业务字段，求解器不静默删除额外字段。
@@ -67,8 +70,12 @@ sink_boundaries[]          编译操作位置、目标、类型和固定边界�
 同一操作数可关联多个可能位置；没有公开操作数的隐式边界不伪造关联。operand_refs 关联实际操作数值，不能将来源父容器冒充其目标字段。
 位置身份依据只保存于独立审计表，不放回业务位置。程序核验引用和引文，不通过工具名称猜测网络。
 位置属性 access_scope/retention 用于程序生成 sink 类型及固定等级；不改变原传播状态中 `(kind,name)` 的身份，也不自动读取或交付数据。具体默认和纳入范围见[Sink 边界主规范](SkillFlow-Sink边界与固定分级.md)。
-`symbolic:` 位置表示同类未知边界，
-按可能别名保守读写，不能被解释为没有交互。来源身份已知而内容未展开时保持具体名称，不用 symbolic: 扩大别名范围。
+`address_kind` 默认是 `identified`：名字表示稳定来源身份，内容未知不扩大别名。
+已知调用参数、异常载荷、调用结果及成员值保留各自真实来源和 occurrence。
+只有地址关系确实未知时使用 `unidentified`，同时提供具体 `address_reason` 和物理源文依据；
+这类位置与同 kind 的明确或不明确位置保守别名，写入只能弱更新。名字本身不承担别名语法，
+`symbolic:` 前缀没有特殊传播含义；旧前缀声明在新协议下必须明确填写地址策略。
+程序验证类型、引用和证据位置；源文审查仍须判断该未知地址理由是否成立。
 
 路径用字符串字段和整数下标的列表表达，`["0"]` 与 `[0]` 不相同。路径选择必须是
 明确操作；发现一个字段或依赖中提到某字段，不自动缩小整体。
@@ -86,6 +93,17 @@ sink_boundaries[]          编译操作位置、目标、类型和固定边界�
 | `update_fields` | `input`、`updates`、`output` | 覆盖明确字段，其余原整体内容保留 |
 | `build` | `container`、`parts`、`output` | 明确构造 object／list，不将候选并集当作组合 |
 | `compute` | `inputs`、`dependencies`、`output` | 不解释开放函数，保存 derived／possible 依赖 |
+| `filter_items` | `input`、`predicate`、`output` | 保留选中成员原身份；不执行自然语言谓词 |
+| `merge` | `incoming`、`output` | 按实际前驱选择对应值，保持前驱配对 |
+| `member` | `collection`、`output` | 保留源集合成员及 occurrence；对象不充当数组 |
+| `branch` | `input`、类型化谓词与目标 | 保留条件和控制边关系，不执行自由文本条件 |
+| `append` | `collection`、`item` 或 `items`、`output` | 保留原集合、加入内容及有序成员关系 |
+
+这 14 个原子操作，加上 flat `call` 和 `processing`、`for_each`、`cases` 三种结构，
+组成运行时契约的 18 行有限清单。清单还覆盖全部 14 个结构化需求表达式操作符。
+每行说明输入输出类型、身份／别名、信息属性、副作用，并共享失败范围和源文依据义务；
+实际字段、引用、数量和边界仍由类型模式校验。完整清单随契约提供，不为每条 IR 再调用模型。
+覆盖有限支持词汇不等于穷尽任意 Skill 行为或外部工具语义；源文关系不在支持域内时必须保留具体缺口。
 
 操作和输出绑定使用 file/start_line/end_line/reason、target/reason 或 rule_id/reason。原文由程序提取；CFG target 使用真实 IR／块身份及相对路径，规则使用 EM 编号，不再维护别名注册表。效果分类与原子关系的依据职责均保留，位置依据单独保存；字段成员仍是所属操作参数。
 `read.location`、`receive.location` 仍表示业务位置，不是证据编号。
@@ -126,8 +144,9 @@ Data 不再复制传播依据：origin 和 dependencies 没有 evidence_refs，�
 自然语言条件，不承诺每个组合实际可执行。依赖关系与 content 关系分开：未知运算
 使用 opaque 加 possible；排除和覆盖使用相应的内容视图，不能通过依赖边直接认定明文包含。
 
-状态为“分类位置 → 可能 Data ID 集合”。前驱汇合取候选并集；当前结果定义和精确唯一
-位置的覆盖写采用替换／强更新。未知位置或顺序不明时采用弱更新并保留旧候选。删除
+状态为“分类位置 → 可能 Data ID 集合”。不同前驱／成员关联保留为独立关系行，
+不能按位置各自取并集而丢失配对；当前结果定义和明确位置的确定覆盖写采用替换／强更新。
+未知地址或顺序不明时采用弱更新并保留旧候选。删除
 只移除位置绑定，不删除 Data 或历史观察事件。
 
 Data 描述细化保持 ID，但会推进 registry.revision。求解器据此重新检查受影响的已处理
@@ -162,13 +181,20 @@ DOE 对照；计算完成不证明路径可行、次数精确或需求最小。
 | 状态 | 含义 |
 | --- | --- |
 | `complete` | 在当前分析域内求解完成；partial 保留可计算候选关系 |
-| `incomplete` | 某些读取或结果在结束时仍没有可用候选 |
+| `incomplete` | 存在未绑定、源文建模缺口或局部操作失败；独立已处理记录继续保留 |
 | `unsupported_feedback` | 历史协议保留的生成反馈拒绝状态；新有限循环域不以存在反馈全局拒绝 |
 | `resource_limit` | 组合／安排超限，未冒充成功 |
-| `execution_error` | 确定性解释或记录过程中发生错误 |
+| `execution_error` | 有明确全局错误诊断的失败结果；不能把任意程序／完整性错误自动降级为局部缺口 |
 
-非法输入和无效规格在进入求解前明确报错。coverage 区分 processed、unresolved_binding、
-not_reached 和 not_solved；未提交记录不能被已提交空状态代替。
+非法输入和无效规格在进入求解前明确报错。单条 IR 的 coverage 区分 `processed`、
+`execution_error`、`blocked`、`unmodeled`、`unresolved_binding`、`not_solved`、
+`not_reached` 和 `infeasible`。只有经过实际 CFG／类型化条件核验的 `infeasible` 才表示路径排除；
+未执行或未形成记录不能据此删除输入。
+
+支持的局部类型／数据域错误保留原错误、IR／事件／操作位置和实际输入 Data 身份。
+失败 IR 的试探更新回滚，已观察的前缀操作另存为失败证据，不伪造成功输出；缺口随实际数据、
+状态和控制依赖传播，独立工作继续。只有可证明的有限汇合点才能解除未知分支控制。
+对象／集合保护不放宽，未知引用、内部不变量错误和资源限制也不按同一种局部错误吞掉。
 
 ## 5. 运行、业务交付与审查
 

@@ -60,7 +60,8 @@ def test_binary_decisions_preserve_three_outcomes_without_three_way_dispatch(rea
     result = propagate(material["cfg"], to_payload(compiled))
     assert result.status == "complete", result.diagnostics
     assert result.coverage[reached] == "processed"
-    assert all(result.coverage[other] == "not_reached" for other in {"ir_003", "ir_004", "ir_005"} - {reached})
+    # Concrete Boolean guards prove these alternatives impossible.
+    assert all(result.coverage[other] == "infeasible" for other in {"ir_003", "ir_004", "ir_005"} - {reached})
 
 
 def test_empty_traversal_has_no_member_call_or_response():
@@ -69,14 +70,20 @@ def test_empty_traversal_has_no_member_call_or_response():
     material, (_, _, compiled, _) = compile_example(example)
     result = propagate(material["cfg"], to_payload(compiled))
     assert result.status == "complete", result.diagnostics
-    assert result.coverage["ir_004"] == result.coverage["ir_005"] == "not_reached"
+    # The known empty collection proves the member/call path infeasible.
+    assert result.coverage["ir_004"] == result.coverage["ir_005"] == "infeasible"
     assert result.coverage["ir_007"] == "processed"
 
 
 def test_zero_argument_call_remains_valid_and_has_no_invented_payload():
     example = alignment_examples()["caller_boundary"]
     example["cfg"]["blocks"][1]["instructions"][0]["inputs"] = []
-    example["processing"]["ir_semantics"]["ir_003"]["segments"][0]["ops"][0]["inputs"] = []
+    call = example["processing"]["ir_semantics"]["ir_003"]["segments"][0]["ops"][0]
+    call["inputs"] = []
+    call["input_contract"] = {"inputs": [],
+        "reason": "The source defines Service() as an interface with no arguments.",
+        "evidences": [{**example["processing"]["ir_semantics"]["ir_003"]["evidences"][0],
+            "reason": "The source explicitly invokes Service() without arguments."}]}
     example["source"] = "Acquire request; call helper() without arguments. It returns Service()'s actual response."
     material, (_, _, compiled, _) = compile_example(example)
     result = propagate(material["cfg"], to_payload(compiled))
@@ -130,6 +137,7 @@ def test_current_graph_and_all_fragments_receive_complete_source_not_prior_citat
         actual_source = prompt.split("RELATED SOURCE\n", 1)[1].split("\n\nOUTPUT REQUIREMENTS\n", 1)[0]
         assert actual_source == render_source(source_packet(files))
         assert '"script_content"' not in prompt
-    assert "SEALED_TASK\n" not in prompts[1] and "SEALED_TASK\n" not in prompts[3]
-    assert "SEALED_TASK\n" in prompts[2]
+    from skillflow.document_guided.fragment_display import fragment_prompt_parts
+    assert fragment_prompt_parts(prompts[2])[1]["task"] == material["task"]
+    assert "task" not in fragment_prompt_parts(prompts[3])[1]
     assert first["metadata"]["script_content"] == files["skill/unmentioned.py"]

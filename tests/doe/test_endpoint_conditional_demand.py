@@ -18,6 +18,7 @@ from skillflow.propagation.loading import materials_from_result
 from skillflow.propagation.material import prepare_material
 from skillflow.propagation.models import FlowLocation, FlowState
 from skillflow.propagation.solver import propagate
+from tests.doe.test_sink_payload_seeds import assert_unreviewed_contracts
 
 
 def rendered_candidate():
@@ -53,8 +54,10 @@ def solve(condition, *, add_optional_expected=False):
     engine = DemandEngine(*args)
     result = engine.solve()
     assert result == DemandEngine(*args).solve(queue_order="lifo")
-    assert propagated.status == result["status"] == "complete"
-    assert propagated.diagnostics == result["diagnostics"] == []
+    assert propagated.status == "complete" and propagated.diagnostics == []
+    assert_unreviewed_contracts(result)
+    # Keep the exact rendered candidate: do not silently add interface semantics
+    # or a synthetic review merely to make its old status assertion complete.
     if not add_optional_expected:
         assert candidate == shown
     goal = next(goal for goal in result["goals"] if goal["path"] == ["offset"])

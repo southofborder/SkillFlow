@@ -104,7 +104,7 @@ def test_recorded_paths_and_readonly_replay(tmp_path, domain, expected_calls):
     assert result["counts"]["logical_calls"] == expected_calls, result
     assert len(extract.prompts) == 1
     source_input = json.JSONDecoder().raw_decode(extract.prompts[0].split("COMPLETE_ORIGINAL_SOURCE\n\n")[1])[0]
-    assert set(source_input) == {"basis", "source_files"}
+    assert set(source_input) == {"source_files"}
     if domain == "task":
         revision = json.JSONDecoder().raw_decode(task_repair.prompts[0].split("ISOLATED_REVISION_DATA\n\n")[1])[0]
         assert set(revision) == {"previous_task", "objections"}

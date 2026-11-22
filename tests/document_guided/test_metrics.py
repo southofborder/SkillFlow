@@ -163,3 +163,47 @@ def test_launch_attempt_count_does_not_claim_a_failed_popen_started_a_process(tm
     assert result["native_process_starts"] == 0 and result["unknown_native_process_starts"] == 0
     write(directory / "process.json", {"status": "process_error", "exited": False})
     assert transport_metrics(tmp_path)["unknown_native_process_starts"] == 1
+
+
+def test_legacy_attempt_without_observation_has_no_invented_token_timing(tmp_path):
+    attempt(tmp_path, [{"type": "turn.started"}, final("answer"), completed({"input_tokens": 10, "output_tokens": 5})])
+    result = transport_metrics(tmp_path)
+    observed = result["requests"][0]["public_observations"]
+    assert observed["status"] == "missing" and observed["first_token_seconds"] is None
+    assert observed["provider_generation_seconds"] is None
+    assert result["total_usage_known"] and not result["monitor_warnings"]
+
+
+def test_public_observations_do_not_upgrade_unknown_usage(tmp_path, monkeypatch):
+    from tools.doe import document_guided_observation as observation
+    directory = attempt(tmp_path, [{"type": "turn.started"}, final("answer")])
+    (directory / "stderr.txt").write_bytes(b"")
+    monkeypatch.setattr(observation.time, "perf_counter", lambda: 2.5)
+    observation.PublicObserver(directory, 0, "source🌍").observe([], terminal=True)
+    result = transport_metrics(tmp_path)
+    observed = result["requests"][0]["public_observations"]
+    assert observed["status"] == "terminal" and observed["first_completed_final_interval_seconds"] == [0, 2.5]
+    assert observed["delivery"]["characters"] < observed["delivery"]["utf8_bytes"]
+    assert result["unknown_usage_requests"] == 1 and not result["total_usage_known"]
+    assert result["known_token_usage"] == result["partial_token_usage"] == {}
+
+
+def test_malformed_observation_does_not_change_accepted_usage(tmp_path):
+    from tools.doe.document_guided_observation import FILENAME
+    directory = attempt(tmp_path, [{"type": "turn.started"}, final("answer"),
+        completed({"input_tokens": 10, "output_tokens": 5})])
+    (directory / FILENAME).write_text("invalid optional observation\n", encoding="utf-8")
+    result = transport_metrics(tmp_path)
+    assert result["requests"][0]["public_observations"]["status"] == "unavailable"
+    assert result["total_usage_known"] and result["known_token_usage"]["total_tokens"] == 15
+    assert result["monitor_warnings"]
+
+
+def test_fallback_answer_size_does_not_invent_public_final_arrival(tmp_path):
+    attempt(tmp_path, [], answer="answer原文🌍")
+    result = transport_metrics(tmp_path)
+    row = result["requests"][0]
+    assert row["accepted_answer_characters"] == len("answer原文🌍")
+    assert row["accepted_answer_utf8_bytes"] == len("answer原文🌍".encode())
+    assert row["public_observations"]["first_completed_final_interval_seconds"] is None
+    assert result["unknown_usage_requests"] == 1

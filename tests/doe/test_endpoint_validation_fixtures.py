@@ -20,6 +20,7 @@ from skillflow.propagation.review.prompts import build_prompt as review_prompt
 from skillflow.propagation.review.services import validate_response as validate_review
 from skillflow.propagation.solver import propagate
 from tools.doe.endpoint_validation_fixtures import endpoint_validation_fixtures
+from tests.doe.test_sink_payload_seeds import assert_unreviewed_contracts
 
 
 @pytest.fixture(scope="module")
@@ -76,7 +77,7 @@ def test_actual_prompts_are_english_and_exclude_external_acceptance(fixtures):
 
 def test_endpoint_reference_retains_distinct_receiver_and_append_demands(fixtures):
     engine, answer = solve(find_example(fixtures, "annotation_ceramic_dispatch"))
-    assert answer["status"] == "complete"
+    assert_unreviewed_contracts(answer)
     receiver_rows = []
     for sink in answer["sinks"]:
         if sink["boundary"]["sink_type"] not in {"external_tool", "storage_write"}:
@@ -97,7 +98,7 @@ def test_endpoint_reference_retains_distinct_receiver_and_append_demands(fixture
 def test_whole_value_opaque_and_true_return_are_legitimate_controls(fixtures):
     for name in ("annotation_folio_return", "review_custody_release"):
         engine, answer = solve(find_example(fixtures, name))
-        assert answer["status"] == "complete"
+        assert_unreviewed_contracts(answer)
         tools = [sink for sink in answer["sinks"] if sink["boundary"]["sink_type"] == "external_tool"]
         assert tools
         assert any(answer["derivations"][key]["property"] == "value" and answer["derivations"][key]["path"] == []
@@ -107,8 +108,11 @@ def test_whole_value_opaque_and_true_return_are_legitimate_controls(fixtures):
     tool_sink = next(sink for sink in answer["sinks"] if sink["boundary"]["sink_type"] == "external_tool")
     endpoint = [answer["derivations"][key] for key in tool_sink["demanded_information"] + tool_sink["conservative_retention"]
                 if answer["derivations"][key]["node"]["kind"] == "op_input"]
-    assert endpoint and {row["property"] for row in endpoint} == {"shape"}
-    assert not any(row["property"] == "value" for row in endpoint)
+    assert_unreviewed_contracts(answer)
+    exact = [row for row in endpoint if not row["conservative"]]
+    assert exact and {row["property"] for row in exact} == {"shape"}
+    assert not any(row["property"] == "value" for row in exact)
+    assert any(row["conservative"] and row["property"] == "value" for row in endpoint)
 
 
 def test_negative_review_uses_real_goal_and_parent_but_real_cfg_evidence(fixtures):

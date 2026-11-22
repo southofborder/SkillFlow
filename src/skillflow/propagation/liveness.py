@@ -127,7 +127,7 @@ def calculate_liveness(cfg, annotation, interpreter, successors):
                             read.update(aliases)
                             retained.update(aliases)
                             if (body_index is None and event.case is None and spec.order == "fixed"
-                                    and not operation.may and not target.name.startswith("symbolic:")
+                                    and not operation.may and not interpreter.is_unknown_address(target)
                                     and operation.mode in {"replace", "delete"}):
                                 defined.add(target)
                         elif operation.op == "branch":

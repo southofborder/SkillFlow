@@ -14,6 +14,7 @@ from skillflow.document_guided.source_review import (
 )
 from skillflow.graph.extraction.compiler import compile_candidate
 from skillflow.propagation.contracts.task import validate_task_candidate
+from tests.doe.input_review_helpers import review_prompt_payload
 
 
 class Client:
@@ -67,7 +68,7 @@ def test_partial_empty_findings_is_normal_without_a_fake_annotation_or_pass_ledg
     prompt = build_source_review_prompt(material)
     assert "SourceFinding" in prompt and '"suggestion"' in prompt and '"source_refs"' in prompt
     assert "COMPLETE SOURCE" in prompt and "1: Read the request" in prompt
-    payload = json.loads(prompt.split("\nINPUT_JSON\n", 1)[1].split("\nCOMPLETE SOURCE\n", 1)[0])
+    payload = review_prompt_payload(prompt)
     assert "draft_instruction_id" not in json.dumps(payload["cfg"])
     assert not ({"usage", "billing", "env", "requirement_checks", "declaration_checks"} & payload.keys())
 
@@ -254,7 +255,7 @@ def test_fragment_review_partial_gaps_are_not_unknown_as_safe_and_replay_zero_ca
     gap = {"instruction_id": "ir_001", "reason": "The result's internal member acquisition is not represented.",
         "evidences": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}], "unmodeled": True}
     args = {"files": files, "task": task, "cfg": cfg, "generation": "fragment-v1", "processing_gaps": [gap]}
-    client = Client({"outcome": "completed", "findings": []})
+    client = Client({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": []})
     result = run_source_review(tmp_path, **args, client=client)
     assert result["status"] == "complete" and result["diagnostic_only"]
     assert result["availability"] == {"task": True, "cfg": True, "annotation": False,
@@ -272,7 +273,7 @@ def test_fragment_review_whole_failure_gets_one_shape_correction(tmp_path):
     files, task, cfg = fixture()
     client = Client({"outcome": "cannot_assess", "failure": {
         "reason": "Some processing remains unknown.", "target_ids": ["cfg:"], "source_refs": []}},
-        {"outcome": "completed", "findings": []})
+        {"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": []})
     args = {"files": files, "task": task, "cfg": cfg, "generation": "fragment-v1", "partial": True}
     result = run_source_review(tmp_path, **args, client=client)
     assert result["status"] == "complete" and result["diagnostic_only"]
@@ -294,12 +295,12 @@ def test_fragment_review_annotation_owner_comes_from_actual_target(pointer, expe
     material = prepare_review_material(files=files, task=task, cfg=cfg, annotation=wire, generation="fragment-v1")
     item = finding("annotation")
     item["target_ids"] = ["annotation:" + pointer]
-    review = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    review = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert review["findings"][0]["owner"] == expected
     changed = deepcopy(item)
     changed["owner"] = "sensitivity" if expected != "sensitivity" else "processing"
     with pytest.raises(StructuralValidationError):
-        validate_source_review({"outcome": "completed", "findings": [changed]}, material)
+        validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [changed]}, material)
 
 
 @pytest.mark.parametrize("rich_origins", [False, True])
@@ -316,12 +317,12 @@ def test_fragment_origins_override_prefix_and_full_annotation_gaps_stay_diagnost
         mapping=mapping, generation="fragment-v1")
     item = finding("annotation")
     item["target_ids"] = ["annotation:" + pointer]
-    checked = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    checked = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert checked["findings"][0]["owner"] == "task-correspondence"
     assert material["fragment_origins"] == mapping["fragment_origins"]
     args = {"files": files, "task": task, "cfg": cfg, "annotation": wire, "mapping": mapping,
             "generation": "fragment-v1"}
-    result = run_source_review(tmp_path, **args, client=Client({"outcome": "completed", "findings": []}))
+    result = run_source_review(tmp_path, **args, client=Client({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": []}))
     assert all(result["availability"].values()) and result["diagnostic_only"]
     assert replay_saved_review(tmp_path) == result
 
@@ -332,13 +333,13 @@ def test_fragment_owner_cannot_route_task_or_cfg_and_finite_objections_stay_isol
     item = finding("task")
     item["task_objection"] = {"code": "missing_requirement", "source_spans": [
         {"file": "skill/SKILL.md", "start_line": 2, "end_line": 2}], "requirement_ids": []}
-    review = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    review = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert task_objections(review) == [item["task_objection"]]
     assert "owner" not in review["findings"][0]
     for changed in (item, finding("cfg")):
         changed["owner"] = "processing"
         with pytest.raises(StructuralValidationError):
-            validate_source_review({"outcome": "completed", "findings": [changed]}, material)
+            validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [changed]}, material)
 
 
 def partial_fragments():
@@ -374,7 +375,7 @@ def test_partial_review_preserves_actual_fragments_without_fabricating_annotatio
     assert "source-supported semantic omission or defect" in prompt
     item = finding("annotation")
     item["target_ids"] = [operation]
-    checked = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    checked = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert checked["findings"][0]["owner"] == "processing"
     assert task_objections(checked) == []
 
@@ -389,7 +390,7 @@ def test_partial_stage_target_routes_real_source_finding_and_rejects_bad_groundi
     item = finding("annotation")
     item["target_ids"] = ["stage:" + owner]
     item["explanation"] = "The original source requires a declaration missing from the available analysis."
-    checked = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    checked = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert checked["findings"][0]["owner"] == owner
     for change in ("no_source", "bad_source", "bad_owner", "absent_fragment"):
         changed = deepcopy(item)
@@ -402,7 +403,7 @@ def test_partial_stage_target_routes_real_source_finding_and_rejects_bad_groundi
         else:
             changed["target_ids"] = ["fragment:" + owner + ":"]
         with pytest.raises(StructuralValidationError):
-            validate_source_review({"outcome": "completed", "findings": [changed]}, material)
+            validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [changed]}, material)
 
 
 @pytest.mark.parametrize("owner,pointer", [
@@ -419,12 +420,12 @@ def test_actual_partial_owner_targets_remain_reviewable_when_another_owner_faile
         stage_failures={missing: {"status": "structural_failure"}}, generation="fragment-v1")
     item = finding("annotation")
     item["target_ids"] = ["fragment:" + owner + ":" + pointer]
-    checked = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    checked = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert checked["findings"][0]["owner"] == owner
     assert material["annotation"] is None
     item["owner"] = missing
     with pytest.raises(StructuralValidationError):
-        validate_source_review({"outcome": "completed", "findings": [item]}, material)
+        validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
 
 
 def test_partial_fragment_stage_finding_records_and_replays_without_new_calls(tmp_path):
@@ -434,7 +435,7 @@ def test_partial_fragment_stage_finding_records_and_replays_without_new_calls(tm
     args = {"files": files, "task": task, "cfg": cfg, "generation": "fragment-v1",
         "fragments": partial_fragments(), "stage_failures": {"sensitivity": {
             "status": "structural_failure", "reason": "No valid sensitivity fragment"}}}
-    client = Client({"outcome": "completed", "findings": [item]})
+    client = Client({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]})
     result = run_source_review(tmp_path, **args, client=client)
     assert result["status"] == "complete" and result["diagnostic_only"]
     assert result["review"]["findings"][0]["owner"] == "sensitivity"
@@ -453,11 +454,11 @@ def test_fragment_inputs_do_not_change_finite_task_objection_projection():
     item = finding("task")
     item["task_objection"] = {"code": "missing_requirement", "source_spans": [
         {"file": "skill/SKILL.md", "start_line": 2, "end_line": 2}], "requirement_ids": []}
-    review = validate_source_review({"outcome": "completed", "findings": [item]}, material)
+    review = validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
     assert task_objections(review) == [item["task_objection"]]
     item["target_ids"].append("fragment:processing:")
     with pytest.raises(StructuralValidationError):
-        validate_source_review({"outcome": "completed", "findings": [item]}, material)
+        validate_source_review({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": [item]}, material)
 
 
 def test_partial_fragment_inputs_are_explicit_and_legacy_default_is_unchanged():
