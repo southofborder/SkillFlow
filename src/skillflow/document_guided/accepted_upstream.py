@@ -17,9 +17,10 @@ from .accepted_stage_reader import accepted_stage_value, checked_task_artifacts
 IDENTITY = "skillflow-accepted-upstream-v1"
 PATH = "accepted-upstream.json"
 _PARENTS = {"skillflow-document-guided-run-v16", "skillflow-document-guided-run-v17", "skillflow-document-guided-run-v18",
-            "skillflow-document-guided-run-v19", "skillflow-document-guided-run-v20", "skillflow-document-guided-run-v21"}
+            "skillflow-document-guided-run-v19", "skillflow-document-guided-run-v20", "skillflow-document-guided-run-v21",
+            "skillflow-document-guided-run-v22"}
 _STEPS = {"skillflow-document-step-v13", "skillflow-document-step-v14", "skillflow-document-step-v15",
-          "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18"}
+          "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18", "skillflow-document-step-v19"}
 _SOURCE = "skillflow-document-source-v6"
 _EXCLUDED = {".runner.lock", "execution-boundary.json", "report.md"}
 MAX_LINEAGE = 8

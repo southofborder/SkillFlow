@@ -7,7 +7,8 @@ IDENTITY = "skillflow-shared-repair-decision-v2"
 FRAGMENTS = frozenset({"processing", "task-correspondence", "sensitivity"})
 
 
-def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_only=False, processing_gaps=()):
+def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_only=False, processing_gaps=(),
+                    normalize_blocks=True):
     findings = (reviewed.get("review") or {}).get("findings", [])
     domains = {row["domain"] for row in findings}
     reviewed_status = reviewed.get("status")
@@ -31,7 +32,8 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
     if graph_facts_only and (recovery or "cfg" in domains and "graph" in values):
         from .graph_steps import rejected_facts, repair_input, repair_slots
         candidate = rejected_facts(evidence) if recovery else values["graph"]["value"]
-        plan = repair_input(files=files, previous=candidate, accepted=not recovery,
+        plan = repair_input(files=files, previous=candidate, accepted=not recovery, normalize_blocks=normalize_blocks,
+                            failure_evidence=evidence if recovery else None,
                             findings=[row for row in findings if row["domain"] == "cfg"])
         if plan is None or not repair_slots(plan["plan"]):
             scoped_blocked = True

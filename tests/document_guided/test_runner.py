@@ -149,7 +149,7 @@ def test_recorded_review_request_failure_keeps_compiled_doe_and_replays(tmp_path
     assert read(harness.directory / "review/execution-boundary.json")["kind"] == "finished"
     assert len(harness.calls) == result["counts"]["logical_calls"] == 7
     manifest = read(harness.directory / "manifest.json")
-    assert manifest["identity"] == "skillflow-document-guided-run-v21"
+    assert manifest["identity"] == "skillflow-document-guided-run-v22"
     assert manifest["policy"]["review_protocol"] == "shared-v2"
     assert manifest["policy"]["review_request_failure"] == "bound_prior_record_retention_v1"
     assert read(harness.directory / "review/inputs.json")["prompt_view"] == "shared-v2"

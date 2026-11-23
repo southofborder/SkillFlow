@@ -17,6 +17,7 @@ _STRATEGIES = {
     "skillflow-document-step-v16": "skillflow-graph-facts-correction-v1",
     "skillflow-document-step-v17": "skillflow-graph-facts-correction-v2",
     "skillflow-document-step-v18": "skillflow-graph-facts-correction-v3",
+    "skillflow-document-step-v19": "skillflow-graph-facts-correction-v4",
 }
 
 
@@ -47,7 +48,7 @@ def accepted_stage_value(owner, manifest, *, source):
     owner = checked_run_path(owner)
     kind, identity = manifest.get("kind"), manifest.get("identity")
     from .graph_steps import FACTS, UPDATES
-    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18"}
+    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18", "skillflow-document-step-v19"}
     kinds = {FACTS, UPDATES} if current else {"cfg_wire_v5"}
     if identity not in _STRATEGIES or kind not in {"flow_document", *kinds}:
         raise ValueError("Unsupported accepted upstream stage protocol")
@@ -60,8 +61,9 @@ def accepted_stage_value(owner, manifest, *, source):
         raise ValueError("Accepted upstream result must have the exact successful result shape")
     from .online import _bind_strategy, _step_context
     context = {"source": source, "files": {"skill/" + row["path"]: row["content"] for row in source["files"]}}
-    if current and identity != "skillflow-document-step-v18":
-        context["archived_graph"] = True
+    if current:
+        context["archived_graph"] = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}
+        context["normalize_blocks"] = identity == "skillflow-document-step-v19"
     if kind == UPDATES:
         context = _step_context(owner, manifest)
     strategy = _bind_strategy(kind, context)
@@ -98,7 +100,7 @@ def accepted_stage_value(owner, manifest, *, source):
         elif identity == "skillflow-document-step-v16" and kind == FACTS:
             from .prompts import build_graph_updates_prompt
             prompt = build_graph_updates_prompt(files=strategy.files, plan=strategy._plan(previous["candidate"])["plan"],
-                                                archived_v16=True)
+                                                archived_v16=True, normalize_blocks=False)
         elif strategy:
             prompt = strategy.build_prompt(base, deepcopy(previous["candidate"]), deepcopy(previous["diagnostics"]))
         else:

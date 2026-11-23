@@ -272,8 +272,8 @@ def build_compact_graph_prompt(**kwargs):
         previous, kwargs["global_requirements"], packet, _pre_submit(output, "cfg", kwargs.get("self_check", False)))
 
 
-def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False):
-    from .graph_facts import GRAPH_FACTS_SCHEMA
+def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False, normalize_blocks=True):
+    from .graph_facts import BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA
     output = ("Return source-located GraphFacts. The program builds and validates the CFG. "
               "Use stable local references to the actual producer and result version; do not use a nearby "
               "replacement value. Identify the entry, each operation's operands and results, and every exit's "
@@ -290,6 +290,7 @@ def build_graph_facts_prompt(*, files, documents, global_requirements, self_chec
               "supported action outside those roles. Preserve each known boundary even when its response value is unknown. "
               "Localize unknown required facts, keep other supported facts, and cite exact physical source lines. "
               "Do not include source text as a generated value, blocks of machine-authored CFG structure, or a whole-analysis refusal.\n"
+              + (BLOCK_KIND_RULES + "\n" if normalize_blocks else "")
               + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n" + render_prompt_format(GRAPH_FACTS_SCHEMA))
     return _render("Identify the control and data facts in the frozen Skill.",
         _working_documents(documents, ("flow",)), global_requirements, source_packet(files),
@@ -308,12 +309,12 @@ def _fragment_format(step):
     return output
 
 
-def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False):
+def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False, normalize_blocks=True):
     from .graph_slots import GRAPH_UPDATES_SCHEMA
     from .fragment_display import render_fragment_material
     output = "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA)
     if not archived_v16:
-        from .graph_facts import ARCHIVED_GRAPH_FACTS_SCHEMA, GRAPH_FACTS_SCHEMA
+        from .graph_facts import ARCHIVED_GRAPH_FACTS_SCHEMA, BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA
         action_rule = ("An action addition, removal or move cannot be encoded by a region. Leave that finding open.\n"
                        if archived_v17 else
                        "For kind=action_region the value is also a NONEMPTY ARRAY of Block. Editable action "
@@ -328,7 +329,12 @@ def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=
             "For kind=region the value is a NONEMPTY ARRAY of Block, e.g. [block], with no enclosing object. "
             "Preserve all original operations in the entry block exactly. Additional blocks contain zero operations. "
             "Preserve source kinds, constraints, frozen boundary, result ports, return values and action effects. "
-            + action_rule + render_prompt_format(ARCHIVED_GRAPH_FACTS_SCHEMA if archived_v17 else GRAPH_FACTS_SCHEMA))
+            + action_rule
+            + (BLOCK_KIND_RULES + "\nFor an acquisition-shape action_region, return one Block[] update that "
+               "handles the block kind, separates the actual acquisition and updates dependent operands together. "
+               "Keep existing results, external ports and source-supported actions in order.\n"
+               if normalize_blocks and not archived_v17 else "")
+            + render_prompt_format(ARCHIVED_GRAPH_FACTS_SCHEMA if archived_v17 else GRAPH_FACTS_SCHEMA))
     return _render("Supply only the listed, missing or challenged graph facts.",
         render_fragment_material("cfg", {"scope": plan}),
         "Inputs, outputs, conditions and effects at the region boundary are frozen. Check the complete source. "

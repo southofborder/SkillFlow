@@ -19,8 +19,17 @@ from skillflow.graph.extraction.candidate import IRAnalysisCandidate
 from skillflow.graph.extraction.compiler import allocate_candidate_ids, compile_candidate
 from skillflow.graph.ir.cfg import ControlFlowGraph
 
-IDENTITY = "skillflow-graph-facts-v2"
+IDENTITY = "skillflow-graph-facts-v3"
+PREVIOUS_IDENTITY = "skillflow-graph-facts-v2"
 ARCHIVED_IDENTITY = "skillflow-graph-facts-v1"
+
+BLOCK_KIND_RULES = (
+    "Use source_kind=normal for ordinary operations and for a control-only block using existing results or literals. "
+    "A context or external block contains exactly one acquisition before its exit, with at least one result. "
+    "A context acquisition consumes only nonempty context_key inputs. Ordinary uses refer to its produced results. "
+    "An external acquisition needs an actual external resource or prior result. Put later actions in a normal "
+    "successor. Preserve their original order, versions and control conditions."
+)
 
 
 class ResultValue(StrictRecord):
@@ -159,14 +168,18 @@ class GraphAssembly:
     legacy_cfg: dict | None = None
     patch_diagnostics: list = field(default_factory=list)
     archived: bool = False
+    normalize_blocks: bool = True
+    block_layout: dict = field(default_factory=dict)
 
     def to_receipt(self):
-        return {"identity": ARCHIVED_IDENTITY if self.archived else IDENTITY, "origin": self.origin, "source_sha256": self.source_sha256,
+        identity = ARCHIVED_IDENTITY if self.archived else IDENTITY if self.normalize_blocks else PREVIOUS_IDENTITY
+        return {"identity": identity, "origin": self.origin, "source_sha256": self.source_sha256,
             "facts_sha256": canonical_sha256(self.facts),
             "candidate_sha256": _digest(self.candidate), "cfg_sha256": _digest(self.cfg),
             "legacy_cfg_sha256": _digest(self.legacy_cfg), "facts": deepcopy(self.facts),
             "id_map": deepcopy(self.id_map), "slots": deepcopy(self.slots), "gaps": deepcopy(self.gaps),
-            "patch_diagnostics": deepcopy(self.patch_diagnostics)}
+            "patch_diagnostics": deepcopy(self.patch_diagnostics),
+            **({"block_layout": deepcopy(self.block_layout)} if self.block_layout else {})}
 
 
 def _digest(value):
@@ -330,7 +343,58 @@ def _check_authored_roles(raw, slots, gaps, *, imported, prior):
                          "The source action inventory must contain the operation's declared role: " + primary)
 
 
-def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_ids):
+def _acquisition_layout(facts):
+    """Derive physical blocks only where the submitted actions determine the boundary."""
+    layout = {}
+    refs = Counter(block.ref for block in facts.blocks)
+    names = {*refs, facts.entry}
+    for block in facts.blocks:
+        if isinstance(block.exit, Jump):
+            names.add(block.exit.target)
+        elif isinstance(block.exit, Branch):
+            names.update(arm.target for arm in block.exit.arms)
+    for block in facts.blocks:
+        if block.source_kind == "normal" or refs[block.ref] != 1:
+            continue
+        exit = block.exit
+        values = exit.conditions if isinstance(exit, Branch) else exit.values if isinstance(exit, Return) else []
+        if not block.operations:
+            if all(isinstance(value, (ResultValue, LiteralValue)) for value in values):
+                layout[block.ref] = {"kind": "control"}
+            continue
+        if len(block.operations) == 1 or block.constraints:
+            continue
+        first, *rest = block.operations
+        # A read/receive action has an explicit source boundary. A call, inferred
+        # name or composite action provides no unique place to separate it.
+        if first.source_actions:
+            if len(first.source_actions) != 1:
+                continue
+            action = first.source_actions[0]
+            role = action.role or action.kind
+        else:
+            role = first.role or first.opcode
+        if role not in {"receive", "read"} or not first.outputs or not first.inputs:
+            continue
+        if block.source_kind == "context" and not all(isinstance(v, ContextValue) for v in first.inputs):
+            continue
+        if block.source_kind == "external" and not any(isinstance(v, (ResourceValue, ResultValue)) for v in first.inputs):
+            continue
+        if any(isinstance(v, ContextValue) for op in rest for v in op.inputs) or any(
+                isinstance(v, ContextValue) for v in values):
+            continue
+        stem = block.ref + ".body"
+        continuation = stem
+        suffix = 2
+        while continuation in names:
+            continuation = f"{stem}.{suffix}"
+            suffix += 1
+        names.add(continuation)
+        layout[block.ref] = {"kind": "split", "continuation": continuation}
+    return layout
+
+
+def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_ids, block_layout):
     blocks, edges, contexts = [], [], []
     previous = {(block["block_id"], insn["id"]): insn for block in (legacy_cfg or {}).get("blocks", {}).values()
                 for insn in block["instructions"]}
@@ -341,13 +405,15 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
     legacy_edges = {}
     for edge in (legacy_cfg or {}).get("edges", []):
         legacy_edges.setdefault(edge["source_block_id"], []).append((edge["target_block_id"], edge["condition_text"]))
-    locators, inherited_refs = {}, {}
+    locators, inherited_refs, edge_paths = {}, {}, {}
     if facts.entry not in known_blocks:
         _add_gap(raw, slots, gaps, "entry_not_found", ("entry",),
                  "The entry must refer to a declared block.")
 
     def add_edge(ref, target, condition, path):
         edges.append({"source_block_ref": ref, "target_block_ref": target, "condition_text": condition})
+        if block_layout:
+            edge_paths[id(edges[-1])] = path
         if target not in known_blocks:
             _add_gap(raw, slots, gaps, "target_not_found", path, "This target does not identify a declared block.")
 
@@ -422,6 +488,11 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
 
     for bi, block in enumerate(facts.blocks):
         path = ("blocks", bi)
+        layout = block_layout.get(block.ref, {})
+        continuation = layout.get("continuation")
+        physical_index = len(blocks)
+        if block_layout:
+            locators["block", physical_index] = (*path, "operations")
         if not _name(block.ref) or known_blocks[block.ref] != 1:
             _add_gap(raw, slots, gaps, "ambiguous_block", (*path, "ref"),
                      "Block references must be unique and nonempty without surrounding space.", editable=False)
@@ -450,10 +521,14 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
                     _add_gap(raw, slots, gaps, "context_acquisition_only", (*op_path, "inputs", index),
                              "A raw context key belongs to its context acquisition, not an ordinary use.")
             operations.append(instruction(ref, op.opcode, op.inputs, op.outputs, op, op_path, op.ref))
-            locators[(bi, oi)] = op_path
+            if continuation and oi > 0:
+                locators[physical_index + 1, oi - 1] = op_path
+            else:
+                locators[physical_index, oi] = op_path
         exit, exit_path = block.exit, (*path, "exit")
+        exit_block = continuation or block.ref
         if isinstance(exit, Jump):
-            add_edge(block.ref, exit.target, None, (*exit_path, "target"))
+            add_edge(exit_block, exit.target, None, (*exit_path, "target"))
         elif isinstance(exit, Branch):
             actual_arms = [(arm.target, arm.condition) for arm in exit.arms]
             if actual_arms != legacy_edges.get(block.ref):
@@ -465,7 +540,7 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
                         _add_gap(raw, slots, gaps, "guarded_arm", (*exit_path, "arms", ai, "condition"),
                                  "Supply the actual condition for this guarded arm.")
             for ai, arm in enumerate(exit.arms):
-                add_edge(block.ref, arm.target, arm.condition, (*exit_path, "arms", ai, "target"))
+                add_edge(exit_block, arm.target, arm.condition, (*exit_path, "arms", ai, "target"))
         values = exit.values if isinstance(exit, Return) else exit.conditions if isinstance(exit, Branch) else []
         for vi, value in enumerate(values):
             if isinstance(value, ContextValue):
@@ -477,8 +552,21 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
         legacy_exit = legacy_ops[-1]["id"] if legacy_ops else None
         operations.append(instruction(instruction_ref(block.ref), "return" if isinstance(exit, Return) else "dispatch",
             values, [], exit, exit_path, legacy_exit))
-        locators[(bi, len(operations) - 1)] = exit_path
-        kind = None if block.source_kind == "normal" else block.source_kind
+        kind = None if block.source_kind == "normal" or layout.get("kind") == "control" else block.source_kind
+        if continuation:
+            # This instruction only connects the two physical blocks. It has no
+            # source action, value operand, read, write or branch condition.
+            bridge = {"instruction_ref": json_pointer("blocks", block.ref, "continuation"),
+                      "opcode": "dispatch", "inputs": [], "outputs": [], "constraints": [], "metadata": {}}
+            blocks.append({"block_ref": block.ref, "block_name": block.name or block.ref,
+                           "data_source_kind": kind, "instructions": [operations[0], bridge], "constraints": []})
+            edges.append({"source_block_ref": block.ref, "target_block_ref": continuation, "condition_text": None})
+            blocks.append({"block_ref": continuation, "block_name": continuation, "data_source_kind": None,
+                           "instructions": operations[1:], "constraints": []})
+            locators[physical_index + 1, len(operations) - 2] = exit_path
+            locators["block", physical_index + 1] = (*path, "operations")
+            continue
+        locators[physical_index, len(operations) - 1] = exit_path
         if kind is not None:
             if len(block.operations) != 1:
                 _add_gap(raw, slots, gaps, "acquisition_shape", (*path, "operations"),
@@ -504,6 +592,7 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
                  for i, edge in enumerate(legacy_cfg["edges"])}
         edges.sort(key=lambda row: order.get((row["source_block_ref"], row["target_block_ref"],
                                               row["condition_text"]), len(order)))
+    locators.update({("edge", i): edge_paths[id(edge)] for i, edge in enumerate(edges) if id(edge) in edge_paths})
     return {"entry_block_ref": facts.entry, "blocks": blocks, "edges": edges,
             "constraints": facts.constraints, "declared_context_keys": contexts}, locators, inherited_refs
 
@@ -520,6 +609,10 @@ def _compile_gap_path(row, locators):
             return (*path, *suffix)
     if parts == ("entry_block_ref",):
         return ("entry",)
+    if len(parts) >= 2 and parts[0] == "edges":
+        return locators.get(("edge", parts[1]))
+    if len(parts) == 2 and parts[0] == "blocks":
+        return locators.get(("block", parts[1]))
     return None
 
 
@@ -542,7 +635,7 @@ def _restore_legacy_labels(cfg, inherited_refs):
                         item["semantic_name"] = old["semantic_name"]
 
 
-def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, archived=False):
+def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, archived=False, normalize_blocks=True):
     """Lower complete facts and revalidate the entire CFG without synthesizing semantics."""
     sha = source_digest(files)
     if not isinstance(value, dict):
@@ -551,15 +644,20 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
     raw, slots, gaps = deepcopy(value), {}, []
     origin = "accepted_cfg" if legacy_cfg is not None else "model_facts"
     prior = deepcopy(canonical_ids or {})
+    normalize_blocks = normalize_blocks and not archived
     if not archived:
         _check_authored_roles(raw, slots, gaps, imported=legacy_cfg is not None, prior=prior)
     facts = _validate_facts(raw, slots, gaps, archived=archived)
     if facts is None:
-        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived)
+        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived,
+                             normalize_blocks=normalize_blocks)
+    layout = _acquisition_layout(facts) if normalize_blocks else {}
+    options = {"archived": archived, "normalize_blocks": normalize_blocks, "block_layout": layout}
     candidate, locators, inherited_refs = _lower(facts, raw, files=files, slots=slots, gaps=gaps,
-                                                legacy_cfg=legacy_cfg, archived=archived, canonical_ids=prior)
+                                                legacy_cfg=legacy_cfg, archived=archived, canonical_ids=prior,
+                                                block_layout=layout)
     if gaps:
-        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived)
+        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, **options)
     try:
         parsed = IRAnalysisCandidate.model_validate(candidate)
     except ValidationError as error:
@@ -571,7 +669,7 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
                     _add_gap(raw, slots, gaps, row["type"], locator, row["msg"])
                     continue
             _add_gap(raw, slots, gaps, row["type"], (), row["msg"], editable=False)
-        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived)
+        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, **options)
     ids = allocate_candidate_ids(parsed, canonical_ids)
     compiled = compile_candidate(parsed, canonical_ids=ids)
     for row in compiled.diagnostics:
@@ -584,7 +682,7 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
         cfg = json.loads(compiled.cfg.to_json())
         _restore_legacy_labels(cfg, inherited_refs)
         ControlFlowGraph.model_validate(cfg).validate_integrity()
-    return GraphAssembly(raw, candidate, cfg, slots, gaps, ids, sha, origin, legacy_cfg, archived=archived)
+    return GraphAssembly(raw, candidate, cfg, slots, gaps, ids, sha, origin, legacy_cfg, **options)
 
 
 def _fact_input(operand):
@@ -592,7 +690,7 @@ def _fact_input(operand):
             else {operand["type"]: operand["identifier"]})
 
 
-def from_accepted_cfg(cfg, *, files, archived=False):
+def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True):
     """Bind old canonical material without representing it as new model-authored facts."""
     verified = ControlFlowGraph.model_validate(cfg)
     verified.validate_integrity()
@@ -633,7 +731,8 @@ def from_accepted_cfg(cfg, *, files, archived=False):
                 arms=[{"target": row["target_block_id"], "condition": row["condition_text"]} for row in edges])
         draft["exit"] = exit
         facts["blocks"].append(draft)
-    assembly = assemble_graph_facts(facts, files=files, canonical_ids=ids, legacy_cfg=cfg, archived=archived)
+    assembly = assemble_graph_facts(facts, files=files, canonical_ids=ids, legacy_cfg=cfg, archived=archived,
+                                    normalize_blocks=normalize_blocks)
     if assembly.cfg != cfg:
         raise ValueError("Cannot reconstruct the accepted CFG exactly from editable facts")
     return assembly

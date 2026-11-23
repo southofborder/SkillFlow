@@ -12,7 +12,8 @@ from skillflow.common.source_evidence import json_pointer, _json_object
 from skillflow.common.validation import structural_error
 
 
-IDENTITY = "skillflow-failed-stage-review-targets-v1"
+ARCHIVED_IDENTITY = "skillflow-failed-stage-review-targets-v1"
+IDENTITY = "skillflow-failed-stage-review-targets-v2"
 EVIDENCE_IDENTITY = "skillflow-failed-stage-material-v1"
 POLICY = {
     "task": {"domain": "task", "accepted_object": "task", "requires_evidence": True},
@@ -34,7 +35,7 @@ def _checked_evidence(evidence, *, stage, failure, source_sha256):
         raise ValueError("Failed-stage review evidence does not match its actual stage, status, source or material")
 
 
-def failed_stage_inventory(*, files, failures, collections, fragments):
+def failed_stage_inventory(*, files, failures, collections, fragments, identity=IDENTITY):
     """Derive all permitted exact IDs and explicit unavailable-stage reasons."""
     source_sha256 = canonical_sha256(files)
     targets, unavailable = [], []
@@ -59,33 +60,38 @@ def failed_stage_inventory(*, files, failures, collections, fragments):
             continue
         target = {"id": "stage:" + stage, "domain": policy["domain"], "kind": "stage_failures",
                   "pointer": json_pointer(stage), "stage": stage, "requires_source": True,
-                  "binding": {"identity": IDENTITY, "source_sha256": source_sha256,
+                  "binding": {"identity": identity, "source_sha256": source_sha256,
                               "failure_sha256": canonical_sha256(failure)}}
         if "owner" in policy:
             target["owner"] = policy["owner"]
         targets.append(target)
-    return {"identity": IDENTITY, "source_sha256": source_sha256,
+        if stage == "graph" and identity == IDENTITY and evidence:
+            from .failed_graph_targets import failed_graph_targets
+            targets.extend(failed_graph_targets(evidence["material"], target))
+    return {"identity": identity, "source_sha256": source_sha256,
             "targets": targets, "unavailable": unavailable}
 
 
 def inventory_for_material(material):
+    recorded = material.get("failed_stage_targets", {}).get("identity")
     return failed_stage_inventory(files=material["files"], failures=material["stage_failures"],
         collections={key: material.get(key) for key in ("task", "cfg", "annotation")},
-        fragments=material.get("fragments", {}))
+        fragments=material.get("fragments", {}), identity=ARCHIVED_IDENTITY if recorded == ARCHIVED_IDENTITY else IDENTITY)
 
 
 def checked_stage_target(identity, material, target):
     """Reject stale or fabricated target rows against current bound evidence."""
-    stage = next((name for name in POLICY if identity == "stage:" + name), None)
+    stage = identity.partition("/")[0].removeprefix("stage:")
     failure = material["stage_failures"].get(stage)
+    saved_inventory = material.get("failed_stage_targets", {})
+    policy = saved_inventory.get("identity") if isinstance(saved_inventory, dict) else None
     expected_inventory = failed_stage_inventory(files=material["files"],
-        failures={} if stage is None or failure is None else {stage: failure},
+        failures={} if stage not in POLICY or failure is None else {stage: failure},
         collections={key: material.get(key) for key in ("task", "cfg", "annotation")},
-        fragments=material.get("fragments", {}))
+        fragments=material.get("fragments", {}), identity=ARCHIVED_IDENTITY if policy == ARCHIVED_IDENTITY else IDENTITY)
     expected = next((row for row in expected_inventory["targets"] if row["id"] == identity), None)
-    saved_inventory = material.get("failed_stage_targets")
     saved = (next((row for row in saved_inventory.get("targets", []) if row.get("id") == identity), None)
-             if isinstance(saved_inventory, dict) and saved_inventory.get("identity") == IDENTITY
+             if policy in {IDENTITY, ARCHIVED_IDENTITY}
              and saved_inventory.get("source_sha256") == expected_inventory["source_sha256"] else None)
     if expected is None or target != expected or saved != expected:
         raise ValueError("Failed-stage review target is absent, stale or not bound to the actual failure material")
@@ -95,8 +101,13 @@ def checked_stage_target(identity, material, target):
 def target_correction_context(identity, material, *, domain=None):
     """Expose exact permitted targets, never invent an alias or semantic parent."""
     targets = material["target_index"]
+    # The complete draft index already accompanies the request. Include only
+    # the named block's sites in an individual correction diagnostic.
+    parts = identity.split("/")
+    draft_block = "/".join(parts[:3]) if parts[:2] == ["stage:graph", "blocks"] and len(parts) >= 3 else None
     stages = [{key: deepcopy(row[key]) for key in ("id", "domain", "stage", "owner") if key in row}
-              for row in targets if row.get("kind") == "stage_failures"]
+              for row in targets if row.get("kind") == "stage_failures" and (
+                  "/" not in row["id"] or draft_block and (row["id"] == draft_block or row["id"].startswith(draft_block + "/")))]
     roots = [row["id"] for row in targets if row.get("pointer") == "" and row.get("domain") == domain]
     compatible = [row for row in targets if row.get("domain") == domain]
     return {"requested_domain": domain, "allowed_failed_stage_targets": stages,
@@ -124,7 +135,7 @@ def correction_guard(candidate, diagnostics, correction):
         context = row.get("context", {})
         match = re.match(r"^/findings/(0|[1-9][0-9]*)/target_ids(?:/|$)", row.get("path", ""))
         if (match is None or context.get("correction_scope") != "unrepresentable_domain"
-                or context.get("target_policy") != IDENTITY):
+                or context.get("target_policy") not in {IDENTITY, ARCHIVED_IDENTITY}):
             continue
         index = int(match[1])
         if (index < len(findings) and isinstance(findings[index], dict)

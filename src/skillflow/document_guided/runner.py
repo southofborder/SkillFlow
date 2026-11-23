@@ -18,7 +18,7 @@ from skillflow.common.upstream import checked_run_path
 from .online import (analysis_config, checked_manifest, file_reference, inventory, prepare_step,
                      read, resolve_file, run_step, save_assembled_annotation, seal)
 
-IDENTITY = "skillflow-document-guided-run-v21"
+IDENTITY = "skillflow-document-guided-run-v22"
 SOURCE_IDENTITY = "skillflow-document-source-v6"
 POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_calls": 7,
           "annotation_assembly": "program", "whole_analysis_refusal": False,
@@ -463,6 +463,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                             previous = rejected_facts(failure["evidence"])
                             previous_path = run / "audit/failed-stages/graph.json"
                         repair = repair_input(files=files, previous=previous, accepted=old is not None,
+                            failure_evidence=None if old is not None else failure["evidence"],
                             findings=[row for row in feedback["review"]["findings"] if row["domain"] == "cfg"])
                         path = _stable(run / "graph/revision-input.json", {"repair": repair}, replay)
                         if repair is None or not repair_slots(repair["plan"]):

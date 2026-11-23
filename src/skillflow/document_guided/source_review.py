@@ -495,6 +495,12 @@ def build_source_review_prompt(material):
                    != expected_stages["targets"]):
             raise ValueError("Failed-stage target inventory does not match current bound review material")
         adapter = FRAGMENT_RESPONSE_ADAPTER
+        if any(row["id"].startswith("stage:graph/") for row in expected_stages["targets"]):
+            instructions += ("\nFor a defect in a rejected graph use the listed stage:graph/blocks/... "
+                "target_ids for its actual operations or exit. For a missing action select the existing "
+                "block or exit where the source places it, request action_inventory, and cite the source "
+                "of that action. For missing data relationships select the affected producers and consumers. "
+                "The stage:graph root alone identifies evidence without authorizing a local edit.\n")
         if material.get("sensitivity_entry_gaps"):
             payload["sensitivity_entry_gaps"] = deepcopy(material["sensitivity_entry_gaps"])
             instructions += ("\nCheck every reported missing sensitive ingress against the source and the named "

@@ -23,7 +23,8 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 from skillflow.common.semantic_failure import SemanticFailure
 from .batches import validate_batch, batch_model, combine_annotation
 
-STEP_IDENTITY = "skillflow-document-step-v18"
+STEP_IDENTITY = "skillflow-document-step-v19"
+PREVIOUS_STEP_IDENTITY = "skillflow-document-step-v18"
 ANNOTATION_IDENTITY = "skillflow-document-annotation-v13"
 ARCHIVED_ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
 READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v12", ARCHIVED_ANNOTATION_IDENTITY})
@@ -143,6 +144,8 @@ def _step_context(directory, manifest):
     """Resolve explicit owners; never copy the full material into a step."""
     context = manifest.get("context", {})
     value = {}
+    if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"}:
+        value["normalize_blocks"] = manifest.get("identity") == STEP_IDENTITY
     if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"} and manifest.get("identity") in {
             "skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}:
         value["archived_graph"] = True
@@ -165,7 +168,8 @@ def _step_context(directory, manifest):
     if "graph_repair_path" in value:
         from .graph_steps import load_revision_input
         value["graph_repair"] = load_revision_input(directory, value["graph_repair_path"], value["files"],
-            [resolve_file(directory, ref) for ref in manifest["dependencies"]], archived=value.get("archived_graph", False))
+            [resolve_file(directory, ref) for ref in manifest["dependencies"]], archived=value.get("archived_graph", False),
+            normalize_blocks=value.get("normalize_blocks", True))
     if "processing_scope_path" in value:
         from .fragment_revision import processing_scope
         run = directory.parent.parent
@@ -215,7 +219,7 @@ def _step_context(directory, manifest):
                 or [resolve_file(directory, ref) for ref in manifest["dependencies"][-5:]] != expected_paths):
             raise ValueError("Scoped Task correspondence does not bind its original record owners")
         previous = load_step(old_step)
-        old_context = _step_context(old_step, checked_manifest(old_step, STEP_IDENTITY))
+        old_context = _step_context(old_step, checked_manifest(old_step, manifest["identity"]))
         findings = (read(review).get("review") or {}).get("findings", [])
         expected = correspondence_scope(read(old_graph)["cfg"], value["cfg"], old_context["processing"],
             value["processing"], old_context["task"], value["task"], findings, previous,
@@ -246,7 +250,8 @@ def _fragment_material(context):
 def _correction_strategy(kind, context=None):
     from .graph_steps import FACTS, GraphFactsCorrection
     if kind == FACTS:
-        return GraphFactsCorrection((context or {})["files"], archived=(context or {}).get("archived_graph", False))
+        return GraphFactsCorrection(context["files"], archived=context.get("archived_graph", False),
+                                    normalize_blocks=context.get("normalize_blocks", True))
     if kind == "cfg_wire_v5":
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy("cfg")
@@ -516,7 +521,7 @@ def _program_fragment(directory, manifest, context, writer, replay):
             raise ValueError("Program-carried fragment differs")
     else:
         writer.json(path, value)
-    result = {"identity": STEP_IDENTITY, "value_file": "value.json", "value_sha256": sha_file(path),
+    result = {"identity": manifest["identity"], "value_file": "value.json", "value_sha256": sha_file(path),
               "program_revision_sha256": _program_scope(context)["scope_sha256"]}
     if replay:
         if read(directory / "result.json") != result:
@@ -651,7 +656,10 @@ def _saved_step_value(directory, manifest, *, expected_identity=STEP_IDENTITY):
 
 def load_step(directory, *, recompute=False):
     directory = checked_run_path(directory)
-    manifest = checked_manifest(directory, STEP_IDENTITY, recompute=recompute)
+    identity = read(directory / "manifest.json")["identity"] if not recompute else STEP_IDENTITY
+    if identity not in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}:
+        raise ValueError("Unsupported document step identity")
+    manifest = checked_manifest(directory, identity, recompute=recompute)
     config = analysis_config(manifest["config"])
     if manifest["config"] != config:
         raise ValueError("Document step configuration differs")
@@ -661,7 +669,7 @@ def load_step(directory, *, recompute=False):
     if _program_scope(context) is not None:
         return _program_fragment(directory, manifest, context, ArtifactWriter(()), True)
     if not recompute:
-        return _saved_step_value(directory, manifest)
+        return _saved_step_value(directory, manifest, expected_identity=identity)
     chain = ResponseChain(directory, prefix="calls", base_prompt=(directory / "prompt.txt").read_bytes().decode(),
         request_kind="document_guided_" + manifest["kind"], config=config, writer=ArtifactWriter(()),
         validate=lambda raw: validate_step(manifest["kind"], raw, context=context), replay=True, read_only=True,

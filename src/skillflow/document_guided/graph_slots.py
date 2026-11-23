@@ -14,7 +14,8 @@ from skillflow.common.validation import structural_error
 from .graph_facts import assemble_graph_facts, field_slot, instruction_ref, source_digest
 
 
-IDENTITY = "skillflow-graph-slot-plan-v2"
+IDENTITY = "skillflow-graph-slot-plan-v3"
+PRIOR_IDENTITY = "skillflow-graph-slot-plan-v2"
 ARCHIVED_IDENTITY = "skillflow-graph-slot-plan-v1"
 
 
@@ -149,6 +150,12 @@ def _targets(assembly, finding, files):
         return []
     index = {assembly.id_map["blocks"][block["ref"]]: bi
              for bi, block in enumerate(assembly.facts["blocks"])}
+    continuation_ids = set()
+    for ref, layout in assembly.block_layout.items():
+        if layout["kind"] == "split":
+            ids = assembly.id_map["blocks"]
+            continuation_ids.add(ids[layout["continuation"]])
+            index[ids[layout["continuation"]]] = index[ids[ref]]
     selected = []
     for target in finding.get("target_ids", []):
         if not isinstance(target, str):
@@ -188,15 +195,25 @@ def _targets(assembly, finding, files):
         if ref not in index:
             continue
         suffix = tuple(match[3][1:].split("/")) if match[3] else ()
+        bi = index[ref]
+        oi = int(match[2]) if match[2] is not None else None
+        if oi is not None:
+            if oi >= len(assembly.cfg["blocks"][ref]["instructions"]):
+                continue
+            if ref in continuation_ids:
+                oi += 1
+            elif assembly.block_layout.get(assembly.facts["blocks"][bi]["ref"], {}).get("kind") == "split" and oi:
+                # The program's unconditional bridge has no editable source operation.
+                if capability == "field" or suffix:
+                    continue
+                oi = None
         if capability == "action_inventory":
-            oi = int(match[2]) if match[2] is not None else None
-            operations = assembly.facts["blocks"][index[ref]]["operations"]
+            operations = assembly.facts["blocks"][bi]["operations"]
             if oi is None or oi <= len(operations):
-                selected.append(_action_slot(assembly.facts, index[ref],
+                selected.append(_action_slot(assembly.facts, bi,
                                             operations[oi]["ref"] if oi is not None and oi < len(operations) else None, refs))
             continue
-        selected.extend(_simple_slots(assembly.facts, index[ref],
-                                      int(match[2]) if match[2] is not None else None, suffix,
+        selected.extend(_simple_slots(assembly.facts, bi, oi, suffix,
                                       archived=assembly.archived))
     kind = {"topology": "region", "field": "field"}.get(capability)
     return [slot for slot in selected if slot is not None and (kind is None or slot["kind"] == kind)]
@@ -208,6 +225,45 @@ def _action_slot(facts, bi, action_ref, source_refs):
                 editable_action_refs=[] if action_ref is None else [action_ref],
                 source_refs=deepcopy(source_refs))
     return slot
+
+
+def _acquisition_slots(assembly, slots, gaps):
+    """Offer one block edit for a rejected acquisition, including its operand errors."""
+    regions = {}
+    for gap in gaps:
+        if gap["code"] != "acquisition_shape" or gap.get("slot_id") not in slots:
+            continue
+        bi = slots[gap["slot_id"]]["path"][1]
+        block = assembly.facts["blocks"][bi]
+        operations = block["operations"]
+        sources = []
+        for site in [*operations, block["exit"]]:
+            if site.get("source") and site["source"] not in sources:
+                sources.append(site["source"])
+        region = _action_slot(assembly.facts, bi, None, sources)
+        region["editable_action_refs"] = [op["ref"] for i, op in enumerate(operations)
+            if i == 0 or any("context_key" in value for value in op["inputs"])]
+        regions[bi] = region
+    for bi, region in regions.items():
+        covered = {key for key, slot in slots.items() if slot["path"][:2] == ["blocks", bi]}
+        for gap in gaps:
+            if gap.get("slot_id") in covered:
+                gap["slot_id"] = region["slot_id"]
+        for key in covered:
+            path = slots[key]["path"]
+            if len(path) >= 5 and path[2] == "operations":
+                ref = region["old_value"]["operations"][path[3]]["ref"]
+                if ref not in region["editable_action_refs"]:
+                    region["editable_action_refs"].append(ref)
+            del slots[key]
+        slots[region["slot_id"]] = region
+    return regions
+
+
+def structural_slots(assembly):
+    slots, gaps = deepcopy(assembly.slots), deepcopy(assembly.gaps)
+    regions = _acquisition_slots(assembly, slots, gaps) if assembly.normalize_blocks else {}
+    return slots, gaps, regions
 
 
 def _context(assembly, slots):
@@ -271,25 +327,40 @@ def plan_graph_repair(assembly, *, findings=(), files):
         raise ValueError("Graph repair findings must be source-review records")
     if assembly.cfg is not None and assembly.gaps:
         raise ValueError("An accepted graph cannot carry assembly failures")
-    slots = deepcopy(assembly.slots)
+    slots, gaps, regions = structural_slots(assembly)
+    current = assembly.normalize_blocks and not assembly.archived
     unsupported = []
     for finding in findings:
-        local = _targets(assembly, finding, files) if assembly.cfg is not None else []
+        if assembly.cfg is None and current:
+            from .failed_graph_targets import failed_graph_slots
+            local = failed_graph_slots(assembly, finding, files)
+        else:
+            local = _targets(assembly, finding, files) if assembly.cfg is not None else []
         if not local:
             unsupported.append(finding.get("id") or canonical_sha256(finding)[:24])
         for slot in local:
-            saved = slots.setdefault(slot["slot_id"], slot)
-            if saved["kind"] == "action_region" and saved is not slot:
+            path = slot["path"]
+            saved = regions.get(path[1]) if len(path) >= 2 and path[0] == "blocks" else None
+            if saved is None:
+                saved = slots.setdefault(slot["slot_id"], slot)
+            if saved["kind"] == slot["kind"] == "action_region" and saved is not slot:
                 for key in ("editable_action_refs", "source_refs"):
                     saved[key].extend(item for item in slot[key] if item not in saved[key])
+            elif saved is not slot and saved["kind"] == "action_region":
+                if len(path) >= 4 and path[2] == "operations":
+                    ref = saved["old_value"]["operations"][path[3]]["ref"]
+                    if ref not in saved["editable_action_refs"]:
+                        saved["editable_action_refs"].append(ref)
+                saved["source_refs"].extend(s for s in finding.get("source_refs", []) if s not in saved["source_refs"])
             if finding.get("id") is not None:
                 finding_ids = saved.setdefault("finding_ids", [])
                 if finding["id"] not in finding_ids:
                     finding_ids.append(finding["id"])
-    body = {"identity": ARCHIVED_IDENTITY if assembly.archived else IDENTITY, "base": {key: value for key, value in assembly.to_receipt().items()
+    identity = ARCHIVED_IDENTITY if assembly.archived else IDENTITY if current else PRIOR_IDENTITY
+    body = {"identity": identity, "base": {key: value for key, value in assembly.to_receipt().items()
             if key not in {"facts", "slots", "gaps", "id_map"}},
         "mode": "slots" if slots else "unaddressable" if assembly.gaps or findings else "no_patch",
-        "slots": slots, "gaps": deepcopy(assembly.gaps), "context": _context(assembly, slots),
+        "slots": slots, "gaps": gaps, "context": _context(assembly, slots),
         "remaining_findings": deepcopy(list(findings)), "unaddressable_findings": unsupported}
     return {**body, "plan_sha256": canonical_sha256(body)}
 
@@ -301,11 +372,112 @@ def _replace(facts, path, value):
     parent[path[-1]] = deepcopy(value)
 
 
-def _check_action_edit(old, blocks, slot, files):
+def _constraint_views(old, blocks, files):
+    """Verify each old block restriction across a split or at its cited source action."""
+    original = {op["ref"]: op for op in old["operations"]}
+    constraints = old.get("constraints", [])
+    views = deepcopy(blocks)
+    relocated = Counter()
+    for block in views:
+        if any(item not in constraints for item in block.get("constraints", [])):
+            raise ValueError("An acquisition split cannot introduce a block restriction")
+        for op in block["operations"]:
+            prior = original.get(op["ref"], {})
+            current = op.get("constraints", [])
+            retained = prior.get("constraints", [])
+            if current == retained:
+                continue
+            if current[:len(retained)] != retained or op.get("source") != prior.get("source") or not op.get("source"):
+                raise ValueError("A relocated block restriction needs the original action and its cited source")
+            validate_source_ref(op["source"], files)
+            added = current[len(retained):]
+            if any(item not in constraints for item in added):
+                raise ValueError("An acquisition split must preserve existing action restrictions")
+            relocated.update(added)
+            if "constraints" in prior:
+                op["constraints"] = retained
+            else:
+                op.pop("constraints", None)
+    for constraint, count in Counter(constraints).items():
+        per_block = [b.get("constraints", []).count(constraint) for b in views]
+        if not (all(n == count for n in per_block) and relocated[constraint] == 0
+                or not any(per_block) and relocated[constraint] == count):
+            raise ValueError("Keep each restriction across the split or attach it to its cited source action")
+    return views
+
+
+def _acquisition_permissions(assembly, plan, region, files):
+    """Recover field and review permissions bundled into a single block update."""
+    from .failed_graph_targets import failed_graph_slots
+    allowed = defaultdict(set)
+    replaceable, additions, control = set(), [], []
+    operations = region["old_value"]["operations"]
+    def allow_field(path):
+        if path[:2] == region["path"] and len(path) >= 5 and path[2] == "operations":
+            allowed[operations[path[3]]["ref"]].add(tuple(path[4:]))
+    for field in assembly.slots.values():
+        allow_field(field["path"])
+    for finding in plan["remaining_findings"]:
+        if finding.get("id") not in region.get("finding_ids", []):
+            continue
+        for grant in failed_graph_slots(assembly, finding, files):
+            if grant["path"][:2] != region["path"]:
+                continue
+            if grant["kind"] == "field":
+                allow_field(grant["path"])
+            else:
+                control.extend(finding["source_refs"])
+                if grant["kind"] == "action_region":
+                    replaceable.update(grant["editable_action_refs"])
+                    additions.extend(grant["source_refs"])
+    return allowed, replaceable, additions, control
+
+
+def _same_outside(before, after, writable):
+    if not writable or before == after:
+        return before == after
+    if () in writable:
+        return True
+    if isinstance(before, dict) and isinstance(after, dict):
+        missing = object()
+        entries = [(k, before.get(k, missing), after.get(k, missing)) for k in before.keys() | after.keys()]
+    elif isinstance(before, list) and isinstance(after, list) and len(before) == len(after):
+        entries = [(i, a, b) for i, (a, b) in enumerate(zip(before, after))]
+    else:
+        return False
+    return all(_same_outside(a, b, {p[1:] for p in writable if p[0] == k}) for k, a, b in entries)
+
+
+def _check_action_edit(old, blocks, slot, files, *, permissions=None):
     """Keep untargeted effects on every old through path, in their original order."""
     editable = set(slot["editable_action_refs"])
     protected = {op["ref"]: op for op in old["operations"] if op["ref"] not in editable}
     original = {op["ref"]: op for op in old["operations"]}
+    def covered(span, refs):
+        return span and any(span["file"] == r["file"] and r["start_line"] <= span["start_line"]
+                            and span["end_line"] <= r["end_line"] for r in refs)
+
+    def roles(op):
+        parts = op.get("source_actions") or [{"role": op.get("role"), "kind": op["opcode"]}]
+        return [action.get("role") or action["kind"] for action in parts]
+
+    acquisition_repair = permissions is not None
+    if acquisition_repair:
+        blocks = _constraint_views(old, blocks, files)
+        allowed, replaceable, additions, control = permissions
+        for i, b in enumerate(blocks):
+            exit = b["exit"]
+            sequential = (exit == old["exit"] if i == len(blocks) - 1 else
+                          exit["kind"] == "jump" and exit["target"] == blocks[i + 1]["ref"])
+            if not sequential and not covered(exit.get("source"), control):
+                raise ValueError("An acquisition split uses sequential jumps and keeps the original exit on its last block")
+        receives = {r for r in editable if roles(original[r]) == ["receive"]
+                    and any("context_key" in v for v in original[r]["inputs"])}
+        retained = set(original) - receives - replaceable
+        existing_keys = {v["context_key"] for ref, op in original.items() if ref not in replaceable
+                         for v in op["inputs"] if "context_key" in v}
+    else:
+        retained = set(protected)
     anchors = list(slot["source_refs"])
     for ref in editable:
         prior = original[ref]
@@ -330,8 +502,19 @@ def _check_action_edit(old, blocks, slot, files):
             encountered.add(ref)
             if ref in protected and op != protected[ref]:
                 raise ValueError("An unaffected action changed in the action region")
-            if ref in protected and block["source_kind"] != old["source_kind"]:
+            if ref in protected and block["source_kind"] != old["source_kind"] and not acquisition_repair:
                 raise ValueError("An unaffected acquisition changed its source kind")
+            if acquisition_repair and ref in retained and ref in editable:
+                writable = set(allowed[ref])
+                for i, (prior, current) in enumerate(zip(original[ref]["inputs"], op["inputs"])):
+                    if "context_key" in prior and "result" in current:
+                        writable.add(("inputs", i))
+                if not _same_outside(original[ref], op, writable):
+                    raise ValueError("Keep the existing action and change only its authorized fields or raw input binding")
+            if (acquisition_repair and ref not in retained and ref not in replaceable
+                    and (ref in original or not covered(op.get("source"), additions))):
+                if any(role not in {"receive", "value"} for role in roles(op)):
+                    raise ValueError("An acquisition repair may introduce only source acquisitions and local value bindings")
             if op != original.get(ref):
                 check_anchor(op.get("source"))
                 for part in op.get("source_actions", []):
@@ -340,11 +523,22 @@ def _check_action_edit(old, blocks, slot, files):
                 raise ValueError("Preserve the reviewed action's declared constraints")
         if block["exit"] != old["exit"]:
             check_anchor(block["exit"].get("source"))
-    if not protected.keys() <= encountered:
+    if not retained <= encountered:
         raise ValueError("The action region removed an unaffected action")
     if any(op.get("constraints") and ref not in encountered for ref, op in original.items()):
         raise ValueError("Cannot retire an action with a surviving declared restriction")
-    order = list(protected)
+    def sequence(ops):
+        events = []
+        for op in ops:
+            ref = op["ref"]
+            if acquisition_repair and ref not in replaceable:
+                added = ref not in original and covered(op.get("source"), additions)
+                events.extend(("key", v["context_key"], op["source"]) for v in op["inputs"]
+                              if "context_key" in v and (not added or v["context_key"] in existing_keys))
+            if ref in retained:
+                events.append(("action", ref))
+        return events
+    order = sequence(old["operations"])
     root = old["ref"]
     repeated_root = any(target == root for _, target, _ in _edges(old))
     by_ref = {b["ref"]: b for b in blocks}
@@ -355,10 +549,13 @@ def _check_action_edit(old, blocks, slot, files):
             continue
         visited.add((name, offset))
         block = by_ref[name]
-        sequence = [op["ref"] for op in block["operations"] if op["ref"] in protected]
-        if sequence != order[offset:offset + len(sequence)]:
-            raise ValueError("An action region repeated or reordered an unaffected action")
-        offset += len(sequence)
+        observed = sequence(block["operations"])
+        expected = order[offset:offset + len(observed)]
+        if len(expected) != len(observed) or any(a != b and not (
+                a[:2] == b[:2] and a[0] == "key" and b[2] and covered(a[2], [b[2]]))
+                for a, b in zip(observed, expected)):
+            raise ValueError("An action region repeated, replaced or reordered an unaffected action or context-key read")
+        offset += len(observed)
         targets = [t for _, t, _ in _edges(block)]
         if not targets and offset != len(order):
             raise ValueError("An action region skipped an unaffected action before returning")
@@ -370,7 +567,7 @@ def _check_action_edit(old, blocks, slot, files):
                 frontier.append((target, 0 if repeated_root and target == root else offset))
 
 
-def _region_changes(facts, slot, rows, files, *, archived):
+def _region_changes(facts, slot, rows, files, *, archived, permissions=None):
     # First validate the local wire types before reading the promised boundary.
     from .graph_facts import ArchivedBlock, Block
 
@@ -398,14 +595,15 @@ def _region_changes(facts, slot, rows, files, *, archived):
     # a newly inserted or moved operation is free of effects.
     action_edit = slot["kind"] == "action_region"
     if action_edit:
-        _check_action_edit(old, normalized, slot, files)
+        _check_action_edit(old, normalized, slot, files, permissions=permissions)
     elif (normalized[0]["source_kind"] != old["source_kind"]
             or normalized[0]["operations"] != old["operations"]
             or any(row["source_kind"] != "normal" or row["operations"] for row in normalized[1:])):
         raise ValueError("A local topology update must preserve the existing actions and acquisition effects")
     exit_index = _retained_exit_index(old, normalized) if action_edit else 0
-    if (normalized[0].get("constraints", []) != old.get("constraints", [])
-            or any(row.get("constraints") for row in normalized[1:])
+    changed_block_constraints = (normalized[0].get("constraints", []) != old.get("constraints", [])
+                                 or any(row.get("constraints") for row in normalized[1:]))
+    if ((permissions is None and changed_block_constraints)
             or any(row["exit"].get("constraints", []) != (old["exit"].get("constraints", []) if i == exit_index else [])
                    for i, row in enumerate(normalized))):
         raise ValueError("A local topology update must preserve declaration scopes")
@@ -488,7 +686,8 @@ def _compile_edits(assembly, edits, files):
     for index, rows in sorted(regions, reverse=True):
         merged["blocks"][index:index + 1] = rows
     return assemble_graph_facts(merged, files=files, canonical_ids=ids,
-                                legacy_cfg=assembly.legacy_cfg, archived=assembly.archived)
+                                legacy_cfg=assembly.legacy_cfg, archived=assembly.archived,
+                                normalize_blocks=assembly.normalize_blocks)
 
 
 def apply_graph_updates(assembly, plan, updates, *, files):
@@ -523,6 +722,7 @@ def apply_graph_updates(assembly, plan, updates, *, files):
             continue
         modifications.append((index, slot, entry.value))
     edits = []
+    acquisition_regions = {g.get("slot_id") for g in plan["gaps"] if g["code"] == "acquisition_shape"}
     for index, slot, value in modifications:
         path = tuple(slot["path"])
         if any(path[:len(other)] == other or other[:len(path)] == path
@@ -532,7 +732,10 @@ def apply_graph_updates(assembly, plan, updates, *, files):
             continue
         if slot["kind"] in {"region", "action_region"}:
             try:
-                value = _region_changes(assembly.facts, slot, value, files, archived=assembly.archived)
+                permissions = (_acquisition_permissions(assembly, plan, slot, files)
+                               if slot["slot_id"] in acquisition_regions else None)
+                value = _region_changes(assembly.facts, slot, value, files, archived=assembly.archived,
+                                        permissions=permissions)
             except (ValueError, TypeError) as error:
                 reject(index, "cfg_region_boundary", str(error), slot["slot_id"])
                 continue
@@ -554,4 +757,5 @@ def apply_graph_updates(assembly, plan, updates, *, files):
                 reject(index, "cfg_slot_merge_conflict", "Individually valid changes conflict when combined.",
                        slot["slot_id"], result.gaps)
             result = assembly
-    return replace(result, patch_diagnostics=[*assembly.patch_diagnostics, *diagnostics])
+    prior = [] if assembly.normalize_blocks and not assembly.archived else assembly.patch_diagnostics
+    return replace(result, patch_diagnostics=[*prior, *diagnostics])
