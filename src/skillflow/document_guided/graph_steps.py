@@ -106,7 +106,7 @@ def validate_graph(kind, value, context):
 
 
 class GraphFactsCorrection:
-    identity = "skillflow-graph-facts-correction-v1"
+    identity = "skillflow-graph-facts-correction-v2"
 
     def __init__(self, files):
         self.files = files

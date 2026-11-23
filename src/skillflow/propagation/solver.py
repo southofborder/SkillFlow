@@ -8,6 +8,7 @@ import json
 from skillflow.propagation.data import DataRegistry
 from skillflow.graph.ir.cfg import ControlFlowGraph
 from skillflow.common.recording import canonical_sha256
+from skillflow.propagation.selectors import compatible_bindings
 from skillflow.propagation.contracts.profiles import AnnotationPayload
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION as PROFILE_VERSION
 from skillflow.propagation.interpreter import PendingValue
@@ -68,14 +69,14 @@ def _join_ir_records(variants):
 
 def _guard_operand_origin(ir, spec, record, event_index, op_index):
     """Prove a local field guard reads a particular immutable result version."""
-    ops = [plain(op) for op in spec.events[event_index].atomic_ops]
-    ref = ops[op_index]["input"]
+    ref = plain(spec.events[event_index].atomic_ops[op_index])["input"]
     if ref["kind"] != "local":
         return None
     # A condition can alias an unrelated Data object with the same content.
     # Follow the typed producer and its recorded paired inputs, not content.
-    for index in range(op_index - 1, -1, -1):
-        producer = ops[index]
+    preceding = [(e, o, plain(op)) for e, event in enumerate(spec.events[:event_index+1])
+                 for o, op in enumerate(getattr(event, "atomic_ops", [])) if (e, o) < (event_index, op_index)]
+    for e, index, producer in reversed(preceding):
         if producer.get("output") != ref["name"]:
             continue
         if producer["op"] != "select_part" or producer["input"]["kind"] != "input":
@@ -83,7 +84,7 @@ def _guard_operand_origin(ir, spec, record, event_index, op_index):
         operand = ir["inputs"][producer["input"]["index"]]
         if operand["type"] != "result":
             return None
-        actual = record.events[event_index].atomic_ops[index]
+        actual = record.events[e].atomic_ops[index]
         return FlowLocation(kind="result", name=operand["identifier"]), actual.alternatives
     return None
 
@@ -113,8 +114,7 @@ def _guarded_outgoing(state, successors, decisions, registry, max_variants):
                 roots_by_origin = None
                 if origin is not None:
                     pairs = [row for row in origin[1] if row.outputs[0] & alternative.inputs[0]
-                             and all(key not in alternative.bindings or alternative.bindings[key] == value
-                                     for key, value in row.bindings.items())]
+                             and compatible_bindings(alternative.bindings, row.bindings)]
                     # The producing result may be dead on this edge; absence
                     # is no reason to reject a route.
                     if pairs and origin[0] in before:
@@ -124,9 +124,7 @@ def _guarded_outgoing(state, successors, decisions, registry, max_variants):
                     # Stored versions survive other members. Their creation
                     # context is preserved by a read/use alias, not a filter.
                     compatible = (values if location.kind != "result" else frozenset(
-                        identity for identity in values if all(
-                            key not in alternative.bindings or alternative.bindings[key] == value
-                            for key, value in registry.bindings(identity).items())))
+                        identity for identity in values if compatible_bindings(alternative.bindings, registry.bindings(identity))))
                     if location == condition_location:
                         roots = set()
                         pending = list(alternative.inputs[0])
@@ -143,6 +141,13 @@ def _guarded_outgoing(state, successors, decisions, registry, max_variants):
                         compatible &= roots
                     if roots_by_origin is not None and location == origin[0]:
                         compatible &= roots_by_origin
+                    if raw.get("selector") and location.kind == "result" and any(
+                            axis.startswith("selector:") for axis in alternative.bindings):
+                        from skillflow.propagation.selectors import routed_identity
+                        compatible = frozenset(routed_identity(registry, identity, alternative.bindings)
+                            if identity in alternative.inputs[0] or (
+                                roots_by_origin is not None and location == origin[0] and identity in roots_by_origin)
+                            else identity for identity in compatible)
                     if compatible:
                         after[location] = compatible
                 if ((condition_location in before and condition_location not in after)
@@ -445,7 +450,9 @@ def propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
             loop_scopes.update({ir["id"]: scope for node in component for ir in cfg["blocks"][node]["instructions"]})
     has_loop_ops = any(op.op in {"merge", "member", "branch", "append"}
         for spec in annotation.ir_semantics.values() for _, _, event in iter_scoped_events(spec) for op in event.atomic_ops)
-    if loop_scopes or has_loop_ops:
+    guarded_cases = any(event.case and event.case.guard for spec in annotation.ir_semantics.values()
+                        for _, _, event in iter_scoped_events(spec))
+    if loop_scopes or has_loop_ops or guarded_cases:
         from skillflow.propagation.loop_domain import LoopFactRegistry
         registry = LoopFactRegistry(registry, loop_scopes)
         registry.max_facts = max_variants
@@ -726,7 +733,7 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                             for event_index, event in enumerate(record.events):
                                 if hasattr(event, "atomic_ops"):
                                     for op_index, op in enumerate(event.atomic_ops):
-                                        if op.op == "branch":
+                                        if op.op == "branch" and not op.skipped_case_inputs:
                                             allowed &= set(op.branch_targets)
                                             decisions.append((ir, annotation.ir_semantics[identity], record,
                                                               event_index, op_index, op))

@@ -8,7 +8,7 @@
 
 本目录给出静态分析 IR 的声明式结构条件 `WF`、可运行参考检查器、Lean 内核检查的证明，以及生产 Python 校验器与参考检查器的差分工具。规范见 [Skill-IR 结构规范与验证边界](../docs/graph/Skill-IR结构规范与验证边界.md)，实施范围见 [第一步实施方案](../docs/history/skill-ir/Plan1.md)。
 
-这一步回答“图是否符合约定的结构和引用规则”，不回答“原文是否全部提取”“操作是否正确执行”或“所有路径是否安全”。Lean 是研究验收工具，不是生产 Python 包的依赖。这里不执行 Skill，不调用模型 API，也不修改冻结的输入、标注、CFG 或图片。
+本步骤验证图的结构和引用规则。文档引导分析及 CFG 受控回述需要调用本机 Lean 打印／解析器。Python 包提供构建用的源码，所有命令均可在固定工具链安装后离线运行。
 
 ## 文件与证明范围
 
@@ -66,6 +66,35 @@ python -m pip install -e . pytest
 ```
 
 ## 构建与公理审计
+
+### 克隆仓库或安装 wheel 后构建受控回述校验器
+
+仓库和 Python wheel 都包含相同的 Lean 源文件、Lake 项目配置、依赖清单和工具链标识。Windows、
+Linux 和 macOS 使用同一条构建命令。可先用官方工具链管理器安装项目固定的版本。[Elan 安装与使用](https://lean-lang.org/doc/reference/latest/Build-Tools-and-Distribution/Managing-Toolchains-with-Elan/)
+
+```text
+elan toolchain install leanprover/lean4:v4.33.1
+python -m skillflow.lean_renderer
+```
+
+已有便携工具链时，使用 `python -m skillflow.lean_renderer --toolchain-bin PATH`，
+将 `PATH` 替换为该发行版内同时包含 `lean` 和 `lake` 的 `bin` 目录。命令核对两者报告的
+Lean 版本，从源码副本构建 `skill_ir_retell`，再用实际二进制对一张固定 CFG 做打印、解析和完整证书核验。
+成功时标准输出是可执行文件的绝对路径，构建目录下的 `build.json` 记录编译工具版本、Lean 源码摘要、
+二进制 SHA-256 和样例 CFG 摘要。这一次往返用于检查安装，业务数据的每张 CFG 仍须独立核验。
+
+代码更新后再次运行即可。默认缓存在用户目录，按平台、架构及 Lean 源码摘要分别存储构建。
+显式传入 `--build-dir 新目录` 可以为一次受控实验保留独立产物。在该实验中将输出路径传给
+校验器参数，或在当前会话设置 `SKILLFLOW_LEAN_RENDERER`。显式路径优先，指定路径失效会报告该路径。
+原有手工构建 `formal/.lake/build/bin/skill_ir_retell` 及其 Windows 版本仍可用于对应平台。
+
+工具链缺失时，先完成上面的固定版本安装。构建报错会列出具体命令和 Lake 的诊断。
+若编译或产物核验失败，错误信息给出未发布的构建目录，便于按原路径查看诊断和提交设备管理员审查。
+如果 Windows 报 WinError 4551、577 或 1260，请查看 CodeIntegrity 的 Operational 日志以确认被拦截的文件。
+设备管理员可提供获批的工具链、签名校验器或允许完成同一套实际核验的构建环境。
+本机编译能解决操作系统或架构不匹配，生成的程序仍须符合设备的签名及应用控制策略。
+
+### 验证完整证明库
 
 从仓库根目录进入本目录。下面的 `PATH` 设置仅用于本次会话的便携工具链；使用 elan 时省略该行。
 

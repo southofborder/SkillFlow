@@ -56,7 +56,8 @@ class ConstraintEngine:
                     info = self.engine.ops[key]
                     if info["spec"]["op"] == "branch":
                         spec = info["spec"]
-                        truths = guard_values(self.data, info["record"]["inputs"][0], spec["predicate"])
+                        truths = guard_values(self.data, info["record"]["inputs"][0], spec["predicate"],
+                                              selector=spec.get("selector"))
                         targets &= {spec["true_target"] if truth else spec["false_target"] for truth in truths}
                         self.typed_targets[block] = targets
         self._reachable = set()
@@ -347,11 +348,36 @@ class ConstraintEngine:
             # Candidate conditions remain source-supported possibilities. One
             # invocation/member selects exactly one alternative, never all.
             result = []
-            for selected in groups[group]:
-                facts = dict(cube)
-                facts.update({case_key(group, identity): identity == selected for identity in groups[group]})
-                result.append((selected == case["id"], facts))
+            for selected, candidate in groups[group].items():
+                for facts in guarded_cases(candidate, cube):
+                    facts.update({case_key(group, identity): identity == selected for identity in groups[group]})
+                    result.append((selected == case["id"], facts))
             return result
+
+        def guarded_cases(case, cube):
+            guard = case.get("guard")
+            if guard is None:
+                return [dict(cube)]
+            from skillflow.propagation.selectors import compatible_bindings, literal_choice, selector_binding, selector_outcomes
+            slot = guard["input_index"]
+            operand = self.engine.index.instructions[ir]["inputs"][slot]
+            if operand["type"] == "literal":
+                return [dict(cube)] if literal_choice(operand["literal_value"], guard) == guard["outcome"] else []
+            sources = self.engine._operand_data(ir, slot, "inputs")
+            if not sources:
+                return [dict(cube)]
+            choices = []
+            for source in sorted(sources):
+                if guard["outcome"] not in selector_outcomes(self.data, source, guard):
+                    continue
+                content = self.data[source]["content"]
+                if content.get("form") == "loop_summary" and content["scope"].startswith("loop:"):
+                    choices.append(dict(cube))
+                    continue
+                decisions = selector_binding(self.data, source, guard, guard["outcome"])
+                if compatible_bindings(cube, decisions):
+                    choices.append({**cube, **decisions})
+            return choices
         lookup = {}
         for key in self.by_ir[ir]:
             pos = self.engine.ops[key]["position"]

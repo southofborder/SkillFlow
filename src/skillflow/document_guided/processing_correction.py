@@ -8,7 +8,7 @@ from skillflow.common.source_evidence import json_pointer, resolve_pointer
 from skillflow.common.validation import structural_error
 
 
-VERSION = "finite-processing-slots-v1"
+VERSION = "finite-processing-slots-v2"
 
 
 def gap_positions(value):
@@ -63,7 +63,7 @@ def _field_slot(candidate, owner, row):
     local_field = (
         row["code"] == "validate_ref" and re.fullmatch(r"/output_bindings/\d+/value", relative)
         or row["code"] == "mechanism_evidence_reference" and path.endswith("/evidences")
-        or row["code"] == "input_contract_required" and path.endswith("/input_contract")
+        or row["code"] == "input_contract_required" and path.endswith(("/input_contract", "/demand_transfer"))
     )
     if not local_field:
         return None
@@ -111,6 +111,16 @@ def correction_scope(candidate, diagnostics, records):
         fields = {row["path"]: _field_slot(candidate, key, row) for row in owned}
         if all(slot is not None for slot in fields.values()):
             field_slots.update(fields)
+            # If the required local has no producer the binding leaf alone
+            # cannot express a repair. The enclosing IR owns its segments.
+            missing_producer = any(row["code"] == "validate_ref" and
+                isinstance(row.get("context", {}).get("available_locals"), list) and
+                isinstance(row.get("context", {}).get("current"), dict) and
+                row["context"]["current"].get("kind") == "local"
+                for row in owned)
+            if missing_producer and isinstance(value, dict) and isinstance(value.get("segments"), list):
+                field_slots[key + "/segments"] = {"record_id": key, "present": True,
+                    "value": value["segments"], "purpose": "Define or select the missing source-backed local producer inside this IR."}
             read_only[key] = value
         else:
             selected[key] = value

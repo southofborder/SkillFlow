@@ -394,14 +394,16 @@ def test_seven_normal_requests_keep_two_workers_local_failures_and_one_shared_re
             instruction, spec = next(iter(self.fragments["processing"]["ir_semantics"].items()))
             cited = deepcopy(spec["evidences"])
             operations = spec["segments"][0]["ops"]
+            first_compute = len(operations)
             for output in ("unrelated_label", "required_label"):
                 operation = compute([inp()], [rule([], [row(0, ["label"])])])
                 operation.update(output=output, evidences=cited)
                 operation["demand_transfer"]["rules"][0]["evidences"] = cited
                 operations.append(operation)
             spec["segments"][1]["ops"][0]["inputs"][0] = {"kind": "local", "name": "required_label"}
-            self.invalid_target = f"annotation:/ir_semantics/{instruction}/segments/0/ops/1"
-            self.repair_target = f"annotation:/ir_semantics/{instruction}/segments/0/ops/0"
+            self.invalid_target = f"annotation:/ir_semantics/{instruction}/segments/0/ops/{first_compute}"
+            self.repair_target = f"annotation:/ir_semantics/{instruction}/segments/0/ops/{first_compute - 1}"
+            self.repair_position = first_compute - 1
             self.cited = cited
 
         def complete(self, stage, prompt):
@@ -410,7 +412,7 @@ def test_seven_normal_requests_keep_two_workers_local_failures_and_one_shared_re
                 if stage == "revision-processing":
                     slot, = result["coverage_slots"]
                     assert self.repair_target.startswith(f"annotation:/ir_semantics/{slot['instruction_id']}/")
-                    operation = slot["modeled"]["segments"][0]["ops"][0]
+                    operation = slot["modeled"]["segments"][0]["ops"][self.repair_position]
                     operation["evidences"][0]["reason"] += " The source-supported selection was rechecked."
                 return result
             if stage in self.terminals:

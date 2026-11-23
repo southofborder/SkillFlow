@@ -69,6 +69,8 @@ def dependencies(ir, spec, interpreter, block, predecessor, state):
             if event.yield_value is not None:
                 reads.update(_ref_locations(event.yield_value, ir, interpreter))
     for _, body, event in iter_scoped_events(spec):
+        if event.case and event.case.guard:
+            reads.update(_operand_locations(ir, "input", event.case.guard.input_index, interpreter))
         for op in event.atomic_ops:
             if op.op == "merge" and predecessor is not None:
                 for incoming in op.incoming:

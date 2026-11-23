@@ -14,6 +14,7 @@ from .sensitivity_engine import prefix as _prefix, covers, unstable_collection_o
 from skillflow.common.source_evidence import resolve_pointer
 from skillflow.propagation.contracts.references import target_key
 from skillflow.propagation.contracts.limitations import processing_impacts
+from .selector_demands import shifts_tested_index
 
 
 def _overlap(a, b):
@@ -27,6 +28,12 @@ class ForwardInfluence:
         self.edges = defaultdict(set)
         self.member_sources = defaultdict(set)
         self.map_edges = defaultdict(list)
+        self.selector_edges = defaultdict(set)
+        self.typed_dispatches = {info["position"]["instruction_id"] for info in engine.ops.values()
+                                 if info["spec"]["op"] == "branch" and info["spec"].get("selector")}
+        self.typed_dispatches.difference_update(info["position"]["instruction_id"] for info in engine.ops.values()
+            if info["spec"]["op"] == "branch" and not info["spec"].get("selector"))
+        self.typed_dispatches.difference_update(ir for ir, path in engine.expressions if path and path[0] != "events")
         self.incomplete = False
         self.gaps = set()
         self.limited_instructions = set().union(*processing_impacts(engine.index.cfg, engine.compiled).values())
@@ -43,17 +50,41 @@ class ForwardInfluence:
 
     def _setup(self):
         e = self.engine
+        def selector_edges(guard, ir, kind, target):
+            if guard:
+                source = e.node_at("ir_input", ir, slot=guard["input_index"])
+                self.selector_edges[source].add((tuple(guard["path"]), kind, target))
+        def yield_edges(ref, ir, target):
+            if ref["kind"] == "alternatives":
+                selector_edges(ref.get("guard"), ir, "value", target)
+                for item in ref["items"]:
+                    yield_edges(item, ir, target)
         for key, info in e.ops.items():
             ir = info["position"]["instruction_id"]
+            selector_edges((info.get("case") or {}).get("guard"), ir, "operation", key)
             for slot, (ref, _) in e.slots(key).items():
                 target = e.node_at("op_input", ir, key, slot)
+                yield_edges(ref, ir, target)
                 for source in self._resolve(ref, ir, info["scope"]):
                     self.edges[source].add(target)
         for ir, spec in e.compiled["ir_semantics"].items():
             for binding in spec["output_bindings"]:
                 target = e.node_at("ir_output", ir, slot=binding["output_index"])
+                yield_edges(binding["value"], ir, target)
                 for source in self._resolve(binding["value"], ir):
                     self.edges[source].add(target)
+        for ir, record in e.index.records.items():
+            for i, event in enumerate(record.get("events", [])):
+                if event.get("kind") == "for_each":
+                    events = ((f"{i}/instances/{j}/body/{k}", child)
+                              for j, member in enumerate(event["instances"]) for k, child in enumerate(member["body"]))
+                else:
+                    events = [(str(i), event)]
+                for coordinate, child in events:
+                    for o, operation in enumerate(child.get("atomic_ops", [])):
+                        if operation.get("skipped_case_inputs"):
+                            selector_edges(child["case"]["guard"], ir, "skipped",
+                                           f"{ir}/events/{coordinate}/atomic_ops/{o}")
         # Raw templates exist even when the current collection has no instance.
         # A changed collection can create occurrences absent from actual records.
         for ir, spec in e.raw["ir_semantics"].items():
@@ -139,6 +170,13 @@ class ForwardInfluence:
             output(key, [], parent, rule)
 
         emit(initial, list(path), "boundary_input_change")
+        def dispatch_change(current_ir, parent):
+            descendants = e.index.reachable[e.index.ir_block[current_ir]]
+            control_instructions.update(i for i, b in e.index.ir_block.items() if b in descendants)
+            for other, info in e.ops.items():
+                if e.index.ir_block[info["position"]["instruction_id"]] in descendants:
+                    whole_operation(other, parent, "changed_control")
+
         while queue:
             identity = queue.popleft() if queue_order == "fifo" else queue.pop()
             row = rows[identity]
@@ -151,6 +189,15 @@ class ForwardInfluence:
                 gaps.add(f"Changed collection can alter member occurrences at {sorted(self.member_sources[row['node']])}.")
             for target in sorted(self.edges.get(row["node"], ())):
                 emit(target, changed, "symbolic_use", identity)
+            for path_, target_kind, target in self.selector_edges.get(row["node"], ()):
+                if _prefix(changed, list(path_)) or shifts_tested_index(changed, list(path_)):
+                    if target_kind == "operation":
+                        whole_operation(target, identity, "changed_case_selection")
+                    elif target_kind == "skipped":
+                        missing = True
+                        gaps.add(f"Changing selector {list(path_)} may enable the previously infeasible operation {target}.")
+                    else:
+                        emit(target, [], "changed_case_selection", identity)
             for target, prefix in self.map_edges.get(row["node"], ()):
                 emit(target, [*prefix, *changed], "map_yield_change", identity)
             kind, key, current_ir = node["kind"], node["operation_id"], node["instruction_id"]
@@ -166,13 +213,8 @@ class ForwardInfluence:
                         whole_operation(other, identity, "element_membership")
             if kind == "ir_input":
                 instruction = e.index.instructions[current_ir]
-                if instruction["opcode"] == "dispatch":
-                    block = e.index.ir_block[current_ir]
-                    descendants = e.index.reachable[block]
-                    control_instructions.update(i for i, b in e.index.ir_block.items() if b in descendants)
-                    for other, info in e.ops.items():
-                        if e.index.ir_block[info["position"]["instruction_id"]] in descendants:
-                            whole_operation(other, identity, "changed_control")
+                if instruction["opcode"] == "dispatch" and current_ir not in self.typed_dispatches:
+                    dispatch_change(current_ir, identity)
             if kind != "op_input":
                 continue
             affected.add(key)
@@ -184,7 +226,7 @@ class ForwardInfluence:
                 review_barriers.update(barrier["id"] for barrier in barriers)
                 gaps.update(barrier_reason(barrier) for barrier in barriers)
                 whole_operation(key, identity, "review_validation_barrier")
-            if e.slots(key).get(input_slot, (None, None))[1] == "control":
+            if e.slots(key).get(input_slot, (None, None))[1] == "control" and not info["spec"].get("selector"):
                 behavior.add(key)
             spec, record = info["spec"], info["record"]
             op = spec["op"]
@@ -234,7 +276,11 @@ class ForwardInfluence:
                             projected[0] = projected[0] + size if size is not None else {"kind": "each"}
                         output(key, projected, identity, "accumulated_items_change")
             elif op == "branch":
-                behavior.add(key)
+                if (not spec.get("selector") or _prefix(changed, spec["selector"]["path"])
+                        or shifts_tested_index(changed, spec["selector"]["path"])):
+                    behavior.add(key)
+                    if current_ir in self.typed_dispatches:
+                        dispatch_change(current_ir, identity)
             elif op in {"compute", "receive"}:
                 selectors = contract_outputs(key, input_slot, changed)
                 if selectors is None:

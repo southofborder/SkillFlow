@@ -42,6 +42,19 @@ def test_root_is_lazy_and_independent_of_nesting(tmp_path):
     assert paths.project_root(nested) == root
 
 
+def test_wheel_output_checks_the_destination_checkout_even_under_a_nested_project(tmp_path):
+    marker = '[project]\nname = "skillflow"\n'
+    checkout = tmp_path / "clone"
+    nested = checkout / "dataset/skill"
+    nested.mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text(marker, encoding="utf-8")
+    (nested / "pyproject.toml").write_text(marker, encoding="utf-8")
+    assert paths.is_protected_output(nested / "analysis")
+    assert paths.is_protected_output(checkout / "result")
+    assert not paths.is_protected_output(checkout / "work/result")
+    assert not paths.is_protected_output(tmp_path / "dataset/user-output")
+
+
 def test_exact_historical_relative_and_absolute_addresses(tmp_path, monkeypatch):
     root = project(tmp_path, monkeypatch)
     entry = file_entry(root)

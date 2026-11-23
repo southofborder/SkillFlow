@@ -116,6 +116,23 @@ def test_parent_selection_mismatch_rejected_before_creating_child(tmp_path):
     assert not (tmp_path/'child').exists()
 
 
+def test_processing_onward_certificate_origin_is_the_bound_donor_copy(tmp_path):
+    from skillflow.common.recording import sha_file
+
+    parent = parent_run(tmp_path)
+    certificate = parent.directory / "graph/initial/controlled.json"
+    runner.WRITER.json(certificate, {"test_document": "archived producer"})
+    child = tmp_path / "child"
+    runner.prepare_from_accepted_cfg(parent.directory, run_dir=child)
+    origin = accepted_upstream.load_accepted_upstream(child)["graph"]["certificate_origin"]
+    assert origin == {"path": "inherited/graph/initial/controlled.json", "sha256": sha_file(certificate)}
+    target = child / "graph/initial/controlled.json"
+    assert (child / origin["path"]).read_bytes() == target.read_bytes() == certificate.read_bytes()
+    target.write_bytes(target.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="Accepted upstream bytes changed"):
+        accepted_upstream.load_accepted_upstream(child)
+
+
 def test_reuse_of_a_closed_descendant_retains_original_owners(tmp_path):
     parent=parent_run(tmp_path)
     child=Downstream(tmp_path/'child')

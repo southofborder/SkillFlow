@@ -10,6 +10,7 @@ import json
 from copy import deepcopy
 
 from skillflow.common.recording import canonical_sha256
+from skillflow.propagation.selectors import consistent_bindings
 from skillflow.propagation.data import DataRegistry, Data, Origin, OpaqueContent
 from skillflow.propagation.data import LoopSummaryContent, LoopVariant, SelectionContent
 from skillflow.propagation.data.registry import _Identity, _Entry, IterationEntry, _content_references
@@ -84,7 +85,7 @@ class LoopFactRegistry(DataRegistry):
                 if scope in bindings and bindings[scope] != selector:
                     return None
                 bindings[scope] = selector
-        return bindings
+        return bindings if consistent_bindings(bindings) else None
 
     def aggregate_bindings(self, position, inputs):
         bindings = self.combine_bindings(inputs)

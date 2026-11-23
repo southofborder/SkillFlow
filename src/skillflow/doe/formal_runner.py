@@ -11,7 +11,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 
-from skillflow.common.artifact_io import atomic_write_text
+from skillflow.common.artifact_io import atomic_write_chunks, atomic_write_text
 from skillflow.common.recording import canonical_sha256, implementation_provenance, sha_file
 from skillflow.common.runs import exclusive_run
 from skillflow.common.upstream import checked_run_path, make_run_reference, resolve_run_reference
@@ -23,12 +23,12 @@ from skillflow.propagation.runner import load_propagation_materials
 from .demand_material import checked_demand_material, validate_demand_result
 from .sensitivity_material import (SensitivityReview, build_sensitivity_index,
     prepare_joint_sensitivity_review, validate_sensitivity_result, joint_demands)
-from .sensitivity_report import render_html, render_markdown
+from .sensitivity_report import build_view, report_chunks
 from .input_contract_review import build_input_contract_review, checked_input_contract_review
 
 
-IDENTITY = "skillflow-doe-run-v12"
-FORMAT_VERSION = 12
+IDENTITY = "skillflow-doe-run-v13"
+FORMAT_VERSION = 13
 _MARKER = ".preparing.json"
 _ARTIFACTS = frozenset({"audit/index.json",
     "audit/demand-support.json", "audit/input-contract-review.json", "doe-result.json", "report.html", "report.md"})
@@ -128,7 +128,7 @@ def _demand_support(demand, result):
                    if key not in _SHARED_SINK_FIELDS - {"id"}} for sink in demand["sinks"]]}
 
 
-def _restore_demand(result, support, annotation):
+def _restore_demand(result, support, annotation, *, archived_v12=False):
     from .demand_results import DemandResult
     if set(support) != (set(DemandResult.model_fields) - {"goals", "derivations"} | {"extra_derivations"}):
         raise ValueError("Formal DOE demand support fields differ")
@@ -144,7 +144,7 @@ def _restore_demand(result, support, annotation):
         "derivations": {**deepcopy(support["extra_derivations"]), **deepcopy(result["derivations"]["demand"])},
         "sinks": [{**{key: deepcopy(sinks[row["id"]][key]) for key in _SHARED_SINK_FIELDS},
                    **deepcopy(row)} for row in support["sinks"]]}
-    return validate_demand_result(value)
+    return validate_demand_result(value, archived_v12=archived_v12)
 
 
 def _index_snapshot(index):
@@ -154,7 +154,7 @@ def _index_snapshot(index):
             for identifier, row in index["declarations"].items()}}
 
 
-def _validate(result, index, support, facts, annotation, input_contract_review):
+def _validate(result, index, support, facts, annotation, input_contract_review, *, archived_v12=False):
     task = annotation["task"]
     demands = joint_demands(annotation)
     candidate = extract_sensitivity_candidate(annotation["raw_annotation"])
@@ -162,9 +162,9 @@ def _validate(result, index, support, facts, annotation, input_contract_review):
     full_index = build_sensitivity_index(annotation, candidate)
     if canonical_sha256(index) != canonical_sha256(_index_snapshot(full_index)):
         raise ValueError("Formal DOE declaration index differs from joint annotation")
-    demand = _restore_demand(result, support, annotation)
+    demand = _restore_demand(result, support, annotation, archived_v12=archived_v12)
     validate_sensitivity_result(result, facts, task, annotation, demands, candidate, demand_result=demand,
-                                input_contract_review=input_contract_review)
+                                input_contract_review=input_contract_review, archived_v12=archived_v12)
     return SensitivityReview(deepcopy(result), full_index, demand)
 
 
@@ -188,11 +188,6 @@ def _metadata(result, annotation, provenance):
         "diagnostic_count": len(result["diagnostics"]), "business_filename": "doe-result.json"}
 
 
-def _report_metadata(result, annotation, demand, provenance):
-    return {**_metadata(result, annotation, provenance), "task": deepcopy(annotation["task"]),
-        "source_files": joint_source_files(annotation["material"]), "demand": deepcopy(demand)}
-
-
 def _compute(facts, annotation, input_contract_review):
     """The same zero-call computation for publication and failed-run replay."""
     review = prepare_joint_sensitivity_review(facts, annotation, input_contract_review=input_contract_review)
@@ -204,11 +199,12 @@ def _compute(facts, annotation, input_contract_review):
     return review, result, index, support
 
 
-def _checked_review(facts, annotation, value):
+def _checked_review(facts, annotation, value, *, archived_v12=False):
     files = joint_source_files(annotation["material"])
     if value is None:
         value = build_input_contract_review(files=files, cfg=facts.cfg, annotation=annotation)
-    return checked_input_contract_review(value, files=files, cfg=facts.cfg, annotation=annotation)
+    return checked_input_contract_review(value, files=files, cfg=facts.cfg, annotation=annotation,
+                                         archived_v12=archived_v12)
 
 
 def verify_uncommitted_doe(propagation_run, *, run_dir, input_contract_review=None):
@@ -290,9 +286,13 @@ def run_doe(propagation_run, *, run_dir, input_contract_review=None):
                   "audit/input-contract-review.json": receipt, "doe-result.json": result}
         for name, value in values.items():
             _write_matching(directory / name, _json(value))
-        metadata = _report_metadata(result, annotation, review.demand_dict(), loaded.provenance)
-        _write_matching(directory / "report.html", render_html(review, metadata=metadata))
-        _write_matching(directory / "report.md", render_markdown(review, metadata=metadata))
+        metadata = {**_metadata(result, annotation, loaded.provenance), "task": annotation["task"],
+                    "source_files": joint_source_files(annotation["material"])}
+        view = build_view(review, metadata=metadata, compact=True)
+        for name in ("report.html", "report.md"):
+            atomic_write_chunks(directory / name, report_chunks(view, markdown=name.endswith(".md")),
+                                match_existing=True)
+        del view
         from skillflow.propagation.runner import check_propagation_unchanged
         check_propagation_unchanged(upstream, loaded.manifest)
         manifest = _signed({**expected, "created_at": marker["created_at"], "committed_at": _now(),
@@ -306,8 +306,9 @@ def run_doe(propagation_run, *, run_dir, input_contract_review=None):
 
 
 def _load_materials(directory, manifest, *, upstream=None):
-    if (manifest.get("identity") != IDENTITY or type(manifest.get("schema_version")) is not int
-            or manifest["schema_version"] != FORMAT_VERSION):
+    formats = {(IDENTITY, FORMAT_VERSION), ("skillflow-doe-run-v12", 12)}
+    if (type(manifest.get("schema_version")) is not int
+            or (manifest.get("identity"), manifest["schema_version"]) not in formats):
         raise ValueError("Unsupported formal DOE run version")
     _check_signed(manifest, "Formal DOE manifest")
     if set(manifest) != {"identity", "schema_version", "upstream", "upstream_identity",
@@ -322,6 +323,9 @@ def _load_materials(directory, manifest, *, upstream=None):
         if sha_file(directory / name) != digest:
             raise ValueError("Formal DOE artifact digest mismatch: " + name)
     result, index = _read(directory / "doe-result.json"), _read(directory / "audit/index.json")
+    result_format = "skillflow-sensitivity-review-v10" if manifest["schema_version"] == 12 else "skillflow-sensitivity-review-v11"
+    if result.get("schema_version") != result_format:
+        raise ValueError("Formal DOE and sensitivity result versions differ")
     support = _read(directory / "audit/demand-support.json")
     for key, value in (("result", result), ("index", index), ("support", support)):
         if canonical_sha256(value) != manifest[key + "_sha256"]:
@@ -334,10 +338,12 @@ def _load_materials(directory, manifest, *, upstream=None):
     if canonical_sha256(upstream.upstream_identity) != canonical_sha256(manifest["upstream_identity"]):
         raise ValueError("Formal DOE input differs from verified propagation material")
     facts, annotation = upstream, upstream.annotation
-    receipt = _checked_review(facts, annotation, _read(directory / "audit/input-contract-review.json"))
+    archived = manifest["schema_version"] == 12
+    receipt = _checked_review(facts, annotation, _read(directory / "audit/input-contract-review.json"),
+                              archived_v12=archived)
     if canonical_sha256(receipt) != manifest["input_contract_review_sha256"]:
         raise ValueError("Formal DOE input-contract review digest mismatch")
-    review = _validate(result, index, support, facts, annotation, receipt)
+    review = _validate(result, index, support, facts, annotation, receipt, archived_v12=archived)
     metadata = _metadata(result, annotation, upstream.provenance)
     if "task_provenance" not in manifest["metadata"]:
         # Existing current-format runs stay byte-for-byte intact. Their missing

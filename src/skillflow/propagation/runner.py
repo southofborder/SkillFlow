@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from skillflow.common.artifacts import ArtifactWriter
-from skillflow.common.paths import project_root
+from skillflow.common.paths import is_protected_output
 from skillflow.common.recording import canonical_sha256, implementation_provenance, sha_file
 from skillflow.common.runs import exclusive_run
 from skillflow.common.source_evidence import _require_json
@@ -21,10 +21,11 @@ from skillflow.propagation.models import FlowState
 from skillflow.propagation.records import PropagationRecords, SCHEMA_VERSION as RECORD_VERSION, LEGACY_SCHEMA_VERSION
 from skillflow.propagation.report import write_reports
 
-IDENTITY = "skill-ir-propagation-v23"
-FORMAT_VERSION = 23
+IDENTITY = "skill-ir-propagation-v24"
+FORMAT_VERSION = 24
 _READABLE_VERSIONS = ((IDENTITY, FORMAT_VERSION, RECORD_VERSION),
-                      ("skill-ir-propagation-v22", 22, RECORD_VERSION),
+                      ("skill-ir-propagation-v23", 23, "skillflow-propagation-record-v16"),
+                      ("skill-ir-propagation-v22", 22, "skillflow-propagation-record-v16"),
                       ("skill-ir-propagation-v20", 20, LEGACY_SCHEMA_VERSION))
 POLICY = {"offline": True, "model_calls": 0, "execute_skill": False}
 ARTIFACTS = frozenset({"data.json", "records.json", "sinks.json", "audit/requested-data.json",
@@ -95,9 +96,7 @@ def _output_path(origin, run_dir):
     directory = checked_run_path(run_dir)
     if directory == origin or directory.is_relative_to(origin) or origin.is_relative_to(directory):
         raise ValueError("Propagation output cannot overlap its annotation input")
-    repository = project_root()
-    if any(directory == root or directory.is_relative_to(root)
-           for root in (repository / "dataset", repository / "result")):
+    if is_protected_output(directory):
         raise ValueError("Propagation output cannot overwrite frozen inputs or delivery artifacts")
     return directory
 
@@ -170,8 +169,8 @@ def run_propagation(annotation_run, *, run_dir, seed_data=None, initial_state=No
     """Calculate using the current implementation and a checked accepted annotation."""
     origin = checked_run_path(annotation_run)
     _output_path(origin, run_dir)
-    from skillflow.document_guided.online import ANNOTATION_IDENTITY
-    guided = _read(origin / "manifest.json").get("identity") == ANNOTATION_IDENTITY
+    from skillflow.document_guided.online import READABLE_ANNOTATION_IDENTITIES
+    guided = _read(origin / "manifest.json").get("identity") in READABLE_ANNOTATION_IDENTITIES
     verified = None if guided else verify_prepared(origin, replay=True)
     loaded = load_annotation_run(origin)
     if guided:
@@ -197,8 +196,8 @@ def run_propagation(annotation_run, *, run_dir, seed_data=None, initial_state=No
 
 
 def _check_annotation_unchanged(origin, manifest, accepted_response_sha256, *, upstream_identity=None):
-    from skillflow.document_guided.online import ANNOTATION_IDENTITY, check_annotation_unchanged
-    if manifest.get("identity") == ANNOTATION_IDENTITY:
+    from skillflow.document_guided.online import READABLE_ANNOTATION_IDENTITIES, check_annotation_unchanged
+    if manifest.get("identity") in READABLE_ANNOTATION_IDENTITIES:
         check_annotation_unchanged(origin, manifest)
         filename = "wire-annotation.json" if (origin / "audit/wire-annotation.json").is_file() else "raw-annotation.json"
         if canonical_sha256(_read(origin / "audit" / filename)) != accepted_response_sha256:
@@ -260,8 +259,23 @@ def _load_run(run_dir):
         if values[f"audit/{name}.json"] is not None:
             checked_states[name] = FlowState.model_validate(values[f"audit/{name}.json"])
     registry = restore_registry(values["data.json"], values["audit/data-identities.json"])
+    compiled_payload = to_payload(loaded["compiled_annotation"])
+    if manifest["records_schema_version"] != RECORD_VERSION:
+        def reject_guarded_event(event):
+            if ((event.get("case") or {}).get("guard") is not None
+                    or any("skipped_case_inputs" in op or op.get("predicate") == "selector"
+                           for op in event.get("atomic_ops", []))):
+                raise ValueError("Typed case guards require the guarded propagation record version")
+            for child in event.get("body", []):
+                reject_guarded_event(child)
+            for instance in event.get("instances", []):
+                for child in instance["body"]:
+                    reject_guarded_event(child)
+        for owner in (*values["records.json"].values(), *compiled_payload["ir_semantics"].values()):
+            for event in owner["events"]:
+                reject_guarded_event(event)
     records = PropagationRecords.from_records(values["records.json"], cfg=_normalized_cfg(loaded["material"]["cfg"]),
-        annotation=to_payload(loaded["compiled_annotation"]), data_registry=registry,
+        annotation=compiled_payload, data_registry=registry,
         initial_data=values["audit/initial-data.json"], initial_state=checked_states["initial-state"],
         _validated_inputs=True)
     from skillflow.propagation.solver import PropagationResult

@@ -73,6 +73,20 @@ def test_actual_lean_text_and_complete_certificate_roundtrip(document, executabl
     assert {unit["basis"] for unit in document["units"]} >= {"explicit_graph", "declared_constraint", "embedded_content"}
 
 
+def test_foreign_build_requires_independent_lean_recertification(document, executable):
+    import hashlib
+
+    archived = deepcopy(document)
+    archived["certificate"]["binary_sha256"] = hashlib.sha256(b"other machine build").hexdigest()
+    raw = json.dumps(archived).encode("utf-8")
+    with pytest.raises(ControlledVerificationError, match="certificate does not match"):
+        verify_controlled(archived, cfg=example_cfg(), executable=executable)
+    local = controlled.recertify_inherited(raw, expected_sha256=hashlib.sha256(raw).hexdigest(),
+                                          cfg=example_cfg(), executable=executable)
+    assert local == document["certificate"]
+    assert archived["certificate"] != local
+
+
 @pytest.mark.parametrize("field", ["text", "units", "derived_links", "graph_sha256", "certificate"])
 def test_document_tampering_cannot_pass_verification(document, executable, field):
     changed = deepcopy(document)

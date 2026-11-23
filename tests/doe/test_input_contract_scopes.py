@@ -5,7 +5,8 @@ import json
 import pytest
 
 from skillflow.doe.input_contract_review import (
-    build_input_contract_review, checked_contract_checks, checked_input_contract_review,
+    ARCHIVED_RECEIPT, ARCHIVED_SOURCE_REVIEW, _seal_core,
+    build_input_contract_review, checked_contract_checks, checked_contract_record, checked_input_contract_review,
     checked_projection_checks, compact_review_inventory, input_contract_binding,
     input_contract_review_inventory, reviewed_contract_scopes, reviewed_acquisition_projections,
     SOURCE_REVIEW_VERSION,
@@ -66,6 +67,23 @@ def test_missing_attachment_is_an_expected_rejected_obligation_not_vacuous_accep
         checked_contract_checks([check], inventory=inventory, files=files)
 
 
+def test_read_only_receipt_uses_the_original_version_and_rechecks_decisions():
+    values = materials()
+    files, cfg, annotation, _ = values
+    kwargs = dict(files=files, cfg=cfg, annotation=annotation)
+    current = sealed(values)
+    archived_core = {**current["review_core"], "schema_version": ARCHIVED_SOURCE_REVIEW}
+    archived = _seal_core(archived_core, ARCHIVED_RECEIPT)
+    assert checked_input_contract_review(archived, **kwargs, archived_v12=True) == archived
+    with pytest.raises(ValueError, match="Unsupported"):
+        checked_input_contract_review(archived, **kwargs)
+    with pytest.raises(ValueError, match="Unsupported"):
+        checked_input_contract_review(current, **kwargs, archived_v12=True)
+    corrupted = _seal_core({**archived_core, "checks": []}, ARCHIVED_RECEIPT)
+    with pytest.raises(ValueError, match="every expected obligation"):
+        checked_input_contract_review(corrupted, **kwargs, archived_v12=True)
+
+
 @pytest.mark.parametrize("change", ["omitted", "duplicate", "invented", "gap_missing", "resolution_missing", "generic"])
 def test_nonaccepted_scope_partition_and_concrete_gap_are_mandatory(change):
     files, _, _, inventory = materials()
@@ -120,8 +138,11 @@ def test_wide_barrier_must_name_only_explicitly_nonaccepted_actual_input_scopes(
     # The group also contains the input remainder, so a shared affected list
     # cannot masquerade as a wide-only relation.
     check["scope_checks"][0]["affected_scope_ids"] = [check["scope_checks"][1]["scope_ids"][0]]
-    with pytest.raises(ValueError, match="affected|barriers"):
+    narrow = check["scope_checks"][0]["scope_ids"][0]
+    with pytest.raises(ValueError, match=f"Subject {narrow} .*Split narrow subjects"):
         checked_contract_checks([check], inventory=inventory, files=files)
+    with pytest.raises(ValueError, match="^Wide review barriers must reference actual input-information scopes$"):
+        checked_contract_record(check, inventory=inventory, files=files, archived_v7=True)
 
 
 def test_if_present_descriptor_exposes_existing_presence_semantics_without_extra_claim():

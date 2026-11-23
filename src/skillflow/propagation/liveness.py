@@ -44,7 +44,10 @@ def _ref_locations(ref, ir, interpreter):
     if kind == "input":
         return _operand_locations(ir, "input", ref.index, interpreter)
     if kind == "alternatives":
-        return set().union(*(_ref_locations(child, ir, interpreter) for child in ref.items))
+        locations = set().union(*(_ref_locations(child, ir, interpreter) for child in ref.items))
+        if ref.guard:
+            locations.update(_operand_locations(ir, "input", ref.guard.input_index, interpreter))
+        return locations
     return set()
 
 
@@ -114,6 +117,8 @@ def calculate_liveness(cfg, annotation, interpreter, successors):
                         if event.yield_value is not None:
                             read.update(_ref_locations(event.yield_value, ir, interpreter))
                 for _, body_index, event in iter_scoped_events(spec):
+                    if event.case and event.case.guard:
+                        read.update(_operand_locations(ir, "input", event.case.guard.input_index, interpreter))
                     for operation in event.atomic_ops:
                         for use in active_value_uses(operation, ir):
                             read.update(_ref_locations(use.value, ir, interpreter))

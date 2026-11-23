@@ -30,7 +30,7 @@ def selector(need):
 class InputContracts:
     """Resolve only checks bound to the selected source and annotation."""
 
-    def __init__(self, engine, receipt=None):
+    def __init__(self, engine, receipt=None, *, archived_v12=False):
         self.engine = engine
         self.entries = {(row["instruction_id"], tuple(row["raw_path"])): row
                         for row in engine.compiled.get("input_contracts", [])}
@@ -44,7 +44,7 @@ class InputContracts:
             from skillflow.propagation.contracts.joint import joint_source_files
             self.receipt = checked_input_contract_review(receipt,
                 files=joint_source_files(engine.annotation["material"]), cfg=engine.index.cfg,
-                annotation=engine.annotation)
+                annotation=engine.annotation, archived_v12=archived_v12)
             self.checks = {row["contract_id"]: row for row in self.receipt["checks"] if row["contract_id"] is not None}
             self.obligation_checks = {row["obligation_id"]: row for row in self.receipt["checks"]}
             self.obligations = {(row["instruction_id"], tuple(row["raw_path"])): row

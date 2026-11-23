@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from time import sleep
 from uuid import uuid4
@@ -16,6 +17,14 @@ from uuid import uuid4
 
 _REPLACE_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.0)
 _RETRYABLE_WINERRORS = frozenset({5, 32, 33})
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class ArtifactWriteError(RuntimeError):
@@ -60,6 +69,11 @@ def atomic_write_text(path: Path, value: str) -> None:
     complete file. The six bounded delays total 2.55 seconds. No write, mkdir or
     unrelated replacement failure is retried. Interrupts remain interrupts.
     """
+    atomic_write_chunks(path, (value,))
+
+
+def atomic_write_chunks(path: Path, chunks: Iterable[str], *, match_existing: bool = False) -> None:
+    """Stream exact UTF-8 chunks into one closed snapshot before publication."""
     path = Path(path).absolute()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,11 +82,13 @@ def atomic_write_text(path: Path, value: str) -> None:
 
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        payload = value.encode("utf-8")
+        digest = hashlib.sha256()
         with temporary.open("xb") as stream:
-            written = stream.write(payload)
-            if written != len(payload):
-                raise OSError("Incomplete temporary artifact write")
+            for chunk in chunks:
+                payload = chunk.encode("utf-8")
+                if stream.write(payload) != len(payload):
+                    raise OSError("Incomplete temporary artifact write")
+                digest.update(payload)
         # The context manager must close successfully before this is complete.
     except Exception as error:
         cleanup_error = None
@@ -84,7 +100,13 @@ def atomic_write_text(path: Path, value: str) -> None:
             path, "write", error, temporary_path=temporary, cleanup_error=cleanup_error,
         ) from error
 
-    snapshot_sha256 = hashlib.sha256(payload).hexdigest()
+    snapshot_sha256 = digest.hexdigest()
+    if match_existing and path.exists():
+        same = file_sha256(path) == snapshot_sha256
+        temporary.unlink()
+        if not same:
+            raise ValueError("Interrupted formal DOE artifact differs: " + path.name)
+        return
     for attempt in range(len(_REPLACE_DELAYS) + 1):
         try:
             os.replace(temporary, path)

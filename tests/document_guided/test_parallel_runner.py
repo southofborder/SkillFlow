@@ -125,13 +125,9 @@ class Harness:
         self.wire = _flat(self.example["annotation"])
         from skillflow.document_guided.fragments import split_fragments
         self.fragments = split_fragments(self.wire)
+        self.input_label = None
         if canaries and not self.fragments["sensitivity"]["declarations"]:
-            ir = next(iter(self.wire["ir_semantics"]))
-            self.fragments["sensitivity"]["declarations"].append({
-                "instruction_id": ir, "value": {"kind": "local", "name": "label"},
-                "label": "Synthetic input sensitivity", "evidences": [{"file": "skill/SKILL.md",
-                    "start_line": 1, "end_line": 1,
-                    "reason": "Synthetic sensitivity declaration checks input isolation; not an empirical source assessment."}]})
+            self.add_ingress("Synthetic input SENSITIVITY_DOCUMENT_CANARY")
         self.domains, self.annotation_failure = domains, annotation_failure
         self.repair_failure, self.final_failure = repair_failure, final_failure
         self.precise_repair = precise_repair
@@ -140,6 +136,15 @@ class Harness:
         self.attempts = {}
         self.lock = Lock()
         self.graph_started, self.mapping_started, self.sensitivity_started = Event(), Event(), Event()
+
+    def add_ingress(self, label):
+        self.input_label = label
+        processing = self.fragments["processing"]
+        initial = next(iter(processing["ir_semantics"].values()))
+        processing["locations"]["calibration_argument"] = {
+            "kind": "runtime_context", "name": "calibration_argument", "evidences": initial["evidences"]}
+        initial["segments"][0]["ops"].insert(0, {
+            "op": "read", "location": "calibration_argument", "output": "read_calibration_argument"})
 
     def factory(self, stage, owner):
         harness = self
@@ -181,8 +186,13 @@ class Harness:
                 # Malformed whole fragment cannot be passed off as an empty annotation.
                 return {"outcome": "cannot_assess", "failure": {"reason": "Injected unsupported submission"}}
             fragment = deepcopy(self.fragments[base])
-            if base == "sensitivity" and self.canaries and fragment.get("declarations"):
-                fragment["declarations"][0]["label"] += " SENSITIVITY_DOCUMENT_CANARY"
+            if base == "sensitivity" and self.input_label and scope is None:
+                catalogue = displayed[1]["entry_catalogue"]
+                entry = next(key for key, row in catalogue.items() if row["source"] == "calibration_argument")
+                fragment["declarations"] = [{"entry_id": entry, "origin": "skill_argument", "applicability": "source_field", "path": ["label"],
+                    "label": self.input_label, "evidences": [{"file": "skill/SKILL.md",
+                    "start_line": self.canary_line, "end_line": self.canary_line,
+                    "reason": "The calibration argument carries the sensitive label field."}]}]
             if stage == "revision-processing" and scope is not None:
                 slots = []
                 for ir in scope["slots"]:
@@ -192,7 +202,8 @@ class Harness:
                     slots.append({"instruction_id": ir, "modeled": body})
                 return {"coverage_slots": slots}
             if stage == "revision-sensitivity" and scope is not None:
-                return {"slots": [{"instruction_id": identity, "declarations": slot["declarations"]}
+                return {"slots": [{"instruction_id": identity, "declarations": slot["prior_entry_labels"],
+                                   "entry_gaps": slot["prior_entry_gaps"]}
                                   for identity, slot in scope["slots"].items()]}
             if stage == "revision-task-correspondence" and scope is not None:
                 from skillflow.document_guided.fragment_revision import _correspondence_groups
@@ -251,6 +262,9 @@ class Harness:
     def prepare(self, package):
         package.mkdir()
         source = self.example["source"] + "\nOriginal source quotation: 保留原文，不翻译引文。\r\n"
+        if self.input_label:
+            source = source.rstrip("\r\n") + "\nThe display operation also reads the calibration_argument input. Its label is sensitive.\n"
+            self.canary_line = len(source.splitlines())
         (package / "SKILL.md").write_bytes(source.encode("utf-8"))
         runner.prepare(package, run_dir=self.directory)
         return source

@@ -66,7 +66,7 @@ class ScopedHarness(Harness):
             self.calls.append(stage)
             self.prompts[stage] = prompt
             plan = prompt_scope(prompt)
-            return {"slots": [{"instruction_id": identity, "declarations": slot["declarations"]}
+            return {"slots": [{"instruction_id": identity, "declarations": slot["prior_entry_labels"]}
                               for identity, slot in plan["slots"].items()]}
         answer = super().complete(stage, prompt)
         if stage == "review" and self.mode in {"revision", "wrong-plan"}:

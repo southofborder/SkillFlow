@@ -15,7 +15,8 @@ import subprocess
 from typing import Any
 
 from skillflow.graph.ir.cfg import ControlFlowGraph
-from skillflow.common.paths import project_root, formal_root
+from skillflow.common.paths import formal_root
+from skillflow import lean_renderer
 
 from skillflow.graph.audit.evidence import canonical_graph_sha256
 from skillflow.graph.audit.evidence import definition_refs
@@ -193,24 +194,21 @@ def from_rich(rich: dict[str, Any]) -> dict[str, Any]:
 
 
 def _executable(executable: str | Path | None) -> Path:
-    default = formal_root() / ".lake/build/bin/skill_ir_retell.exe" if executable is None else Path(executable)
-    if executable is None and not default.exists():
-        default = default.with_suffix("")
-    path = Path(executable) if executable is not None else default
-    path = path.resolve()
-    if not path.is_file():
-        _fail(f"Lean retelling executable does not exist; build skill_ir_retell first: {path}")
-    return path
+    try:
+        return lean_renderer.renderer_path(executable)
+    except (OSError, ValueError) as error:
+        raise ControlledVerificationError(str(error)) from error
 
 
 def _provenance(executable: Path) -> dict[str, Any]:
-    paths = {Path(__file__).resolve(), Path(__file__).with_name("evidence.py").resolve()}
-    proof_root = formal_root()
-    paths.update(path for path in proof_root.rglob("*.lean") if ".lake" not in path.relative_to(proof_root).parts)
-    paths.update(proof_root / name for name in ("lakefile.toml", "lake-manifest.json", "lean-toolchain"))
-    files = {path.relative_to(project_root()).as_posix(): _sha_bytes(path.read_bytes()) for path in sorted(paths)}
+    paths = {"formal/" + name: path for name, path in lean_renderer.source_files(formal_root()).items()}
+    audit = Path(__file__).resolve().parent
+    paths.update({"src/skillflow/graph/audit/controlled.py": audit / "controlled.py",
+                  "src/skillflow/graph/audit/evidence.py": audit / "evidence.py",
+                  "src/skillflow/lean_renderer.py": Path(lean_renderer.__file__)})
+    files = {name: _sha_bytes(path.read_bytes()) for name, path in sorted(paths.items())}
     return {"source_files": files, "source_sha256": canonical_graph_sha256(files),
-            "binary_sha256": _sha_bytes(executable.read_bytes())}
+            "binary_sha256": lean_renderer.file_sha256(executable)}
 
 
 def _lean(executable: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -218,7 +216,9 @@ def _lean(executable: Path, payload: dict[str, Any]) -> dict[str, Any]:
         process = subprocess.run([str(executable)], input=(_canonical(payload) + "\n").encode("utf-8"),
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=executable.parent,
                                  check=False, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except OSError as error:
+        raise ControlledVerificationError(lean_renderer.launch_error(executable, error)) from error
+    except subprocess.TimeoutExpired as error:
         raise ControlledVerificationError(f"Lean subprocess failed: {error}") from error
     if process.returncode:
         _fail(f"Lean exited {process.returncode}: {process.stderr.decode('utf-8', errors='replace')}")
@@ -425,3 +425,33 @@ def verify_controlled(document: dict[str, Any], cfg: ControlFlowGraph | None = N
     if _provenance(binary) != provenance:
         _fail("Printer source or executable changed during controlled verification")
     return expected
+
+
+def recertify_inherited(raw_document: bytes, *, expected_sha256: str, cfg: ControlFlowGraph,
+                       executable: str | Path | None = None) -> dict[str, Any]:
+    """Independently prove the same document with the receiving installation.
+
+    The caller supplies the byte digest from the verified upstream inventory.
+    The old provenance still identifies the original producer. All other fields
+    must match the document rendered and round-tripped in the local Lean process.
+    """
+    if _sha_bytes(raw_document) != expected_sha256:
+        _fail("Inherited controlled document differs from its bound upstream bytes")
+    archived = _json(raw_document.decode("utf-8"))
+    old = archived.get("certificate") if isinstance(archived, dict) else None
+    if not isinstance(old, dict):
+        _fail("Inherited controlled document has no producer certificate")
+    files = old.get("source_files")
+
+    def digest(value: Any) -> bool:
+        return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+    if (not isinstance(files, dict) or not files or not all(name and digest(value) for name, value in files.items())
+            or canonical_graph_sha256(files) != old.get("source_sha256") or not digest(old.get("binary_sha256"))):
+        _fail("Invalid inherited controlled producer provenance")
+    local = render_controlled(cfg, executable=executable)
+    producer = {key: old[key] for key in ("source_files", "source_sha256", "binary_sha256")}
+    comparison = {**local, "certificate": {**local["certificate"], **producer}}
+    if _canonical(comparison) != _canonical(archived):
+        _fail("Local Lean proof differs from the inherited text, graph, evidence, links or checks")
+    return local["certificate"]

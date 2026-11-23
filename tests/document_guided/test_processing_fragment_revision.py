@@ -62,7 +62,7 @@ def test_scoped_revision_requires_each_slot_and_rejects_unrelated_patch_or_stale
         merge_processing_revision({**prior, "processing_gaps": []}, scope, {"coverage_slots": []})
 
 
-def test_revision_keeps_only_unaffected_validation_gaps_and_refuses_changed_shared_location():
+def test_revision_opens_bound_validation_gaps_and_refuses_changed_shared_location():
     material, prior, _ = inputs()
     old = material["cfg"]
     path = {"instruction_id": "ir_call", "side": "input", "index": 0}
@@ -74,7 +74,10 @@ def test_revision_keeps_only_unaffected_validation_gaps_and_refuses_changed_shar
     gap = lambda ir: validation_gap(ir, [{"code": "example", "path": "/", "message": "A recorded validation barrier."}])
     fixed = [gap("ir_call"), gap("ir_unaffected")]
     scope = processing_scope(old, new, [], prior, validation_gaps=fixed)
-    assert scope["retained_validation_gaps"] == [fixed[-1]]
+    assert scope["retained_validation_gaps"] == []
+    for gap in fixed:
+        slot = scope["slots"][gap["instruction_id"]]
+        assert slot["validation_gaps"] == [gap] and not slot["allow_keep"]
 
 
 def test_revision_can_keep_one_existing_source_gap_without_inventing_an_ir_record():

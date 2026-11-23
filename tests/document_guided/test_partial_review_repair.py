@@ -167,10 +167,7 @@ def test_source_supported_missing_sensitivity_finding_repairs_only_failed_owner(
     harness = MissingSensitivity(tmp_path / "run")
     harness.example["source"] = harness.example["source"].rstrip() + (
         "\nThe original label is sensitive location information.")
-    identity = next(iter(harness.fragments["processing"]["ir_semantics"]))
-    harness.fragments["sensitivity"]["declarations"] = [{"instruction_id": identity,
-        "value": {"kind": "local", "name": "label"}, "label": "location information",
-        "evidences": [{"file": "skill/SKILL.md", "start_line": 2, "end_line": 2}]}]
+    harness.add_ingress("location information")
     harness.prepare(tmp_path / "package")
     result = runner.run(harness.directory, client_factory=harness.factory, progress=stop_before_backend)
     assert result["status"] == "interrupted" and result["repair_used"], result
@@ -203,8 +200,8 @@ def test_annotation_owner_repairs_only_its_dependency_closure(tmp_path, owner, c
             answer = super().complete(stage, prompt)
             if stage == "review":
                 if owner == "sensitivity":
-                    declaration = self.fragments["sensitivity"]["declarations"][0]
-                    pointer = "/ir_semantics/" + declaration["instruction_id"] + "/sensitivity/0"
+                    ir = next(iter(self.fragments["processing"]["ir_semantics"]))
+                    pointer = "/ir_semantics/" + ir + "/sensitivity/0"
                 else:
                     pointer = "/realizations/0" if owner == "task-correspondence" else "/ir_semantics/ir_001"
                 answer["findings"] = [{"domain": "annotation", "target_ids": ["annotation:" + pointer],
@@ -226,8 +223,7 @@ def test_annotation_owner_repairs_only_its_dependency_closure(tmp_path, owner, c
     harness = OwnedFinding(tmp_path / "run", precise_repair=True,
         domains=("annotation",) if owner == "processing" else ())
     if owner == "sensitivity":
-        from tests.document_guided.test_parallel_recovery import add_synthetic_sensitivity
-        add_synthetic_sensitivity(harness, "Synthetic label sensitivity for routing")
+        harness.add_ingress("Synthetic label sensitivity for routing")
     harness.prepare(tmp_path / "package")
     result = runner.run(harness.directory, client_factory=harness.factory, progress=stop_before_backend)
     assert result["status"] == "interrupted" and result["repair_used"], result

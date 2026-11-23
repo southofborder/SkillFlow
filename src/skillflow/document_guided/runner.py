@@ -18,7 +18,7 @@ from skillflow.common.upstream import checked_run_path
 from .online import (analysis_config, checked_manifest, file_reference, inventory, prepare_step,
                      read, resolve_file, run_step, save_assembled_annotation, seal)
 
-IDENTITY = "skillflow-document-guided-run-v19"
+IDENTITY = "skillflow-document-guided-run-v20"
 SOURCE_IDENTITY = "skillflow-document-source-v6"
 POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_calls": 7,
           "annotation_assembly": "program", "whole_analysis_refusal": False,
@@ -42,7 +42,7 @@ POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_
           "cfg_assembly": "program",
           "cfg_validation": "aggregate_preflight_compiler_v1",
           "failed_stage_review": "bound_failure_targets_v1",
-          "shared_repair_admission": "bound_missing_cfg_v1",
+          "shared_repair_admission": "bound_validation_and_cfg_v2",
           "repair_request_failure": "retain_original_bound_bundle_v1",
           "fatal_phase_replay": "recorded_artifact_bound_frontier_v3",
           "input_contract_review": "required_obligations_scoped_checks_v2",
@@ -215,12 +215,27 @@ def _stable(path, value, replay):
     return path
 
 
-def _certificate(run, label, graph, replay, renderer):
-    from skillflow.graph.audit.controlled import render_controlled, verify_controlled
+def _certificate(run, label, graph, replay, renderer, certificate_origin=None):
+    from skillflow.graph.audit.controlled import recertify_inherited, render_controlled, verify_controlled
     from skillflow.graph.ir.cfg import ControlFlowGraph
     target = run / "graph" / label / "controlled.json"
     cfg = ControlFlowGraph.model_validate(graph)
-    if target.exists():
+    if certificate_origin is not None:
+        local = recertify_inherited(target.read_bytes(), expected_sha256=certificate_origin["sha256"],
+                                    cfg=cfg, executable=renderer)
+        receipt = {
+            "identity": "skillflow-inherited-controlled-verification-v1",
+            "inherited_document": certificate_origin, "local_certificate": local,
+        }
+        receipt_path = target.with_name("local-verification.json")
+        if receipt_path.exists():
+            if canonical_sha256(read(receipt_path)) != canonical_sha256(receipt):
+                raise ValueError("Local graph verification receipt differs from the reproduced proof")
+        elif replay:
+            raise ValueError("Missing local graph verification receipt")
+        else:
+            WRITER.json(receipt_path, receipt)
+    elif target.exists():
         verify_controlled(read(target), cfg=cfg, executable=renderer)
     elif replay:
         raise ValueError("Missing graph certificate")
@@ -307,11 +322,12 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
         config = _verify(run)
         from .accepted_upstream import load_accepted_upstream
         inherited_values = load_accepted_upstream(run)
-        if inherited_values:
-            _certificate(run, "initial", inherited_values["graph"]["value"], replay, renderer)
         saved = read(run / "result.json")
         if saved["status"] not in {"prepared", "running", "interrupted"} and not replay:
             replay, client_factory = True, None
+        if inherited_values:
+            graph = inherited_values["graph"]
+            _certificate(run, "initial", graph["value"], replay, renderer, graph["certificate_origin"])
         if replay and saved["status"] == "interrupted":
             return _replay_interrupted(run, saved, config)
         if replay and saved.get("fatal_frontier_error"):
@@ -375,7 +391,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             return {"value": value, "path": target / "result.json", "step": target,
                     "partial": read(target / "result.json").get("status") == "partial"}
 
-        def phase(base=None, domains=(), feedback=None, prior_errors=None,
+        def phase(base=None, domains=(), feedback=None, prior_errors=None, validation_targets=(),
                   retain_prior_on_request_failure=False):
             values = dict(inherited_values if base is None else base)
             revision = base is not None
@@ -387,8 +403,10 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             if revision:
                 invalid.add("assembly")
             if "annotation" in domains:
-                invalid.update(row.get("owner", "processing") for row in feedback["review"]["findings"]
+                invalid.update(row.get("owner", "processing") for row in (feedback.get("review") or {}).get("findings", [])
                                if row["domain"] == "annotation")
+                if validation_targets:
+                    invalid.add("processing")
             if "cfg" in domains:
                 invalid.add("graph")
             if "task" in domains:
@@ -484,9 +502,11 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                         if revision and "processing" in base and "graph" in base:
                             from .fragment_revision import processing_scope
                             old = base["processing"]
-                            previous_gaps = read(old["path"]).get("validation_gaps", [])
+                            from .online import processing_revision_evidence
+                            previous_gaps, rejected = processing_revision_evidence(old["step"])
                             scope = processing_scope(base["graph"]["value"], graph["value"],
-                                feedback["review"]["findings"], old["value"], validation_gaps=previous_gaps)
+                                (feedback.get("review") or {}).get("findings", []), old["value"],
+                                validation_gaps=previous_gaps, rejected_records=rejected)
                             if scope is not None and scope["slots"]:
                                 path = _stable(run / "revision/processing-scope.json", scope, replay)
                                 item = step(name, build_processing_revision_prompt(files=files,
@@ -719,8 +739,10 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 selected = select(values)
             findings = (reviewed.get("review") or {}).get("findings", [])
             from .shared_repair import repair_decision
+            processing_gaps = (read(values["processing"]["path"]).get("validation_gaps", [])
+                               if "processing" in values else [])
             decision = repair_decision(files=files, values=values, errors=errors,
-                reviewed=reviewed, selected=selected, graph_facts_only=True)
+                reviewed=reviewed, selected=selected, graph_facts_only=True, processing_gaps=processing_gaps)
             _stable(run / "audit/shared-repair-decision.json", decision, replay)
             if decision["eligible"]:
                 result["repair_used"] = True
@@ -729,7 +751,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     prior_errors.setdefault("graph", {"status": "deferred",
                         "reason": "The original CFG findings have no source-bound writable slot"})
                 revised, repair_errors = phase(base=values, domains=set(decision["domains"]),
-                    feedback=reviewed, prior_errors=prior_errors,
+                    feedback={**reviewed, "review": reviewed.get("review") or {"findings": []}}, prior_errors=prior_errors,
+                    validation_targets=decision["processing_validation_targets"],
                     retain_prior_on_request_failure=selected is not None)
                 unchanged = (selected is not None and revised.get("annotation") is values["annotation"])
                 if unchanged:

@@ -68,3 +68,24 @@ def test_all_shared_derivation_links_have_targets():
     for anchor in [row["declaration_anchor"], row["derivation_anchor"], row["demands"][0]["anchor"]]:
         assert f'href="#{anchor}"' in html
         assert f'id="{anchor}"' in html
+
+
+def test_large_shared_limits_are_resolved_once_and_all_candidates_remain_addressable():
+    import re
+    review, metadata = fixture()
+    result = review.to_dict()
+    diagnostic = {"id": "limit", "reason": "shared evidence " * 1000}
+    result["diagnostics"] = [diagnostic]
+    sink = result["sinks"][0]
+    sink["limitations"] = ["limit"]
+    template = sink["data_reviews"][0]
+    sink["data_reviews"] = [{**template, "id": f"candidate-{i}"} for i in range(150)]
+    stored = _StoredReview(result, review.index_dict())
+    for renderer in (render_html, render_markdown):
+        output = renderer(stored, metadata=metadata)
+        assert output.count(diagnostic["reason"]) == 1
+        assert all(f"candidate-{i} · " in output for i in range(150))
+        anchors = re.findall(r'id="([^"]+)"', output)
+        assert len(set(anchors)) == len(anchors)
+        assert set(re.findall(r'href="#([^"]+)"', output)) <= set(anchors)
+        assert len(output.encode("utf-8")) < 250_000

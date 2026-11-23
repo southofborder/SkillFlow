@@ -127,15 +127,25 @@ candidate; `render` is offline. Supply local credentials using the
 DeepSeek endpoint and requests `deepseek-v4-flash`; actual response model names
 are recorded separately. See the [package guide](docs/architecture/implementation.md).
 
-The independent controlled-retelling experiment requires the pinned Lean printer:
+The controlled CFG audit and document-guided analysis use a native Lean printer/parser.
+After a clone or wheel installation, install the pinned compiler once with Elan and build
+the printer for this computer. The build command checks a complete CFG text round trip
+before printing the verified executable path.
 
 ```powershell
-# In formal, using the pinned Lean toolchain:
-lake build
-lake env lean ProofAudit.lean
-# From the repository root; prepare is offline:
+elan toolchain install leanprover/lean4:v4.33.1
+python -m skillflow.lean_renderer
+# From the repository root for the offline experiment:
 python -m skillflow.graph.audit prepare --run-dir tmp/backtrace-review
 ```
+
+`--toolchain-bin PATH` selects an already installed Lean distribution. Run the build
+command again after updating SkillFlow. Builds for different sources and platforms use
+separate user cache directories. An explicit renderer path takes precedence over
+`SKILLFLOW_LEAN_RENDERER`, which in turn overrides the default. On devices with
+application control, the compiler and resulting executable must be approved to run.
+See the [Lean installation guide](https://lean-lang.org/install/) and
+[formal verification guide](formal/README.md).
 
 `run` performs five model comparisons for F01 and its four controlled variants;
 `replay` parses saved current-version responses offline. The early

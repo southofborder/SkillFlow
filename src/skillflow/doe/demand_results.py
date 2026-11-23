@@ -120,6 +120,7 @@ class Derivation(Strict):
     seed_goal_id: Text
     conservative: bool
     information_bound: bool = False
+    selector_ref: Text | None = None
     rules: Annotated[list[Text], Field(min_length=1)]
     parents: list[Text]
 
@@ -128,10 +129,14 @@ class Derivation(Strict):
         value = handler(self)
         if not self.information_bound:
             value.pop("information_bound", None)
+        if self.selector_ref is None:
+            value.pop("selector_ref", None)
         return value
 
     @model_validator(mode="after")
     def member_paths(self):
+        if self.selector_ref and self.property not in {"truth", "presence"}:
+            raise ValueError("A selector decision preserves truth or field presence")
         if self.information_bound and not self.conservative:
             raise ValueError("A bounded uncertain information scope must remain conservative")
         _check_goal_path(self.path)
@@ -271,7 +276,7 @@ from .input_assessments import InputAssessment, InputSemanticFinding
 
 
 class DemandResult(Strict):
-    schema_version: Literal["skillflow-demand-v12"]
+    schema_version: Literal["skillflow-demand-v13"]
     status: Literal["complete", "partial"]
     goals: list[DemandGoal]
     traceability: Traceability
@@ -450,21 +455,39 @@ def _validate_information_bounds(derivations, diagnostics, receipt_sha256):
         raise ValueError("A bounded information scope lacks ancestry to a reviewed scoped gap")
 
 
-def validate_result_shape(value):
+def reject_archived_selectors(derivations):
+    if isinstance(derivations, dict) and any(isinstance(row, dict) and "selector_ref" in row
+                                             for row in derivations.values()):
+        raise ValueError("Archived demand v12 derivations cannot carry selector_ref")
+
+
+class ArchivedDemandResult(DemandResult):
+    schema_version: Literal["skillflow-demand-v12"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def historical_derivations(cls, value):
+        if isinstance(value, dict):
+            reject_archived_selectors(value.get("derivations"))
+        return value
+
+
+def validate_result_shape(value, *, archived_v12=False):
     """Strict fields and internal references only; replay checks derivation truth."""
     _require_json(value, "")
-    checked = DemandResult.model_validate(value).model_dump(mode="json")
+    schema = ArchivedDemandResult if archived_v12 else DemandResult
+    checked = schema.model_validate(value).model_dump(mode="json")
     if checked != value:
         raise ValueError("Demand result must preserve its explicit wire fields")
     return deepcopy(checked)
 
 
-def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None):
+def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None, archived_v12=False):
     """Bind saved references to facts without re-solving preservation semantics."""
     from types import SimpleNamespace
     from .material import _Index, _id, payload_alternatives
     from skillflow.propagation.conditions import payload_inputs
-    checked = validate_result_shape(value)
+    checked = validate_result_shape(value, archived_v12=archived_v12)
     index = _Index(facts)
     annotation = facts.annotation
     task = annotation["task"]
@@ -636,6 +659,8 @@ def validate_result_references(value, facts, targets, *, input_contract_review=N
     elif (engine.facts is not facts
             or (engine.contracts.receipt or {}).get("receipt_sha256") != checked["input_contract_review_sha256"]):
         raise ValueError("Reused demand index belongs to different facts or source-review material")
+    from .selector_demands import validate_bindings
+    validate_bindings(checked["derivations"], engine)
     from .input_assessments import InputReviewBarrierIndex
     from .review_barriers import barrier_reason, barrier_diagnostic_value, operation_barriers
     barriers = InputReviewBarrierIndex(engine)

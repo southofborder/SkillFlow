@@ -103,7 +103,7 @@ def prepare_joint_sensitivity_review(facts, annotation, *, queue_order="fifo", i
 
 def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
                                 demand_candidate=None, sensitivity_candidate=None, *, demand_result=None,
-                                input_contract_review=None):
+                                input_contract_review=None, archived_v12=False):
     """Strict stored-result and reference checks; this does not re-run inference."""
     from skillflow.propagation.conditions import payload_input_indices
     from skillflow.propagation.contracts.sensitivity import validate_sensitivity_candidate
@@ -111,9 +111,12 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
     from skillflow.propagation.contracts.demand import validate_demand_candidate
     from skillflow.propagation.contracts.task import Task, task_source_files
     value = SensitivityResult.model_validate(result).model_dump(mode="json")
+    expected_version = "skillflow-sensitivity-review-v10" if archived_v12 else "skillflow-sensitivity-review-v11"
+    if value["schema_version"] != expected_version:
+        raise ValueError("Sensitivity result version differs from the selected validation mode")
     if facts is not None and demand_result is None:
         raise ValueError("Verified demand result is required for sensitivity material validation")
-    expected_demand = validate_demand_result(demand_result) if demand_result is not None else None
+    expected_demand = validate_demand_result(demand_result, archived_v12=archived_v12) if demand_result is not None else None
     if expected_demand is not None and expected_demand["input_contract_review_sha256"] != (input_contract_review or {}).get("receipt_sha256"):
         raise ValueError("Demand input-contract review identity differs from the validated review receipt")
     target_index = None
@@ -143,14 +146,15 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             source_files=joint_source_files(annotation["material"]), targets=targets())
         # Rebuild the read-only index and checks, not a second demand solve.
         reference_engine = DemandEngine(facts, checked_task, annotation,
-            checked_candidate.model_dump(mode="json"), targets(), input_contract_review=input_contract_review)
+            checked_candidate.model_dump(mode="json"), targets(), input_contract_review=input_contract_review,
+            archived_v12=archived_v12)
         constraint_analysis = ConstraintAnalysis(reference_engine)
         if value["constraints"]["checks"] != constraint_analysis.checks:
             raise ValueError("Forward constraint checks differ from verified facts")
     if expected_demand is not None and facts is not None and annotation is not None:
         from .demand_results import validate_result_references
         validate_result_references(expected_demand, facts, targets(), input_contract_review=input_contract_review,
-                                   engine=reference_engine)
+                                   engine=reference_engine, archived_v12=archived_v12)
     if len(diagnostics) != len(value["diagnostics"]):
         raise ValueError("Duplicate sensitivity diagnostic")
     for records in (sensitivity, demand):
@@ -176,7 +180,15 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
             if any(d["requirement_id"] not in requirements for d in demand.values()):
                 raise ValueError("Sensitivity demand refers to an absent task requirement")
     declarations = build_sensitivity_index(annotation, sensitivity_candidate)["declarations"] if sensitivity_candidate is not None else None
+    access_tracker = None
     if declarations is not None:
+        if value["schema_version"] == "skillflow-sensitivity-review-v11" and reference_engine is not None:
+            from .sensitivity_engine import equivalent_entry_declarations
+            if value["declaration_aliases"] != equivalent_entry_declarations(reference_engine, declarations):
+                raise ValueError("Sensitivity source group differs from resolved ingress bindings")
+            if any(row["declaration"].get("source_entry_applicability") == "access" for row in declarations.values()):
+                from .sensitivity_engine import SensitivityEngine
+                access_tracker = SensitivityEngine(reference_engine, expected_demand, declarations)
         if value["coverage"]["declarations"] != len(declarations):
             raise ValueError("Sensitivity declaration coverage differs")
         if any(d["declaration_id"] not in declarations for d in sensitivity.values()):
@@ -228,7 +240,9 @@ def validate_sensitivity_result(result, facts=None, task=None, annotation=None,
                 from .sensitivity_engine import dominates
                 for slot in payload_input_indices(operation["record"]):
                     for data_id in operation["record"]["inputs"][slot]:
-                        candidates = {identity: row for identity, row in sensitivity.items() if row["data_id"] == data_id}
+                        candidates = {identity: row for identity, row in sensitivity.items() if row["data_id"] == data_id
+                            and (access_tracker is None or access_tracker.applies_at(
+                                row["declaration_id"], payload["operation_id"], slot, data_id))}
                         for identity, row in candidates.items():
                             if any(other != identity and dominates(other_row, row)
                                    and (not dominates(row, other_row) or other < identity)

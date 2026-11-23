@@ -22,7 +22,7 @@ from tests.propagation.annotation.helpers import material, semantics
 def test_one_isolated_contract_and_canonical_binding():
     current = runtime_contract()
     assert set(current) == {"version", "rules", "operation_contract"}
-    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v12"
+    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v13"
     assert [rule["id"] for rule in current["rules"]] == [f"EM{i:02}" for i in range(1, 19)]
     binding = runtime_contract_binding(current)
     assert binding == {"version": CONTRACT_VERSION, "sha256": canonical_sha256(current)}
@@ -34,6 +34,17 @@ def test_one_isolated_contract_and_canonical_binding():
     assert binding == runtime_contract_binding(runtime_contract())
     current["rules"].clear()
     assert len(runtime_contract()["rules"]) == 18
+
+
+def test_previous_contract_is_accepted_only_by_explicit_historical_reader():
+    old = runtime_contract(version="skillflow-abstract-runtime-v12")
+    with pytest.raises(ValueError):
+        validate_runtime_contract(old)
+    binding = runtime_contract_binding(old, read_only=True)
+    assert validate_runtime_contract_binding(binding, read_only=True) == binding
+    old["operation_contract"]["common"]["selectors"] = "injected"
+    with pytest.raises(ValueError):
+        validate_runtime_contract(old, read_only=True)
 
 
 @pytest.mark.parametrize("change", [

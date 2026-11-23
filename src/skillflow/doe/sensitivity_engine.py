@@ -148,7 +148,14 @@ def demand_overlap(signal, demand):
         return "none"
     if any(covers(p, path) for p in signal["excluded_paths"]):
         return "none"
+    if demand.get("selector_ref"):
+        from .selector_demands import shifts_tested_index
+        if shifts_tested_index(sensitive, path):
+            return "structure"
     if not (prefix(path, sensitive) or prefix(sensitive, path)):
+        return "none"
+    if demand.get("selector_ref") and prefix(path, sensitive) and len(sensitive) > len(path):
+        # Removing a strict descendant leaves the subject's type, scalar value and presence intact.
         return "none"
     if demand["conservative"] and not demand.get("information_bound", False):
         return "retain"
@@ -329,17 +336,81 @@ def _expression_influence(signal, uses):
     return False
 
 
+def equivalent_entry_declarations(engine, declarations):
+    """Only an identified, unversioned external root may share a classification.
+
+    A grouped root is intrinsic to the single Data value before any access.
+    Event-produced values, ambiguous alternatives, members, unreachable sites,
+    and distinct classifications/evidence retain their own identities.
+    """
+    groups = defaultdict(list)
+    for identity, row in declarations.items():
+        declaration = row["declaration"]
+        if (declaration.get("source_entry_applicability") != "source_field" or row["scope_path"]
+                or engine.index.coverage.get(row["instruction_id"]) != "processed"):
+            continue
+        refs = {data for node in engine.resolve(declaration["value"], row["instruction_id"])
+                for data in engine.nodes[node]["data_ids"]}
+        if len(refs) != 1:
+            continue
+        root = next(iter(refs))
+        origin = engine.index.data[root]["origin"]
+        if (origin.get("at") is not None or origin.get("part_of") or origin.get("inputs")
+                or origin.get("acquired_from") != declaration["source_entry_location"]):
+            continue
+        # This applies only to an actual identified pre-existing root. Explicit
+        # intrinsic evidence covers its field before any of the cited reads.
+        # Access-specific declarations retain their exact occurrence.
+        excluded = {"value", "source_access_id", "source_entry_context"}
+        signature = [root, {key: value for key, value in declaration.items() if key not in excluded}]
+        groups[canonical_sha256(signature)].append(identity)
+    return {min(ids): sorted(ids) for ids in groups.values() if len(ids) > 1}
+
+
 class SensitivityEngine:
     def __init__(self, demand_engine, demand_result, declarations):
         self.engine, self.demand = demand_engine, demand_result
         self.data, self.declarations = demand_engine.index.data, declarations
         self.rows, self.by_data, self.edges = {}, defaultdict(set), defaultdict(list)
         self.queue, self.diagnostics, self.resolved = deque(), {}, set()
+        self.aliases = equivalent_entry_declarations(demand_engine, declarations)
+        for gap in demand_engine.annotation.get("mapping", {}).get("sensitivity_entry_gaps", []):
+            spans = ", ".join(f"{e['file']}:{e['start_line']}-{e['end_line']}" for e in gap["evidences"])
+            self.diagnostic("missing_sensitivity_ingress",
+                f"{gap['missing_entry']} ({spans}). {gap['reason']}", gap["instruction_id"])
         self.path_budget = 2 + sum(len(p.get("path", [])) for d in self.data.values()
             for p in [*d["content"].get("parts", []), *d["content"].get("updates", [])])
         self.path_budget += sum(len(d["declaration"]["path"]) for d in declarations.values())
         self.path_budget += sum(value["content"]["form"] == "mapped_collection" for value in self.data.values())
         self._edges()
+        self.access_scopes = self._access_scopes()
+
+    def _access_scopes(self):
+        from .access_sensitivity import AccessIndex
+        result = {}
+        access_index = None
+        for identity, row in self.declarations.items():
+            declaration = row["declaration"]
+            if declaration.get("source_entry_applicability") != "access":
+                continue
+            if access_index is None:
+                access_index = AccessIndex(self.engine)
+            ir = row["instruction_id"]
+            starts = [(node, data) for scope in self._scopes(row)
+                      for node in self.engine.resolve(declaration["value"], ir, scope)
+                      for data in self.engine.nodes[node]["data_ids"]
+                      if self.data[data]["origin"].get("acquired_from") == declaration["source_entry_location"]]
+            slots, edges, gaps = access_index.trace(starts, self.edges)
+            result[identity] = (slots, edges)
+            citations = ", ".join(f"{e['file']}:{e['start_line']}-{e['end_line']}" for e in declaration["evidences"])
+            for owner, op, relation in gaps:
+                self.diagnostic("unmapped_sensitivity_access", "The declaration at " + declaration["source_access_id"]
+                    + " (" + citations + ") requires a recorded binding between this " + relation
+                    + " to establish further access-specific propagation.", owner, op)
+        return result
+
+    def applies_at(self, declaration, operation, slot, data):
+        return declaration not in self.access_scopes or (operation, slot, data) in self.access_scopes[declaration][0]
 
     def diagnostic(self, code, reason, ir=None, op=None, blocking=True):
         row = {"code": code, "reason": reason, "instruction_id": ir,
@@ -497,6 +568,7 @@ class SensitivityEngine:
             and all(is_definitely_empty_collection(self.data, value) for value in event["collections"]))
 
     def seed(self):
+        representative = {alias: primary for primary, ids in self.aliases.items() for alias in ids}
         for identity, row in self.declarations.items():
             declaration = row["declaration"]
             if self.engine.index.coverage.get(row["instruction_id"]) == "infeasible":
@@ -516,6 +588,13 @@ class SensitivityEngine:
                 continue
             absent = False
             for data_id in refs:
+                source = declaration.get("source_entry_location")
+                if source and self.data[data_id]["origin"].get("acquired_from") != source:
+                    self.diagnostic("sensitivity_non_ingress_version",
+                        "This access resolves to a different source or an internally produced version at " + data_id
+                        + "; only the external ingress version can seed this source classification.", row["instruction_id"])
+                    absent = True
+                    continue
                 presence = range_presence(self.data, data_id, declaration["path"])
                 if presence == "empty":
                     continue  # A quantified range has no members, not a missing value.
@@ -526,7 +605,7 @@ class SensitivityEngine:
                     self.diagnostic("absent_sensitive_range", "The declared range is absent from resolved Data " + data_id + "; no sensitive content is manufactured.", row["instruction_id"])
                     absent = True
                     continue
-                self.emit(data_id, {"declaration_id": identity, "label": declaration["label"],
+                self.emit(data_id, {"declaration_id": representative.get(identity, identity), "label": declaration["label"],
                     "property": declaration["property"], "path": declaration["path"],
                     "excluded_paths": [], "relation": "direct"}, "explicit_declaration")
             if not absent:
@@ -538,6 +617,9 @@ class SensitivityEngine:
             identity = self.queue.popleft()
             row = self.rows[identity]
             for target, relation, parameter in self.edges[row["data_id"]]:
+                scope = self.access_scopes.get(row["declaration_id"])
+                if scope is not None and (row["data_id"], target, relation, canonical_sha256(parameter)) not in scope[1]:
+                    continue
                 if relation == "map_structure":
                     if row["property"] not in {"cardinality", "shape"} or row["path"]:
                         continue
@@ -691,6 +773,8 @@ class SensitivityEngine:
                         candidates = []
                         for identity in sorted(self.by_data[data_id]):
                             row = self.rows[identity]
+                            if not self.applies_at(row["declaration_id"], key, slot, data_id):
+                                continue
                             if any(other != identity and dominates(self.rows[other], row)
                                    and (not dominates(row, self.rows[other]) or other < identity)
                                    for other in self.by_data[data_id]):
@@ -732,7 +816,8 @@ class SensitivityEngine:
                         if field != "id"} for k in sorted(ids)}
         partial = (self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
                    or any(c["status"] == "not_established" for c in constraints.checks.values()))
-        return {"schema_version": "skillflow-sensitivity-review-v10", "status": "partial" if partial else "complete",
+        return {"schema_version": "skillflow-sensitivity-review-v11", "status": "partial" if partial else "complete",
+            "declaration_aliases": self.aliases,
             "sinks": sinks, "derivations": {"sensitivity": closure(used_sensitivity, self.rows),
                 "demand": closure(used_demands, self.demand["derivations"])},
             "constraints": constraints.to_dict(),

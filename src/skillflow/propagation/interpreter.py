@@ -21,6 +21,7 @@ from skillflow.propagation.data import SelectionContent, AccumulatedCollectionCo
 from skillflow.propagation.data.registry import DataReferenceError
 from skillflow.propagation.data.registry import DataDomainError
 from skillflow.common.recording import canonical_sha256
+from skillflow.propagation.selectors import compatible_bindings, consistent_bindings
 from skillflow.propagation.models import AtomicOpRecord
 from skillflow.propagation.models import EffectEvent
 from skillflow.propagation.models import FlowLocation
@@ -86,6 +87,8 @@ class TransferInterpreter:
         self.current_block = None
         self.active_predecessor = None
         self.loop_backedge_available = False
+        self.case_contexts = None
+        self.case_input_index = None
         # The solver supplies its already validated specifications. Direct
         # interpreter callers cross this boundary once, never once per value.
         self.specs = (dict(typed_specs) if typed_specs is not None else {
@@ -184,7 +187,10 @@ class TransferInterpreter:
         if ref["kind"] == "input":
             return self.context_locations(ir, ref["index"])
         if ref["kind"] == "alternatives":
-            return set().union(*(self.referenced_context_locations(ir, child) for child in ref["items"]))
+            locations = set().union(*(self.referenced_context_locations(ir, child) for child in ref["items"]))
+            if ref.get("guard"):
+                locations.update(self.context_locations(ir, ref["guard"]["input_index"]))
+            return locations
         return set()
 
     def initial_locations(self):
@@ -204,6 +210,8 @@ class TransferInterpreter:
                     if getattr(event, "kind", None) == "for_each":
                         locations.update(self.referenced_context_locations(ir, event.collection))
                 for event in iter_effect_events(typed_spec):
+                    if event.case and event.case.guard:
+                        locations.update(self.context_locations(ir, event.case.guard.input_index))
                     for operation in event.atomic_ops:
                         op = plain(operation)
                         if op["op"] == "read":
@@ -230,10 +238,21 @@ class TransferInterpreter:
         if kind == "local":
             return locals_.get(ref["name"], frozenset())
         if kind == "alternatives":
-            return frozenset().union(*(
-                self.resolve(item, ir, state, locals_, [position, i])
-                for i, item in enumerate(ref["items"])
-            ))
+            if ref.get("guard"):
+                guard = ref["guard"]
+                _, contexts = self._case_choices(guard, ir, state, locals_, position)
+                aliases = set()
+                for i, item in enumerate(ref["items"]):
+                    ids = self.resolve(item, ir, state, locals_, [position, i])
+                    if item == {"kind": "input", "index": guard["input_index"]}:
+                        for source, decision in contexts:
+                            if source in ids:
+                                aliases.update(self._guarded_aliases([source], [(source, decision)], position))
+                    else:
+                        aliases.update(self._guarded_aliases(ids, contexts, position))
+                return frozenset(aliases)
+            return frozenset().union(*(self.resolve(item, ir, state, locals_, [position, i])
+                                       for i, item in enumerate(ref["items"])))
         # IR operands denote entry values. A later shared-state read must be
         # an explicit read operation; re-resolving input(context_key) against
         # mutable stage state would silently change versions under one symbol.
@@ -253,7 +272,34 @@ class TransferInterpreter:
                                          for loc in self.context_locations(ir, index)))
                 ids = self._use_aliases(ids, ir, self._entry_state, locals_, [ir["id"], "input-use", index])
             self._entry_inputs[index] = ids
+        if index == self.case_input_index and self.case_contexts is not None:
+            return self._entry_inputs[index] & {identity for identity, _ in self.case_contexts}
         return self._entry_inputs[index]
+
+    def _case_choices(self, guard, ir, state, locals_, position):
+        from skillflow.propagation.selectors import selector_binding, selector_outcomes
+        selectors = self.resolve({"kind": "input", "index": guard["input_index"]}, ir, state, locals_, position)
+        if not selectors:
+            raise PendingValue(f"{position}: case selector input is unavailable")
+        choices = []
+        for source in sorted(selectors):
+            if guard["outcome"] not in selector_outcomes(self.registry, source, guard):
+                continue
+            bindings = self.registry.bindings(source) if hasattr(self.registry, "bindings") else {}
+            choice = selector_binding(self.registry, source, guard, guard["outcome"])
+            if compatible_bindings(bindings, choice):
+                choices.append((source, {**bindings, **choice}))
+        return selectors, choices
+
+    def _guarded_aliases(self, ids, choices, position):
+        aliases = set()
+        for identity in ids:
+            for source, decision in choices:
+                for context in self._contexts_for([identity, source], [decision]):
+                    producer = self.registry.family_producer(identity) if hasattr(self.registry, "family_producer") else identity
+                    aliases.add(self._result([position, "guarded-use", producer], [identity, source],
+                        SelectionContent(base=identity, path=[]), relations=["derived", "possible"], bindings=context))
+        return frozenset(aliases)
 
     def _use_aliases(self, identities, ir, state, locals_, position):
         """A stored value keeps its creation provenance in a current-use view.
@@ -272,6 +318,9 @@ class TransferInterpreter:
                 continue
             for context in contexts:
                 carried = self.registry.carried_bindings(identity)
+                if not compatible_bindings({k: v for k, v in carried.items() if k.startswith("selector:")},
+                                           {k: v for k, v in context.items() if k.startswith("selector:")}):
+                    continue
                 for key, value in context.items():
                     if key in carried and carried[key] != value:
                         carried["unresolved:" + key.removeprefix("incoming:")] = "multiple_generations"
@@ -334,7 +383,7 @@ class TransferInterpreter:
             index = order[depth]
             for identity in sorted(compatible(index, context)):
                 combined = {**context, **bindings[identity]}
-                if all(compatible(later, combined) for later in order[depth + 1:]):
+                if consistent_bindings(combined) and all(compatible(later, combined) for later in order[depth + 1:]):
                     selected[index] = identity
                     visit(depth + 1, combined)
 
@@ -367,7 +416,7 @@ class TransferInterpreter:
             for context in contexts:
                 for identity in sorted(values):
                     binding = registry.bindings(identity)
-                    if all(key not in context or context[key] == value for key, value in binding.items()):
+                    if compatible_bindings(context, binding):
                         candidates.append({**context, **binding})
             unique = {canonical_sha256(value): value for value in candidates}
             contexts = [unique[key] for key in sorted(unique)]
@@ -380,7 +429,7 @@ class TransferInterpreter:
         if bindings is None:
             return []
         return [{**context, **bindings} for context in ambient
-                if all(key not in context or context[key] == value for key, value in bindings.items())]
+                if compatible_bindings(context, bindings)]
 
     def _result(self, position, inputs, content, *, relations=None, acquired_from=None, bindings=None):
         if hasattr(self.registry, "facts") and isinstance(position, list) and len(position) == 4 and position[2] == "collect":
@@ -535,6 +584,9 @@ class TransferInterpreter:
             pos = [*pos, "member", member_token]
         kind = op["op"]
         ambient = self._ambient_bindings(ir, state, locals_)
+        if self.case_contexts is not None:
+            ambient = [{**base, **choice} for base in ambient for _, choice in self.case_contexts
+                       if all(axis not in base or base[axis] == value for axis, value in choice.items())]
         if hasattr(self.registry, "current_position"):
             self.registry.current_position = pos
         members, when_input_index, build_variants = None, None, None
@@ -611,7 +663,7 @@ class TransferInterpreter:
             valid, invalid = set(), []
             for identity in sorted(inputs[0]):
                 try:
-                    truths = guard_values(self.registry, [identity], op["predicate"],
+                    truths = guard_values(self.registry, [identity], op["predicate"], selector=op.get("selector"),
                                           traversal_exit=self.loop_backedge_available)
                 except ValueError as error:
                     invalid.append(str(error))
@@ -619,7 +671,18 @@ class TransferInterpreter:
                 targets = sorted({op["true_target"] if truth else op["false_target"] for truth in truths})
                 for bindings in self._contexts_for([identity], ambient):
                     valid.add(identity)
-                    alternatives.append(OperationAlternative(inputs=[frozenset([identity])], bindings=bindings, branch_targets=targets))
+                    if op.get("selector") and len(truths) > 1:
+                        from skillflow.propagation.selectors import selector_outcomes, selector_binding
+                        selector = op["selector"]
+                        for outcome in sorted(selector_outcomes(self.registry, identity, selector)):
+                            choice = selector_binding(self.registry, identity, selector, outcome)
+                            if not compatible_bindings(bindings, choice):
+                                continue
+                            target = op["true_target"] if outcome == selector["outcome"] else op["false_target"]
+                            alternatives.append(OperationAlternative(inputs=[frozenset([identity])],
+                                bindings={**bindings, **choice}, branch_targets=[target]))
+                    else:
+                        alternatives.append(OperationAlternative(inputs=[frozenset([identity])], bindings=bindings, branch_targets=targets))
             if not valid:
                 raise OperandDomainError("Unsupported typed guard domain: " + "; ".join(sorted(set(invalid))))
             if invalid:
@@ -657,7 +720,9 @@ class TransferInterpreter:
                 if op["mode"] == "delete":
                     after = before if weak else frozenset()
                 elif op["mode"] == "replace":
-                    after = inputs[0] | before if weak else inputs[0]
+                    replacement = (self._guarded_aliases(inputs[0], self.case_contexts, [pos, "write"])
+                                   if self.case_contexts is not None else inputs[0])
+                    after = replacement | before if weak else replacement
                 else:
                     old = before
                     if not old:
@@ -718,6 +783,22 @@ class TransferInterpreter:
         else:
             raise ValueError(f"unsupported abstract operation: {kind}")
         resolved_outputs = []
+        if outputs and self.case_contexts is not None:
+            guarded, paired_inputs = set(), {}
+            output_aliases = {}
+            for identity in outputs:
+                output_aliases[identity] = self._guarded_aliases([identity], self.case_contexts, pos)
+                for alias in output_aliases[identity]:
+                    guarded.add(alias)
+                    if identity in output_inputs:
+                        paired_inputs.setdefault(alias, set()).update(output_inputs[identity])
+            outputs, output_inputs = guarded, paired_inputs
+            if alternatives:
+                alternatives = [item.model_copy(update={"bindings": {**item.bindings, **context},
+                    "outputs": [frozenset(alias for source in slot for alias in output_aliases[source]
+                                         if compatible_bindings(self.registry.bindings(alias), context)) for slot in item.outputs]})
+                    for item in alternatives for _, context in self.case_contexts
+                    if compatible_bindings(item.bindings, context)]
         if "output" in op:
             if not outputs:
                 raise PendingValue(f"{pos}: output has no candidates (not an opaque source)")
@@ -730,9 +811,8 @@ class TransferInterpreter:
                         if (identity not in output_inputs or any(
                             all(args[index] == value for index, value in relation)
                             for relation in output_inputs[identity]))
-                        and (not hasattr(self.registry, "bindings") or all(
-                            key not in bindings or bindings[key] == value
-                            for key, value in self.registry.bindings(identity).items())))
+                        and (not hasattr(self.registry, "bindings") or
+                             compatible_bindings(self.registry.bindings(identity), bindings)))
                     alternatives.append(OperationAlternative(inputs=[frozenset([item]) for item in args],
                         outputs=[paired] if "output" in op else [], bindings=bindings))
         if hasattr(self.registry, "facts") and kind != "branch" and not alternatives:
@@ -867,8 +947,15 @@ class TransferInterpreter:
                     bases.setdefault(case.group, dict(current))
                     next_state = dict(branch_states.get(case.id, bases[case.group]))
                 try:
+                    choices = None
+                    if case is not None and case.guard is not None:
+                        selectors, choices = self._case_choices(plain(case.guard), ir, next_state, next_locals, (e, o))
                     if o == -2:
                         rec, found = None, []
+                    elif choices == []:
+                        rec = AtomicOpRecord(op=op.op, skipped_case_inputs=sorted(selectors),
+                                             may_state=getattr(op, "may", False))
+                        found = []
                     elif o == -1:
                         rec, found = self._for_each(ir, e, op, next_state, next_locals, uncertain=uncertain)
                     else:
@@ -880,19 +967,29 @@ class TransferInterpreter:
                             if key not in records:
                                 raise PendingValue("matched request delivery has not been evaluated")
                             request_inputs = records[key].inputs
-                        rec = self.execute(ir, e if outer_event is None else outer_event, o, op,
-                                           next_state, next_locals, uncertain=uncertain,
-                                           body_event_index=e if outer_event is not None else None,
-                                            request_inputs=request_inputs, member_token=member_token)
+                        prior_contexts, self.case_contexts = self.case_contexts, choices
+                        prior_index, self.case_input_index = self.case_input_index, (case.guard.input_index
+                            if case is not None and case.guard is not None else None)
+                        try:
+                            rec = self.execute(ir, e if outer_event is None else outer_event, o, op,
+                                               next_state, next_locals, uncertain=uncertain,
+                                               body_event_index=e if outer_event is not None else None,
+                                               request_inputs=request_inputs, member_token=member_token)
+                        finally:
+                            self.case_contexts = prior_contexts
+                            self.case_input_index = prior_index
                         found = self._step_diagnostics
                     if case is not None:
-                        branch_states[case.id] = dict(next_state)
+                        if choices != []:
+                            branch_states[case.id] = dict(next_state)
                         next_state = join_states([current, next_state])
                         if group_atoms[case.group] <= done | {(e, o)}:
                             # Retain failure-prefix records, but never publish
                             # thrown-only changes as a normal continuation.
-                            next_state = join_states(branch_states[identity]
-                                for identity in sorted(returning_cases[case.group]))
+                            feasible = sorted(returning_cases[case.group] & branch_states.keys())
+                            if not feasible:
+                                raise PendingValue(f"{ir['id']}: no case with a feasible selector returns normally")
+                            next_state = join_states(branch_states[identity] for identity in feasible)
                     visit(next_state, next_locals, done | {(e, o)},
                           {**records, (e, o): rec}, [*diagnostics, *found], bases, branch_states)
                 except PendingValue as error:
@@ -906,6 +1003,11 @@ class TransferInterpreter:
 
     @staticmethod
     def _merge_operations(variants):
+        feasible = [item for item in variants if not item.skipped_case_inputs]
+        if not feasible:
+            return variants[0].model_copy(update={"skipped_case_inputs": sorted(
+                {identity for item in variants for identity in item.skipped_case_inputs})})
+        variants = feasible
         if len(variants) == 1:
             return variants[0]
         data = variants[0].model_dump(mode="python")

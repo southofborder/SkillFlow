@@ -23,8 +23,10 @@ from .source_input_findings import (
 )
 
 
-VERSION = "skillflow-input-contract-review-v4"
-SOURCE_REVIEW_VERSION = "skillflow-document-source-review-fragment-v7"
+VERSION = "skillflow-input-contract-review-v5"
+SOURCE_REVIEW_VERSION = "skillflow-document-source-review-fragment-v8"
+ARCHIVED_SOURCE_REVIEW = "skillflow-document-source-review-fragment-v7"
+ARCHIVED_RECEIPT = "skillflow-input-contract-review-v4"
 
 
 class InputScopeCheck(StrictRecord):
@@ -33,7 +35,7 @@ class InputScopeCheck(StrictRecord):
     reason: Text
     evidences: list[TaskEvidence] = Field(min_length=1)
     gap: InputRequirementGap | None = None
-    affected_scope_ids: list[Text] = Field(default_factory=list)
+    affected_scope_ids: list[Text] = Field(default_factory=list, description="Only wide rule/interface/output_parts subjects may list affected input scopes. Every subject of this group shares this list. Group narrow subjects separately.")
 
     @model_validator(mode="after")
     def concrete_scope(self):
@@ -81,7 +83,7 @@ def _evidence(evidences, files):
         extract_source_lines(files[evidence["file"]], evidence["start_line"], evidence["end_line"])
 
 
-def _checked_groups(groups, scopes, files):
+def _checked_groups(groups, scopes, files, *, archived_v7=False):
     parsed = TypeAdapter(list[InputScopeCheck]).validate_python(groups)
     values = [row.model_dump(mode="json", exclude_none=True) for row in parsed]
     expected = {row["id"]: row for row in scopes}
@@ -99,8 +101,12 @@ def _checked_groups(groups, scopes, files):
     for identity, decision in decisions.items():
         for affected in decision["affected_scope_ids"]:
             subject, target = expected[identity], expected.get(affected)
-            if subject["kind"] not in wide or target is None or target["kind"] in wide | {"missing_attachment", "projection"}:
+            if archived_v7 and (subject["kind"] not in wide or target is None or target["kind"] in wide | {"missing_attachment", "projection"}):
                 raise ValueError("Wide review barriers must reference actual input-information scopes")
+            if subject["kind"] not in wide:
+                raise ValueError(f"Subject {identity} ({subject['kind']}) cannot declare affected_scope_ids. Split narrow subjects from wide rule/interface/output_parts subjects and omit their affected list.")
+            if target is None or target["kind"] in wide | {"missing_attachment", "projection"}:
+                raise ValueError(f"Wide review barriers must reference actual input-information scopes; target {affected} is invalid for subject {identity}")
             if subject.get("output") is not None and target.get("output") != subject["output"]:
                 raise ValueError("A wide review barrier references another output rule")
             if decisions[affected]["status"] == "accepted":
@@ -108,7 +114,7 @@ def _checked_groups(groups, scopes, files):
     return values, decisions
 
 
-def checked_contract_record(check, *, inventory, files):
+def checked_contract_record(check, *, inventory, files, archived_v7=False):
     """Validate one row against the full selected inventory, never a subset."""
     row = InputContractCheck.model_validate(check).model_dump(mode="json", exclude_none=True)
     obligations = {row["id"]: row for row in inventory["obligations"]}
@@ -124,11 +130,11 @@ def checked_contract_record(check, *, inventory, files):
         if row["contract_id"] is None:
             raise ValueError("A missing input-contract attachment cannot be accepted")
         if row["scope_checks"]:
-            _, decisions = _checked_groups(row["scope_checks"], layout["scopes"], files)
+            _, decisions = _checked_groups(row["scope_checks"], layout["scopes"], files, archived_v7=archived_v7)
             if any(d["status"] != "accepted" for d in decisions.values()):
                 raise ValueError("Accepted summary contradicts a nonaccepted scope")
     else:
-        row["scope_checks"], decisions = _checked_groups(row["scope_checks"], layout["scopes"], files)
+        row["scope_checks"], decisions = _checked_groups(row["scope_checks"], layout["scopes"], files, archived_v7=archived_v7)
         aggregate = "rejected" if any(d["status"] == "rejected" for d in decisions.values()) else (
             "unresolved" if any(d["status"] == "unresolved" for d in decisions.values()) else "accepted")
         if row["status"] != aggregate:
@@ -251,7 +257,7 @@ def _isolation_material(*, files, cfg, annotation, context):
         stage_failures=context["stage_failures"])
 
 
-def _build_core(*, files, cfg, annotation, reviewed, material):
+def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=False):
     binding = _binding(files, cfg, annotation)
     inventory = input_contract_review_inventory(cfg=cfg, raw_annotation=annotation["raw_annotation"],
         compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])
@@ -276,6 +282,8 @@ def _build_core(*, files, cfg, annotation, reviewed, material):
                 "fragments": deepcopy(material.get("fragments", {})),
                 "stage_failures": deepcopy(material.get("stage_failures", {}))}
         rebuilt_material = _isolation_material(files=files, cfg=cfg, annotation=annotation, context=context)
+        if archived_v12:
+            rebuilt_material["identity"] = ARCHIVED_SOURCE_REVIEW
         if (material.get("input_contract_binding") != binding
                 or material.get("input_contract_inventory") != inventory
                 or validation.get("binding") != binding):
@@ -297,7 +305,8 @@ def _build_core(*, files, cfg, annotation, reviewed, material):
         source_findings = normalize_source_input_findings(candidates, files=files, cfg=cfg,
             raw_annotation=annotation["raw_annotation"], compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])
     if completed:
-        if response.get("schema_version") != SOURCE_REVIEW_VERSION or response.get("outcome") != "completed":
+        expected_schema = ARCHIVED_SOURCE_REVIEW if archived_v12 else SOURCE_REVIEW_VERSION
+        if response.get("schema_version") != expected_schema or response.get("outcome") != "completed":
             raise ValueError("Input-contract acceptance requires the explicit current source-review protocol")
         if material.get("input_contract_binding") != binding or material.get("input_contract_inventory") != inventory:
             raise ValueError("Input-contract source review belongs to another selected bundle or obligation inventory")
@@ -334,19 +343,24 @@ def build_input_contract_review(*, files, cfg, annotation, review=None, review_m
     """Seal complete expected coverage and local decisions for selected material."""
     core = _build_core(files=files, cfg=cfg, annotation=annotation,
         reviewed=deepcopy(review or {"status": "unavailable", "review": None}), material=review_material or {})
+    return _seal_core(core, VERSION)
+
+
+def _seal_core(core, version):
     complete = core["status"] == "complete" and not core["partial"] and all(core["availability"].values()) and core["inventory"]["available"]
-    value = {"schema_version": VERSION, **core["binding"], "review_sha256": canonical_sha256(core),
+    value = {"schema_version": version, **core["binding"], "review_sha256": canonical_sha256(core),
         "review_core": core, "review_status": core["status"], "source_review_complete": complete, "checks": core["checks"]}
     return {**value, "receipt_sha256": canonical_sha256(value)}
 
 
-def checked_input_contract_review(value, *, files, cfg, annotation):
+def checked_input_contract_review(value, *, files, cfg, annotation, archived_v12=False):
     """Recheck saved identity, scope coverage and references without solving."""
     if not isinstance(value, dict):
         raise TypeError("Input-contract review receipt must be an object")
     fields = {"schema_version", "source_sha256", "cfg_sha256", "annotation_sha256", "contracts_sha256", "obligations_sha256",
         "review_sha256", "review_core", "review_status", "source_review_complete", "checks", "receipt_sha256"}
-    if set(value) != fields or value.get("schema_version") != VERSION:
+    version = ARCHIVED_RECEIPT if archived_v12 else VERSION
+    if set(value) != fields or value.get("schema_version") != version:
         raise ValueError("Unsupported input-contract review receipt")
     if value["receipt_sha256"] != canonical_sha256({key: row for key, row in value.items() if key != "receipt_sha256"}):
         raise ValueError("Input-contract review receipt digest mismatch")
@@ -361,12 +375,12 @@ def checked_input_contract_review(value, *, files, cfg, annotation):
     response = {"schema_version": core.get("schema_version"), "outcome": "completed", "findings": core.get("findings", []),
         "input_contract_checks": core.get("checks", []), "input_projection_checks": core.get("projection_checks", []),
         "source_input_findings": core.get("source_input_candidates", [])}
-    rebuilt = build_input_contract_review(files=files, cfg=cfg, annotation=annotation,
-        review={"status": core.get("status"), "availability": core["availability"], "review": response,
+    checked = _build_core(files=files, cfg=cfg, annotation=annotation, archived_v12=archived_v12,
+        reviewed={"status": core.get("status"), "availability": core["availability"], "review": response,
                 "validation": core.get("review_validation"), "isolation_context": core.get("isolation_context")},
-        review_material={"partial": core["partial"], "input_contract_binding": binding, "input_contract_inventory":
+        material={"partial": core["partial"], "input_contract_binding": binding, "input_contract_inventory":
             input_contract_review_inventory(cfg=cfg, raw_annotation=annotation["raw_annotation"],
                 compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])})
-    if rebuilt != value:
+    if _seal_core(checked, version) != value:
         raise ValueError("Input-contract source-review decisions, inventory or completion differ from the selected bundle")
     return deepcopy(value)

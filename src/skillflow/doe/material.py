@@ -180,6 +180,8 @@ class _Index:
 
     def _add_operations(self, ir_id, event_index, event, body_index=None, instance_index=None):
         for op_index, record in enumerate(event["atomic_ops"]):
+            if record.get("skipped_case_inputs"):
+                continue
             position = {"instruction_id": ir_id, "event_index": event_index, "op_index": op_index,
                         "body_event_index": body_index, "instance_index": instance_index}
             key = _id("op_", position)

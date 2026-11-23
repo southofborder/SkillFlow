@@ -84,8 +84,8 @@ def load_annotation_run(run_dir):
     saved materials is rejected, as are incomplete executions and old formats.
     """
     directory = checked_run_path(run_dir)
-    from skillflow.document_guided.online import ANNOTATION_IDENTITY, load_annotation
-    if _read(directory / "manifest.json").get("identity") == ANNOTATION_IDENTITY:
+    from skillflow.document_guided.online import READABLE_ANNOTATION_IDENTITIES, load_annotation
+    if _read(directory / "manifest.json").get("identity") in READABLE_ANNOTATION_IDENTITIES:
         return load_annotation(directory)
     try:
         identity = _read(directory / "manifest.json")

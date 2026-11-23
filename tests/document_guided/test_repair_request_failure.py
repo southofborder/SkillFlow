@@ -53,9 +53,8 @@ class RequestFailureHarness(Harness):
                 self.fragments["processing"]["ir_semantics"][ir])} for ir in plan["slots"]]}
         if stage == "revision-sensitivity":
             plan = self._slot_plan(prompt, "SENSITIVITY REVISION SLOTS")
-            declarations = self.fragments["sensitivity"]["declarations"]
-            return {"slots": [{"instruction_id": ir, "declarations": [deepcopy(row) for row in declarations
-                if row["instruction_id"] == ir]} for ir in plan["slots"]]}
+            return {"slots": [{"instruction_id": ir, "declarations": slot["prior_entry_labels"]}
+                              for ir, slot in plan["slots"].items()]}
         return answer
 
 

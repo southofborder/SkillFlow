@@ -147,7 +147,7 @@ def test_shared_display_injected_seven_calls_two_workers_and_zero_call_replay(tm
     assert "TASK_DOCUMENT_CANARY" in harness.prompts["review"]
     assert "SENSITIVITY_DOCUMENT_CANARY" not in harness.prompts["task-correspondence"]
     assert "SENSITIVITY_DOCUMENT_CANARY" in harness.prompts["review"]
-    assert read(harness.directory / "manifest.json")["identity"] == "skillflow-document-guided-run-v19"
+    assert read(harness.directory / "manifest.json")["identity"] == "skillflow-document-guided-run-v20"
     assert read(harness.directory / "review/inputs.json")["prompt_view"] == "shared-v2"
     assert (harness.directory / "source/inputs/package/SKILL.md").read_bytes().decode("utf-8") == source
     receipt = read(harness.directory / "audit/input-contract-review.json")

@@ -23,8 +23,10 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 from skillflow.common.semantic_failure import SemanticFailure
 from .batches import validate_batch, batch_model, combine_annotation
 
-STEP_IDENTITY = "skillflow-document-step-v16"
-ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
+STEP_IDENTITY = "skillflow-document-step-v17"
+ANNOTATION_IDENTITY = "skillflow-document-annotation-v12"
+ARCHIVED_ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
+READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, ARCHIVED_ANNOTATION_IDENTITY})
 FRAGMENT_KINDS = {name + "_fragment": name for name in
                   ("processing", "task-correspondence", "sensitivity")}
 _SCOPED = ("processing_revision", "sensitivity_revision", "correspondence_revision")
@@ -56,6 +58,37 @@ def _same_decision(left, right):
 
 def read(path):
     return _json_object(checked_run_path(path).read_bytes().decode("utf-8"))
+
+
+def processing_revision_evidence(owner):
+    """Recover rejected rows from the bound terminal attempt, never as executable input."""
+    result = read(owner / "result.json")
+    gaps = result.get("validation_gaps", [])
+    if not gaps:
+        return [], {}
+    from skillflow.common.json_normalization import normalize_response
+    from skillflow.common.recording import read_json
+    from .fragment_wire import expand_processing_response
+    chain = read(owner / "calls/chain.json")
+    if (result.get("response_chain_sha256") != canonical_sha256(chain) or not chain["attempts"]
+            or result.get("status") != "partial" or result.get("accepted_call") is not None):
+        raise ValueError("Rejected processing records require a bound partial processing decision")
+    attempt = chain["attempts"][-1]
+    if attempt["status"] != "structural_invalid" or attempt["call"] != f"calls/a{len(chain['attempts']):03d}":
+        raise ValueError("Rejected processing attempt does not match the terminal validation")
+    folder = owner / attempt["call"]
+    validation = read(folder / "validation.json")
+    response = read_json(folder / "response.json")
+    if (canonical_sha256(validation) != attempt["validation_sha256"]
+            or canonical_sha256(response) != validation["response_sha256"]):
+        raise ValueError("Rejected processing response or diagnostics differ from the terminal chain")
+    merged = folder / "merged-candidate.json"
+    candidate = read_json(merged) if merged.is_file() else normalize_response(response)[0]
+    if canonical_sha256(candidate) != validation["candidate_sha256"]:
+        raise ValueError("Rejected processing candidate differs from its terminal validation")
+    records = expand_processing_response(candidate).get("ir_semantics", {})
+    ids = {gap["instruction_id"] for gap in gaps}
+    return gaps, {ir: record for ir, record in records.items() if ir in ids}
 
 
 def inventory(directory):
@@ -142,8 +175,9 @@ def _step_context(directory, manifest):
             raise ValueError("Scoped processing does not bind its original record owners")
         previous = load_step(old_step)
         findings = (read(review).get("review") or {}).get("findings", [])
+        gaps, rejected = processing_revision_evidence(old_step)
         expected = processing_scope(read(old_graph)["cfg"], value["cfg"], findings, previous,
-            validation_gaps=read(old_step / "result.json").get("validation_gaps", []))
+            validation_gaps=gaps, rejected_records=rejected)
         if expected is None or expected != read(path):
             raise ValueError("Processing revision scope differs from its bound dependency proof")
         value["processing_revision"] = {"scope": expected, "previous": previous}
@@ -238,12 +272,22 @@ def _run_candidate(chain, kind, context):
         if kind not in FRAGMENT_KINDS or any(context.get(key) for key in _SCOPED):
             raise
         from .fragments import salvage_fragment
-        value, gaps = salvage_fragment(FRAGMENT_KINDS[kind], chain.last_candidate,
+        raw, entry_gaps = chain.last_candidate, []
+        if kind == "sensitivity_fragment":
+            from .sensitivity_entries import retain_valid_entries
+            raw, entry_gaps = retain_valid_entries(raw, context["cfg"], context["processing"], context["files"])
+            if raw is None:
+                raise
+        value, gaps = salvage_fragment(FRAGMENT_KINDS[kind], raw,
             _fragment_material(context), processing=context.get("processing"),
             validation_gaps=context.get("validation_gaps", []))
+        if value is None and kind == "sensitivity_fragment" and entry_gaps and raw == {"declarations": []}:
+            # Every submitted record had a verified, localized rejection.
+            # Preserve explicit partial coverage without declaring any seed.
+            value = raw
         if value is None:
             raise
-        return value, gaps
+        return value, [*entry_gaps, *gaps]
 
 
 def _full_graph(value, context):
@@ -292,7 +336,12 @@ def validate_step(kind, response, *, context=None):
         revision = (context or {}).get("sensitivity_revision")
         if revision:
             from .fragment_revision import merge_sensitivity_revision
-            response = merge_sensitivity_revision(revision["previous"], revision["scope"], response)
+            response = merge_sensitivity_revision(revision["previous"], revision["scope"], response, files=context["files"])
+        elif kind == "sensitivity_fragment":
+            from .sensitivity_entries import entry_catalogue, resolve_labels
+            from skillflow.propagation.contracts.references import cfg_instructions
+            catalogue = entry_catalogue(context["cfg"], context["processing"])
+            response = resolve_labels(response, catalogue, cfg_instructions(context["cfg"]), context["files"])
         revision = (context or {}).get("correspondence_revision")
         if revision:
             from .fragment_revision import merge_correspondence_revision
@@ -823,15 +872,72 @@ def _check_annotation_steps(directory, manifest, refs):
     else:
         raise ValueError("Unknown annotation candidate origin")
     for ref in references:
-        load_step(resolve_run_reference(directory, ref))
+        step = resolve_run_reference(directory, ref)
+        if manifest["identity"] == ARCHIVED_ANNOTATION_IDENTITY:
+            _read_v11_step(step)
+        else:
+            load_step(step)
     return {key: refs[key]}
+
+
+def _read_v11_step(directory):
+    """Read a terminal v11 constituent with its recorded step/producer identity."""
+    identity = read(directory / "manifest.json")["identity"]
+    if identity not in {f"skillflow-document-step-v{i}" for i in range(13, 17)}:
+        raise ValueError("Unsupported step producer for archived v11 annotation")
+    manifest = checked_manifest(directory, identity)
+    if manifest["config"] != analysis_config(manifest["config"]):
+        raise ValueError("Archived document step configuration differs")
+    for reference in manifest["dependencies"]:
+        resolve_file(directory, reference)
+    for name, reference in manifest.get("context", {}).items():
+        if name in {"source_owner", "task_run", "processing_step"}:
+            resolve_run_reference(directory, reference)
+        elif name.endswith("_path"):
+            resolve_file(directory, reference)
+    result = read(directory / "result.json")
+    if "program_revision_sha256" not in result:
+        return _saved_step_value(directory, manifest, expected_identity=identity)
+    # Old zero-call carries only retired existing owners; verify the saved
+    # scope, original candidate and output, without invoking the new compiler.
+    kind = manifest["kind"].removesuffix("_fragment")
+    if kind not in {"sensitivity", "task-correspondence"} or (directory / "calls").exists():
+        raise ValueError("Archived program-carry owner or call inventory differs")
+    run = directory.parent.parent
+    expected_paths = scoped_dependencies(run, kind)
+    owners = [resolve_file(directory, ref) for ref in manifest["dependencies"]]
+    path = resolve_file(directory, manifest["context"][kind + "_scope_path"])
+    if directory.name != "revision-" + kind or path != expected_paths[-1] or owners[-len(expected_paths):] != expected_paths:
+        raise ValueError("Archived program carry has different scope dependencies")
+    scope = read(path)
+    before = _read_v11_step(run / "steps" / kind)
+    digest = canonical_sha256({key: value for key, value in scope.items() if key != "scope_sha256"})
+    if (scope.get("slots") != {} or scope.get("scope_sha256") != digest
+            or canonical_sha256(before) != scope.get("candidate_sha256")):
+        raise ValueError("Archived program carry must bind a zero-slot plan and exact candidate")
+    if kind == "sensitivity":
+        if scope["identity"] != "skillflow-sensitivity-revision-scope-v1":
+            raise ValueError("Unsupported archived sensitivity scope")
+        retired = set(scope["removed_instruction_ids"])
+        carried = deepcopy(before)
+        if "declarations" in before:
+            carried["declarations"] = [row for row in before["declarations"] if row["instruction_id"] not in retired]
+    else:
+        from .fragment_revision import merge_correspondence_revision
+        carried = merge_correspondence_revision(before, scope, {"slots": []})
+    file = directory / "value.json"
+    if (read(file) != carried or result != {"identity": identity, "value_file": "value.json",
+            "value_sha256": sha_file(file), "program_revision_sha256": digest}):
+        raise ValueError("Archived program carry differs from its bound result")
+    return carried
 
 
 def check_annotation_unchanged(directory, manifest):
     """Check persisted bindings before commit without loading compiled payloads."""
     from skillflow.propagation.annotation.inputs import load_prepared_material
     directory = checked_run_path(directory)
-    if checked_manifest(directory, ANNOTATION_IDENTITY) != manifest:
+    identity = manifest.get("identity")
+    if identity not in READABLE_ANNOTATION_IDENTITIES or checked_manifest(directory, identity) != manifest:
         raise ValueError("Annotation input changed during calculation")
     if {"inputs/" + k: v for k, v in inventory(directory / "inputs").items()} != manifest["files"]:
         raise ValueError("Unexpected composition input")
@@ -844,7 +950,10 @@ def check_annotation_unchanged(directory, manifest):
 def load_annotation(directory, *, recompute=False):
     from skillflow.propagation.annotation.inputs import load_prepared_material
     directory = checked_run_path(directory)
-    manifest = checked_manifest(directory, ANNOTATION_IDENTITY, recompute=recompute)
+    identity = read(directory / "manifest.json").get("identity")
+    if identity not in READABLE_ANNOTATION_IDENTITIES or recompute and identity != ANNOTATION_IDENTITY:
+        raise ValueError("Unsupported annotation protocol for this operation")
+    manifest = checked_manifest(directory, identity, recompute=recompute)
     if {"inputs/" + k: v for k, v in inventory(directory / "inputs").items()} != manifest["files"]:
         raise ValueError("Unexpected composition input")
     if {"audit/" + k: v for k, v in inventory(directory / "audit").items()} != manifest["artifacts"]:
@@ -892,7 +1001,7 @@ def load_annotation(directory, *, recompute=False):
             if canonical_sha256(read(directory / "audit" / name)) != canonical_sha256(value):
                 raise ValueError("Saved annotation differs from its accepted model response")
     _, _, metadata = read_snapshot(resolve_run_reference(directory, refs["source_owner"]))
-    identity = {"identity": ANNOTATION_IDENTITY, "manifest_sha256": manifest["manifest_sha256"],
+    identity = {"identity": manifest["identity"], "manifest_sha256": manifest["manifest_sha256"],
         "accepted_response_sha256": canonical_sha256(wire if wire is not None else raw), "candidate_origin": manifest["candidate_origin"],
         "implementation": manifest["implementation"], **provenance}
     return {"manifest": manifest, "material": material, "raw_annotation": raw,

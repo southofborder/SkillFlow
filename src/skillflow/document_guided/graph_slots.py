@@ -125,6 +125,10 @@ def _targets(assembly, finding, files):
             validate_source_ref(ref, files)
     except (ValueError, TypeError):
         return []
+    capability = finding.get("required_graph_edit")
+    if capability == "action_inventory":
+        # An action inventory change exceeds both finite edit types.
+        return []
     index = {assembly.id_map["blocks"][block["ref"]]: bi
              for bi, block in enumerate(assembly.facts["blocks"])}
     selected = []
@@ -140,6 +144,9 @@ def _targets(assembly, finding, files):
             edge = edges[ordinal]
             source = index.get(edge["source_block_id"])
             if source is None:
+                continue
+            if capability == "topology":
+                selected.append(_region_slot(assembly.facts, source))
                 continue
             exit = assembly.facts["blocks"][source]["exit"]
             path = ("blocks", source, "exit")
@@ -162,7 +169,8 @@ def _targets(assembly, finding, files):
         suffix = tuple(match[3][1:].split("/")) if match[3] else ()
         selected.extend(_simple_slots(assembly.facts, index[ref],
                                       int(match[2]) if match[2] is not None else None, suffix))
-    return [slot for slot in selected if slot is not None]
+    kind = {"topology": "region", "field": "field"}.get(capability)
+    return [slot for slot in selected if slot is not None and (kind is None or slot["kind"] == kind)]
 
 
 def _context(assembly, slots):

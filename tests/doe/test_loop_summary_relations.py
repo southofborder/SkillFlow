@@ -21,7 +21,8 @@ def _family(identity, contents):
 
 
 def _track(data, identity, path):
-    engine = SimpleNamespace(index=SimpleNamespace(data=data), ops={}, expressions={})
+    engine = SimpleNamespace(index=SimpleNamespace(data=data), ops={}, expressions={},
+                             annotation={"mapping": {"sensitivity_entry_gaps": []}})
     result = SensitivityEngine(engine, {}, {})
     result.seed = lambda: result.emit(identity, {"declaration_id": "credential", "label": "credential",
         "property": "content", "path": path, "excluded_paths": [], "relation": "direct"},

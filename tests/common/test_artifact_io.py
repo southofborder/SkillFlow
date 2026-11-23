@@ -31,6 +31,18 @@ def test_exact_utf8_text_replaces_old_file_and_leaves_no_temporary(tmp_path):
     assert list(target.parent.glob(".*.tmp")) == []
 
 
+def test_streamed_publication_checks_existing_bytes_without_republishing(tmp_path, monkeypatch):
+    path = tmp_path / "report.md"
+    chunks = ["中文", "\r\n", "linked evidence"]
+    artifact_io.atomic_write_chunks(path, iter(chunks), match_existing=True)
+    monkeypatch.setattr(artifact_io.os, "replace", lambda *a: pytest.fail("immutable file replaced"))
+    artifact_io.atomic_write_chunks(path, (chunks[0] + chunks[1], chunks[2]), match_existing=True)
+    with pytest.raises(ValueError, match="differs"):
+        artifact_io.atomic_write_chunks(path, ["中文\n", chunks[2]], match_existing=True)
+    assert path.read_bytes() == "".join(chunks).encode("utf-8")
+    assert list(path.parent.glob(".*.tmp")) == []
+
+
 @pytest.mark.parametrize("code", [5, 32, 33])
 def test_temporary_sharing_failure_retries_same_closed_complete_file(tmp_path, monkeypatch, code):
     target = tmp_path / "state.json"

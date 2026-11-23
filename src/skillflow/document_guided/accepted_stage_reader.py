@@ -15,6 +15,7 @@ _STRATEGIES = {
     "skillflow-document-step-v14": "skillflow-document-fragments-v9:cfg:record-replacement-v1",
     "skillflow-document-step-v15": "skillflow-graph-facts-correction-v1",
     "skillflow-document-step-v16": "skillflow-graph-facts-correction-v1",
+    "skillflow-document-step-v17": "skillflow-graph-facts-correction-v2",
 }
 
 
@@ -45,7 +46,7 @@ def accepted_stage_value(owner, manifest, *, source):
     owner = checked_run_path(owner)
     kind, identity = manifest.get("kind"), manifest.get("identity")
     from .graph_steps import FACTS, UPDATES
-    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16"}
+    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}
     kinds = {FACTS, UPDATES} if current else {"cfg_wire_v5"}
     if identity not in _STRATEGIES or kind not in {"flow_document", *kinds}:
         raise ValueError("Unsupported accepted upstream stage protocol")
@@ -91,6 +92,10 @@ def accepted_stage_value(owner, manifest, *, source):
             prompt = base
         elif identity == "skillflow-document-step-v15" and kind == FACTS:
             prompt = _v15_graph_correction_prompt(strategy, deepcopy(previous["candidate"]))
+        elif identity == "skillflow-document-step-v16" and kind == FACTS:
+            from .prompts import build_graph_updates_prompt
+            prompt = build_graph_updates_prompt(files=strategy.files, plan=strategy._plan(previous["candidate"])["plan"],
+                                                archived_v16=True)
         elif strategy:
             prompt = strategy.build_prompt(base, deepcopy(previous["candidate"]), deepcopy(previous["diagnostics"]))
         else:

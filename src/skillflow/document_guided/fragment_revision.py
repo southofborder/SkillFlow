@@ -12,8 +12,8 @@ from skillflow.propagation.contracts.references import cfg_instructions, resolve
 from .processing_correction import gap_positions, merge_slots
 
 
-IDENTITY = "skillflow-processing-revision-scope-v1"
-SENSITIVITY_IDENTITY = "skillflow-sensitivity-revision-scope-v1"
+IDENTITY = "skillflow-processing-revision-scope-v2"
+SENSITIVITY_IDENTITY = "skillflow-sensitivity-revision-scope-v2"
 CORRESPONDENCE_IDENTITY = "skillflow-correspondence-revision-scope-v1"
 
 
@@ -111,7 +111,45 @@ def _cfg_evidence(value):
             yield from _cfg_evidence(child)
 
 
-def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_gaps=()):
+def processing_slot_obligations(ir, record, locations, expressions):
+    """List obligations at physical wire coordinates; never descend into literal contents."""
+    from skillflow.propagation.contracts.input_requirements import required_contract_kind
+
+    rows = []
+    standalone = {tuple(target["operation_path"]) for expression in expressions
+                  for target in [expression["target"]] if target.get("instruction_id") == ir
+                  and "operation_path" in target and target.get("slot") == {"kind": "self"}}
+
+    def walk(segments, path):
+        for index, segment in enumerate(segments if isinstance(segments, list) else ()):
+            if not isinstance(segment, dict):
+                continue
+            prefix = [*path, index]
+            if "body" in segment:
+                walk(segment["body"], [*prefix, "body"])
+            for ci, case in enumerate(segment.get("cases", []) if isinstance(segment.get("cases"), list) else ()):
+                if isinstance(case, dict):
+                    walk(case.get("segments"), [*prefix, "cases", ci, "segments"])
+            for oi, op in enumerate(segment.get("ops", []) if isinstance(segment.get("ops"), list) else ()):
+                if not isinstance(op, dict) or not isinstance(op.get("op"), str):
+                    continue
+                pos = [*prefix, "ops", oi]
+                boundary = op.get("location", op.get("target"))
+                location = locations.get(boundary, {}) if isinstance(boundary, str) else {}
+                # This inventory describes the old shape. A newly added expression must
+                # pass exact-target validation before it can discharge the obligation.
+                exact = op.get("expression") is not None or tuple(pos) in standalone
+                required = required_contract_kind(op["op"], location.get("kind"), exact_expression=exact)
+                if required:
+                    rows.append({"operation": op["op"], "path": pos, "required_field": required[1],
+                                 "attachment_pointer": json_pointer(*pos, required[1]),
+                                 "input_count": len(op["inputs"]) if isinstance(op.get("inputs"), list) else None})
+    if isinstance(record, dict):
+        walk(record.get("segments"), ["segments"])
+    return rows
+
+
+def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_gaps=(), *, rejected_records=None):
     """Compute edit permissions using executable references and checked finding anchors.
 
     Shared locations and standalone expression declarations are held immutable.
@@ -144,16 +182,37 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
             else:
                 unresolved.append(target)
     previous_gaps = gap_positions(prior_processing)
+    barriers = defaultdict(list)
+    # Earlier producers attached a combined validation pass to each isolated
+    # record. Retain its receipt hash but do not present a sibling's concrete
+    # pointer as an obligation of this record.
+    for gap in validation_gaps:
+        ir = gap["instruction_id"]
+        if ir in new:
+            local = deepcopy(gap)
+            pointer = json_pointer("ir_semantics", ir)
+            local["validation_errors"] = [diagnostic for diagnostic in local["validation_errors"]
+                if not diagnostic["path"].startswith("/ir_semantics/")
+                or diagnostic["path"] == pointer or diagnostic["path"].startswith(pointer + "/")]
+            barriers[ir].append(local)
+    rejected_records = rejected_records or {}
+    locations = prior_processing.get("locations", {})
+    expressions = prior_processing.get("expressions", [])
     slots = {}
-    for ir in sorted((affected | located.keys()) & new.keys()):
+    for ir in sorted((affected | located.keys() | barriers.keys()) & new.keys()):
         slots[ir] = {"instruction": deepcopy(new[ir]), "changed_cfg": ir in changed,
             "finding_targets": sorted(set(located[ir])), "modeled": deepcopy(records.get(ir)),
-            "source_rechecks": source_rechecks[ir], "allow_keep": ir not in changed and ir in old,
+            "source_rechecks": source_rechecks[ir], "allow_keep": ir not in changed and ir in old and ir not in barriers,
+            "validation_gaps": barriers.get(ir, []),
+            "rejected_record": deepcopy(rejected_records.get(ir)) if ir in barriers else None,
+            "required_attachments": processing_slot_obligations(ir, records.get(ir, rejected_records.get(ir)), locations, expressions),
             "unmodeled_gaps": {json_pointer("processing_gaps", index): deepcopy(gaps[index])
                                for index in previous_gaps[ir]}}
     plan = {"identity": IDENTITY, "candidate_sha256": canonical_sha256(prior_processing),
         "old_cfg_sha256": canonical_sha256(old_cfg), "new_cfg_sha256": canonical_sha256(new_cfg),
         "findings_sha256": canonical_sha256(findings), "slots": slots,
+        "validation_gaps_sha256": canonical_sha256(list(validation_gaps)),
+        "read_only": {"locations": deepcopy(locations), "expressions": deepcopy(expressions)},
         "removed_instruction_ids": sorted(old.keys() - new.keys()),
         "retained_validation_gaps": [deepcopy(gap) for gap in validation_gaps
             if gap["instruction_id"] in new and gap["instruction_id"] not in slots],
@@ -183,12 +242,37 @@ def merge_processing_revision(previous, scope, response):
         except ValidationError as error:
             raise schema_error(error, pointer, candidate=value, schema=FlatProcessingGap.model_json_schema()) from error
 
+    # An attachment-only correction does not require the model to manufacture a
+    # second copy of every other operation, evidence row and contract in the IR.
+    # Compile the signed typed edits to the same full rows validated below.
+    response = deepcopy(response)
     for index, row in enumerate(response["coverage_slots"]):
+        if isinstance(row, dict) and "attachments" in row:
+            pointer = json_pointer("coverage_slots", index)
+            ir = row.get("instruction_id")
+            slot = scope["slots"].get(ir) if isinstance(ir, str) else None
+            if (set(row) != {"instruction_id", "attachments"} or slot is None or slot["changed_cfg"]
+                    or not isinstance(row["attachments"], list) or not row["attachments"]):
+                raise structural_error("processing_revision_attachments", pointer,
+                    "An attachment-only change needs an unchanged CFG owner and a nonempty list of authorized edits.")
+            source = slot["modeled"] if slot["modeled"] is not None else slot["rejected_record"]
+            updated = deepcopy(source)
+            allowed = {ob["attachment_pointer"] for ob in slot["required_attachments"]}
+            for ordinal, edit in enumerate(row["attachments"]):
+                if (not isinstance(edit, dict) or set(edit) != {"path", "value"}
+                        or not isinstance(edit["path"], str) or edit["path"] not in allowed):
+                    raise structural_error("processing_revision_attachment_path", pointer + f"/attachments/{ordinal}",
+                        "Use the exact IR-relative pointer of a listed required attachment once, with its complete value.")
+                path = edit["path"]
+                allowed.remove(path)
+                owner, field = path.rsplit("/", 1)
+                resolve_pointer(updated, owner)[field] = deepcopy(edit["value"])
+            response["coverage_slots"][index] = {"instruction_id": ir, "modeled": updated}
         if isinstance(row, dict) and "keep" in row and isinstance(row.get("instruction_id"), str):
             slot = scope["slots"].get(row["instruction_id"])
             if slot is not None and not slot["allow_keep"]:
                 raise structural_error("processing_revision_keep", json_pointer("coverage_slots", index, "keep"),
-                    "A changed CFG slot needs an explicit processing record or source-backed unmodeled gap.")
+                    "A changed CFG slot or a validation-excluded slot needs an explicit processing record or source-backed unmodeled gap.")
     merged = merge_slots(previous, response, {"candidate_sha256": scope["candidate_sha256"],
         "records": {}, "coverage_slots": scope["slots"], "field_slots": {}}, validate_gap=validate_gap)
     seen = {row["instruction_id"] for row in response["coverage_slots"]}
@@ -223,6 +307,11 @@ def _location_uses(processing, cfg):
     """Return the actual modeled location dependencies and state read/write roles."""
     locations = processing.get("locations", {})
     uses, reads, writes = defaultdict(set), defaultdict(list), defaultdict(list)
+    anchored = defaultdict(list)
+    for name, loc in locations.items():
+        for ref in loc.get("operand_refs", []):
+            if ref["side"] == "input":
+                anchored[ref["instruction_id"], ref["index"]].append((name, loc))
     for ir, spec in processing["ir_semantics"].items():
         for op in _operations(spec):
             ref = op.get("location", op.get("target"))
@@ -234,8 +323,14 @@ def _location_uses(processing, cfg):
             if op["op"] == "write":
                 writes[ir].append(locations[ref])
     for ir, instruction in cfg_instructions(cfg).items():
-        reads[ir].extend({"kind": "runtime_context", "name": op["identifier"], "address_kind": "identified"}
-                         for op in instruction["inputs"] if op["type"] == "context_key")
+        for i, operand in enumerate(instruction["inputs"]):
+            if operand["type"] == "context_key":
+                if (ir, i) in anchored:
+                    for name, loc in anchored[ir, i]:
+                        reads[ir].append(loc)
+                        uses[ir].add(name)
+                else:
+                    reads[ir].append({"kind": "runtime_context", "name": operand["identifier"], "address_kind": "identified"})
     return uses, reads, writes
 
 
@@ -286,20 +381,26 @@ def sensitivity_scope(old_cfg, new_cfg, old_processing, new_processing, findings
                 source_rechecks[owner].append({"target_id": target, "source_refs": deepcopy(finding.get("source_refs", []))})
             else:
                 unresolved.append(target)
+    from .sensitivity_entries import entry_catalogue, prior_entry_labels
+    prior_gaps = defaultdict(list)
+    for gap in prior_sensitivity.get("entry_gaps", []):
+        prior_gaps[gap["instruction_id"]].append(gap)
     new = cfg_instructions(new_cfg)
     slots = {ir: {"instruction": deepcopy(new[ir]), "processing": deepcopy(new_specs[ir]),
-                  "declarations": deepcopy(declarations[ir]), "source_rechecks": source_rechecks[ir]}
+                  "prior_entry_labels": prior_entry_labels(declarations[ir]),
+                  "prior_entry_gaps": deepcopy(prior_gaps[ir]), "source_rechecks": source_rechecks[ir]}
              for ir in sorted((affected | source_rechecks.keys()) & new_specs.keys())}
     plan = {"identity": SENSITIVITY_IDENTITY, "candidate_sha256": canonical_sha256(prior_sensitivity),
+        "entry_catalogue": entry_catalogue(new_cfg, new_processing, owners=slots),
         "old_cfg_sha256": canonical_sha256(old_cfg), "new_cfg_sha256": canonical_sha256(new_cfg),
         "old_processing_sha256": canonical_sha256(old_processing), "new_processing_sha256": canonical_sha256(new_processing),
         "findings_sha256": canonical_sha256(findings), "slots": slots,
-        "removed_instruction_ids": sorted(declarations.keys() - new_specs.keys()),
+        "removed_instruction_ids": sorted((declarations.keys() | prior_gaps.keys()) - new_specs.keys()),
         "unresolved_targets": sorted(set(unresolved))}
     return {**plan, "scope_sha256": canonical_sha256(plan)}
 
 
-def merge_sensitivity_revision(previous, scope, response):
+def merge_sensitivity_revision(previous, scope, response, *, files=None):
     """Replace only authorized declaration groups and preserve every other row."""
     from .fragments import ScopedSensitivity
 
@@ -313,15 +414,28 @@ def merge_sensitivity_revision(previous, scope, response):
         raise structural_error("sensitivity_revision_json", "", str(error)) from error
     if set(response) != {"slots"} or not isinstance(response["slots"], list):
         raise structural_error("sensitivity_revision_envelope", "", "Return the authorized slots array only.")
-    slots, updates = scope["slots"], {}
+    slots, updates, gaps = scope["slots"], {}, []
     for index, row in enumerate(response["slots"]):
         path = json_pointer("slots", index)
-        if not isinstance(row, dict) or set(row) != {"instruction_id", "declarations"} or not isinstance(row["declarations"], list):
+        if (not isinstance(row, dict) or set(row) - {"instruction_id", "declarations", "entry_gaps"}
+                or not isinstance(row.get("declarations"), list) or "instruction_id" not in row):
             raise structural_error("sensitivity_revision_shape", path, "Each slot requires instruction_id and a declarations array.")
         ir = row["instruction_id"]
         if not isinstance(ir, str) or ir not in slots or ir in updates:
             raise structural_error("sensitivity_revision_identity", path + "/instruction_id", "Use each authorized instruction_id at most once.")
-        for decl_index, declaration in enumerate(row["declarations"]):
+        declarations = row["declarations"]
+        if files is not None:
+            from .sensitivity_entries import resolve_labels
+            catalogue = {key: {**entry, "accesses": [site for site in entry["accesses"] if site["instruction_id"] == ir]}
+                         for key, entry in scope["entry_catalogue"].items()
+                         if any(site["instruction_id"] == ir for site in entry["accesses"])}
+            try:
+                resolved = resolve_labels({k:v for k,v in row.items() if k != "instruction_id"}, catalogue, {ir}, files)
+            except StructuralValidationError as error:
+                raise StructuralValidationError([{**d, "path": path + d["path"]} for d in error.diagnostics]) from error
+            declarations = resolved["declarations"]
+            gaps.extend(resolved.get("entry_gaps", []))
+        for decl_index, declaration in enumerate(declarations):
             pointer = path + f"/declarations/{decl_index}"
             try:
                 parsed = ScopedSensitivity.model_validate(declaration)
@@ -330,7 +444,7 @@ def merge_sensitivity_revision(previous, scope, response):
                     schema=ScopedSensitivity.model_json_schema()) from error
             if parsed.instruction_id != ir:
                 raise structural_error("sensitivity_revision_owner", pointer + "/instruction_id", "The declaration must belong to this exact slot.")
-        updates[ir] = row["declarations"]
+        updates[ir] = declarations
     missing = slots.keys() - updates.keys()
     if missing:
         raise StructuralValidationError([{"code": "sensitivity_revision_missing", "path": "/slots",
@@ -347,6 +461,9 @@ def merge_sensitivity_revision(previous, scope, response):
         declarations.extend(deepcopy(updates[ir]))
     if declarations or "declarations" in result:
         result["declarations"] = declarations
+    retained_gaps = [g for g in previous.get("entry_gaps", []) if g["instruction_id"] not in slots and g["instruction_id"] not in retired]
+    if gaps or retained_gaps or "entry_gaps" in result:
+        result["entry_gaps"] = [*retained_gaps, *gaps]
     return result
 
 

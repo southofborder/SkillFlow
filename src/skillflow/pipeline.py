@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Event
 
 from skillflow.common.artifacts import ArtifactWriter
-from skillflow.common.paths import project_root
+from skillflow.common.paths import is_protected_output
 from skillflow.common.recording import canonical_sha256, implementation_provenance, now, sha_file
 from skillflow.common.runs import exclusive_run
 from skillflow.common.source_evidence import _json_object
@@ -70,10 +70,8 @@ def _safe_output(directory, source, analysis):
     if (source.is_dir() and (directory.is_relative_to(source) or source.is_relative_to(directory))
             or analysis.is_relative_to(directory)):
         raise ValueError("Pipeline output must not overlap its source or CFG input")
-    root = project_root()
-    for protected in (root / "dataset", root / "result"):
-        if directory == protected or directory.is_relative_to(protected):
-            raise ValueError("Pipeline output cannot overwrite frozen inputs or deliveries")
+    if is_protected_output(directory):
+        raise ValueError("Pipeline output cannot overwrite frozen inputs or deliveries")
 
 
 def prepare_analysis_run(input, analysis, *, run_dir, config=None, secrets=()):

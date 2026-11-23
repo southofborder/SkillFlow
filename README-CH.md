@@ -85,15 +85,21 @@ python -m skillflow render --input tmp/analysis.json --output tmp/graph.mmd
 模型为 `deepseek-v4-flash`；实际响应模型名单独记录。
 完整说明见 [Skill-IR 使用说明](docs/architecture/implementation.md)。
 
-独立回述实验需要先构建固定版本的 Lean 打印器：
+CFG 受控回述和文档引导分析都需要本机可运行的 Lean 打印／解析器。克隆仓库或安装 wheel 后，
+用 Elan 安装一次固定工具链，再执行构建。命令会实际生成受控文本、解析该文本并核对完整 CFG，
+通过后打印校验器路径。
 
 ```powershell
-# 在 formal 中，使用 lean-toolchain 固定的工具链：
-lake build
-lake env lean ProofAudit.lean
-# 回到仓库根目录；prepare 不调用 API：
+elan toolchain install leanprover/lean4:v4.33.1
+python -m skillflow.lean_renderer
+# 从仓库根目录准备离线实验
 python -m skillflow.graph.audit prepare --run-dir tmp/backtrace-review
 ```
+
+已有官方工具链时，可用 `--toolchain-bin PATH` 指向其 `bin` 目录。更新项目后再次运行构建命令即可。
+不同源码和平台的产物保存在独立的用户缓存目录。运行时依次采用显式参数、环境变量
+`SKILLFLOW_LEAN_RENDERER` 和默认构建。对启用了应用控制的设备，系统须允许编译器与生成的程序运行。
+[Lean 安装指南](https://lean-lang.org/install/) · [离线构建和策略诊断](formal/README.md)
 
 `run` 对 F01 原图与四个反例执行五次模型核对；`replay` 离线重放已保存的新版响应。
 早期实测可阅读 [F01 历史验收报告](experiments/graph/audit/runs/controlled-v2-f01-20260914T142804Z/acceptance.md)，

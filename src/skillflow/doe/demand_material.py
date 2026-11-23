@@ -116,14 +116,12 @@ def prepare_demand_review(facts, task, annotation, candidate, *, queue_order="fi
     return DemandReview(deepcopy(result), {"targets": deepcopy(targets)})
 
 
-def validate_demand_result(result):
+def validate_demand_result(result, *, archived_v12=False):
     """Validate a stored business result; recomputation is the replay's job."""
     from .demand_results import validate_result_shape
-    result = validate_result_shape(result)
+    result = validate_result_shape(result, archived_v12=archived_v12)
     if set(result) != {"schema_version", "status", "goals", "derivations", "sinks", "diagnostics", "coverage", "traceability", "input_assessments", "input_findings", "input_contract_review_sha256"}:
         raise ValueError("Demand result fields differ")
-    if result["schema_version"] != "skillflow-demand-v12" or result["status"] not in {"complete", "partial"}:
-        raise ValueError("Unsupported demand result version or status")
     if not isinstance(result["derivations"], dict) or not isinstance(result["sinks"], list):
         raise ValueError("Invalid demand collections")
     derivations = result["derivations"]

@@ -259,6 +259,40 @@ def test_repeated_parameters_keep_receiver_slot_specific_demands():
                for r in delivery if r["input_index"] == 1)
 
 
+def test_access_specific_label_follows_the_selected_read_to_its_own_receiver_only():
+    def change(prepared, raw, ev):
+        events = raw["ir_semantics"]["ir_filter"]["events"][0]["events"]
+        events.append({"effect": "fs_read", "evidences": ev, "atomic_ops": [{"op": "read",
+            "location": "ir_read_boundary_0", "output": "independent_read", "evidences": ev}]})
+        events.append({"effect": "transform", "evidences": ev, "atomic_ops": [{"op": "build", "container": "object",
+            "parts": [{"path": ["selected"], "value": inp()}, {"path": ["other"], "value": local("independent_read")}],
+            "output": "combined", "evidences": ev}]})
+        for name, use in (("first_receiver", inp()), ("second_receiver", local("independent_read")),
+                          ("pair_receiver", local("combined"))):
+            raw["locations"][name] = {"kind": "tool", "name": name, "operand_refs": [],
+                                      "access_scope": "recipient", "retention": None}
+            raw["location_evidences"][name] = ev
+            events.append({"effect": None, "evidences": [], "atomic_ops": [{"op": "deliver",
+                           "inputs": [use], "target": name, "evidences": ev}]})
+    values = fixture([{"op": "compute", "inputs": [inp()], "dependencies": ["possible"], "output": "unused"}],
+                     mode="local", custom=change)
+    decl = declarations(ir="ir_read", value=local("stage_0"))
+    row = decl["scopes"][0]["declarations"][0]
+    row.update(source_entry_id="entry_" + "1" * 24, source_access_id="access_" + "2" * 24,
+               source_entry_origin="file", source_entry_location="storage:ir_read_boundary_0",
+               source_entry_context="a" * 64, source_entry_applicability="access")
+    result = review(values, decl)
+    sinks = [sink for sink in result["sinks"] if sink["boundary"]["sink_type"] == "external_tool"]
+    assert len(sinks) == 3
+    by_receiver = {sink["boundary"]["target"]: sink for sink in sinks}
+    assert by_receiver["first_receiver"]["actual_payload"][0]["inputs"] == by_receiver["second_receiver"]["actual_payload"][0]["inputs"]
+    assert by_receiver["first_receiver"]["data_reviews"]
+    assert not by_receiver["second_receiver"]["data_reviews"]
+    joined = by_receiver["pair_receiver"]
+    assert [resolve_data_review(r, joined, result["derivations"]["sensitivity"])["path"]
+            for r in joined["data_reviews"]] == [["selected", "token"]]
+
+
 def test_filter_and_element_scope_keep_member_field_sensitive_without_tool_expansion():
     def change(prepared, raw, ev):
         set_operator(raw, prepared, "ir_filter", ["llm"])

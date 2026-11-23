@@ -71,6 +71,16 @@ def test_source_gap_seven_text_answers_saved_backend_and_replay(tmp_path, monkey
             calls.append(self.name)
             if self.name == "flow":
                 return "# Flow\nKeep the independent return and unsupported cache write. skill/SKILL.md:1-5"
+            if self.name == "sensitivity":
+                from skillflow.document_guided.fragment_display import fragment_prompt_parts
+                entries = fragment_prompt_parts(prompt)[1]["entry_catalogue"]
+                entry, = [key for key, value in entries.items() if value["origins"] == ["file"] and
+                          any("operation_path" in site and site["instruction_id"] == identities["ir_read"]
+                              for site in value["accesses"])]
+                return json.dumps({"declarations": [{"entry_id": entry, "origin": "file",
+                    "applicability": "source_field", "path": ["token"], "label": "credential",
+                    "evidences": [{"file": "skill/SKILL.md", "start_line": 2, "end_line": 5,
+                                   "reason": "The local configuration's token field is confidential."}]}]})
             value = task if self.name == "task" else graph if self.name == "graph" else (
                 accepted_prompt_review(prompt) if self.name == "review" else fragments[self.name])
             return json.dumps(value, ensure_ascii=False)
@@ -82,16 +92,18 @@ def test_source_gap_seven_text_answers_saved_backend_and_replay(tmp_path, monkey
     assert (directory / "doe/doe-result.json").exists()
     propagation = read(directory / "propagation/manifest.json")
     assert propagation["status"] == "incomplete"
-    # The saved deterministic report contains the same substantive result as
-    # the solver-only regression: no reduction beside a shared unknown write.
-    reviews = []
-    for path in (directory / "doe").rglob("*.json"):
-        value = read(path)
-        for sink in value.get("sinks", []):
-            if sink.get("boundary", {}).get("instruction_id") == identities["ir_filter"]:
-                reviews.extend(sink.get("data_reviews", []))
-    assert reviews
-    assert any(row["conclusion"] == "excess_supported" for row in reviews) is (not shared_cache)
+    report = read(directory / "doe/doe-result.json")
+    sink, = [s for s in report["sinks"] if s["boundary"]["instruction_id"] == identities["ir_filter"]]
+    assert report["coverage"]["resolved_declarations"] == 1
+    if shared_cache:
+        # The source declares a configuration-file field. The downstream
+        # cache carries no proven identity with that external field.
+        assert sink["data_reviews"] == []
+        assert propagation["coverage"][identities["ir_unknown"]] == "unmodeled"
+        assert any(row["instruction_id"] == identities["ir_late_return"]
+                   for row in report["coverage"]["unresolved_boundaries"])
+    else:
+        assert any(row["conclusion"] == "excess_supported" for row in sink["data_reviews"])
     before = {str(path.relative_to(directory)): path.read_bytes() for path in directory.rglob("response.json")}
     assert runner.replay(directory) == result
     assert len(calls) == 7

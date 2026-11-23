@@ -364,6 +364,14 @@ def test_013_unanchored_cfg_finding_keeps_original_bundle_and_finishes_doe(tmp_p
 
         def complete(self, stage, prompt):
             answer = super().complete(stage, prompt)
+            if stage == "sensitivity":
+                from skillflow.document_guided.fragment_display import fragment_prompt_parts
+                entries = fragment_prompt_parts(prompt)[1]["entry_catalogue"]
+                entry, = [key for key, value in entries.items() if value["location"] == "runtime_context:FAST_KEY"
+                          and any("operation_path" in site for site in value["accesses"])]
+                return {"declarations": [{"entry_id": entry, "origin": "environment", "applicability": "source_field",
+                    "label": "Preferred-tool credential", "evidences": [{"file": "skill/SKILL.md", "start_line": 8,
+                    "end_line": 15, "reason": "FAST_KEY is read from the environment and is a preferred-tool credential."}]}]}
             if stage == "review":
                 from tests.doe.input_review_helpers import checks_for_inventory, review_prompt_payload
                 payload = review_prompt_payload(prompt)

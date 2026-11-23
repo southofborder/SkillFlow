@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 from typing import Callable
 
+import skillflow
 from skillflow.common.artifacts import ArtifactWriter
 from skillflow.common.llm.config import LlmConfig
 from skillflow.common.llm.config import load_environment
@@ -22,7 +23,7 @@ from skillflow.common.llm.client import request_bytes
 from skillflow.common.llm.client import request_metadata
 from skillflow.common.recording_errors import error_fields
 from skillflow.common.recording_errors import finalize_record
-from skillflow.common.paths import project_root
+from skillflow.common.paths import formal_root
 
 def canonical_sha256(value) -> str:
     text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -38,16 +39,21 @@ def read_json(path: Path):
 
 
 def sha_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    from .artifact_io import file_sha256
+    return file_sha256(path)
 
 
 def implementation_provenance() -> dict:
-    root = project_root()
-    paths = set((root / "src/skillflow").rglob("*.py"))
-    paths.update((root / "formal").rglob("*.lean"))
-    paths = {p for p in paths if ".lake" not in p.parts}
-    paths.update(root / "formal" / name for name in ("lakefile.toml", "lean-toolchain"))
-    files = {p.relative_to(root).as_posix(): sha_file(p) for p in sorted(paths)}
+    package = Path(skillflow.__file__).resolve().parent
+    proof = formal_root()
+    files = {
+        "src/skillflow/" + p.relative_to(package).as_posix(): sha_file(p)
+        for p in sorted(package.rglob("*.py"))
+        if not p.is_relative_to(package / "_lean_sources")
+    }
+    sources = {p for p in proof.rglob("*.lean") if ".lake" not in p.relative_to(proof).parts}
+    sources.update(proof / name for name in ("lakefile.toml", "lean-toolchain"))
+    files.update({"formal/" + p.relative_to(proof).as_posix(): sha_file(p) for p in sorted(sources)})
     return {"files": files, "sha256": canonical_sha256(files), "python": platform.python_version()}
 
 

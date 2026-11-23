@@ -74,7 +74,7 @@ def test_one_solve_and_one_result_with_joint_projection(propagation_run, tmp_pat
     directory = tmp_path / "doe"
     loaded = runner.run_doe(propagation_run, run_dir=directory)
     assert calls == [1]
-    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v12"
+    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v13"
     assert (directory / "audit/input-contract-review.json").is_file()
     assert loaded["input_contract_review"]["source_review_complete"] is False
     assert loaded["manifest"]["policy"]["candidate_origin"] == "model_annotation"
@@ -130,16 +130,17 @@ def test_read_no_solve_replay_strict_implementation(propagation_run, tmp_path, m
 @pytest.mark.parametrize("name", ["doe-result.json", "report.html", "manifest.json"])
 def test_interrupted_save_is_not_committed_and_can_resume(propagation_run, tmp_path, monkeypatch, name):
     directory = tmp_path / "doe"
-    original = runner.atomic_write_text
-    def write(path, text):
+    writer = "atomic_write_chunks" if name == "report.html" else "atomic_write_text"
+    original = getattr(runner, writer)
+    def write(path, text, **kwargs):
         if path.name == name:
             raise KeyboardInterrupt()
-        return original(path, text)
-    monkeypatch.setattr(runner, "atomic_write_text", write)
+        return original(path, text, **kwargs)
+    monkeypatch.setattr(runner, writer, write)
     with pytest.raises(KeyboardInterrupt):
         runner.run_doe(propagation_run, run_dir=directory)
     assert not (directory / "manifest.json").exists()
-    monkeypatch.setattr(runner, "atomic_write_text", original)
+    monkeypatch.setattr(runner, writer, original)
     assert runner.run_doe(propagation_run, run_dir=directory)["manifest"]["status"] in {"complete", "partial"}
 
 

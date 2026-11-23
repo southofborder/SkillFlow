@@ -15,6 +15,7 @@ from skillflow.propagation.contracts.values import StrictSpec, Text, ValueRef
 from skillflow.propagation.contracts.references import cfg_instructions
 from skillflow.propagation.contracts.demand import OperationTaskGoal, RawDemandGoal
 from . import annotation_wire as flat
+from .sensitivity_entries import EntryGap
 
 VERSION = "skillflow-document-fragments-v9"
 # Independent Task extraction keeps its unchanged v5 correction contract.
@@ -150,6 +151,7 @@ class ScopedSensitivity(flat.FlatSensitivity):
 
 class SensitivityFragment(StrictSpec):
     declarations: list[ScopedSensitivity] = Field(default_factory=list)
+    entry_gaps: list[EntryGap] = Field(default_factory=list)
 
 
 _MODELS = {"processing": ProcessingFragment, "task-correspondence": CorrespondenceFragment,
@@ -510,6 +512,9 @@ def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=
         instructions, files = cfg_instructions(material["cfg"]), task_source_files(material["source"])
         identities = set()
         records = value.get("declarations", [])
+        if isinstance(records, list) and any(isinstance(row, dict) and "source_entry_id" in row for row in records):
+            from .sensitivity_entries import entry_catalogue, validate_resolved_sites
+            diagnostics.extend(validate_resolved_sites(records, entry_catalogue(material["cfg"], processing)))
         for i, record in enumerate(records if isinstance(records, list) else []):
             try:
                 ScopedSensitivity.model_validate(record)
@@ -568,6 +573,8 @@ def assemble_fragments(processing, correspondence, sensitivity, material, *, val
                              validation_gaps=validation_gaps, processing_expansion=expanded)
     wire, origins = _wire(p, m, s)
     wire["_fragment_origins"] = origins
+    if s.get("entry_gaps"):
+        wire["_sensitivity_entry_gaps"] = deepcopy(s["entry_gaps"])
     if validation_gaps:
         wire["_validation_gaps"] = deepcopy(list(validation_gaps))
     try:
@@ -614,7 +621,7 @@ def split_fragments(wire):
 def _records(kind, candidate):
     fields = {"processing": ("ir_semantics", "locations", "expressions", "processing_gaps"),
               "task-correspondence": ("realizations", "demands", "operation_demands"),
-              "sensitivity": ("declarations",), "task": ("requirements", "issues"),
+              "sensitivity": ("declarations", "entry_gaps"), "task": ("requirements", "issues"),
               "cfg": ("blocks", "edges"), "review": ("findings", "input_contract_checks",
                   "input_projection_checks", "source_input_findings")}[_kind(kind)]
     result = {}
@@ -775,8 +782,11 @@ class FragmentCorrectionStrategy:
                 'or {"instruction_id":"<key>","keep":"unmodeled"} without restating its contents. '
                 "Each coverage slot selects exactly one disposition. Every gap in an unmodeled replacement must name "
                 "that instruction_id and have unmodeled=true. Use each authorized slot at most once. The program retains "
-                "every unlisted record and checks the complete merged fragment. Return only the supplied slots that can be "
-                "corrected with evidence. Do not produce a full replacement or touch a slot outside the allowed tables.\n"
+                "every unlisted record and checks the complete merged fragment. Resolve every listed diagnostic. Required "
+                "attachments are named at their exact paths. When a missing local has no producer, the listed segments "
+                "field can define its source-backed selection/computation; using an unrelated existing local is invalid. "
+                "An unchanged binding that now resolves to its true producer can remain. Never invent a missing fact. "
+                "Do not produce a full replacement or touch a slot outside the allowed tables.\n"
                 "SCOPED_PROCESSING_CORRECTION_JSON\n"
             ) + compact_json(context)
             return compact_processing_correction(base_prompt, fallback, context)
@@ -964,7 +974,8 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
                 container = value[field_name]
                 key = int(token) if isinstance(container, list) else token.replace("~1", "/").replace("~0", "~")
                 if kind == "processing" and field_name == "ir_semantics":
-                    add_gap(key, error.diagnostics)
+                    add_gap(key, [row for row in error.diagnostics
+                                  if row["path"] == pointer or row["path"].startswith(pointer + "/")])
                 elif kind == "sensitivity":
                     ir = record.get("instruction_id") if isinstance(record, dict) else None
                     for target in [ir] if ir in instructions else instructions:

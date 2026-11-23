@@ -45,7 +45,7 @@ def corrected_stage(tmp_path, monkeypatch, *, archived):
             calls.append(prompt)
             if len(calls) == 1:
                 return json.dumps(initial)
-            if archived:
+            if archived is True:
                 marker = "AUTHORIZED GRAPH SLOTS\n"
                 plan = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1])[0]
             else:
@@ -56,14 +56,23 @@ def corrected_stage(tmp_path, monkeypatch, *, archived):
 
     with monkeypatch.context() as producing:
         if archived:
-            producing.setattr(online, "STEP_IDENTITY", "skillflow-document-step-v15")
-            producing.setattr(graph_steps.GraphFactsCorrection, "build_prompt", archived_v15_prompt)
+            producing.setattr(online, "STEP_IDENTITY", "skillflow-document-step-v15" if archived is True else "skillflow-document-step-v16")
+            producing.setattr(graph_steps.GraphFactsCorrection, "identity", "skillflow-graph-facts-correction-v1")
+            if archived is True:
+                producing.setattr(graph_steps.GraphFactsCorrection, "build_prompt", archived_v15_prompt)
+            else:
+                from skillflow.document_guided.fragment_display import render_fragment_material
+                def archived_v16_prompt(strategy, base_prompt, candidate, diagnostics):
+                    plan = strategy._plan(candidate)["plan"]
+                    return archived_v15_prompt(strategy, base_prompt, candidate, diagnostics).replace(
+                        "AUTHORIZED GRAPH SLOTS\n" + compact_json(plan), render_fragment_material("cfg", {"scope": plan}), 1)
+                producing.setattr(graph_steps.GraphFactsCorrection, "build_prompt", archived_v16_prompt)
         online.prepare_step(owner, base, kind=graph_steps.FACTS,
             context={"source_owner": harness.directory / "source"},
             dependencies=[harness.directory / "source/manifest.json"], max_corrections=1)
         expected = online.run_step(owner, client=Client())
     assert len(calls) == 2
-    marker = "AUTHORIZED GRAPH SLOTS\n" if archived else "FRAGMENT_INPUT_JSON\n"
+    marker = "AUTHORIZED GRAPH SLOTS\n" if archived is True else "FRAGMENT_INPUT_JSON\n"
     assert marker in calls[1]
     return owner, source, expected
 
@@ -76,7 +85,7 @@ def forbid_execution(monkeypatch):
     monkeypatch.setattr("skillflow.common.structural_correction.ResponseChain.run", fail)
 
 
-@pytest.mark.parametrize("archived", [True, False])
+@pytest.mark.parametrize("archived", [True, "v16", False])
 def test_archived_and_current_graph_correction_displays_are_exact_pure_reads(tmp_path, monkeypatch, archived):
     owner, source, expected = corrected_stage(tmp_path, monkeypatch, archived=archived)
     before = online.inventory(owner)

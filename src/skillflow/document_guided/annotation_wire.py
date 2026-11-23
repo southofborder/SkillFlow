@@ -56,6 +56,7 @@ PROCESSING_RULES = {
     "tool_input_contract": "Every actual tool/remote call, deliver and receive requires an input_contract, including zero-input interfaces with inputs=[] plus reason and evidence. List interface-required information ranges, not every supplied parameter as necessary. Account for each actual input once, preserving the actual extra payload. Cite the interface/source explicitly. For an explicitly optional interface field use if_present=true: the flag automatically preserves presence and supplied value without requiring an absent value; do not add a redundant presence selector to fix this flag. Never infer optionality just from recorded absence. A required invocation preserves interface-required fields; a contract does not create Task purpose or make an unused call required. Paired deliver/receive carry identical contracts. Missing attachments are structural omissions; use specific supported gaps instead of omitting the obligation. No declared request inputs does not certify absence of hidden state or source abstraction errors.",
     "acquisition_projection": "Only explicit source/interface support permits optional input_contract.acquisition_projections. Each capability binds selection_input_index of the real request, selection_parameter_path within that argument, and one exact value returned_range relative to the paired receive output, with reason and physical evidence. The existing exact request/response pair and lexical scope are retained; equal payloads do not identify a pair. Absence means capability unestablished. A whole returned range does not imply arbitrary descendant selection, and separate rows do not imply arbitrary joint masks. Do not infer a capability from a parameter name or later result use, generate selection values/query encodings, or rewrite the request. Capability review is independent of input necessity.",
     "expression_target": "Expression supplements address an existing computation/control target with that target's real declared inputs. They cannot add an undeclared dependency, replace boundary acquisition, or turn prose into a Boolean fact. Inline operation expressions use that operation's declared values.",
+    "typed_selectors": "For source-supported cases testing the same actual entry value, give each case a guard {input_index,path,tests,outcome} with physical source evidence. tests is an ordered list of disjoint or first-match tests: object, array, string, nonempty_string, null, missing, or equals with exact scalar value. Use the zero-based matching test or len(tests) for the remaining domain. For wrappers select the real status field and equals literal; branch predicate=selector takes selector={path,tests,outcome} on its actual input and source evidence. One source argument passed repeatedly has the same partition; independently read clocks/resources can still vary within a case. Empty strings and absent fields are distinct. Retain prose-only cases when the controlling operand or test cannot be grounded.",
     "loop_operations": "Use merge to associate each incoming value with a distinct actual predecessor block, member to select a source collection occurrence, and append with mode=item/items for real accumulation. branch belongs to the block terminator; its true/false targets exactly cover the actual outgoing successors. truthy requires an actual Boolean, not implicit truth conversion; nonempty/empty test collections, and has_member preserves collection traversal. The program derives loop regions and occurrence identities; never supply a loop ID, unfold iterations, or substitute unguarded alternatives/compute for predecessor/member relations.",
 }
 
@@ -139,6 +140,7 @@ class FlatCase(StrictSpec):
     phase: Literal["normal", "pre_request_error", "post_request_error", "local_error"]
     disposition: Literal["return", "throw"]
     condition: Text
+    guard: specs.CaseGuard | None = Field(default=None, description="Source-backed test of a real entry input. Preserve the evidenced test order at each use; outcome=len(tests) selects the remainder. Compatible decisions on the same immutable value and field can be shared across different partitions.", exclude_if=lambda value: value is None)
     segments: list[FlatProcessing] = Field(default_factory=list,
         description="Actual additional processing only; omit or use [] when this candidate only yields an already available value.")
     yield_value: ValueRef | None = Field(default=None, alias="yield")
@@ -557,6 +559,9 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
                         label = {"group": group, "id": identity, **{key: case[key] for key in
                                  ("name", "phase", "disposition", "condition")}}
                         case_evidence = inherit(case, evidence)
+                        if case.get("guard") is not None:
+                            label["guard_evidences"] = inherit(case, evidence, source_only=True, path=[*cp, "guard"])
+                            label["guard"] = deepcopy(case["guard"])
                         if not case_segments:
                             # A source-backed candidate can select an existing value
                             # without performing another operation. Preserve its
@@ -581,7 +586,10 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
                                 expanded["requires_completion"] = list(pending)
                             target.append(expanded)
                         if case["disposition"] == "return" and case.get("yield") is not None:
-                            yields.append(refs(case["yield"], local_map))
+                            yielded = refs(case["yield"], local_map)
+                            if case.get("guard") is not None:
+                                yielded = {"kind": "alternatives", "items": [yielded], "guard": deepcopy(case["guard"])}
+                            yields.append(yielded)
                         thrown |= case["disposition"] == "throw"
                     if segment.get("output") is not None:
                         names[segment["output"]] = yields[0] if len(yields) == 1 else {"kind": "alternatives", "items": yields}
@@ -885,6 +893,15 @@ def compile_flat_response(raw, material, *, validation_gaps=()):
     saved = deepcopy(value)
     internal = value.pop("_validation_gaps", [])
     origins = value.pop("_fragment_origins", None)
+    entry_gaps = value.pop("_sensitivity_entry_gaps", [])
+    if entry_gaps:
+        from .sensitivity_entries import resolve_labels
+        from skillflow.propagation.contracts.references import cfg_instructions
+        from skillflow.propagation.contracts.task import task_source_files
+        if origins is None:
+            raise ValueError("Ingress gaps require their originating fragment")
+        resolve_labels({"entry_gaps": entry_gaps, "declarations": []}, {},
+                       cfg_instructions(material["cfg"]), task_source_files(material["source"]))
     if origins is not None and (not isinstance(origins, dict) or any(
             not isinstance(pointer, str) or not pointer.startswith("/") or not isinstance(origin, dict)
             or set(origin) != {"fragment", "path"} or origin["fragment"] not in {"processing", "task-correspondence", "sensitivity"}
@@ -918,4 +935,6 @@ def compile_flat_response(raw, material, *, validation_gaps=()):
         mapping["fragment_origins"] = {pointer: item["fragment"] for pointer, item in origins.items()}
         mapping["fragment_paths"] = deepcopy(origins)
         mapping["processing_gaps"] = deepcopy(backend.get("processing_gaps", []))
+        if entry_gaps:
+            mapping["sensitivity_entry_gaps"] = deepcopy(entry_gaps)
     return wire, backend, compiled, mapping

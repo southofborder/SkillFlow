@@ -76,9 +76,11 @@ def test_cfg_wire_keeps_source_span_and_source_block_validators():
         validate_step("cfg_wire", bad, context=context)
 
 
-def prepared_harness(tmp_path, *, processing_gap=False):
+def prepared_harness(tmp_path, *, processing_gap=False, ingress_label=None):
     from tests.document_guided.test_parallel_runner import Harness
     harness = Harness(tmp_path / "run")
+    if ingress_label:
+        harness.add_ingress(ingress_label)
     if processing_gap:
         identity = next(iter(harness.fragments["processing"]["ir_semantics"]))
         harness.fragments["processing"]["processing_gaps"] = [{"instruction_id": identity,
@@ -88,18 +90,9 @@ def prepared_harness(tmp_path, *, processing_gap=False):
     return harness
 
 
-def add_synthetic_sensitivity(harness, label):
-    """An explicit typed canary over an existing value, never semantic gold."""
-    identity = next(iter(harness.fragments["processing"]["ir_semantics"]))
-    harness.fragments["sensitivity"]["declarations"].append({"instruction_id": identity,
-        "value": {"kind": "local", "name": "label"}, "label": label,
-        "evidences": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}]})
-
-
 def test_explicit_processing_gap_replays_with_different_parallel_completion_order(tmp_path, monkeypatch):
-    harness = prepared_harness(tmp_path, processing_gap=True)
+    harness = prepared_harness(tmp_path, processing_gap=True, ingress_label="SENSITIVITY_CANARY")
     directory = harness.directory
-    add_synthetic_sensitivity(harness, "SENSITIVITY_CANARY")
     flow_complete, replay_task_complete = Event(), Event()
     first_order, replay_order = [], []
 

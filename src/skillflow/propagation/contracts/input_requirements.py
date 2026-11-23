@@ -247,6 +247,15 @@ def validate_contract_evidence(contract, source_files, pointer=""):
             raise structural_error("input_contract_evidence", target, str(error)) from error
 
 
+def required_contract_kind(op, location_kind, *, exact_expression):
+    """Attachment required by one operation, shared with revision instructions."""
+    if op == "compute" and not exact_expression:
+        return "compute", "demand_transfer"
+    if op in {"call", "deliver", "receive"} and location_kind in {"tool", "remote"}:
+        return "tool", "input_contract"
+    return None
+
+
 def expected_input_contract_obligations(targets, locations, *, exact_expression_targets):
     """Inventory actual operation obligations, independent of Task and demands.
 
@@ -261,12 +270,11 @@ def expected_input_contract_obligations(targets, locations, *, exact_expression_
             continue
         operation = target["value"]
         boundary = operation.get("target", operation.get("location"))
-        if operation["op"] == "compute" and key not in exact:
-            kind, attachment = "compute", "demand_transfer"
-        elif operation["op"] in {"deliver", "receive"} and locations.get(boundary, {}).get("kind") in {"tool", "remote"}:
-            kind, attachment = "tool", "input_contract"
-        else:
+        required = required_contract_kind(operation["op"], locations.get(boundary, {}).get("kind"),
+                                          exact_expression=key in exact)
+        if required is None:
             continue
+        kind, attachment = required
         ir, path = target["instruction_id"], target["raw_path"]
         scope = target.get("scope_path") or []
         row = {"id": "input_obligation_" + canonical_sha256([kind, ir, path])[:20],

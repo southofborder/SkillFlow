@@ -96,7 +96,10 @@ def test_runtime_inventory_exactly_covers_supported_operation_schemas():
     wire = {row[0] for row in rows if row[1] in {"atomic", "wire"}}
     assert wire == set(TypeAdapter(FlatAtomicOp).json_schema()["discriminator"]["mapping"])
     assert {row[0] for row in rows if row[1] == "structure"} == {"processing", "for_each", "cases"}
-    assert set(inventory["common"]) == {"evidence", "failure", "schema"}
+    assert set(inventory["common"]) == {"evidence", "failure", "schema", "selectors"}
+    assert "different order or overlapping domains" in inventory["common"]["selectors"]
+    historical = runtime_contract(version="skillflow-abstract-runtime-v12")["operation_contract"]
+    assert set(historical["common"]) == {"evidence", "failure", "schema"}
     assert set(inventory["expression_operators"]) == set(TypeAdapter(DemandExpression).json_schema()["discriminator"]["mapping"])
     assert all(all(isinstance(cell, str) and cell.strip() for cell in row) for row in rows)
     assert len(json.dumps(inventory, ensure_ascii=False, separators=(",", ":"))) < 6500

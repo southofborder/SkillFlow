@@ -145,6 +145,9 @@ class UnavailableDependencies:
         if ref.kind == "input":
             self._input(ir, ref.index, wanted, requirement, parent)
         elif ref.kind == "alternatives":
+            if ref.guard:
+                self.engine._case_control(ir, ref.guard.model_dump(mode="json"), requirement, parent, True,
+                                          "declared_unavailable_selector")
             for child in ref.items:
                 self._reference(child, ir, scope, wanted, requirement, parent, visited)
         elif ref.kind == "local":
@@ -179,6 +182,12 @@ class UnavailableDependencies:
         op = operations[coordinate]
         event, body, _ = coordinate
         scope = event if body is not None else None
+        declaration = self.compiled["ir_semantics"][ir]["events"][event]
+        if body is not None:
+            declaration = declaration["body"][body]
+        guard = (declaration.get("case") or {}).get("guard")
+        if guard:
+            self.engine._case_control(ir, guard, requirement, parent, True, "declared_unavailable_selector")
         if scope is not None:
             self._reference(loops[scope].collection, ir, None, need("shape"), requirement, parent, visited)
         location = self.compiled["locations"].get(getattr(op, "target", getattr(op, "location", None)))
@@ -194,8 +203,18 @@ class UnavailableDependencies:
                             requirement, parent, visited)
             return
         if op.op == "branch":
-            self._reference(op.input, ir, scope, need("truth" if op.predicate == "truthy" else "cardinality"),
-                            requirement, parent, visited)
+            if op.selector and op.input.kind == "input":
+                self.engine.emit(self.engine.node_at("ir_input", ir, slot=op.input.index),
+                    self.engine._selector_need(ir, op.input.model_dump(mode="json"), op.selector.model_dump(mode="json")),
+                    requirement, "declared_unavailable_selector", parent, True)
+                return
+            if op.selector:
+                self.engine.diagnostic("selector_transfer_gap", f"Unexecuted branch at {ir}/events/{coordinate} "
+                    f"reads local {op.input.model_dump(mode='json')} at path {op.selector.path}. "
+                    "Bind a recorded operand or a verified transfer for this local to certify its selector.",
+                    ir=ir, requirement=requirement, blocking=False)
+            info = need("value", op.selector.path) if op.selector else need("truth" if op.predicate == "truthy" else "cardinality")
+            self._reference(op.input, ir, scope, info, requirement, parent, visited)
             return
         for use in active_value_uses(op, instruction):
             if use.role == "control" and static_condition(use.value, instruction) is not None:

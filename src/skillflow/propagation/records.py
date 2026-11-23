@@ -34,7 +34,7 @@ from skillflow.propagation.conditions import guard_truths
 from skillflow.propagation.conditions import payload_input_indices
 from skillflow.propagation.conditions import validate_record_consumption
 
-SCHEMA_VERSION = "skillflow-propagation-record-v16"
+SCHEMA_VERSION = "skillflow-propagation-record-v17"
 LEGACY_SCHEMA_VERSION = "skillflow-propagation-record-v15"
 
 
@@ -270,6 +270,27 @@ class PropagationRecords:
                     raise PropagationRecordError(f"atomic operation identity mismatch at {ir_id}/{position}/{op_index}")
                 if operation.may_state != op_spec.get("may", False):
                     raise PropagationRecordError("state summary differs from the declared may write")
+                if operation.skipped_case_inputs:
+                    from skillflow.propagation.selectors import selector_outcomes
+                    guard = (spec.get("case") or {}).get("guard")
+                    if guard is None:
+                        raise PropagationRecordError("infeasible operation requires a declared case guard")
+                    check_data(frozenset(operation.skipped_case_inputs))
+                    operand = self._instructions[ir_id]["inputs"][guard["input_index"]]
+                    if operand["type"] == "result":
+                        roots = next((b.data_ids for b in record.entry_state.bindings
+                                      if b.location.kind == "result" and b.location.name == operand["identifier"]), frozenset())
+                        if roots != frozenset(operation.skipped_case_inputs):
+                            raise PropagationRecordError("infeasible case evidence differs from its entry operand versions")
+                    elif operand["type"] == "literal":
+                        for identity in operation.skipped_case_inputs:
+                            content = self._data_registry.get(identity).content
+                            if content.form != "literal" or _digest(content.value) != _digest(operand["literal_value"]):
+                                raise PropagationRecordError("infeasible case evidence differs from its literal operand")
+                    if any(guard["outcome"] in selector_outcomes(self._data_registry, identity, guard)
+                           for identity in operation.skipped_case_inputs):
+                        raise PropagationRecordError("infeasible case record contradicts the actual selector")
+                    continue
                 validate_record_consumption(operation, self._data_registry)
                 if operation.op == "build":
                     if len(operation.members) != len(op_spec["parts"]):
@@ -413,6 +434,7 @@ class PropagationRecords:
                     events.append(event)
             for event in events:
                 for operation in event.atomic_ops:
+                    data_refs(operation.skipped_case_inputs)
                     for values in [*operation.inputs, *operation.outputs]:
                         data_refs(values)
                     for alternative in operation.alternatives:

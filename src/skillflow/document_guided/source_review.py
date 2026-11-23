@@ -41,7 +41,7 @@ from .failed_stage_targets import (
     checked_stage_target, target_correction_context,
 )
 from skillflow.doe.input_contract_review import (
-    InputContractCheck, InputScopeCheck, input_contract_binding,
+    InputContractCheck, InputScopeCheck, SOURCE_REVIEW_VERSION, input_contract_binding,
     contract_review_targets, input_contract_review_inventory, compact_review_inventory,
 )
 from skillflow.doe.source_input_findings import (
@@ -50,7 +50,7 @@ from skillflow.doe.source_input_findings import (
 
 
 IDENTITY = "skillflow-document-source-review-v1"
-FRAGMENT_IDENTITY = "skillflow-document-source-review-fragment-v7"
+FRAGMENT_IDENTITY = SOURCE_REVIEW_VERSION
 CONFIG = {"model": "gpt-6.1-sol", "reasoning_effort": "max", "response_format": "json_object"}
 ANNOTATION_OWNERS = {"processing", "task-correspondence", "sensitivity"}
 COMPACT_VIEW = "compact-v1"
@@ -107,13 +107,24 @@ class CannotAssessSourceReview(StrictRecord):
 RESPONSE_ADAPTER = TypeAdapter(CompletedSourceReview | CannotAssessSourceReview)
 
 
-class FragmentSourceFinding(SourceFinding):
+class ArchivedFragmentSourceFinding(SourceFinding):
     owner: Literal["processing", "task-correspondence", "sensitivity"] | None = None
 
     @model_validator(mode="after")
     def annotation_owner_only(self):
         if self.domain != "annotation" and self.owner is not None:
             raise ValueError("Only annotation findings may carry a fragment owner")
+        return self
+
+
+class FragmentSourceFinding(ArchivedFragmentSourceFinding):
+    required_graph_edit: Literal["field", "topology", "action_inventory"] | None = Field(default=None,
+        description="CFG findings only. Use action_inventory when repair requires adding, removing or moving action sites.")
+
+    @model_validator(mode="after")
+    def cfg_edit_only(self):
+        if self.required_graph_edit is not None and self.domain != "cfg":
+            raise ValueError("Only a CFG finding can specify its required graph edit")
         return self
 
 
@@ -285,6 +296,11 @@ def prepare_review_material(*, files, task=None, cfg=None, annotation=None, raw_
     if generation == "fragment-v1":
         result.update(generation=generation, processing_gaps=gaps, partial=partial or bool(gaps),
                       fragment_origins=saved_origins, fragments=actual_fragments)
+        entry_gaps = deepcopy((mapping or {}).get("sensitivity_entry_gaps",
+            actual_fragments.get("sensitivity", {}).get("entry_gaps", [])))
+        if entry_gaps:
+            result["sensitivity_entry_gaps"] = entry_gaps
+            result["partial"] = True
         result["failed_stage_targets"] = failed_stage_inventory(files=files, failures=failures,
             collections=collections, fragments=actual_fragments)
         result["target_index"].extend(deepcopy(result["failed_stage_targets"]["targets"]))
@@ -468,6 +484,11 @@ def build_source_review_prompt(material):
                    != expected_stages["targets"]):
             raise ValueError("Failed-stage target inventory does not match current bound review material")
         adapter = FRAGMENT_RESPONSE_ADAPTER
+        if material.get("sensitivity_entry_gaps"):
+            payload["sensitivity_entry_gaps"] = deepcopy(material["sensitivity_entry_gaps"])
+            instructions += ("\nCheck every reported missing sensitive ingress against the source and the named "
+                "instruction. Route an evidenced omission to the actual CFG or processing owner using its existing "
+                "target. Do not seed a substituted downstream value.\n")
         payload.update(processing_gaps=deepcopy(material["processing_gaps"]), partial=material["partial"],
                        fragments=deepcopy(material["fragments"]),
                        failed_stage_targets=deepcopy(expected_stages),
@@ -504,6 +525,9 @@ def build_source_review_prompt(material):
             "For any rejected/unresolved check, scope_checks must exhaustively partition all listed scope IDs exactly once into accepted/rejected/unresolved groups. "
             "Omitted scopes are never implicitly accepted. Unresolved groups require a typed gap with code, specific missing fact/conflict, resolution requirement, reason and source evidence. "
             "Wide rule/interface/output_parts barriers have no implicit whole-input effect: list exact affected_scope_ids and mark each such input scope nonaccepted itself. "
+            "Each nonempty affected_scope_ids list applies to every subject in its group. Put wide subjects alone in that group; required/remainder or other narrow subjects belong in separate groups with no affected list. "
+            "For CFG findings state required_graph_edit (field, topology, or action_inventory). An action inventory change needs source-backed changes to action sites; topology only preserves every existing action. "
+            "Check sensitivity sources against physical entry fields and acquisition versions, including omissions and any repeated declaration of the same entry. Check each SDK receiver, request/response pairing and the actual response projection against source. Route supported discrepancies to the owning fragment at exact targets. "
             "An empty affected list means no additional actual-input retention. Unrelated accepted input ranges remain accepted. "
             "Independently assess every output property/path and every actual input slot, field, control, "
             "member scope and remainder. A claimed dependency list is not proof that every listed input is needed. "

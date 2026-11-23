@@ -21,7 +21,7 @@ from skillflow.propagation.contracts.sensitivity import SensitivityDeclaration
 from skillflow.propagation.contracts.demand import OperationTaskGoal, OperationExpression
 from skillflow.propagation.contracts.input_requirements import DemandTransfer, ToolInputContract, check_input_coverage
 from skillflow.propagation.contracts.evidence import (
-    SpecEvidence, Evidences, Operator, OperatorEvidence, Effect, RawEffect,
+    SourceEvidence, SpecEvidence, Evidences, Operator, OperatorEvidence, Effect, RawEffect,
 )
 
 
@@ -34,6 +34,7 @@ SpecPath = Annotated[list[StrictStr | Index], BeforeValidator(_require_list), Fi
 LocationKind = Literal["runtime_context", "storage", "model_context", "remote", "tool", "user"]
 
 from skillflow.propagation.contracts.references import OperandRef
+from skillflow.propagation.contracts.selectors import CaseGuard, Selector
 from skillflow.propagation.contracts.locations import AddressPolicy
 
 
@@ -270,9 +271,16 @@ class MemberOp(AtomicSpec):
 class BranchOp(AtomicSpec):
     op: Literal["branch"]
     input: ValueRef
-    predicate: Literal["truthy", "nonempty", "empty", "has_member"]
+    predicate: Literal["truthy", "nonempty", "empty", "has_member", "selector"]
+    selector: Selector | None = Field(default=None, exclude_if=lambda value: value is None)
     true_target: Text
     false_target: Text
+
+    @model_validator(mode="after")
+    def selector_matches_predicate(self):
+        if (self.predicate == "selector") != (self.selector is not None):
+            raise ValueError("only predicate=selector requires a typed selector")
+        return self
 
 
 class AppendOp(AtomicSpec):
@@ -390,6 +398,14 @@ class CaseLabel(StrictSpec):
     phase: Literal["normal", "pre_request_error", "post_request_error", "local_error"]
     disposition: Literal["return", "throw"]
     condition: Text
+    guard: CaseGuard | None = Field(default=None, exclude_if=lambda value: value is None)
+    guard_evidences: list[SourceEvidence] = Field(default_factory=list, exclude_if=lambda value: not value)
+
+    @model_validator(mode="after")
+    def grounded_selector(self):
+        if (self.guard is not None) != bool(self.guard_evidences):
+            raise ValueError("a typed case guard requires frozen source evidence")
+        return self
 
 
 class EffectSpec(StrictSpec):
@@ -677,6 +693,8 @@ def _validate_ref(ref: ValueRef, instruction: dict, definitions: dict[str, int],
         if definitions[ref.name] >= position and not (uncertain and inside_alternatives):
             raise structural_error("validate_ref", "", f"local reference precedes definition: {instruction['id']}/{ref.name}")
     elif isinstance(ref, AlternativesRef):
+        if ref.guard is not None:
+            _validate_ref(InputRef(kind="input", index=ref.guard.input_index), instruction, definitions, position, uncertain=False)
         for item in ref.items:
             _validate_ref(item, instruction, definitions, position, uncertain=uncertain, inside_alternatives=True)
         if uncertain and not any(not _local_names(item) or all(definitions[name] < position for name in _local_names(item)) for item in ref.items):
@@ -772,6 +790,13 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
                 case_groups.setdefault(label.group, set()).add(label.disposition)
             if any("return" not in dispositions for dispositions in case_groups.values()):
                 raise structural_error("case_result", "/events", "bounded call cases require at least one return candidate")
+            returning_guards = {label.guard.model_dump_json() for label in label_ids.values()
+                                if label.guard is not None and label.disposition == "return"}
+            for path, ref in _located_refs(spec):
+                for subpath, guard in _guarded_choices(ref, path):
+                    if guard.model_dump_json() not in returning_guards:
+                        raise structural_error("selector_evidence", subpath,
+                            "A guarded yield must match a returning case with its source-backed input selector.")
             for _, _, event in iter_scoped_events(spec):
                 if not set(event.requires_completion) <= set(case_groups):
                     raise structural_error("case_completion", "/events", "normal completion references an undefined case group")
@@ -785,6 +810,15 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
             outgoing_blocks = {edge["target_block_id"] for edge in cfg.get("edges", []) if edge["source_block_id"] == block_id}
             for e, b, event in iter_scoped_events(spec):
                 event_path = f"/events/{e}" + (f"/body/{b}" if b is not None else "")
+                if event.case is not None and event.case.guard is not None:
+                    try:
+                        with validation_at(event_path + "/case/guard/input_index"):
+                            _validate_ref(InputRef(kind="input", index=event.case.guard.input_index),
+                                          instruction, {}, 0, uncertain=False)
+                            if instruction["inputs"][event.case.guard.input_index]["type"] == "context_key":
+                                raise structural_error("case_guard_operand", "", "Select a literal or immutable result operand; acquire the version before testing mutable context.")
+                    except StructuralValidationError as error:
+                        local_errors.extend(error.diagnostics)
                 try:
                     with validation_at(event_path):
                         if event.atomic_ops or event.case is None or event.effect is not None:
@@ -797,6 +831,9 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
                         local_errors.extend(structural_error("merge_predecessor", path + "/incoming",
                             "merge predecessor must be an actual incoming CFG block").diagnostics)
                     if isinstance(operation, BranchOp):
+                        if operation.selector is not None and not any(isinstance(item, SourceEvidence) for item in operation.evidences):
+                            local_errors.extend(structural_error("selector_evidence", path + "/evidences",
+                                "A typed field discriminator requires a physical source span for the test.").diagnostics)
                         if {operation.true_target, operation.false_target} != outgoing_blocks:
                             local_errors.extend(structural_error("branch_targets", path,
                                 "typed branch targets must cover exactly the outgoing CFG successors").diagnostics)
@@ -854,6 +891,14 @@ def _located_refs(value, path=""):
         for name in type(value).model_fields:
             if name not in {"evidences", "demands", "expression"}:
                 yield from _located_refs(getattr(value, name), path + "/" + name)
+
+
+def _guarded_choices(value, path):
+    if isinstance(value, AlternativesRef):
+        if value.guard is not None:
+            yield path + "/guard", value.guard
+        for i, item in enumerate(value.items):
+            yield from _guarded_choices(item, path + f"/items/{i}")
 
 
 def _validate_scope(events, instruction, locations, *, uncertain, external=None,
@@ -950,7 +995,7 @@ def _validate_scope(events, instruction, locations, *, uncertain, external=None,
         if refs_valid:
             from skillflow.propagation.contracts.uses import value_uses, static_condition
             for use in value_uses(operation):
-                if use.role == "control":
+                if use.role == "control" and not (isinstance(operation, BranchOp) and operation.predicate == "selector"):
                     check(path, static_condition, use.value, instruction)
         output = getattr(operation, "output", None)
         if output is not None and refs_valid:
@@ -990,6 +1035,9 @@ def iter_located_spec_evidence(annotation: Any):
         for index, event in enumerate(events):
             position = path + f"/{index}"
             yield from listed(event.evidences, position + "/evidences")
+            case = getattr(event, "case", None)
+            if case and case.guard:
+                yield from listed(case.guard_evidences, position + "/case/guard_evidences")
             if isinstance(event, (RawForEachSpec, ForEachSpec)):
                 yield from effects(event.body, position + "/body")
             elif isinstance(event, ProcessingSpec):

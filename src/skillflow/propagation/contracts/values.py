@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_validator
 from skillflow.propagation.data.models import _check_json_value
+from skillflow.propagation.contracts.selectors import CaseGuard
 
 Text = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 Index = Annotated[int, Field(strict=True, ge=0)]
@@ -31,6 +32,7 @@ class LiteralRef(StrictSpec):
 class AlternativesRef(StrictSpec):
     kind: Literal["alternatives"]
     items: list["ValueRef"]
+    guard: CaseGuard | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("items")
     @classmethod

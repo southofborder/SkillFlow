@@ -229,7 +229,7 @@ def replay_fatal_frontier(run, saved, config, *, renderer=None):
         tasks["task"] = inherited["task"]["value"]
         stage_values["flow"] = inherited["flow"]["value"]
         outcomes.update({key:{"status":"complete"} for key in inherited})
-        _certificate(run, "initial", graphs["initial"], True, renderer)
+        _certificate(run, "initial", graphs["initial"], True, renderer, inherited["graph"]["certificate_origin"])
     for name, owner in sorted(owners.items()):
         if name in {"review", "revision/review"}:
             continue

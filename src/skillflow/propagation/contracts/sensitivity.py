@@ -9,7 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Annotated, Any, Literal
 
-from pydantic import BeforeValidator, Field, StrictStr, field_validator, model_validator
+from pydantic import BeforeValidator, Field, StrictStr, field_validator, model_serializer, model_validator
 
 from skillflow.common.source_evidence import _json_object, _require_json, extract_source_lines
 from skillflow.propagation.contracts.task import TaskEvidence
@@ -37,9 +37,35 @@ class SensitivityDeclaration(StrictSpec):
     property: SensitivityProperty = "value"
     label: Text
     evidences: Annotated[list[TaskEvidence], BeforeValidator(_require_list), Field(min_length=1)]
+    source_entry_id: Annotated[StrictStr, Field(pattern=r"^entry_[0-9a-f]{24}$")] | None = None
+    source_entry_location: Text | None = None
+    source_entry_origin: Literal["skill_argument", "environment", "file", "tool_response"] | None = None
+    source_entry_context: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    source_entry_applicability: Literal["source_field", "access"] | None = None
+    source_access_id: Annotated[StrictStr, Field(pattern=r"^access_[0-9a-f]{24}$")] | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_unbound_entry(self, handler):
+        row = handler(self)
+        if self.source_entry_id is None:
+            row.pop("source_entry_id", None)
+        if self.source_entry_location is None:
+            row.pop("source_entry_location", None)
+        if self.source_entry_origin is None:
+            row.pop("source_entry_origin", None)
+        if self.source_entry_context is None:
+            row.pop("source_entry_context", None)
+        if self.source_entry_applicability is None:
+            row.pop("source_entry_applicability", None)
+        if self.source_access_id is None:
+            row.pop("source_access_id", None)
+        return row
 
     @model_validator(mode="after")
     def distinct_evidence(self):
+        if len({value is None for value in (self.source_entry_id, self.source_entry_location,
+                self.source_entry_origin, self.source_entry_context, self.source_entry_applicability, self.source_access_id)}) != 1:
+            raise ValueError("An ingress binding requires its catalogue identity, acquisition location and access context")
         spans = [(e.file, e.start_line, e.end_line) for e in self.evidences]
         if len(spans) != len(set(spans)):
             raise ValueError("duplicate sensitivity evidence span")

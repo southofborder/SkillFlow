@@ -167,6 +167,8 @@ def _validate_records(records, instructions, data, declared):
             return value.content.bindings
         return value_bindings(value.origin.part_of) if value.origin.part_of else {}
 
+    from skillflow.propagation.selectors import compatible_bindings, consistent_bindings
+
     for ir_id, record in records.items():
         if any(record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"])) is None
                for operand in instructions[ir_id]["outputs"]):
@@ -241,16 +243,20 @@ def _validate_records(records, instructions, data, declared):
                     # and therefore validates its output side only here.
                     inputs = [] if op.op == "merge" else alternative.inputs
                     scopes = {}
+                    simultaneous = dict(alternative.bindings)
                     for slot_index, slot in enumerate(inputs):
                         for identity in slot:
+                            if len(slot) == 1:
+                                simultaneous.update(value_bindings(identity))
                             for scope, selector in value_bindings(identity).items():
                                 if scope in scopes and any(value != selector for index, value in scopes[scope] if index != slot_index):
                                     raise ValueError("operation alternative mixes incompatible incoming/member tuple choices")
                                 scopes.setdefault(scope, []).append((slot_index, selector))
+                    if not consistent_bindings(simultaneous):
+                        raise ValueError("operation alternative combines mutually exclusive selector conditions")
                     for slot in [*inputs, *alternative.outputs]:
                         for identity in slot:
-                            if any(scope in alternative.bindings and alternative.bindings[scope] != selector
-                                   for scope, selector in value_bindings(identity).items()):
+                            if not compatible_bindings(alternative.bindings, value_bindings(identity)):
                                 raise ValueError("operation alternative context contradicts its Data binding")
                 if len(op.endpoints) != int(op.op in INTERACTION_EFFECTS):
                     raise ValueError("recorded interaction endpoint arity differs")
@@ -293,7 +299,7 @@ def resolved_sink_boundaries(locations, records, *, _checked_records=False) -> l
 
     def collect(ir_id, event_index, event, body_index=None):
         for op_index, op in enumerate(event.atomic_ops):
-            if op.op not in {"deliver", "write"}:
+            if op.skipped_case_inputs or op.op not in {"deliver", "write"}:
                 continue
             # A false conditional observation retains its control input for
             # audit, but has no observed payload and is not a sink occurrence.

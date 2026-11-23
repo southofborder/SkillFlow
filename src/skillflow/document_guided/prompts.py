@@ -174,7 +174,6 @@ def build_flow_prompt(*, files, global_requirements, self_check=False):
 def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
                           task=None, runtime_contract=None, repair_context=None, self_check=False):
     """One semantic owner submits records; Python performs annotation assembly."""
-    from .fragments import fragment_adapter, fragment_contract_rules
     if step not in {"processing", "task-correspondence", "sensitivity"}:
         raise ValueError("Unknown semantic fragment")
     expected = {"flow"} if step == "processing" else {"processing"}
@@ -203,6 +202,9 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
     else:
         from .fragment_display import render_fragment_material
         material = {"documents": documents, "cfg": display_cfg}
+        if step == "sensitivity" and isinstance(documents["processing"], dict):
+            from .sensitivity_entries import entry_catalogue
+            material["entry_catalogue"] = entry_catalogue(cfg, documents["processing"])
         if task is not None:
             material["task"] = task
         if step == "task-correspondence" and isinstance(documents["processing"], dict):
@@ -238,11 +240,7 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
             "ir_semantics record or an explicit source-backed unmodeled processing gap. A control terminator is not omitted "
             "merely because it has no output. Precision-only gaps do not replace its record. Do not return only edited records.\n"
             "REQUIRED_IR_IDS\n" + compact_json(ids) + "\n")
-    output = (common + necessity + coverage + "FRAGMENT FORMAT\n" + render_prompt_format(fragment_adapter(step).json_schema())
-              + "\n" + fragment_contract_rules(step) + "\n" + phase_examples(step))
-    if step == "processing":
-        from .fragment_wire import output_wire_instructions
-        output += "\n" + output_wire_instructions()
+    output = common + necessity + coverage + "FRAGMENT FORMAT\n" + _fragment_format(step)
     return _render(_STEPS[step][1], "\n\n".join(previous), global_requirements, packet, _pre_submit(output, step, self_check))
 
 
@@ -288,19 +286,39 @@ def build_graph_facts_prompt(*, files, documents, global_requirements, self_chec
         _pre_submit(output, "cfg", self_check))
 
 
-def build_graph_updates_prompt(*, files, plan):
+def _fragment_format(step):
+    from .fragments import fragment_adapter, fragment_contract_rules
+    if step == "sensitivity":
+        from .sensitivity_entries import EntryLabels, instructions
+        return render_prompt_format(EntryLabels.model_json_schema()) + "\n" + instructions()
+    output = render_prompt_format(fragment_adapter(step).json_schema()) + "\n" + fragment_contract_rules(step) + "\n" + phase_examples(step)
+    if step == "processing":
+        from .fragment_wire import output_wire_instructions
+        output += "\n" + output_wire_instructions()
+    return output
+
+
+def build_graph_updates_prompt(*, files, plan, archived_v16=False):
     from .graph_slots import GRAPH_UPDATES_SCHEMA
     from .fragment_display import render_fragment_material
+    output = "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA)
+    if not archived_v16:
+        from .graph_facts import GRAPH_FACTS_SCHEMA
+        output += ("\nFor kind=field use the exact value type at slot.path in GraphFacts below. "
+            "For kind=region the value is a NONEMPTY ARRAY of Block, e.g. [block], with no enclosing object. "
+            "Preserve all original operations in the entry block exactly. Additional blocks contain zero operations. "
+            "Preserve source kinds, constraints, frozen boundary, result ports, return values and action effects. "
+            "An action addition, removal or move cannot be encoded by a region. Leave that finding open.\n"
+            + render_prompt_format(GRAPH_FACTS_SCHEMA))
     return _render("Supply only the listed, missing or challenged graph facts.",
         render_fragment_material("cfg", {"scope": plan}),
         "Inputs, outputs, conditions and effects at the region boundary are frozen. Check the complete source. "
         "Return updates only for facts supported by the source. Leave unsupported slots unfilled; never rewrite "
         "the graph, change an unlisted slot, or invent an effect.",
-        source_packet(files), "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA))
+        source_packet(files), output)
 
 
 def build_processing_revision_prompt(*, files, flow, runtime_contract, scope, global_requirements):
-    from .fragments import fragment_adapter
     from .fragment_display import render_fragment_material
     _working_documents({"flow": flow}, ("flow",))
     previous = render_fragment_material("processing",
@@ -308,26 +326,35 @@ def build_processing_revision_prompt(*, files, flow, runtime_contract, scope, gl
     return _render("Review only the authorized processing records.",
         previous, global_requirements, source_packet(files),
         'Return {"coverage_slots":[...]}. Each row names instruction_id and exactly one of '
-        'modeled (a ProcessingIR), unmodeled_gaps (source-backed gaps of this IR), or keep ("modeled" or '
-        '"unmodeled", only for an unchanged retained record where allowed). Return all required slots. '
+        'modeled (a ProcessingIR), unmodeled_gaps (source-backed gaps of this IR), keep ("modeled" or '
+        '"unmodeled", only where allowed), or attachments. For an attachment-only change on an unchanged CFG '
+        'instruction, return attachments:[{"path":"<copy attachment_pointer>",'
+        '"value":<complete typed contract>}]. The program fills the unedited fields from the signed original row '
+        'and validates the result. Return exactly one disposition for every required slot. '
         "Retired IDs and shared declarations are program-owned in this scope. The program keeps other records "
         "and strictly validates the whole composition. The schema below defines the slot value types; "
-        "do not submit the complete fragment.\n" + render_prompt_format(fragment_adapter("processing").json_schema()))
+        "do not submit the complete fragment. slots.required_attachments lists the required field, operation coordinate "
+        "and input count for the retained or rejected shape. Fill every required attachment on modeled operations, "
+        "including new operations; apply the same conditional rules if operations move or change. Use the read_only "
+        "declarations to bind actual locations and expressions. validation_gaps and rejected_record are prior diagnostics "
+        "and failed evidence: resolve their causes within this owner, including required local producer definitions.\n"
+        + _fragment_format("processing"))
 
 
 def build_sensitivity_revision_prompt(*, files, scope, global_requirements):
-    from .fragments import fragment_adapter
     from .fragment_display import render_fragment_material
     return _render("Recheck sensitivity declarations only at the authorized instructions.",
         render_fragment_material("sensitivity", {"scope": scope}), global_requirements, source_packet(files),
-        'Return {"slots":[{"instruction_id":"...","declarations":[...]}]}. Every listed instruction '
+        'Return {"slots":[{"instruction_id":"...","declarations":[...],"entry_gaps":[]}]}. Every listed instruction '
         "requires one slot, with [] when it has no source-supported declaration. The program retains "
-        "all unrelated declarations. Use only the listed processing values and evidence; the Task is not part of this stage.\n"
-        + render_prompt_format(fragment_adapter("sensitivity").json_schema()))
+        "all unrelated declarations. For each slot use only the entries with accesses at that instruction. "
+        "Each slot supplies prior_entry_labels and prior_entry_gaps in submission format. Recheck them against "
+        "the current catalogue and source. Copy supported records, correct changed bindings, and supply every "
+        "required field. The declarations array uses entry_id, origin, applicability, label and evidences.\n"
+        + _fragment_format("sensitivity"))
 
 
 def build_correspondence_revision_prompt(*, files, scope, cfg, processing, global_requirements):
-    from .fragments import fragment_adapter
     from .annotation_wire import expression_reference_view
     from .fragment_display import render_fragment_material
     packet = source_packet(files)
@@ -340,7 +367,7 @@ def build_correspondence_revision_prompt(*, files, scope, cfg, processing, globa
         "Only a slot marked keepable may use keep:true instead. Preserve each requirement's full constraints "
         "and actual receiver, field, and operation identities. A permitted requirement can use any supported "
         "current target. The program retains every other requirement and validates the merged fragment.\n"
-        + render_prompt_format(fragment_adapter("task-correspondence").json_schema()))
+        + _fragment_format("task-correspondence"))
 
 
 def build_annotation_prompt(material, *, documents, spans=None, global_requirements,

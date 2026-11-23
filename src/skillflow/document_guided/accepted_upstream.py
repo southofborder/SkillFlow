@@ -17,9 +17,9 @@ from .accepted_stage_reader import accepted_stage_value, checked_task_artifacts
 IDENTITY = "skillflow-accepted-upstream-v1"
 PATH = "accepted-upstream.json"
 _PARENTS = {"skillflow-document-guided-run-v16", "skillflow-document-guided-run-v17", "skillflow-document-guided-run-v18",
-            "skillflow-document-guided-run-v19"}
+            "skillflow-document-guided-run-v19", "skillflow-document-guided-run-v20"}
 _STEPS = {"skillflow-document-step-v13", "skillflow-document-step-v14", "skillflow-document-step-v15",
-          "skillflow-document-step-v16"}
+          "skillflow-document-step-v16", "skillflow-document-step-v17"}
 _SOURCE = "skillflow-document-source-v6"
 _EXCLUDED = {".runner.lock", "execution-boundary.json", "report.md"}
 MAX_LINEAGE = 8
@@ -309,6 +309,13 @@ def load_accepted_upstream(run):
     graph = _accepted_graph(owners["graph"], config=manifest["config"], source=source)
     if read(run / "graph/initial.json") != {"cfg":graph}:
         raise ValueError("Retained initial CFG differs from its accepted candidate")
+    certificate_origin = None
+    if donor["certificate"] is not None:
+        name = donor["certificate"]
+        digest = donor["files"][name]
+        if receipt["copied_files"].get("graph/initial/controlled.json") != digest:
+            raise ValueError("Retained graph certificate differs from its verified donor")
+        certificate_origin = {"path": "inherited/" + name, "sha256": digest}
     return {"task":{"value":task,"path":owners["task"] / "task.json","owner":owners["task"]},
         "flow":{"value":flow,"path":owners["flow"] / "result.json","step":owners["flow"]},
-        "graph":{"value":graph,"path":run / "graph/initial.json"}}
+        "graph":{"value":graph,"path":run / "graph/initial.json", "certificate_origin":certificate_origin}}

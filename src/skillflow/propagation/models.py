@@ -199,6 +199,7 @@ class OperationAlternative(StrictRecord):
 
 class AtomicOpRecord(StrictRecord):
     op: AtomicOperation
+    skipped_case_inputs: list[Text] = Field(default_factory=list, exclude_if=lambda value: not value)
     inputs: StrictList[CandidateIDs] = Field(default_factory=list)
     outputs: StrictList[DataIDs] = Field(default_factory=list)
     endpoints: StrictList[FlowLocation] = Field(default_factory=list)
@@ -211,6 +212,11 @@ class AtomicOpRecord(StrictRecord):
 
     @model_validator(mode="after")
     def validate_consumption(self):
+        if self.skipped_case_inputs:
+            if (self.inputs or self.outputs or self.endpoints or self.changes or self.alternatives
+                    or self.members is not None or self.when_input_index is not None or self.branch_targets):
+                raise ValueError("an infeasible case operation cannot have effects, inputs, outputs or alternatives")
+            return self
         from skillflow.propagation.conditions import validate_record_consumption
         validate_record_consumption(self)
         if self.op != "merge" and any(not values for values in self.inputs):

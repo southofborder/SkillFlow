@@ -12,6 +12,7 @@ import os
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 import stat
+import skillflow
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10 remains supported by the package.
@@ -47,7 +48,27 @@ def project_root(start: str | Path | None = None) -> Path:
 
 
 def formal_root() -> Path:
-    return project_root() / "formal"
+    """Use the Lean sources installed with this Python package."""
+    package = Path(skillflow.__file__).resolve().parent
+    bundled = package / "_lean_sources"
+    if bundled.is_dir():
+        return bundled
+    return project_root(start=package) / "formal"
+
+
+def is_protected_output(directory: Path) -> bool:
+    """Protect frozen datasets and deliveries in a checkout even for wheel clients."""
+    for ancestor in (directory, *directory.parents):
+        parent = ancestor.parent
+        if ancestor not in (parent / "dataset", parent / "result") or not (parent / "pyproject.toml").is_file():
+            continue
+        try:
+            root = project_root(start=parent)
+        except FileNotFoundError:
+            continue
+        if root == parent:
+            return True
+    return False
 
 
 def _address(value: str | Path) -> str:

@@ -13,6 +13,7 @@ from skillflow.common.recording import canonical_sha256
 from skillflow.common.source_evidence import _json_object, json_pointer, resolve_pointer
 from skillflow.common.validation import StructuralValidationError, schema_error
 from skillflow.doe.input_contract_review import (
+    ARCHIVED_SOURCE_REVIEW,
     InputContractCheck, InputScopeCheck, checked_contract_record, _evidence,
     check_contract_finding_consistency,
 )
@@ -25,11 +26,16 @@ IDENTITY = "skillflow-source-review-isolation-v1"
 TABLES = ("findings", "input_contract_checks", "input_projection_checks", "source_input_findings")
 
 
+def _finding_model(material):
+    from .source_review import ArchivedFragmentSourceFinding, FragmentSourceFinding
+    return ArchivedFragmentSourceFinding if material.get("identity") == ARCHIVED_SOURCE_REVIEW else FragmentSourceFinding
+
+
 def checked_finding(value, material, path):
     # Lazy import keeps the public source-review schema and legacy route in one
     # place while sharing exactly the same checks with strict and local paths.
-    from .source_review import FragmentSourceFinding, _check_targets, _check_source
-    finding = FragmentSourceFinding.model_validate(value).model_dump(mode="json", exclude_none=True)
+    from .source_review import _check_targets, _check_source
+    finding = _finding_model(material).model_validate(value).model_dump(mode="json", exclude_none=True)
     targets = _check_targets(finding["target_ids"], material, path + "/target_ids", domain=finding["domain"])
     _check_source(finding["source_refs"], material, path + "/source_refs")
     partial_target = any(target["domain"] == finding["domain"] and (
@@ -101,7 +107,6 @@ def repair_findings(checks, projections, material):
 
 def isolate_source_review(candidate, material):
     """Validate every record against original material; never run a model."""
-    from .source_review import FragmentSourceFinding
     value = _json_object(candidate)
     inventory = material["input_contract_inventory"]
     input_material = material["input_review_material"]
@@ -211,7 +216,7 @@ def isolate_source_review(candidate, material):
     if not envelope_ok:
         failure("" if extras else "/outcome", "envelope", value,
                 ValueError("Review requires outcome=completed and only its declared tables; unexpected keys: " + str(sorted(extras))))
-    schemas = {"findings": TypeAdapter(FragmentSourceFinding), "input_contract_checks": TypeAdapter(InputContractCheck),
+    schemas = {"findings": TypeAdapter(_finding_model(material)), "input_contract_checks": TypeAdapter(InputContractCheck),
                "input_projection_checks": TypeAdapter(InputScopeCheck), "source_input_findings": TypeAdapter(SourceInputFindingCandidate)}
     for table in TABLES:
         rows = value.get(table)
@@ -232,7 +237,8 @@ def isolate_source_review(candidate, material):
                 if table == "findings":
                     parsed = checked_finding(row, material, path)
                 elif table == "input_contract_checks":
-                    parsed = checked_contract_record(row, inventory=inventory, files=material["files"])
+                    parsed = checked_contract_record(row, inventory=inventory, files=material["files"],
+                        archived_v7=material.get("identity") == ARCHIVED_SOURCE_REVIEW)
                 elif table == "input_projection_checks":
                     parsed = checked_projection_record(row, inventory, material["files"])
                 else:
@@ -338,6 +344,9 @@ def isolate_source_review(candidate, material):
     checks = sorted([row for _, row in valid["input_contract_checks"]], key=lambda r: r["obligation_id"])
     projection_checks = [row for _, row in valid["input_projection_checks"]]
     findings = ordinary + repair_findings(checks, projection_checks, material)
+    if material.get("sensitivity_entry_gaps"):
+        from .sensitivity_entries import ingress_gap_rechecks
+        findings += ingress_gap_rechecks(material)
     for i, finding in enumerate(findings):
         finding["id"] = f"F{i + 1:03d}"
     review = {"schema_version": material["identity"], "outcome": "completed", "findings": findings,

@@ -16,6 +16,8 @@ from .material import _id
 from .input_contracts import prefix, overlaps, covers
 from .input_locations import AssessmentLocation, InputModification, RetrievalProjection, InputLocationBuilder
 from .source_input_findings import NormalizedSourceInputFinding
+from .selector_demands import reason as selector_reason
+from skillflow.propagation.selectors import literal_children, observed_children
 
 AssessmentPath = list[PathStep | EachDemandStep]
 
@@ -67,7 +69,7 @@ def derivation_problem_refs(engine):
     refs, children = {}, defaultdict(set)
     for key, row in engine.derivations.items():
         refs[key] = {rule.split(":", 1)[1] for rule in row["rules"]
-                     if rule.startswith(("input_contract_gap:", "unavailable_dependency:"))}
+                     if rule.startswith(("input_contract_gap:", "unavailable_dependency:", "selector_gap:"))}
         for parent in row["parents"]:
             children[parent].add(key)
     queue = deque(key for key in sorted(refs) if refs[key])
@@ -366,7 +368,9 @@ def build_input_assessments(engine):
                 "demand_refs": [identity], "diagnostic_refs": refs, "contract_refs": contracts,
                 "reason": ("The declared dependencies of a required but unestablished action retain this range: " if unavailable
                            else "The recorded transfer retains this range conservatively: " if row["conservative"]
-                           else "This information preserves the task goal through ") + ", ".join(sorted(row["rules"])) + "."})
+                           else "This information preserves the task goal through ") + ", ".join(sorted(row["rules"])) + "."
+                          + (" " + selector_reason(engine.selector_sources[row["selector_ref"]])
+                             if row.get("selector_ref") else "")})
         if barriers:
             refs = sorted({barrier_diagnostic(engine, barrier, ir, operation) for barrier in barriers})
             ranges.append({"status": "unresolved", "property": "value", "path": [], "excluded_paths": [],
@@ -383,12 +387,26 @@ def build_input_assessments(engine):
         # Explicit exclusions, observed member paths and the complement of all
         # retained ranges provide finite candidates without inventing fields.
         retained = {_id("path_", _range(row)["path"]): _range(row)["path"] for _, row in demands}
+        for _, row in demands:
+            if row.get("selector_ref"):
+                subject = _range(row)["path"]
+                indexed = next((i for i, step in enumerate(subject) if type(step) is int), None)
+                if indexed is not None:
+                    # A blanket complement must preserve prior array positions; individual edits are checked below.
+                    retained[_id("path_", subject[:indexed])] = subject[:indexed]
         candidates = {canonical_sha256([]): []}
         for path in _known_paths(engine.index.data, node["data_ids"]):
             candidates[canonical_sha256(path)] = path
         for data_id in node["data_ids"]:
             candidates.update(declared_paths.get(data_id, {}))
         for _, row in demands:
+            if row.get("selector_ref"):
+                tested = _range(row)["path"]
+                operand = engine.index.instructions[ir]["inputs"][slot] if kind == "ir_input" else {}
+                children = (literal_children(operand["literal_value"], tested) if operand.get("type") == "literal"
+                            else observed_children(engine.index.data, node["data_ids"], tested))
+                for path in children:
+                    candidates[canonical_sha256(path)] = path
             for path in _range(row)["excluded_paths"]:
                 candidates[canonical_sha256(path)] = path
         for path in candidates.values():

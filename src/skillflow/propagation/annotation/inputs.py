@@ -43,8 +43,8 @@ def read_source_parts(directory):
     if (directory / "inputs/user-request.json").exists():
         raise ValueError("Retired user-request component is not accepted")
     if (directory / "inputs/references.json").exists():
-        from skillflow.document_guided.online import ANNOTATION_IDENTITY, source_parts
-        if read_component(directory / "manifest.json").get("identity") == ANNOTATION_IDENTITY:
+        from skillflow.document_guided.online import READABLE_ANNOTATION_IDENTITIES, source_parts
+        if read_component(directory / "manifest.json").get("identity") in READABLE_ANNOTATION_IDENTITIES:
             return source_parts(directory)
     source = (read_snapshot(directory)[1] if (directory / "inputs/snapshot.json").is_file()
               else read_component(directory / "inputs/source.json"))
@@ -53,6 +53,10 @@ def read_source_parts(directory):
 
 
 def read_material_parts(directory, *, task_baseline=None):
+    if (checked_run_path(directory) / "inputs/references.json").is_file():
+        from skillflow.document_guided.online import ARCHIVED_ANNOTATION_IDENTITY
+        if read_component(checked_run_path(directory) / "manifest.json").get("identity") == ARCHIVED_ANNOTATION_IDENTITY:
+            return load_prepared_material(directory, task_baseline=task_baseline)
     parts = read_source_parts(directory)
     if task_baseline is None:
         manifest = read_component(checked_run_path(directory) / "manifest.json")
@@ -72,8 +76,8 @@ def _material_chain(run_dir):
     from skillflow.propagation.annotation.runner import IDENTITY as annotation_identity
     from skillflow.propagation.review.refinement import IDENTITY as refinement_identity
     from skillflow.pipeline import IDENTITY as pipeline_identity
-    from skillflow.document_guided.online import ANNOTATION_IDENTITY
-    supported = {annotation_identity, refinement_identity, pipeline_identity, ANNOTATION_IDENTITY}
+    from skillflow.document_guided.online import READABLE_ANNOTATION_IDENTITIES
+    supported = {annotation_identity, refinement_identity, pipeline_identity, *READABLE_ANNOTATION_IDENTITIES}
     while True:
         if directory in seen:
             raise ValueError("Cyclic material ownership reference")
@@ -100,8 +104,8 @@ def _material_chain(run_dir):
 
 def resolve_material_owner(run_dir):
     owner, manifest = _material_chain(run_dir)[-1]
-    from skillflow.document_guided.online import ANNOTATION_IDENTITY
-    if manifest["identity"] == ANNOTATION_IDENTITY:
+    from skillflow.document_guided.online import READABLE_ANNOTATION_IDENTITIES
+    if manifest["identity"] in READABLE_ANNOTATION_IDENTITIES:
         refs = read_component(owner / "inputs/references.json")
         return resolve_run_reference(owner, refs["source_owner"])
     return owner
@@ -109,6 +113,7 @@ def resolve_material_owner(run_dir):
 
 def load_prepared_material(run_dir, *, task_baseline=None):
     """Resolve each stage's Task separately; a revised Task never reuses old goals."""
+    from skillflow.document_guided.online import ARCHIVED_ANNOTATION_IDENTITY
     chain = _material_chain(run_dir)
     parts = read_source_parts(chain[-1][0])
     current = None
@@ -131,12 +136,23 @@ def load_prepared_material(run_dir, *, task_baseline=None):
         else:
             from skillflow.task.runner import load_task_run
             task = load_task_run(resolve_run_reference(directory, reference))["task"]
-        value = checked_material({"version": SCHEMA_VERSION, **parts, "task": task})
+        if manifest["identity"] == ARCHIVED_ANNOTATION_IDENTITY:
+            from skillflow.propagation.contracts.runtime_contract import validate_runtime_contract
+            validate_runtime_contract(parts["runtime_contract"], read_only=True)
+            if parts["runtime_contract"]["version"] != "skillflow-abstract-runtime-v12":
+                raise ValueError("Unsupported archived v11 runtime contract")
+            value = {"version": "security-profile-v24", **parts, "task": task}
+        else:
+            value = checked_material({"version": SCHEMA_VERSION, **parts, "task": task})
         if manifest.get("material_sha256") != canonical_sha256(value):
             raise ValueError("Prepared material content identity differs")
         if current is None:
             current = value
     if task_baseline is not None:
+        if current is not None and chain[0][1]["identity"] == ARCHIVED_ANNOTATION_IDENTITY:
+            if current["task"] != task_baseline:
+                raise ValueError("An archived annotation may be read only with its sealed Task")
+            return current
         return checked_material({"version": SCHEMA_VERSION, **parts, "task": task_baseline})
     if current is None:
         raise ValueError("Source-only owner has no selected Task; supply the sealed Task explicitly")

@@ -4,7 +4,11 @@ import json
 
 
 def render_input_edits(assessments):
-    rows = []
+    return "".join(input_edit_chunks(assessments))
+
+
+def input_edit_chunks(assessments):
+    published_header = False
     for assessment in assessments:
         location = assessment.get("location", {})
         for decision in assessment.get("ranges", []):
@@ -25,9 +29,9 @@ def render_input_edits(assessments):
                 reason += " Retrieval projection: " + projection["status"] + ". " + projection["reason"]
             cells = [assessment["id"], kind, json.dumps(selector, ensure_ascii=False), source,
                      "\n".join(coordinates), reason]
-            rows.append("<tr>" + "".join("<td>" + escape(cell) + "</td>" for cell in cells) + "</tr>")
-    if not rows:
-        return "<p>No completed input deletion is established.</p>"
-    return ("<table><thead><tr><th>Input use</th><th>Modification type</th><th>Information range</th>"
-            "<th>Source evidence</th><th>Actual locations</th><th>Scope and limits</th></tr></thead><tbody>"
-            + "".join(rows) + "</tbody></table>")
+            if not published_header:
+                yield ("<table><thead><tr><th>Input use</th><th>Modification type</th><th>Information range</th>"
+                       "<th>Source evidence</th><th>Actual locations</th><th>Scope and limits</th></tr></thead><tbody>")
+                published_header = True
+            yield "<tr>" + "".join("<td>" + escape(cell) + "</td>" for cell in cells) + "</tr>"
+    yield "</tbody></table>" if published_header else "<p>No completed input deletion is established.</p>"

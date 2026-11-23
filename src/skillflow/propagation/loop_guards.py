@@ -20,8 +20,12 @@ def _empty_collection_base(data, identity, seen=frozenset()):
         for value in values)
 
 
-def guard_values(data, identities, predicate, *, traversal_exit=True):
+def guard_values(data, identities, predicate, *, traversal_exit=True, selector=None):
     """Finite may-truths. A typed traversal can exhaust its collection."""
+    if predicate == "selector":
+        from skillflow.propagation.selectors import selector_outcomes
+        return {outcome == selector["outcome"] for identity in identities
+                for outcome in selector_outcomes(data, identity, selector)}
     def content(identity):
         value = data.get(identity)
         value = value.model_dump(mode="json") if hasattr(value, "model_dump") else value
@@ -89,14 +93,16 @@ def admitted_instructions(cfg, annotation, records, data):
                     if op["op"] != "branch":
                         continue
                     actual = record["events"][event_index]["atomic_ops"][op_index]
+                    if actual.get("skipped_case_inputs"):
+                        continue
                     if len(actual["inputs"]) != 1:
                         raise ValueError("branch record requires its actual condition operand")
-                    truths = guard_values(data, actual["inputs"][0], op["predicate"])
+                    truths = guard_values(data, actual["inputs"][0], op["predicate"], selector=op.get("selector"))
                     expected = {op["true_target"] if truth else op["false_target"] for truth in truths}
                     if not set(actual.get("branch_targets", [])) <= expected:
                         raise ValueError("branch record admits a target ruled out by its typed guard")
                     for candidate in actual.get("alternatives", []):
-                        values = guard_values(data, candidate["inputs"][0], op["predicate"])
+                        values = guard_values(data, candidate["inputs"][0], op["predicate"], selector=op.get("selector"))
                         permitted = {op["true_target"] if value else op["false_target"] for value in values}
                         if not set(candidate.get("branch_targets", [])) <= permitted:
                             raise ValueError("branch candidate route contradicts its typed operand")

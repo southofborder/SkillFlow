@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from skillflow.common.source_evidence import Text
 from skillflow.propagation.contracts.boundaries import SinkBoundary
@@ -125,13 +125,32 @@ class Coverage(Strict):
 
 
 class SensitivityResult(Strict):
-    schema_version: Literal["skillflow-sensitivity-review-v10"]
+    schema_version: Literal["skillflow-sensitivity-review-v10", "skillflow-sensitivity-review-v11"]
+    declaration_aliases: dict[Text, list[Text]] = Field(default_factory=dict)
     status: Literal["complete", "partial"]
     sinks: list[SinkReview]
     derivations: SharedDerivations
     constraints: ConstraintSupport
     diagnostics: list[Diagnostic]
     coverage: Coverage
+
+    @model_validator(mode="before")
+    @classmethod
+    def versioned_alias_table(cls, value):
+        if isinstance(value, dict):
+            if (value.get("schema_version") == "skillflow-sensitivity-review-v11") != ("declaration_aliases" in value):
+                raise ValueError("Only sensitivity review v11 carries the required declaration_aliases table")
+            if value.get("schema_version") == "skillflow-sensitivity-review-v10" and isinstance(value.get("derivations"), dict):
+                from .demand_results import reject_archived_selectors
+                reject_archived_selectors(value["derivations"].get("demand"))
+        return value
+
+    @model_serializer(mode="wrap")
+    def retain_historical_shape(self, handler):
+        row = handler(self)
+        if self.schema_version == "skillflow-sensitivity-review-v10":
+            row.pop("declaration_aliases", None)
+        return row
 
 
 def resolve_data_review(review: dict, sink: dict, derivations: dict) -> dict:

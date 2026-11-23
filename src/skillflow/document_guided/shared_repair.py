@@ -3,16 +3,19 @@ from skillflow.common.recording import canonical_sha256
 from .failed_stage_material import checked_structural_failure
 
 
-IDENTITY = "skillflow-shared-repair-decision-v1"
+IDENTITY = "skillflow-shared-repair-decision-v2"
 FRAGMENTS = frozenset({"processing", "task-correspondence", "sensitivity"})
 
 
-def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_only=False):
+def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_only=False, processing_gaps=()):
     findings = (reviewed.get("review") or {}).get("findings", [])
     domains = {row["domain"] for row in findings}
     reviewed_status = reviewed.get("status")
     review_available = reviewed_status in {"complete", "partial"}
     upstream = {"task", "graph"} <= set(values)
+    validation_ids = sorted({row["instruction_id"] for row in processing_gaps
+                             if row.get("origin") == "validation" and row.get("validation_errors")})
+    validation_repair = bool(validation_ids) and upstream and "processing" in values
     usual = bool(findings) and (selected is not None
         or upstream and bool(domains & {"cfg", "task"})
         or upstream and bool(FRAGMENTS & set(values)) and any(
@@ -36,7 +39,7 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
             domains.discard("cfg")
             usual = usual and bool(domains)
     barriers = []
-    if not review_available:
+    if not review_available and not validation_repair:
         barriers.append("No completed or locally retained source review is available for shared repair.")
     if scoped_blocked:
         barriers.append("The graph findings or rejected draft define no source-bound editable slot.")
@@ -45,13 +48,17 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
             barriers.append("Missing-CFG repair requires the accepted source-only Task and flow document.")
         if not bound:
             barriers.append("No source-bound terminal structural rejection of the current CFG is available; a request failure or capability gap does not authorize another sample.")
-    eligible = review_available and (usual or recovery)
+    eligible = (review_available and (usual or recovery)) or validation_repair
+    if validation_repair:
+        domains.add("annotation")
     if eligible and recovery:
         domains.add("cfg")
     return {"identity": IDENTITY, "eligible": eligible, "budget_rounds": 1,
         "mode": (("missing_cfg_slots" if graph_facts_only else "missing_cfg_rebuild") if eligible and recovery
                  else "reviewed_bundle" if eligible else "not_admitted"),
         "domains": sorted(domains) if eligible else [], "review_status": reviewed_status,
+        "processing_validation_targets": validation_ids,
+        "processing_validation_sha256": canonical_sha256(list(processing_gaps)),
         "finding_count": len(findings), "accepted_stages": sorted(values),
         "source_sha256": canonical_sha256(files), "review_sha256": canonical_sha256(reviewed),
         "graph_failure_sha256": canonical_sha256(failure) if failure else None,
@@ -61,5 +68,6 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
         "basis": (("A required CFG has source-bound writable fact slots. Use the existing shared round only for those slots."
                   if graph_facts_only else
                   "A required CFG has a verified structural rejection. Spend the existing shared round rebuilding from complete source, accepted flow and rejected evidence; accept no failed value.")
-                  if eligible and recovery else "Use the existing shared source-review repair policy."
+                  if eligible and recovery else "The prior processing validation identifies concrete IR owners; include them in this shared round."
+                  if eligible and validation_repair else "Use the existing shared source-review repair policy."
                   if eligible else "No admissible shared repair remains at this decision boundary.")}
