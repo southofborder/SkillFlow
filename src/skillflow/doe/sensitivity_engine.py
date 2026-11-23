@@ -5,6 +5,7 @@ They are deliberately distinct, including when both lead to the same sink.
 """
 from __future__ import annotations
 
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 from collections import defaultdict, deque
 from copy import deepcopy
 
@@ -347,7 +348,7 @@ def equivalent_entry_declarations(engine, declarations):
     for identity, row in declarations.items():
         declaration = row["declaration"]
         if (declaration.get("source_entry_applicability") != "source_field" or row["scope_path"]
-                or engine.index.coverage.get(row["instruction_id"]) != "processed"):
+                or engine.index.coverage.get(row["instruction_id"]) not in RECORDED_COVERAGE):
             continue
         refs = {data for node in engine.resolve(declaration["value"], row["instruction_id"])
                 for data in engine.nodes[node]["data_ids"]}
@@ -816,7 +817,7 @@ class SensitivityEngine:
                         if field != "id"} for k in sorted(ids)}
         partial = (self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
                    or any(c["status"] == "not_established" for c in constraints.checks.values()))
-        return {"schema_version": "skillflow-sensitivity-review-v11", "status": "partial" if partial else "complete",
+        return {"schema_version": "skillflow-sensitivity-review-v12", "status": "partial" if partial else "complete",
             "declaration_aliases": self.aliases,
             "sinks": sinks, "derivations": {"sensitivity": closure(used_sensitivity, self.rows),
                 "demand": closure(used_demands, self.demand["derivations"])},

@@ -27,6 +27,7 @@ from skillflow.propagation.models import FlowState
 from skillflow.propagation.models import IRFlowRecord
 from skillflow.propagation.models import EffectEvent
 from skillflow.propagation.models import ForEachRecord
+from skillflow.propagation.models import validate_placeholder_record
 from skillflow.propagation.contracts.specs import AtomicOp
 from skillflow.propagation.contracts.specs import validate_specs
 from skillflow.propagation.contracts.specs import value_refs
@@ -268,7 +269,7 @@ class PropagationRecords:
             for op_index, (operation, op_spec) in enumerate(zip(event.atomic_ops, spec["atomic_ops"])):
                 if operation.op != op_spec["op"]:
                     raise PropagationRecordError(f"atomic operation identity mismatch at {ir_id}/{position}/{op_index}")
-                if operation.may_state != op_spec.get("may", False):
+                if operation.may_state != op_spec.get("may", op_spec.get("may_write", False)):
                     raise PropagationRecordError("state summary differs from the declared may write")
                 if operation.skipped_case_inputs:
                     from skillflow.propagation.selectors import selector_outcomes
@@ -292,6 +293,8 @@ class PropagationRecords:
                         raise PropagationRecordError("infeasible case record contradicts the actual selector")
                     continue
                 validate_record_consumption(operation, self._data_registry)
+                if operation.op == "placeholder":
+                    validate_placeholder_record(operation, op_spec, self._annotation["locations"], self._data_registry)
                 if operation.op == "build":
                     if len(operation.members) != len(op_spec["parts"]):
                         raise PropagationRecordError("build member coverage differs from specification")

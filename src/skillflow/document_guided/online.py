@@ -23,10 +23,10 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 from skillflow.common.semantic_failure import SemanticFailure
 from .batches import validate_batch, batch_model, combine_annotation
 
-STEP_IDENTITY = "skillflow-document-step-v17"
-ANNOTATION_IDENTITY = "skillflow-document-annotation-v12"
+STEP_IDENTITY = "skillflow-document-step-v18"
+ANNOTATION_IDENTITY = "skillflow-document-annotation-v13"
 ARCHIVED_ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
-READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, ARCHIVED_ANNOTATION_IDENTITY})
+READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v12", ARCHIVED_ANNOTATION_IDENTITY})
 FRAGMENT_KINDS = {name + "_fragment": name for name in
                   ("processing", "task-correspondence", "sensitivity")}
 _SCOPED = ("processing_revision", "sensitivity_revision", "correspondence_revision")
@@ -143,6 +143,9 @@ def _step_context(directory, manifest):
     """Resolve explicit owners; never copy the full material into a step."""
     context = manifest.get("context", {})
     value = {}
+    if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"} and manifest.get("identity") in {
+            "skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}:
+        value["archived_graph"] = True
     for name in ("source_owner", "task_run", "processing_step"):
         if name in context:
             value[name] = resolve_run_reference(directory, context[name])
@@ -162,7 +165,7 @@ def _step_context(directory, manifest):
     if "graph_repair_path" in value:
         from .graph_steps import load_revision_input
         value["graph_repair"] = load_revision_input(directory, value["graph_repair_path"], value["files"],
-            [resolve_file(directory, ref) for ref in manifest["dependencies"]])
+            [resolve_file(directory, ref) for ref in manifest["dependencies"]], archived=value.get("archived_graph", False))
     if "processing_scope_path" in value:
         from .fragment_revision import processing_scope
         run = directory.parent.parent
@@ -243,7 +246,7 @@ def _fragment_material(context):
 def _correction_strategy(kind, context=None):
     from .graph_steps import FACTS, GraphFactsCorrection
     if kind == FACTS:
-        return GraphFactsCorrection((context or {})["files"])
+        return GraphFactsCorrection((context or {})["files"], archived=(context or {}).get("archived_graph", False))
     if kind == "cfg_wire_v5":
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy("cfg")
@@ -332,7 +335,7 @@ def validate_step(kind, response, *, context=None):
         revision = (context or {}).get("processing_revision")
         if revision:
             from .fragment_revision import merge_processing_revision
-            response = merge_processing_revision(revision["previous"], revision["scope"], response)
+            response = merge_processing_revision(revision["previous"], revision["scope"], response, files=context.get("files"))
         revision = (context or {}).get("sensitivity_revision")
         if revision:
             from .fragment_revision import merge_sensitivity_revision
@@ -873,18 +876,20 @@ def _check_annotation_steps(directory, manifest, refs):
         raise ValueError("Unknown annotation candidate origin")
     for ref in references:
         step = resolve_run_reference(directory, ref)
-        if manifest["identity"] == ARCHIVED_ANNOTATION_IDENTITY:
-            _read_v11_step(step)
+        if manifest["identity"] != ANNOTATION_IDENTITY:
+            _read_archived_step(step, manifest["identity"])
         else:
             load_step(step)
     return {key: refs[key]}
 
 
-def _read_v11_step(directory):
-    """Read a terminal v11 constituent with its recorded step/producer identity."""
+def _read_archived_step(directory, annotation_identity):
+    """Read a terminal archived constituent with its recorded step/producer identity."""
     identity = read(directory / "manifest.json")["identity"]
-    if identity not in {f"skillflow-document-step-v{i}" for i in range(13, 17)}:
-        raise ValueError("Unsupported step producer for archived v11 annotation")
+    v11 = annotation_identity == ARCHIVED_ANNOTATION_IDENTITY
+    versions = range(13, 17) if v11 else (17,)
+    if identity not in {f"skillflow-document-step-v{i}" for i in versions}:
+        raise ValueError("Unsupported step producer for archived annotation")
     manifest = checked_manifest(directory, identity)
     if manifest["config"] != analysis_config(manifest["config"]):
         raise ValueError("Archived document step configuration differs")
@@ -910,18 +915,20 @@ def _read_v11_step(directory):
     if directory.name != "revision-" + kind or path != expected_paths[-1] or owners[-len(expected_paths):] != expected_paths:
         raise ValueError("Archived program carry has different scope dependencies")
     scope = read(path)
-    before = _read_v11_step(run / "steps" / kind)
+    before = _read_archived_step(run / "steps" / kind, annotation_identity)
     digest = canonical_sha256({key: value for key, value in scope.items() if key != "scope_sha256"})
     if (scope.get("slots") != {} or scope.get("scope_sha256") != digest
             or canonical_sha256(before) != scope.get("candidate_sha256")):
         raise ValueError("Archived program carry must bind a zero-slot plan and exact candidate")
     if kind == "sensitivity":
-        if scope["identity"] != "skillflow-sensitivity-revision-scope-v1":
+        if scope["identity"] != f"skillflow-sensitivity-revision-scope-v{1 if v11 else 2}":
             raise ValueError("Unsupported archived sensitivity scope")
         retired = set(scope["removed_instruction_ids"])
         carried = deepcopy(before)
         if "declarations" in before:
             carried["declarations"] = [row for row in before["declarations"] if row["instruction_id"] not in retired]
+        if not v11 and "entry_gaps" in before:
+            carried["entry_gaps"] = [row for row in before["entry_gaps"] if row["instruction_id"] not in retired]
     else:
         from .fragment_revision import merge_correspondence_revision
         carried = merge_correspondence_revision(before, scope, {"slots": []})

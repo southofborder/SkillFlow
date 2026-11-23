@@ -6,6 +6,7 @@ an execution observation. Structural guarantees deliberately ignore values.
 """
 from __future__ import annotations
 
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 from collections import defaultdict, deque
 from copy import deepcopy
 
@@ -125,14 +126,20 @@ class ConstraintEngine:
             selected = set()
             for key in found:
                 info = self.engine.ops[key]
-                if info["spec"]["op"] not in {"deliver", "write"} or not self._scope_match(info, constraint["scope"]):
+                spec = info["spec"]
+                possible_effect = spec["op"] == "placeholder" and spec["kind"] == "effect"
+                if (spec["op"] not in {"deliver", "write"} and not possible_effect
+                        or not self._scope_match(info, constraint["scope"])):
                     continue
-                location_id = info["spec"].get("target")
+                location_id = spec.get("location") if possible_effect else spec.get("target")
                 location = self.engine.compiled["locations"].get(location_id)
                 if location is None:
                     continue
                 receiver = constraint["receivers"]
-                if (receiver["kind"] == "all" or receiver["kind"] == "locations" and location_id in receiver["ids"]
+                from skillflow.propagation.contracts.locations import locations_may_alias
+                if (receiver["kind"] == "all" or receiver["kind"] == "locations" and
+                        (location_id in receiver["ids"] or possible_effect and any(
+                            locations_may_alias(location, self.engine.compiled["locations"][other]) for other in receiver["ids"]))
                         or receiver["kind"] == "kind" and location["kind"] == receiver["value"]):
                     selected.add(key)
             return selected
@@ -151,7 +158,7 @@ class ConstraintEngine:
                 self._reasons.add("An event reference has no validated graph or raw-operation target.")
         for block in self._reachable:
             for ir in self.cfg["blocks"][block]["instructions"]:
-                if self.engine.index.coverage.get(ir["id"]) != "processed":
+                if self.engine.index.coverage.get(ir["id"]) not in RECORDED_COVERAGE:
                     self.incomplete_scope.add(identity)
                     self._reasons.add("A task-entry-reachable instruction lacks complete propagation facts.")
         scope = constraint["scope"]
@@ -281,7 +288,13 @@ class ConstraintEngine:
         monitor, cube, trace = state
         info = self.engine.ops[key]
         guard = info["spec"].get("when")
-        if guard is None:
+        if info["spec"]["op"] == "placeholder" and info["spec"]["kind"] == "effect":
+            if constraint["kind"] != "forbid_information" and key in self.resolve_operations(constraint):
+                self._uncheckable = True
+                self._reasons.add(f"Effect occurrence {key} has source-backed possible behavior: "
+                                  + info["spec"]["reason"])
+            active = [(False, cube), (True, cube)]
+        elif guard is None:
             active = [(True, cube)]
         elif structural:
             active = [(False, cube), (True, cube)]
@@ -537,7 +550,7 @@ class ConstraintEngine:
                         pending.append((target, 0, monitor, {} if cyclic else facts, trace))
                 continue
             ir = instructions[offset]["id"]
-            if self.engine.index.coverage.get(ir) != "processed":
+            if self.engine.index.coverage.get(ir) not in RECORDED_COVERAGE:
                 self.incomplete_scope.add(self._identity)
                 self._reasons.add("An unevaluated instruction stops this path; no empty event sequence is substituted.")
                 continue
@@ -584,7 +597,7 @@ class ConstraintEngine:
                     for signal in signals.get(value, []):
                         if range_presence(self.data, value, signal["path"]) in {"absent", "empty", "invalid"}:
                             continue
-                        if signal["relation"] == "direct":
+                        if signal["relation"] == "direct" and record["op"] != "placeholder":
                             direct = True
                         else:
                             possible = True

@@ -4,7 +4,8 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 
 FACTS = "graph_facts_v1"
 UPDATES = "graph_updates_v1"
-REPAIR_IDENTITY = "skillflow-graph-repair-input-v1"
+REPAIR_IDENTITY = "skillflow-graph-repair-input-v2"
+ARCHIVED_REPAIR_IDENTITY = "skillflow-graph-repair-input-v1"
 
 
 def rejected_facts(evidence):
@@ -12,7 +13,7 @@ def rejected_facts(evidence):
     return material.get("candidate", material["response"])
 
 
-def repair_input(*, files, previous, findings, accepted):
+def repair_input(*, files, previous, findings, accepted, archived=False):
     from .graph_facts import assemble_graph_facts, from_accepted_cfg
     from .graph_slots import plan_graph_repair
     if not accepted:
@@ -25,24 +26,24 @@ def repair_input(*, files, previous, findings, accepted):
                 and isinstance(block.get("ref"), str) and block["ref"].strip() for block in blocks)):
             return None
     try:
-        base = (from_accepted_cfg(previous, files=files) if accepted else
-                assemble_graph_facts(facts, files=files))
+        base = (from_accepted_cfg(previous, files=files, archived=archived) if accepted else
+                assemble_graph_facts(facts, files=files, archived=archived))
     except ValueError:
         return None
-    return {"identity": REPAIR_IDENTITY, "previous": previous, "accepted": accepted,
+    return {"identity": ARCHIVED_REPAIR_IDENTITY if archived else REPAIR_IDENTITY, "previous": previous, "accepted": accepted,
             "findings": findings, "plan": plan_graph_repair(base, findings=findings, files=files)}
 
 
-def checked_repair(material, files):
+def checked_repair(material, files, *, archived=False):
     from .graph_facts import assemble_graph_facts, from_accepted_cfg
     if not isinstance(material, dict) or set(material) != {"identity", "previous", "accepted", "findings", "plan"} or type(material["accepted"]) is not bool:
         raise ValueError("Missing exact graph repair input")
     expected = repair_input(files=files, previous=material["previous"],
-                            findings=material["findings"], accepted=material["accepted"])
+                            findings=material["findings"], accepted=material["accepted"], archived=archived)
     if expected != material:
         raise ValueError("Graph repair plan does not match its source and base")
-    base = (from_accepted_cfg(material["previous"], files=files) if material["accepted"] else
-            assemble_graph_facts(_json_object(material["previous"]), files=files))
+    base = (from_accepted_cfg(material["previous"], files=files, archived=archived) if material["accepted"] else
+            assemble_graph_facts(_json_object(material["previous"]), files=files, archived=archived))
     return base, material["plan"]
 
 
@@ -57,7 +58,7 @@ def revision_paths(run):
     return base, run / "review/result.json", run / "graph/revision-input.json"
 
 
-def load_revision_input(directory, path, files, dependencies):
+def load_revision_input(directory, path, files, dependencies, *, archived=False):
     from .online import read
     base_path, review_path, plan_path = revision_paths(directory.parent.parent)
     if path != plan_path or tuple(dependencies[-3:]) != (base_path, review_path, plan_path):
@@ -70,7 +71,7 @@ def load_revision_input(directory, path, files, dependencies):
             raise ValueError("Graph revision base is not a source-bound rejected GraphFacts draft")
     review = read(review_path).get("review") or {}
     expected = repair_input(files=files, previous=base["cfg"] if accepted else rejected_facts(base),
-                            accepted=accepted, findings=[row for row in review.get("findings", [])
+                            accepted=accepted, archived=archived, findings=[row for row in review.get("findings", [])
                                                          if row["domain"] == "cfg"])
     if expected is None or read(path) != {"repair": expected}:
         raise ValueError("Graph revision input differs from its bound source, graph, or findings")
@@ -88,14 +89,15 @@ def validate_graph(kind, value, context):
     from .graph_facts import assemble_graph_facts
     from .graph_slots import apply_graph_updates
     files = context["files"]
+    archived = context.get("archived_graph", False)
     if kind == UPDATES:
-        base, plan = checked_repair(context["graph_repair"], files)
+        base, plan = checked_repair(context["graph_repair"], files, archived=archived)
     try:
         if kind == FACTS:
             strategy = context.get("graph_facts_strategy")
             assembly = strategy.merged_assembly(value) if strategy else None
             if assembly is None:
-                assembly = assemble_graph_facts(value, files=files)
+                assembly = assemble_graph_facts(value, files=files, archived=archived)
         else:
             assembly = apply_graph_updates(base, plan, value, files=files)
     except StructuralValidationError:
@@ -106,10 +108,13 @@ def validate_graph(kind, value, context):
 
 
 class GraphFactsCorrection:
-    identity = "skillflow-graph-facts-correction-v2"
+    identity = "skillflow-graph-facts-correction-v3"
 
-    def __init__(self, files):
+    def __init__(self, files, *, archived=False):
         self.files = files
+        self.archived = archived
+        if archived and self.identity == "skillflow-graph-facts-correction-v3":
+            self.identity = "skillflow-graph-facts-correction-v2"
         self._merged = None
 
     def merged_assembly(self, candidate):
@@ -118,7 +123,7 @@ class GraphFactsCorrection:
         return None
 
     def _plan(self, candidate):
-        return repair_input(files=self.files, previous=candidate, findings=[], accepted=False)
+        return repair_input(files=self.files, previous=candidate, findings=[], accepted=False, archived=self.archived)
 
     def can_correct(self, candidate, diagnostics):
         material = self._plan(candidate)
@@ -126,11 +131,11 @@ class GraphFactsCorrection:
 
     def build_prompt(self, base_prompt, candidate, diagnostics):
         from .prompts import build_graph_updates_prompt
-        return build_graph_updates_prompt(files=self.files, plan=self._plan(candidate)["plan"])
+        return build_graph_updates_prompt(files=self.files, plan=self._plan(candidate)["plan"], archived_v17=self.archived)
 
     def merge(self, candidate, response):
         from .graph_slots import apply_graph_updates
-        base, plan = checked_repair(self._plan(candidate), self.files)
+        base, plan = checked_repair(self._plan(candidate), self.files, archived=self.archived)
         try:
             self._merged = apply_graph_updates(base, plan, _json_object(response), files=self.files)
             return self._merged.facts

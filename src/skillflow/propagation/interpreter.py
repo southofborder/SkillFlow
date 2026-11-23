@@ -631,6 +631,7 @@ class TransferInterpreter:
             output_inputs.setdefault(identity, set()).add(tuple(sorted(selected_inputs.items())))
 
         endpoints, changes, alternatives, branch_targets = [], [], [], []
+        possible_writes = set()
         if kind == "merge":
             for index, values in enumerate(inputs):
                 for identity in sorted(values):
@@ -701,13 +702,27 @@ class TransferInterpreter:
             location = self.locations[op["location"]]
             endpoints.append(location)
             outputs.update(self._use_aliases(self.read_location(location, state), ir, state, locals_, [pos, "read-use"]))
-        elif kind == "receive":
-            location = self.locations[op["location"]]
-            endpoints.append(location)
-            for args in self._tuples(inputs):
-                for context in self._contexts_for(args, ambient):
-                    add_output(self._result(pos, args, OpaqueContent(), relations=["possible"] * len(args),
-                        acquired_from=f"{location.kind}:{location.name}", bindings=context), dict(enumerate(args)))
+        elif kind in {"receive", "placeholder"}:
+            location = self.locations[op["location"]] if op.get("location") else None
+            if location is not None:
+                endpoints.append(location)
+            acquired_from = f"{location.kind}:{location.name}" if kind == "receive" else None
+            if "output" in op or op.get("may_write"):
+                for args in self._tuples(inputs):
+                    for context in self._contexts_for(args, ambient):
+                        value = self._result(pos, args, OpaqueContent(), relations=["possible"] * len(args),
+                                             acquired_from=acquired_from, bindings=context)
+                        if "output" in op:
+                            add_output(value, dict(enumerate(args)))
+                        else:
+                            possible_writes.add(value)
+            if op.get("may_write"):
+                if not possible_writes:
+                    raise PendingValue(f"{pos}: no compatible candidates for the possible write")
+                for target in self.aliases(location):
+                    before = state.get(target, frozenset())
+                    state[target] = before.union(possible_writes)
+                    changes.append(StateChange(location=target, before=before, after=state[target], update="weak"))
         elif kind == "deliver":
             endpoints.append(self.locations[op["target"]])
         elif kind == "write":
@@ -819,7 +834,9 @@ class TransferInterpreter:
             raise PendingValue(f"{pos}: no compatible loop occurrence supplies this operation")
         return AtomicOpRecord(op=kind, inputs=inputs, outputs=resolved_outputs,
                               endpoints=endpoints, changes=changes,
-                              members=members, when_input_index=when_input_index, may_state=op.get("may", False),
+                              members=members, when_input_index=when_input_index, may_state=op.get("may", op.get("may_write", False)),
+                              placeholder_kind=op["kind"] if kind == "placeholder" else None,
+                              possible_writes=frozenset(possible_writes),
                               alternatives=alternatives, branch_targets=branch_targets)
 
     def bind_outputs(self, ir, spec, state, locals_):
@@ -872,7 +889,7 @@ class TransferInterpreter:
                     raise PendingValue(f"{ir['id']}/{event_index}: member scope cannot resolve its body")
                 for final_state, final_locals, records, found in outcomes:
                     if final_state != state:
-                        writes = [op for op in records.values() if op.op == "write"]
+                        writes = [op for op in records.values() if op.changes]
                         if any(not op.may_state for op in writes):
                             raise ValueError("for_each body must not update shared state outside a may summary")
                         state_candidates.append(final_state)
@@ -954,7 +971,7 @@ class TransferInterpreter:
                         rec, found = None, []
                     elif choices == []:
                         rec = AtomicOpRecord(op=op.op, skipped_case_inputs=sorted(selectors),
-                                             may_state=getattr(op, "may", False))
+                                             may_state=getattr(op, "may", getattr(op, "may_write", False)))
                         found = []
                     elif o == -1:
                         rec, found = self._for_each(ir, e, op, next_state, next_locals, uncertain=uncertain)
@@ -1011,6 +1028,8 @@ class TransferInterpreter:
         if len(variants) == 1:
             return variants[0]
         data = variants[0].model_dump(mode="python")
+        if data["op"] == "placeholder":
+            data["possible_writes"] = frozenset().union(*(v.possible_writes for v in variants))
         data["branch_targets"] = sorted({target for item in variants for target in item.branch_targets})
         alternatives = {canonical_sha256(item.model_dump(mode="json")): item
                         for variant in variants for item in variant.alternatives}

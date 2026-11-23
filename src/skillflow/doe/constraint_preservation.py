@@ -292,19 +292,29 @@ class ForwardInfluence:
                 output(key, [], identity, "conservative_processing_change")
             elif op == "read":
                 output(key, changed, identity, "read_change")
-            elif op == "write":
+            elif op == "placeholder" and spec["kind"] == "value":
+                output(key, [], identity, "possible_placeholder_change")
+            elif op == "write" or op == "placeholder":
+                if op == "placeholder":
+                    behavior.add(key)
+                stored_path = changed if spec.get("mode") == "replace" else []
                 for link in e.index.links.values():
                     if link["kind"] == "saved_read" and link["source"] == key:
                         affected.add(link["target"])
-                        output(link["target"], changed if spec["mode"] == "replace" else [], identity, "reaching_write_change")
-                location = e.compiled["locations"][spec["target"]]
-                for target_ir, reaching in e.index.entry_writes.items():
-                    if key not in reaching.get((location["kind"], location["name"]), set()):
-                        continue
-                    for operand in location["operand_refs"]:
-                        if operand["instruction_id"] == target_ir and operand["side"] == "input":
-                            emit(e.node_at("ir_input", target_ir, slot=operand["index"]),
-                                 changed if spec["mode"] == "replace" else [], "saved_operand_change", identity)
+                        output(link["target"], stored_path, identity, "reaching_write_change")
+                for change in record["changes"]:
+                    address = change["location"]
+                    location = (address["kind"], address["name"])
+                    for target_ir, reaching in e.index.entry_writes.items():
+                        if key not in reaching.get(location, set()):
+                            continue
+                        for slot in range(len(e.index.instructions[target_ir]["inputs"])):
+                            if location not in e._operand_locations.get((target_ir, "input", slot), ()):
+                                continue
+                            target = e.node_at("ir_input", target_ir, slot=slot)
+                            if (op != "placeholder" or e.index.written_values(key, location)
+                                    .intersection(e.nodes[target]["data_ids"])):
+                                emit(target, stored_path, "saved_operand_change", identity)
             elif op == "deliver" and info["generated"]:
                 ref = e.slots(key).get(input_slot)
                 source_nodes = set(self._resolve(ref[0], current_ir, info["scope"])) if ref else set()

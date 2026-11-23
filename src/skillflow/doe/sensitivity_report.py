@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import lru_cache
 from hashlib import sha256
 from html import escape
@@ -32,6 +32,20 @@ def _json(value):
 
 def _anchor(kind, identity):
     return kind + "-" + sha256(str(identity).encode("utf-8")).hexdigest()[:20]
+
+
+def placeholder_sites(compiled):
+    """Declared symbolic relations, including sites on paths that were never reached."""
+    for ir, spec in compiled["ir_semantics"].items():
+        for i, event in enumerate(spec["events"]):
+            children = enumerate(event["body"]) if event.get("kind") == "for_each" else [(None, event)]
+            for j, child in children:
+                path = ["events", i] if j is None else ["events", i, "body", j]
+                for k, op in enumerate(child["atomic_ops"]):
+                    if op["op"] == "placeholder":
+                        yield {"instruction": ir, "operation_path": [*path, "atomic_ops", k],
+                               **{key: op[key] for key in ("kind", "reason", "inputs", "output", "location",
+                                                          "may_write", "evidences") if key in op}}
 
 
 def build_view(review, *, metadata=None, compact=False):
@@ -134,6 +148,8 @@ def build_view(review, *, metadata=None, compact=False):
         "candidate_origin": metadata.get("candidate_origin", "Offline candidate"),
         "declaration_source": metadata.get("declaration_source", "offline_candidate"),
         "coverage": result["coverage"], "counts": counts, "declarations": declarations,
+        "instruction_coverage": dict(sorted(Counter(demand.get("coverage", {}).get("upstream", {}).values()).items())),
+        "placeholder_sites": metadata.get("placeholder_sites", []),
         "input_assessments": deepcopy(demand.get("input_assessments", [])),
         "input_findings": deepcopy(demand.get("input_findings", [])),
         "constraint_checks": result["constraints"]["checks"],
@@ -199,7 +215,9 @@ def _report_body(view, groups):
     yield ('<nav><a href="#inputs">All input assessments</a> · <a href="#sinks">Sink comparisons</a> · '
            '<a href="#declarations">Declarations</a> · <a href="' + escape(view["business_filename"], quote=True)
            + '">Business JSON</a></nav>')
-    for title, value in (("Coverage", view["coverage"]), ("Range comparisons", view["counts"]),
+    for title, value in (("Instruction coverage", view["instruction_coverage"]),
+                         ("Declared symbolic operations", view["placeholder_sites"]),
+                         ("Coverage", view["coverage"]), ("Range comparisons", view["counts"]),
                          ("Forward constraint checks", view["constraint_checks"]),
                          ("Task provenance", view["task_provenance"]), ("Task and demand basis", view["task"]),
                          ("Task source evidence", view["task_evidences"])):

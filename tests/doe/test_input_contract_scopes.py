@@ -73,6 +73,8 @@ def test_read_only_receipt_uses_the_original_version_and_rechecks_decisions():
     kwargs = dict(files=files, cfg=cfg, annotation=annotation)
     current = sealed(values)
     archived_core = {**current["review_core"], "schema_version": ARCHIVED_SOURCE_REVIEW}
+    for current_only in ("gap_checks", "placeholder_review_view"):
+        archived_core.pop(current_only)
     archived = _seal_core(archived_core, ARCHIVED_RECEIPT)
     assert checked_input_contract_review(archived, **kwargs, archived_v12=True) == archived
     with pytest.raises(ValueError, match="Unsupported"):

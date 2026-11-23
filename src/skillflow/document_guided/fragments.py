@@ -16,6 +16,7 @@ from skillflow.propagation.contracts.references import cfg_instructions
 from skillflow.propagation.contracts.demand import OperationTaskGoal, RawDemandGoal
 from . import annotation_wire as flat
 from .sensitivity_entries import EntryGap
+from .action_bindings import ActionBindings, SourceAction
 
 VERSION = "skillflow-document-fragments-v9"
 # Independent Task extraction keeps its unchanged v5 correction contract.
@@ -24,6 +25,7 @@ TASK_CORRECTION_VERSION = "skillflow-document-fragments-v8"
 FRAGMENT_RULES = {
     "processing": {
         **flat.PROCESSING_RULES,
+        "source_action_bindings": "Use the ordered metadata.source_actions when present. For a single action the program binds its operations and outputs. For a composite IR provide action_bindings:{ref:[path,...]} in source order, partitioning its exact IR-relative op paths, case guard (or condition) and throwing disposition, loop collection, returns, yields, output_bindings and the synthetic [terminator] path for dispatch/return. Example path: [segments,0,ops,1]. A legacy CFG missing source_actions may acquire a source-located inventory in this processing record. Preserve supported actions and use a local placeholder only for the missing value or effect.",
         "processing_coverage": "No Task demands or sensitivity fields belong in processing. A genuinely unrepresentable required operation uses a source-backed processing_gap with unmodeled=true instead of executable semantics. Name affected output indexes, locations or control; unspecified scope retains the control-reachable continuation. Precision limits on otherwise complete may facts use unmodeled=false, never to conceal a missing actual effect.",
     },
     "task-correspondence": {
@@ -105,6 +107,8 @@ ProcessingTopSegment = Annotated[Union[
 
 
 class ProcessingIR(StrictSpec):
+    action_bindings: ActionBindings | None = None
+    source_actions: list[SourceAction] = Field(default_factory=list)
     order: Literal["fixed", "partial"] = "fixed"
     evidences: flat.WireEvidences
     segments: list[ProcessingTopSegment] = Field(default_factory=list)
@@ -667,7 +671,7 @@ class FragmentCorrectionStrategy:
         except (ValueError, TypeError):
             return True  # The strict wire has no independent retainable candidate.
         scope = correction_scope(parsed, diagnostics, _records(self.kind, parsed))
-        return bool(scope["records"] or scope["coverage_slots"] or scope["field_slots"])
+        return bool(scope["records"] or scope["coverage_slots"] or scope["field_slots"] or scope.get("insertion_points"))
 
     def build_prompt(self, base_prompt, candidate, diagnostics):
         from skillflow.common.structural_correction import correction_base_prompt, correction_prompt
@@ -783,7 +787,7 @@ class FragmentCorrectionStrategy:
                 "Each coverage slot selects exactly one disposition. Every gap in an unmodeled replacement must name "
                 "that instruction_id and have unmodeled=true. Use each authorized slot at most once. The program retains "
                 "every unlisted record and checks the complete merged fragment. Resolve every listed diagnostic. Required "
-                "attachments are named at their exact paths. When a missing local has no producer, the listed segments "
+                "attachments are named at their exact paths. For missing source actions, insertions:[{path,index,values}] adds operations or segments at an authorized insertion_points path and original index. Existing operations are kept. Update action_bindings to the final coordinates. When a missing local has no producer, the listed segments "
                 "field can define its source-backed selection/computation; using an unrelated existing local is invalid. "
                 "An unchanged binding that now resolves to its true producer can remain. Never invent a missing fact. "
                 "Do not produce a full replacement or touch a slot outside the allowed tables.\n"
@@ -868,10 +872,11 @@ class FragmentCorrectionStrategy:
         if not self.selected:
             if self.kind == "review":
                 tables = {"findings", "input_contract_checks", "input_projection_checks", "source_input_findings"}
-                if (set(value) != {"outcome", *tables} or value["outcome"] != "completed"
+                if (set(value) - {"gap_checks"} != {"outcome", *tables} or value["outcome"] != "completed"
+                        or not isinstance(value.get("gap_checks", []), list)
                         or any(not isinstance(value[name], list) for name in tables)):
                     raise structural_error("review_correction_envelope", "",
-                        "A whole review correction requires outcome=completed and exactly the four declared review arrays; replacements or partial envelopes are not allowed")
+                        "A whole review correction requires outcome=completed and the declared review arrays; replacements or partial envelopes are not allowed")
             return value
         if set(value) != {"replacements"} or not isinstance(value["replacements"], list):
             raise structural_error("record_replacement", "", "return only the requested existing-record replacements")
@@ -930,6 +935,7 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
         if ir in instructions and not any(item["instruction_id"] == ir and item.get("origin") == "validation" for item in gaps):
             gap = validation_gap(ir, diagnostics, unmodeled=unmodeled)
             gaps.append(gap)
+    attempted_bindings = set()
     for _ in range(len(_records(kind, value)) + len(instructions) + len(requirements) + 2):
         if kind == "processing":
             modeled = set(value.get("ir_semantics", {})) if isinstance(value.get("ir_semantics"), dict) else set()
@@ -974,8 +980,17 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
                 container = value[field_name]
                 key = int(token) if isinstance(container, list) else token.replace("~1", "/").replace("~0", "~")
                 if kind == "processing" and field_name == "ir_semantics":
-                    add_gap(key, [row for row in error.diagnostics
-                                  if row["path"] == pointer or row["path"].startswith(pointer + "/")])
+                    local = [row for row in error.diagnostics if row["path"] == pointer or row["path"].startswith(pointer + "/")]
+                    if (key in instructions and key not in attempted_bindings and local
+                            and all(row["code"] in {"source_action_binding", "source_action_order"} for row in local)):
+                        from .action_bindings import recover_linear_bindings
+                        attempted_bindings.add(key)
+                        binding, reason = recover_linear_bindings(record, instructions[key], value)
+                        if binding is not None:
+                            record["action_bindings"] = binding
+                            continue
+                        local.append({"code": "source_action_unresolved", "path": pointer + "/action_bindings", "message": reason})
+                    add_gap(key, local)
                 elif kind == "sensitivity":
                     ir = record.get("instruction_id") if isinstance(record, dict) else None
                     for target in [ir] if ir in instructions else instructions:

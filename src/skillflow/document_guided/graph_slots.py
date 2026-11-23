@@ -14,7 +14,8 @@ from skillflow.common.validation import structural_error
 from .graph_facts import assemble_graph_facts, field_slot, instruction_ref, source_digest
 
 
-IDENTITY = "skillflow-graph-slot-plan-v1"
+IDENTITY = "skillflow-graph-slot-plan-v2"
+ARCHIVED_IDENTITY = "skillflow-graph-slot-plan-v1"
 
 
 class Update(StrictRecord):
@@ -56,6 +57,12 @@ def _returns(blocks):
                    if block["exit"]["kind"] == "return")
 
 
+def _retained_exit_index(old, blocks):
+    """A split may move the original terminator intact to the join block."""
+    matches = [i for i, block in enumerate(blocks) if block["exit"] == old["exit"]]
+    return matches[0] if len(matches) == 1 else 0
+
+
 def _region_slot(facts, bi):
     old = facts["blocks"][bi]
     ref = old["ref"]
@@ -74,7 +81,7 @@ def _region_slot(facts, bi):
             "new_block_prefix": ref + "."}
 
 
-def _simple_slots(facts, bi, oi, suffix):
+def _simple_slots(facts, bi, oi, suffix, *, archived):
     path = ("blocks", bi)
     block = facts["blocks"][bi]
     if oi is None:
@@ -85,6 +92,18 @@ def _simple_slots(facts, bi, oi, suffix):
     if oi < len(ops):
         path = (*path, "operations", oi)
         if suffix:
+            if (not archived and len(suffix) >= 4 and suffix[:2] == ("metadata", "source_actions")
+                    and suffix[2].isdecimal() and suffix[3:] in {
+                        ("ref",), ("kind",), ("role",), ("source",), ("source", "file"),
+                        ("source", "start_line"), ("source", "end_line")}):
+                metadata = ops[oi].get("metadata", {})
+                actions = metadata.get("source_actions")
+                index = int(suffix[2])
+                if isinstance(actions, list) and index < len(actions) and metadata.get("source_span"):
+                    slot = field_slot(facts, (*path, "metadata", "source_actions", index, *suffix[3:]))
+                    if slot and (slot["present"] or suffix[3:] == ("role",)):
+                        return [slot]
+                return []
             allowed = {"opcode", "inputs", "outputs", "source", "constraints", "metadata"}
             if suffix[0] not in allowed:
                 return []
@@ -126,8 +145,7 @@ def _targets(assembly, finding, files):
     except (ValueError, TypeError):
         return []
     capability = finding.get("required_graph_edit")
-    if capability == "action_inventory":
-        # An action inventory change exceeds both finite edit types.
+    if capability == "action_inventory" and assembly.archived:
         return []
     index = {assembly.id_map["blocks"][block["ref"]]: bi
              for bi, block in enumerate(assembly.facts["blocks"])}
@@ -144,6 +162,9 @@ def _targets(assembly, finding, files):
             edge = edges[ordinal]
             source = index.get(edge["source_block_id"])
             if source is None:
+                continue
+            if capability == "action_inventory":
+                selected.append(_action_slot(assembly.facts, source, None, refs))
                 continue
             if capability == "topology":
                 selected.append(_region_slot(assembly.facts, source))
@@ -167,10 +188,26 @@ def _targets(assembly, finding, files):
         if ref not in index:
             continue
         suffix = tuple(match[3][1:].split("/")) if match[3] else ()
+        if capability == "action_inventory":
+            oi = int(match[2]) if match[2] is not None else None
+            operations = assembly.facts["blocks"][index[ref]]["operations"]
+            if oi is None or oi <= len(operations):
+                selected.append(_action_slot(assembly.facts, index[ref],
+                                            operations[oi]["ref"] if oi is not None and oi < len(operations) else None, refs))
+            continue
         selected.extend(_simple_slots(assembly.facts, index[ref],
-                                      int(match[2]) if match[2] is not None else None, suffix))
+                                      int(match[2]) if match[2] is not None else None, suffix,
+                                      archived=assembly.archived))
     kind = {"topology": "region", "field": "field"}.get(capability)
     return [slot for slot in selected if slot is not None and (kind is None or slot["kind"] == kind)]
+
+
+def _action_slot(facts, bi, action_ref, source_refs):
+    slot = _region_slot(facts, bi)
+    slot.update(kind="action_region", slot_id="cfg_actions_" + canonical_sha256(slot["target"])[:24],
+                editable_action_refs=[] if action_ref is None else [action_ref],
+                source_refs=deepcopy(source_refs))
+    return slot
 
 
 def _context(assembly, slots):
@@ -242,11 +279,14 @@ def plan_graph_repair(assembly, *, findings=(), files):
             unsupported.append(finding.get("id") or canonical_sha256(finding)[:24])
         for slot in local:
             saved = slots.setdefault(slot["slot_id"], slot)
+            if saved["kind"] == "action_region" and saved is not slot:
+                for key in ("editable_action_refs", "source_refs"):
+                    saved[key].extend(item for item in slot[key] if item not in saved[key])
             if finding.get("id") is not None:
                 finding_ids = saved.setdefault("finding_ids", [])
                 if finding["id"] not in finding_ids:
                     finding_ids.append(finding["id"])
-    body = {"identity": IDENTITY, "base": {key: value for key, value in assembly.to_receipt().items()
+    body = {"identity": ARCHIVED_IDENTITY if assembly.archived else IDENTITY, "base": {key: value for key, value in assembly.to_receipt().items()
             if key not in {"facts", "slots", "gaps", "id_map"}},
         "mode": "slots" if slots else "unaddressable" if assembly.gaps or findings else "no_patch",
         "slots": slots, "gaps": deepcopy(assembly.gaps), "context": _context(assembly, slots),
@@ -261,13 +301,83 @@ def _replace(facts, path, value):
     parent[path[-1]] = deepcopy(value)
 
 
-def _region_changes(facts, slot, rows, files):
+def _check_action_edit(old, blocks, slot, files):
+    """Keep untargeted effects on every old through path, in their original order."""
+    editable = set(slot["editable_action_refs"])
+    protected = {op["ref"]: op for op in old["operations"] if op["ref"] not in editable}
+    original = {op["ref"]: op for op in old["operations"]}
+    anchors = list(slot["source_refs"])
+    for ref in editable:
+        prior = original[ref]
+        span = prior.get("source") or prior.get("metadata", {}).get("source_span")
+        if span:
+            try:
+                anchors.append(validate_source_ref(span, files).model_dump())
+            except ValueError:
+                pass  # A legacy metadata value is not necessarily a bound SourceRef.
+
+    def check_anchor(span):
+        if not span or not any(span["file"] == ref["file"] and ref["start_line"] <= span["start_line"]
+                               and span["end_line"] <= ref["end_line"] for ref in anchors):
+            raise ValueError("A changed action or control site must cite source within the finding or replaced action.")
+
+    encountered = set()
+    for block in blocks:
+        for op in block["operations"]:
+            ref = op["ref"]
+            if ref in encountered:
+                raise ValueError("Action references must be unique across the local replacement region")
+            encountered.add(ref)
+            if ref in protected and op != protected[ref]:
+                raise ValueError("An unaffected action changed in the action region")
+            if ref in protected and block["source_kind"] != old["source_kind"]:
+                raise ValueError("An unaffected acquisition changed its source kind")
+            if op != original.get(ref):
+                check_anchor(op.get("source"))
+                for part in op.get("source_actions", []):
+                    check_anchor(part.get("source"))
+            if ref in editable and original[ref].get("constraints", []) != op.get("constraints", []):
+                raise ValueError("Preserve the reviewed action's declared constraints")
+        if block["exit"] != old["exit"]:
+            check_anchor(block["exit"].get("source"))
+    if not protected.keys() <= encountered:
+        raise ValueError("The action region removed an unaffected action")
+    if any(op.get("constraints") and ref not in encountered for ref, op in original.items()):
+        raise ValueError("Cannot retire an action with a surviving declared restriction")
+    order = list(protected)
+    root = old["ref"]
+    repeated_root = any(target == root for _, target, _ in _edges(old))
+    by_ref = {b["ref"]: b for b in blocks}
+    frontier, visited = [(root, 0)], set()
+    while frontier:
+        name, offset = frontier.pop()
+        if (name, offset) in visited:
+            continue
+        visited.add((name, offset))
+        block = by_ref[name]
+        sequence = [op["ref"] for op in block["operations"] if op["ref"] in protected]
+        if sequence != order[offset:offset + len(sequence)]:
+            raise ValueError("An action region repeated or reordered an unaffected action")
+        offset += len(sequence)
+        targets = [t for _, t, _ in _edges(block)]
+        if not targets and offset != len(order):
+            raise ValueError("An action region skipped an unaffected action before returning")
+        for target in targets:
+            if target not in by_ref or (repeated_root and target == root):
+                if offset != len(order):
+                    raise ValueError("An action region skipped an unaffected action before leaving its scope")
+            if target in by_ref:
+                frontier.append((target, 0 if repeated_root and target == root else offset))
+
+
+def _region_changes(facts, slot, rows, files, *, archived):
     # First validate the local wire types before reading the promised boundary.
-    from .graph_facts import Block
+    from .graph_facts import ArchivedBlock, Block
 
     if not isinstance(rows, list) or not rows:
         raise ValueError("A region value is a nonempty array of blocks")
-    normalized = [Block.model_validate(row).model_dump(mode="json", exclude_unset=True) for row in rows]
+    model = ArchivedBlock if archived else Block
+    normalized = [model.model_validate(row).model_dump(mode="json", exclude_unset=True) for row in rows]
     root = slot["target"]
     names = [block["ref"] for block in normalized]
     if names[0] != root or len(set(names)) != len(names) or any(
@@ -286,16 +396,21 @@ def _region_changes(facts, slot, rows, files):
     old = facts["blocks"][old_index]
     # Ordinary opcodes are open strings, so the compiler cannot certify that
     # a newly inserted or moved operation is free of effects.
-    if (normalized[0]["source_kind"] != old["source_kind"]
+    action_edit = slot["kind"] == "action_region"
+    if action_edit:
+        _check_action_edit(old, normalized, slot, files)
+    elif (normalized[0]["source_kind"] != old["source_kind"]
             or normalized[0]["operations"] != old["operations"]
             or any(row["source_kind"] != "normal" or row["operations"] for row in normalized[1:])):
         raise ValueError("A local topology update must preserve the existing actions and acquisition effects")
+    exit_index = _retained_exit_index(old, normalized) if action_edit else 0
     if (normalized[0].get("constraints", []) != old.get("constraints", [])
-            or normalized[0]["exit"].get("constraints", []) != old["exit"].get("constraints", [])
-            or any(row.get("constraints") or row["exit"].get("constraints") for row in normalized[1:])):
+            or any(row.get("constraints") for row in normalized[1:])
+            or any(row["exit"].get("constraints", []) != (old["exit"].get("constraints", []) if i == exit_index else [])
+                   for i, row in enumerate(normalized))):
         raise ValueError("A local topology update must preserve declaration scopes")
     had_self_loop = any(source == target == root for source, target, _ in _edges(old))
-    if any(target == root for _, target, _ in all_edges) and (not had_self_loop or len(normalized) > 1):
+    if not action_edit and any(target == root for _, target, _ in all_edges) and (not had_self_loop or len(normalized) > 1):
         raise ValueError("A local topology update cannot add repeated visits to the original action block")
     adjacent = defaultdict(set)
     for source, target, _ in all_edges:
@@ -309,7 +424,7 @@ def _region_changes(facts, slot, rows, files):
             pending.extend(adjacent[current])
     if reachable != set(names):
         raise ValueError("New region blocks must be reachable from the frozen entry")
-    if len(normalized) > 1:
+    if not action_edit and len(normalized) > 1:
         indegree = dict.fromkeys(names, 0)
         for targets in adjacent.values():
             for target in targets:
@@ -341,15 +456,39 @@ def _compile_edits(assembly, edits, files):
     if not edits:
         return assembly
     merged, regions = deepcopy(assembly.facts), []
+    edited_anchors = set()
+    ids = deepcopy(assembly.id_map) or None
     for _, slot, value in edits:
-        if slot["kind"] == "region":
+        if slot["kind"] in {"region", "action_region"}:
             regions.append((slot["path"][1], value))
+            if ids and slot["kind"] == "action_region":
+                old_refs = {op["ref"] for op in slot["old_value"]["operations"]}
+                exit_index = _retained_exit_index(slot["old_value"], value)
+                if exit_index:
+                    origin = instruction_ref(slot["target"])
+                    ids["instructions"][instruction_ref(value[exit_index]["ref"])] = ids["instructions"].pop(origin)
+                for block in value[1:]:
+                    for op in block["operations"]:
+                        if op["ref"] in old_refs:
+                            origin = instruction_ref(slot["target"], op["ref"])
+                            moved = instruction_ref(block["ref"], op["ref"])
+                            ids["instructions"][moved] = ids["instructions"].pop(origin)
         else:
             _replace(merged, slot["path"], value)
+            path = slot["path"]
+            if not assembly.archived and path[4:6] == ["metadata", "source_actions"]:
+                edited_anchors.add((path[1], path[3]))
+    for bi, oi in edited_anchors:
+        op = merged["blocks"][bi]["operations"][oi]
+        original = assembly.facts["blocks"][bi]["operations"][oi]["metadata"]
+        op["source_actions"] = op["metadata"]["source_actions"]
+        op["metadata"] = deepcopy(original)
+        if op.get("source") is None:
+            op["source"] = deepcopy(original["source_span"])
     for index, rows in sorted(regions, reverse=True):
         merged["blocks"][index:index + 1] = rows
-    return assemble_graph_facts(merged, files=files, canonical_ids=assembly.id_map or None,
-                                legacy_cfg=assembly.legacy_cfg)
+    return assemble_graph_facts(merged, files=files, canonical_ids=ids,
+                                legacy_cfg=assembly.legacy_cfg, archived=assembly.archived)
 
 
 def apply_graph_updates(assembly, plan, updates, *, files):
@@ -391,9 +530,9 @@ def apply_graph_updates(assembly, plan, updates, *, files):
                for other in [tuple(other_slot["path"])]):
             reject(index, "cfg_slot_conflict", "Two updates address overlapping facts.", slot["slot_id"])
             continue
-        if slot["kind"] == "region":
+        if slot["kind"] in {"region", "action_region"}:
             try:
-                value = _region_changes(assembly.facts, slot, value, files)
+                value = _region_changes(assembly.facts, slot, value, files, archived=assembly.archived)
             except (ValueError, TypeError) as error:
                 reject(index, "cfg_region_boundary", str(error), slot["slot_id"])
                 continue

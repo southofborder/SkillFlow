@@ -24,6 +24,7 @@ from skillflow.propagation.records import PropagationRecords
 from skillflow.propagation.records import cfg_sha256
 from skillflow.propagation.records import _validate_annotation
 from skillflow.propagation.contracts.specs import validate_specs
+from skillflow.propagation.contracts.specs import state_write_target
 from skillflow.propagation.contracts.specs import value_refs
 from skillflow.propagation.contracts.specs import iter_scoped_events
 from skillflow.propagation.contracts.specs import precedence_closure
@@ -274,8 +275,9 @@ def _reaching_memory(cfg, annotation, interpreter, reachable, roots, predecessor
                     # compiled constraints drive concrete candidate scheduling.
                     visible = {loc: set(defs) for loc, defs in base_state.items()}
                     for we, wb, wo, write in ops:
-                        if write.op == "write" and write.mode != "delete" and (we, wb, wo) != (e, b, o) and (we, wb, wo) not in closure[(e, b, o)]:
-                            for loc in interpreter.aliases(interpreter.locations[write.target]):
+                        target_id = state_write_target(write)
+                        if target_id and getattr(write, "mode", None) != "delete" and (we, wb, wo) != (e, b, o) and (we, wb, wo) not in closure[(e, b, o)]:
+                            for loc in interpreter.aliases(interpreter.locations[target_id]):
                                 visible.setdefault(loc, set()).add(static_key(ir["id"], we, wb, wo))
                 else:
                     visible = {loc: set(defs) for loc, defs in state.items()}
@@ -283,11 +285,12 @@ def _reaching_memory(cfg, annotation, interpreter, reachable, roots, predecessor
                 if e not in seen_events:
                     snapshots[(ir["id"], e, None, -1)] = visible
                     seen_events.add(e)
-                if op.op == "write":
-                    target = interpreter.locations[op.target]
+                target_id = state_write_target(op)
+                if target_id:
+                    target = interpreter.locations[target_id]
                     for loc in interpreter.aliases(target):
-                        weak = uncertain or op.may or loc != target or interpreter.is_unknown_address(target)
-                        if op.mode == "delete":
+                        weak = uncertain or op.op == "placeholder" or op.may or loc != target or interpreter.is_unknown_address(target)
+                        if getattr(op, "mode", None) == "delete":
                             if not weak:
                                 state.pop(loc, None)
                         elif weak:
@@ -332,7 +335,7 @@ def _generation_feedback(cfg, annotation, interpreter, reachable, roots, predece
             spec = annotation.ir_semantics[ir["id"]]
             for e, b, event in iter_scoped_events(spec):
                 for o, operation in enumerate(event.atomic_ops):
-                    if hasattr(operation, "output"):
+                    if getattr(operation, "output", None) is not None:
                         target_map = locals_ if b is None else scoped_locals.setdefault((ir["id"], e), {})
                         target_map[(ir["id"], operation.output)] = static_key(ir["id"], e, b, o)
             for e, event in enumerate(spec.events):
@@ -380,7 +383,7 @@ def _generation_feedback(cfg, annotation, interpreter, reachable, roots, predece
                         dependencies.update(set().union(*(memory.get(loc, set())
                                             for loc in interpreter.aliases(interpreter.locations[op["target"]]))))
                         generators.add(node)
-                    if op["op"] in {"receive", "select_part", "exclude_parts", "update_fields", "build", "compute", "filter_items"}:
+                    if op["op"] in {"receive", "select_part", "exclude_parts", "update_fields", "build", "compute", "filter_items", "placeholder"}:
                         generators.add(node)
                     for source in dependencies:
                         edge(source, node)
@@ -820,8 +823,8 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
             for cause in causes:
                 error_scopes[cause].add(ir)
         result.diagnostics.extend(item["diagnostics"])
-    for ir in candidates:
-        result.coverage[ir] = "processed"
+    for ir, variants in candidates.items():
+        result.coverage[ir] = "processed_with_placeholder" if any(row.used_placeholder() for row in variants) else "processed"
     for cause, affected in sorted(error_scopes.items()):
         diagnostic = fault_evidence[cause]
         result.diagnostics.append({**diagnostic, "affected_instruction_ids": sorted(affected)})
@@ -841,7 +844,7 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
         for ir in reachable_instructions(cfg, source):
             if result.coverage[ir] in {"not_reached", "not_solved"}:
                 result.coverage[ir] = "blocked"
-    if result.status == "complete" and (failures or stopped or error_scopes or any(
+    if result.status == "complete" and (failures or stopped or error_scopes or "processed_with_placeholder" in result.coverage.values() or any(
             item["code"] == "unresolved_path" for item in result.diagnostics)):
         result.status = "incomplete"
     # Absence of a worklist visit is not a path exclusion proof. Recompute

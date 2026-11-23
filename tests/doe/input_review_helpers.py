@@ -42,6 +42,15 @@ def projection_checks(inventory, evidences):
              "evidences": deepcopy(evidences)}] if inventory["projections"] else []
 
 
+def retained_gap_checks(material, cited):
+    return {"gap_checks": [{"gap_id": row["id"], "disposition": "retain",
+        **({"masked_boundary": "none", "cfg_action_missing": False} if row.get("kind") == "placeholder" else {}),
+        "reason": "The fixture provides no implementation for the source action at " + row["instruction_id"] + ".",
+        "affected": "The caller cannot determine the return or effect at " + row["instruction_id"] + ".",
+        "source_refs": [{key: value for key, value in cited[0].items() if key != "reason"}]}
+        for row in material.get("processing_gap_inventory", [])]} if material.get("processing_gap_inventory") else {}
+
+
 def source_review_response(material, findings):
     """Explicit current fixture response, keeping representation objections local."""
     inventory = material["input_contract_inventory"]
@@ -54,7 +63,7 @@ def source_review_response(material, findings):
         if any(actual == target or actual.startswith(target + "/") or target.startswith(actual + "/")
                for finding in findings for actual in finding["target_ids"] for target in protected):
             accepted[index] = rejected[check["obligation_id"]]
-    return {"outcome": "completed", "findings": deepcopy(findings), "input_contract_checks": accepted,
+    return {**retained_gap_checks(material, cited), "outcome": "completed", "findings": deepcopy(findings), "input_contract_checks": accepted,
             "input_projection_checks": projection_checks(inventory, cited), "source_input_findings": []}
 
 
@@ -64,5 +73,5 @@ def accepted_prompt_review(prompt, *, evidences=None):
     cited = deepcopy(evidences) if evidences is not None else [
         {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1,
          "reason": "The authored synthetic source specifies these exact input relationships."}]
-    return {"outcome": "completed", "findings": [], "input_contract_checks": checks_for_inventory(inventory, cited),
+    return {**retained_gap_checks(payload, cited), "outcome": "completed", "findings": [], "input_contract_checks": checks_for_inventory(inventory, cited),
             "input_projection_checks": projection_checks(inventory, cited), "source_input_findings": []}

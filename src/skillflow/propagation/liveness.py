@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 
-from skillflow.propagation.contracts.specs import iter_scoped_events
+from skillflow.propagation.contracts.specs import iter_scoped_events, state_write_target
 from skillflow.propagation.contracts.uses import active_value_uses
 from skillflow.propagation.models import FlowLocation
 
@@ -124,14 +124,14 @@ def calculate_liveness(cfg, annotation, interpreter, successors):
                             read.update(_ref_locations(use.value, ir, interpreter))
                         if operation.op == "read":
                             read.update(interpreter.aliases(interpreter.locations[operation.location]))
-                        elif operation.op == "write":
-                            target = interpreter.locations[operation.target]
+                        elif (target_id := state_write_target(operation)) is not None:
+                            target = interpreter.locations[target_id]
                             aliases = set(interpreter.aliases(target))
                             # Before/after are published evidence even for a
                             # definite overwrite/delete with no future read.
                             read.update(aliases)
                             retained.update(aliases)
-                            if (body_index is None and event.case is None and spec.order == "fixed"
+                            if (operation.op == "write" and body_index is None and event.case is None and spec.order == "fixed"
                                     and not operation.may and not interpreter.is_unknown_address(target)
                                     and operation.mode in {"replace", "delete"}):
                                 defined.add(target)

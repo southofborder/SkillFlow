@@ -1,6 +1,6 @@
 """Unavailable values travel with execution rows, never as invented Data."""
 from skillflow.propagation.models import FlowLocation
-from skillflow.propagation.contracts.specs import iter_scoped_events
+from skillflow.propagation.contracts.specs import iter_scoped_events, state_write_target
 from skillflow.propagation.contracts.uses import active_value_uses
 from skillflow.propagation.liveness import _ambient_locations, _operand_locations, _ref_locations
 
@@ -83,12 +83,12 @@ def dependencies(ir, spec, interpreter, block, predecessor, state):
                     reads.update(_ref_locations(use.value, ir, interpreter))
             if op.op == "read":
                 reads.update(interpreter.aliases(interpreter.locations[op.location]))
-            elif op.op == "write":
-                target = interpreter.locations[op.target]
+            elif (target_id := state_write_target(op)) is not None:
+                target = interpreter.locations[target_id]
                 aliases = set(interpreter.aliases(target))
                 writes.update(aliases)
                 state_evidence.update(aliases)
-                strong = (body is None and event.case is None and spec.order == "fixed"
+                strong = (op.op == "write" and body is None and event.case is None and spec.order == "fixed"
                           and not op.may and not interpreter.is_unknown_address(target)
                           and op.mode in {"replace", "delete"})
                 if strong:

@@ -1,6 +1,7 @@
 """Strict saved backward-demand records, without necessity or DOE verdicts."""
 from __future__ import annotations
 
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 from copy import deepcopy
 from typing import Annotated, Literal
 
@@ -261,7 +262,7 @@ class Coverage(Strict):
     requirements: dict[Text, RequirementCoverage]
     sinks: Index
     expected_sinks: Index
-    upstream: dict[Text, Literal["processed", "not_reached", "infeasible", "not_solved", "unresolved_binding", "unmodeled", "blocked", "execution_error"]]
+    upstream: dict[Text, Literal["processed", "processed_with_placeholder", "not_reached", "infeasible", "not_solved", "unresolved_binding", "unmodeled", "blocked", "execution_error"]]
     unresolved_boundaries: list[SinkBoundary] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
@@ -276,7 +277,7 @@ from .input_assessments import InputAssessment, InputSemanticFinding
 
 
 class DemandResult(Strict):
-    schema_version: Literal["skillflow-demand-v13"]
+    schema_version: Literal["skillflow-demand-v14"]
     status: Literal["complete", "partial"]
     goals: list[DemandGoal]
     traceability: Traceability
@@ -337,7 +338,7 @@ class DemandResult(Strict):
                     raise ValueError("Reviewed input contracts require a bound review receipt identity")
                 if not set(row.demand_refs) <= self.derivations.keys() or not set(row.diagnostic_refs) <= diagnostics.keys():
                     raise ValueError("Input assessment has dangling evidence references")
-                if row.status == "deletable" and (row.diagnostic_refs or item.coverage != "processed"):
+                if row.status == "deletable" and (row.diagnostic_refs or item.coverage not in RECORDED_COVERAGE):
                     raise ValueError("An incomplete input assessment cannot authorize deletion")
                 if row.status != "deletable" and (row.modification is not None or row.modification_limit is not None):
                     raise ValueError("Only an established deletion may have a modification recipe or edit limitation")
@@ -461,7 +462,17 @@ def reject_archived_selectors(derivations):
         raise ValueError("Archived demand v12 derivations cannot carry selector_ref")
 
 
-class ArchivedDemandResult(DemandResult):
+class ArchivedDemand13(DemandResult):
+    schema_version: Literal["skillflow-demand-v13"]
+
+    @model_validator(mode="after")
+    def historical_coverage(self):
+        if "processed_with_placeholder" in self.coverage.upstream.values():
+            raise ValueError("Historical demand coverage cannot contain symbolic operations")
+        return self
+
+
+class ArchivedDemandResult(ArchivedDemand13):
     schema_version: Literal["skillflow-demand-v12"]
 
     @model_validator(mode="before")
@@ -472,22 +483,22 @@ class ArchivedDemandResult(DemandResult):
         return value
 
 
-def validate_result_shape(value, *, archived_v12=False):
+def validate_result_shape(value, *, archived_v12=False, archived_v13=False):
     """Strict fields and internal references only; replay checks derivation truth."""
     _require_json(value, "")
-    schema = ArchivedDemandResult if archived_v12 else DemandResult
+    schema = ArchivedDemandResult if archived_v12 else ArchivedDemand13 if archived_v13 else DemandResult
     checked = schema.model_validate(value).model_dump(mode="json")
     if checked != value:
         raise ValueError("Demand result must preserve its explicit wire fields")
     return deepcopy(checked)
 
 
-def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None, archived_v12=False):
+def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None, archived_v12=False, archived_v13=False):
     """Bind saved references to facts without re-solving preservation semantics."""
     from types import SimpleNamespace
     from .material import _Index, _id, payload_alternatives
     from skillflow.propagation.conditions import payload_inputs
-    checked = validate_result_shape(value, archived_v12=archived_v12)
+    checked = validate_result_shape(value, archived_v12=archived_v12, archived_v13=archived_v13)
     index = _Index(facts)
     annotation = facts.annotation
     task = annotation["task"]
@@ -553,6 +564,9 @@ def validate_result_references(value, facts, targets, *, input_contract_review=N
                 if (affected != [diagnostic["instruction_id"]] or diagnostic["operation_id"] not in index.operations
                         or index.operations[diagnostic["operation_id"]]["position"]["instruction_id"] != diagnostic["instruction_id"]):
                     raise ValueError("Input-contract diagnostic has an unsupported local footprint")
+                if (diagnostic["code"] == "input_contract_placeholder"
+                        and index.operations[diagnostic["operation_id"]]["record"]["op"] != "placeholder"):
+                    raise ValueError("Symbolic demand diagnostic must identify its placeholder operation")
                 continue
             if diagnostic["code"] != "processing_gap" or not set(affected) <= set(index.instructions):
                 raise ValueError("Demand diagnostic has an unsupported scoped footprint")

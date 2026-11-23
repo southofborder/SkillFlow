@@ -273,11 +273,11 @@ def test_unrepresentable_failure_survives_exhaustion_and_valid_task_siblings_rem
     assert len(client.prompts) == 2
 
 
-@pytest.mark.parametrize("stale_version", ["v5", "v6", "v7"])
+@pytest.mark.parametrize("stale_version", ["v5", "v6", "v7", "v8"])
 def test_previous_review_generation_cannot_be_used_for_current_contract_acceptance(stale_version):
     from skillflow.doe.input_contract_review import build_input_contract_review, SOURCE_REVIEW_VERSION
     from tests.doe.test_input_contract_scopes import materials
-    assert SOURCE_REVIEW_VERSION == "skillflow-document-source-review-fragment-v8"
+    assert SOURCE_REVIEW_VERSION == "skillflow-document-source-review-fragment-v9"
     files, cfg, annotation, _ = materials()
     stale = {"schema_version": "skillflow-document-source-review-fragment-" + stale_version, **response()}
     with pytest.raises(ValueError, match="explicit current source-review protocol"):

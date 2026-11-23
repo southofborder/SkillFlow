@@ -87,7 +87,19 @@ def test_revision_can_keep_one_existing_source_gap_without_inventing_an_ir_recor
     prior["processing_gaps"][0]["unmodeled"] = True
     scope = processing_scope(cfg, cfg, [{"target_ids": ["annotation:/processing_gaps/0"]}], prior)
     patch = {"coverage_slots": [{"instruction_id": "ir_return", "keep": "unmodeled"}]}
-    assert merge_processing_revision(prior, scope, patch) == prior
+    with pytest.raises(StructuralValidationError, match="whole-IR"):
+        merge_processing_revision(prior, scope, patch)
+    ref = {"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}
+    retention = {"reason": "The source delegates return selection to the opaque runtime callback.",
+                 "affected": {"outputs": [], "locations": [], "control": True, "effect": False}, "source_refs": [ref]}
+    patch["coverage_slots"][0]["retention"] = retention
+    merged = merge_processing_revision(prior, scope, patch, files={"skill/SKILL.md": "Call the handler."})
+    assert merged["ir_semantics"] == prior["ir_semantics"]
+    gap = merged["processing_gaps"][0]
+    assert retention["reason"] in gap["reason"] and ref in gap["evidences"]
+    patch["coverage_slots"][0]["retention"]["source_refs"][0]["end_line"] = 1000
+    with pytest.raises(StructuralValidationError):
+        merge_processing_revision(prior, scope, patch, files={"skill/SKILL.md": "Call the handler."})
 
 
 def _declaration(ir):
@@ -111,7 +123,8 @@ def test_sensitivity_reuses_unchanged_declarations_and_asks_only_changed_or_revi
         "target_ids": ["annotation:/ir_semantics/ir_other_call/sensitivity"]}]
     scope = sensitivity_scope(cfg, cfg, old, new, findings, prior)
     assert set(scope["slots"]) == {"ir_call", "ir_other_call", "ir_return"}
-    assert scope["removed_instruction_ids"] == ["ir_unfilled"]
+    assert scope["removed_instruction_ids"] == []
+    assert scope["unmodeled_declaration_owners"] == ["ir_unfilled"]
     fixed = _declaration("ir_call")
     fixed["value"]["name"] = "renamed_reply"
     expected = {"declarations": [fixed, prior["declarations"][1], _declaration("ir_other_call")]}

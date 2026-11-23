@@ -237,6 +237,37 @@ class ComputeOp(AtomicSpec):
         return self
 
 
+class PlaceholderOp(AtomicSpec):
+    """A source-located unknown relationship at a real operation position."""
+    op: Literal["placeholder"]
+    kind: Literal["value", "effect"]
+    inputs: list[ValueRef]
+    reason: Text
+    output: Text | None = Field(default=None, exclude_if=lambda value: value is None)
+    location: Text | None = Field(default=None, exclude_if=lambda value: value is None)
+    may_write: bool = Field(default=False, exclude_if=lambda value: not value)
+
+    @model_validator(mode="after")
+    def declared_scope(self):
+        if not any(isinstance(ref, SourceEvidence) for ref in self.evidences):
+            raise ValueError("a placeholder requires evidence from the source")
+        if self.kind == "value":
+            if self.output is None or self.location is not None or self.may_write:
+                raise ValueError("a value placeholder requires a local output and no state footprint")
+        elif self.output is not None or (self.may_write and self.location is None):
+            raise ValueError("an effect placeholder has no value output and a possible write needs a location")
+        return self
+
+
+def state_write_target(op):
+    """Declared target for both a definite write and a scoped possible write."""
+    if isinstance(op, WriteOp):
+        return op.target
+    if isinstance(op, PlaceholderOp) and op.may_write:
+        return op.location
+    return None
+
+
 class FilterItemsOp(AtomicSpec):
     op: Literal["filter_items"]
     input: ValueRef
@@ -293,7 +324,7 @@ class AppendOp(AtomicSpec):
 
 AtomicOp = Annotated[
     ReadOp | ReceiveOp | DeliverOp | WriteOp | SelectPartOp | ExcludePartsOp
-    | UpdateFieldsOp | BuildOp | ComputeOp | FilterItemsOp | MergeOp | MemberOp | BranchOp | AppendOp,
+    | UpdateFieldsOp | BuildOp | ComputeOp | PlaceholderOp | FilterItemsOp | MergeOp | MemberOp | BranchOp | AppendOp,
     Field(discriminator="op"),
 ]
 
@@ -356,6 +387,10 @@ class RawComputeOp(ComputeOp):
         return self
 
 
+class RawPlaceholderOp(PlaceholderOp):
+    demands: list[OperationTaskGoal] = Field(default_factory=list)
+
+
 class RawFilterItemsOp(FilterItemsOp):
     demands: list[OperationTaskGoal] = Field(default_factory=list)
     expression: OperationExpression | None = None
@@ -379,7 +414,7 @@ class RawAppendOp(AppendOp):
 
 RawAtomicOp = Annotated[
     RawReadOp | RawReceiveOp | RawDeliverOp | RawWriteOp | RawSelectPartOp | RawExcludePartsOp
-    | RawUpdateFieldsOp | RawBuildOp | RawComputeOp | RawFilterItemsOp
+    | RawUpdateFieldsOp | RawBuildOp | RawComputeOp | RawPlaceholderOp | RawFilterItemsOp
     | RawMergeOp | RawMemberOp | RawBranchOp | RawAppendOp,
     Field(discriminator="op"),
 ]
@@ -975,6 +1010,10 @@ def _validate_scope(events, instruction, locations, *, uncertain, external=None,
                   None if location_id is None else locations[location_id].kind,
                   dependencies=operation.dependencies if isinstance(operation, ComputeOp) else None,
                   input_count=len(operation.inputs) if isinstance(operation, DeliverOp) else None)
+            if (isinstance(operation, PlaceholderOp) and operation.may_write
+                    and locations[location_id].kind not in {"storage", "runtime_context"}):
+                diagnostics.extend(structural_error("placeholder_state", path + "/location",
+                    "a possible state write requires a storage or runtime context location").diagnostics)
         if isinstance(operation, DeliverOp) and operation.when is not None:
             if effect != "model_observe":
                 diagnostics.extend(structural_error("validate_scope", path + "/when", "conditional delivery is reserved for compiled model observation").diagnostics)
@@ -1091,7 +1130,7 @@ def structural_precedence(spec):
     for (e, b, o), op in operations.items():
         if o:
             edges.add(((e, b, o - 1), (e, b, o)))
-        if hasattr(op, "output"):
+        if getattr(op, "output", None) is not None:
             definitions[(None if b is None else e, op.output)] = (e, b, o)
     for key, op in operations.items():
         scope = None if key[1] is None else key[0]

@@ -127,19 +127,20 @@ def compact_review_correction(base_prompt, fallback, context):
 
 
 TABLES = ("findings", "input_contract_checks", "input_projection_checks", "source_input_findings")
-SCOPE_IDENTITY = "skillflow-review-correction-scope-v1"
+SCOPE_IDENTITY = "skillflow-review-correction-scope-v2"
 _MISSING_PREFIX = "Input-contract review must cover every expected obligation exactly once; missing "
 
 
 def complete_review_candidate(value):
     """A complete returned envelope may still contain invalid or missing rows."""
-    return (isinstance(value, dict) and set(value) == {"outcome", *TABLES}
-            and value["outcome"] == "completed" and all(isinstance(value[key], list) for key in TABLES))
+    return (isinstance(value, dict) and set(value) - {"gap_checks"} == {"outcome", *TABLES}
+            and value["outcome"] == "completed" and all(isinstance(value[key], list) for key in TABLES)
+            and isinstance(value.get("gap_checks", []), list))
 
 
 def _record_path(path, candidate):
-    match = re.match(r"^/(findings|input_contract_checks)/(0|[1-9][0-9]*)(?:/|$)", path)
-    if match is None or int(match[2]) >= len(candidate[match[1]]):
+    match = re.match(r"^/(findings|input_contract_checks|gap_checks)/(0|[1-9][0-9]*)(?:/|$)", path)
+    if match is None or int(match[2]) >= len(candidate.get(match[1], [])):
         return None
     return "/" + match[1] + "/" + match[2]
 
@@ -184,11 +185,18 @@ def review_correction_scope(candidate, diagnostics, material):
             or len(set(present)) != len(present)):
         return full("Unknown, absent or duplicate authored obligation identities require a complete replacement.")
     missing = [identity for identity in expected_ids if identity not in set(present)]
-    if not missing and not any(row.get("code") == "input_contract_review_conflict" for row in diagnostics):
+    gap_ids = {row["id"] for row in material.get("processing_gap_inventory", [])}
+    supplied_gaps = [row.get("gap_id") if isinstance(row, dict) else None for row in candidate.get("gap_checks", [])]
+    if any(not isinstance(k, str) or k not in gap_ids for k in supplied_gaps) or len(set(supplied_gaps)) != len(supplied_gaps):
+        return full("Unknown or duplicate whole-instruction gap check identities require a complete replacement.")
+    missing_gaps = sorted(gap_ids - set(supplied_gaps))
+    if not missing and not any(row.get("code") in {"input_contract_review_conflict", "processing_gap_review"} for row in diagnostics):
         return full("No missing obligation or cross-record conflict requires the finite-slot correction protocol; retain the existing correction strategy.")
     check_paths = {identity: f"/input_contract_checks/{index}" for index, identity in enumerate(present)}
     selected, coverage = set(), 0
     for row in diagnostics:
+        if row.get("code") == "processing_gap_review" and row.get("path") == "/gap_checks":
+            continue
         if row.get("code") == "review_coverage" and row.get("path") == "/input_contract_checks":
             coverage += 1
             continue
@@ -209,7 +217,7 @@ def review_correction_scope(candidate, diagnostics, material):
                 selected.add(pair["record_path"])
     if coverage != len(missing):
         return full("Missing-check coverage diagnostics do not match the current finite inventory.")
-    if not selected and not missing:
+    if not selected and not missing and not missing_gaps:
         return full("No finite correction scope was established.")
     linked = {f"/findings/{i}": _overlapping_obligations(row, material["input_contract_targets"])
               for i, row in enumerate(candidate["findings"])}
@@ -232,6 +240,8 @@ def review_correction_scope(candidate, diagnostics, material):
         dependency_obligation_ids=sorted(obligations),
         retained_record_counts={table: len(candidate[table]) - sum(path.startswith("/" + table + "/")
                                       for path in records) for table in TABLES})
+    if gap_ids:
+        evidence["missing_gap_ids"] = missing_gaps
     return {"mode": "records", "records": records, "missing_obligation_ids": missing, "evidence": evidence}
 
 
@@ -267,7 +277,7 @@ class ReviewCorrectionStrategy:
     def __init__(self, material, fallback):
         self.material = deepcopy(material)
         self.fallback = fallback
-        self.identity = fallback.identity + ":finite-obligation-slots-v1"
+        self.identity = fallback.identity + ":finite-obligation-slots-v2"
         self.scope = None
         self.diagnostics = None
 
@@ -305,6 +315,8 @@ class ReviewCorrectionStrategy:
             "Complete source, annotation and every contract/obligation remain in the original input. Look up insertion obligations there; absence of a prior check is not an accepted or unresolved judgment. "
             "A diagnostics missing_coverage table represents one original error per paired diagnostic index/obligation index: read the existing inventory entry's id and append it to message_prefix, retaining code and path. Other indexed diagnostic records are unchanged. "
             "Do not silence a source-supported allegation to pass validation. Every scope, source reference, exact inventory and conflict is validated again on the complete merged result.\n")
+        if self.scope["evidence"].get("missing_gap_ids"):
+            instruction += "Insert one complete gap check with gap_id for every missing_gap_ids entry in scope.\n"
         fallback = correction_base_prompt(base_prompt) + instruction + compact_json(context)
         return compact_review_correction(base_prompt, fallback, context)
 
@@ -330,10 +342,20 @@ class ReviewCorrectionStrategy:
             if table == "input_contract_checks" and (not isinstance(row["value"], dict)
                     or row["value"].get("obligation_id") != original[table][int(position)]["obligation_id"]):
                 raise structural_error("review_correction_obligation", f"/replacements/{index}/value", "An existing check must retain its exact obligation identity")
+            if table == "gap_checks" and (not isinstance(row["value"], dict)
+                    or row["value"].get("gap_id") != original[table][int(position)]["gap_id"]):
+                raise structural_error("review_correction_gap", f"/replacements/{index}/value", "An existing gap decision must retain its exact gap identity.")
             result[table][int(position)] = deepcopy(row["value"])
             used.add(path)
         inserted = set()
         for index, row in enumerate(changed["insertions"]):
+            if isinstance(row, dict) and "gap_id" in row:
+                identity = row["gap_id"]
+                if identity not in self.scope["evidence"].get("missing_gap_ids", []) or identity in inserted:
+                    raise structural_error("review_correction_gap", f"/insertions/{index}", "Insert each supplied missing gap decision at most once.")
+                inserted.add(identity)
+                result.setdefault("gap_checks", []).append(deepcopy(row))
+                continue
             identity = row.get("obligation_id") if isinstance(row, dict) else None
             if identity not in self.scope["missing_obligation_ids"] or identity in inserted:
                 raise structural_error("review_correction_insertion", f"/insertions/{index}", "Insert each supplied missing obligation at most once; existing or invented IDs are forbidden")

@@ -13,6 +13,7 @@ from pydantic import Discriminator, Field, Tag, TypeAdapter, ValidationError, cr
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.source_evidence import _json_object, json_pointer
 from skillflow.common.validation import StructuralValidationError, structural_error, schema_error
+from .action_bindings import ActionBindings, SourceAction, checked_action_bindings
 from skillflow.propagation.contracts import specs
 from skillflow.propagation.contracts.values import StrictSpec, Text, ValueRef
 from skillflow.propagation.contracts.locations import AddressPolicy, require_address_source_evidence
@@ -29,7 +30,7 @@ from skillflow.propagation.contracts.input_requirements import (
 )
 
 
-WIRE_VERSION = "skillflow-flat-annotation-v6"
+WIRE_VERSION = "skillflow-flat-annotation-v7"
 _CITATION_NOTICE = "Declaration citation; semantic support is not independently verified."
 _WIRE_EVIDENCE_TYPES = [create_model("Flat" + cls.__name__, __base__=cls,
     reason=(Text | None, None)) for cls in (SourceEvidence, CFGEvidence, RuleEvidence)]
@@ -78,6 +79,8 @@ _OPS = [_optional_evidence("Flat" + cls.__name__, cls) for cls in (
     specs.RawSelectPartOp, specs.RawExcludePartsOp, specs.RawUpdateFieldsOp,
     specs.RawBuildOp, specs.RawComputeOp, specs.RawFilterItemsOp,
     specs.RawMergeOp, specs.RawMemberOp, specs.RawBranchOp, specs.RawAppendOp)]
+_OPS.append(create_model("FlatPlaceholderOp", __base__=specs.RawPlaceholderOp,
+    evidences=(list[_WIRE_EVIDENCE_TYPES[0]], Field(min_length=1))))
 for index, cls in enumerate(_OPS):
     if cls.model_fields["op"].annotation == Literal["write"]:
         # Only the model wire has this default. The backend still receives an
@@ -203,6 +206,8 @@ FlatSegment = Annotated[Union[
 
 
 class FlatIR(StrictSpec):
+    action_bindings: ActionBindings | None = None
+    source_actions: list[SourceAction] = Field(default_factory=list)
     order: Literal["fixed", "partial"] = "fixed"
     evidences: WireEvidences
     segments: list[FlatSegment] = Field(default_factory=list)
@@ -390,7 +395,7 @@ def _lower_sensitivity(items, names, case_maps, scope_path=()):
     return output
 
 
-def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensitivity_scopes=None):
+def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensitivity_scopes=None, _actions=None):
     from skillflow.propagation.annotation.services import validate_raw_response
     wire, parsed = _parse(raw)
     if isinstance(parsed, FailureResponse):
@@ -434,7 +439,7 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
 
     def effect(op):
         kind = op["op"]
-        if kind == "branch":
+        if kind in {"branch", "placeholder"}:
             return None
         boundary = locations.get(op.get("location", op.get("target")), {}).get("kind")
         if kind in {"read", "write"}:
@@ -679,6 +684,9 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
         expressed = row["requirement_id"] in seeded or bool(row.get("constraints"))
         row["status"] = ("partial" if row["gaps"] else "expressed") if expressed else ("retained_only" if row["bindings"] else "unmapped")
         register(["realizations", index], ["realizations", index])
+    actions = checked_action_bindings(wire, material, raw_specs=backend["ir_semantics"], wire_paths=paths)
+    if _actions is not None:
+        _actions.update(actions)
     try:
         if processing_only:
             _validate_processing_backend(backend, material)
@@ -915,11 +923,14 @@ def compile_flat_response(raw, material, *, validation_gaps=()):
         for gap in internal:
             if ProcessingGap.model_validate(gap).origin != "validation":
                 raise ValueError("Program gap envelope accepts validation origins only")
-    wire, backend, paths = _expand(value, material, validation_gaps=internal or validation_gaps)
+    actions = {}
+    wire, backend, paths = _expand(value, material, validation_gaps=internal or validation_gaps, _actions=actions)
     if internal or origins is not None:
         wire = saved
     backend, compiled, mapping = compile_response(backend, material)
     mapping.update(wire_version=WIRE_VERSION, wire_sha256=canonical_sha256(wire), wire_paths=paths)
+    if actions:
+        mapping["source_action_bindings"] = actions
     def project(pointer):
         for prefix in sorted(paths, key=len, reverse=True):
             if pointer == prefix or pointer.startswith(prefix + "/"):

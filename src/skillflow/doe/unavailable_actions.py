@@ -5,6 +5,7 @@ creates an operation record, supplies an argument, or says the action ran.
 """
 from __future__ import annotations
 
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 from functools import lru_cache
 
 from pydantic import TypeAdapter
@@ -64,7 +65,7 @@ class UnavailableDependencies:
         return operations, membership, definitions, precedence_edges(spec)
 
     def has_incomplete_execution(self, ir):
-        return self.index.coverage[ir] != "processed" or ir in self.faults
+        return self.index.coverage[ir] not in RECORDED_COVERAGE or ir in self.faults
 
     def evidence(self, goal, target):
         ir = target.get("instruction_id")
@@ -87,7 +88,7 @@ class UnavailableDependencies:
             points = sorted({self._fault_point(item) for item in row})
             return "Checked propagation reports " + "; ".join(points) + "."
         state = self.index.coverage[ir]
-        if state != "processed":
+        if state not in RECORDED_COVERAGE:
             return f"Checked propagation coverage for this instruction is {state}; no complete occurrence covers the goal."
         return None
 
@@ -248,7 +249,9 @@ class UnavailableDependencies:
                 continue
             for key in sorted(writes):
                 spec = self.engine.ops[key]["spec"]
-                if spec["mode"] != "delete":
+                if spec["op"] == "placeholder":
+                    self.engine._placeholder_inputs(key, wanted, requirement, parent)
+                elif spec["mode"] != "delete":
                     self.engine.input(key, 0, wanted if spec["mode"] == "replace" else need(), requirement,
                                       "declared_unavailable_reaching_write", parent, True)
         for source in self.index.instructions:

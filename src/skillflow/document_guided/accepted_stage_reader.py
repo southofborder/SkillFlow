@@ -16,6 +16,7 @@ _STRATEGIES = {
     "skillflow-document-step-v15": "skillflow-graph-facts-correction-v1",
     "skillflow-document-step-v16": "skillflow-graph-facts-correction-v1",
     "skillflow-document-step-v17": "skillflow-graph-facts-correction-v2",
+    "skillflow-document-step-v18": "skillflow-graph-facts-correction-v3",
 }
 
 
@@ -46,7 +47,7 @@ def accepted_stage_value(owner, manifest, *, source):
     owner = checked_run_path(owner)
     kind, identity = manifest.get("kind"), manifest.get("identity")
     from .graph_steps import FACTS, UPDATES
-    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}
+    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18"}
     kinds = {FACTS, UPDATES} if current else {"cfg_wire_v5"}
     if identity not in _STRATEGIES or kind not in {"flow_document", *kinds}:
         raise ValueError("Unsupported accepted upstream stage protocol")
@@ -59,6 +60,8 @@ def accepted_stage_value(owner, manifest, *, source):
         raise ValueError("Accepted upstream result must have the exact successful result shape")
     from .online import _bind_strategy, _step_context
     context = {"source": source, "files": {"skill/" + row["path"]: row["content"] for row in source["files"]}}
+    if current and identity != "skillflow-document-step-v18":
+        context["archived_graph"] = True
     if kind == UPDATES:
         context = _step_context(owner, manifest)
     strategy = _bind_strategy(kind, context)

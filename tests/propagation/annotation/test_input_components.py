@@ -12,6 +12,45 @@ from tests.propagation.annotation.test_security_runner import setup_run
 from tests.propagation.review.test_runner import ReviewClient
 
 
+@pytest.mark.parametrize(("producer", "version"), [("v11", "v12"), ("v12", "v13")])
+def test_historical_material_checks_producer_task_runtime_and_byte_owner(tmp_path, producer, version):
+    from skillflow.common.recording import canonical_sha256, sha_file
+    from skillflow.common.upstream import make_run_reference
+    from skillflow.document_guided.online import file_reference
+    from skillflow.propagation.annotation.inputs import read_material_parts, resolve_task_owner
+    from skillflow.propagation.contracts.runtime_contract import runtime_contract
+    from skillflow.propagation.material import checked_material
+
+    source_owner, _, _ = setup_run(tmp_path)
+    material = load_prepared_material(source_owner)
+    directory = tmp_path / "historical"
+    inputs = directory / "inputs"
+    inputs.mkdir(parents=True)
+    refs = {"source_owner": make_run_reference(directory, source_owner),
+            "cfg": file_reference(directory, source_owner / "inputs/cfg.json")}
+    (inputs / "references.json").write_text(json.dumps(refs), encoding="utf-8")
+    runtime = runtime_contract(version="skillflow-abstract-runtime-" + version)
+    (inputs / "runtime-contract.json").write_text(json.dumps(runtime), encoding="utf-8")
+    material.update(runtime_contract=runtime, version="security-profile-v24")
+    manifest = {"identity": "skillflow-document-annotation-" + producer, "preparation_status": "ready",
+        "task_run_ref": make_run_reference(directory, resolve_task_owner(source_owner)),
+        "files": {"inputs/" + f.name: sha_file(f) for f in inputs.iterdir()},
+        "material_sha256": canonical_sha256(material)}
+    def publish():
+        (directory / "manifest.json").write_text(json.dumps(
+            {**manifest, "manifest_sha256": canonical_sha256(manifest)}), encoding="utf-8")
+    publish()
+    assert read_material_parts(directory) == load_prepared_material(directory) == material
+    with pytest.raises(ValueError, match="sealed Task"):
+        read_material_parts(directory, task_baseline={})
+    with pytest.raises(ValueError, match="runtime contract identity"):
+        checked_material(material)
+    manifest["identity"] = "skillflow-document-annotation-" + ("v11" if producer == "v12" else "v12")
+    publish()
+    with pytest.raises(ValueError, match="differs from its annotation producer"):
+        load_prepared_material(directory)
+
+
 def test_annotation_source_has_one_byte_owner_and_no_aggregate_material(tmp_path):
     directory, _, _ = setup_run(tmp_path)
     material = load_prepared_material(directory)

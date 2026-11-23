@@ -23,8 +23,10 @@ from .source_input_findings import (
 )
 
 
-VERSION = "skillflow-input-contract-review-v5"
-SOURCE_REVIEW_VERSION = "skillflow-document-source-review-fragment-v8"
+VERSION = "skillflow-input-contract-review-v6"
+SOURCE_REVIEW_VERSION = "skillflow-document-source-review-fragment-v9"
+ARCHIVED_V13_RECEIPT = "skillflow-input-contract-review-v5"
+ARCHIVED_V13_SOURCE_REVIEW = "skillflow-document-source-review-fragment-v8"
 ARCHIVED_SOURCE_REVIEW = "skillflow-document-source-review-fragment-v7"
 ARCHIVED_RECEIPT = "skillflow-input-contract-review-v4"
 
@@ -257,7 +259,7 @@ def _isolation_material(*, files, cfg, annotation, context):
         stage_failures=context["stage_failures"])
 
 
-def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=False):
+def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=False, archived_v13=False):
     binding = _binding(files, cfg, annotation)
     inventory = input_contract_review_inventory(cfg=cfg, raw_annotation=annotation["raw_annotation"],
         compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])
@@ -282,8 +284,9 @@ def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=Fals
                 "fragments": deepcopy(material.get("fragments", {})),
                 "stage_failures": deepcopy(material.get("stage_failures", {}))}
         rebuilt_material = _isolation_material(files=files, cfg=cfg, annotation=annotation, context=context)
-        if archived_v12:
-            rebuilt_material["identity"] = ARCHIVED_SOURCE_REVIEW
+        if archived_v12 or archived_v13:
+            rebuilt_material["identity"] = ARCHIVED_SOURCE_REVIEW if archived_v12 else ARCHIVED_V13_SOURCE_REVIEW
+            rebuilt_material.pop("processing_gap_inventory", None)
         if (material.get("input_contract_binding") != binding
                 or material.get("input_contract_inventory") != inventory
                 or validation.get("binding") != binding):
@@ -293,7 +296,7 @@ def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=Fals
             raise ValueError("Isolated review records, barriers or complete coverage differ from strict revalidation")
         if not validation["diagnostics"]:
             raise ValueError("Partial source review has no recorded validation failure")
-        retained = any(response[name] for name in ("findings", "input_contract_checks", "input_projection_checks", "source_input_findings"))
+        retained = any(response.get(name) for name in ("gap_checks", "findings", "input_contract_checks", "input_projection_checks", "source_input_findings"))
         if (reviewed["status"] == "partial") != retained:
             raise ValueError("Isolated source-review status differs from its independently validated records")
         checks = deepcopy(response["input_contract_checks"])
@@ -305,7 +308,7 @@ def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=Fals
         source_findings = normalize_source_input_findings(candidates, files=files, cfg=cfg,
             raw_annotation=annotation["raw_annotation"], compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])
     if completed:
-        expected_schema = ARCHIVED_SOURCE_REVIEW if archived_v12 else SOURCE_REVIEW_VERSION
+        expected_schema = ARCHIVED_SOURCE_REVIEW if archived_v12 else ARCHIVED_V13_SOURCE_REVIEW if archived_v13 else SOURCE_REVIEW_VERSION
         if response.get("schema_version") != expected_schema or response.get("outcome") != "completed":
             raise ValueError("Input-contract acceptance requires the explicit current source-review protocol")
         if material.get("input_contract_binding") != binding or material.get("input_contract_inventory") != inventory:
@@ -332,9 +335,37 @@ def _build_core(*, files, cfg, annotation, reviewed, material, archived_v12=Fals
         "validation_barriers": deepcopy((validation or {}).get("validation_barriers", [])),
         "blocked_obligation_ids": deepcopy((validation or {}).get("blocked_obligation_ids", [])),
         "blocked_projection_ids": deepcopy((validation or {}).get("blocked_projection_ids", []))}
+    representation_findings = core["findings"]
+    if not archived_v12 and not archived_v13:
+        from skillflow.document_guided.gap_review import check_gaps, gap_inventory
+        core["gap_checks"] = deepcopy(response.get("gap_checks", []))
+        if completed:
+            view_name = material.get("placeholder_review_view")
+            if view_name is None:
+                shown = material.get("annotation")
+                view_name = ("raw_annotation" if shown is not None and shown == annotation.get("raw_annotation")
+                             or not annotation.get("wire_annotation") else "wire_annotation")
+            if view_name not in {"wire_annotation", "raw_annotation"} or not isinstance(annotation.get(view_name), dict):
+                raise ValueError("Placeholder review requires the selected physical annotation view")
+            view = annotation[view_name]
+            if material.get("annotation") is not None and material["annotation"] != view:
+                raise ValueError("Placeholder review representation differs from selected annotation")
+            core["placeholder_review_view"] = view_name
+            rows = gap_inventory({"processing_gaps": annotation["mapping"].get("processing_gaps", view.get("processing_gaps", [])),
+                                  "annotation": view, "cfg": cfg})
+            _, findings, errors = check_gaps(response, rows, files)
+            saved = [{key: val for key, val in f.items() if key != "id"} for f in core["findings"]]
+            if errors or any(finding not in saved for finding in findings):
+                raise ValueError("Whole-instruction or local placeholder source review differs from the selected gaps or is missing its repair finding")
+            # The separate CFG repair uses the enclosing instruction as its
+            # writable address. Its exact defect is the paired placeholder,
+            # whose operation-position finding still goes through both checks.
+            scoped_cfg = [f for f in findings if f["domain"] == "cfg"]
+            representation_findings = [f for f, normalized in zip(core["findings"], saved, strict=True)
+                                       if normalized not in scoped_cfg]
     if not isolated:
-        check_contract_finding_consistency(checks, core["findings"], targets)
-        check_source_input_finding_consistency(source_findings, core["findings"],
+        check_contract_finding_consistency(checks, representation_findings, targets)
+        check_source_input_finding_consistency(source_findings, representation_findings,
                                               mapping=annotation["mapping"], cfg=cfg)
     return core
 
@@ -353,13 +384,13 @@ def _seal_core(core, version):
     return {**value, "receipt_sha256": canonical_sha256(value)}
 
 
-def checked_input_contract_review(value, *, files, cfg, annotation, archived_v12=False):
+def checked_input_contract_review(value, *, files, cfg, annotation, archived_v12=False, archived_v13=False):
     """Recheck saved identity, scope coverage and references without solving."""
     if not isinstance(value, dict):
         raise TypeError("Input-contract review receipt must be an object")
     fields = {"schema_version", "source_sha256", "cfg_sha256", "annotation_sha256", "contracts_sha256", "obligations_sha256",
         "review_sha256", "review_core", "review_status", "source_review_complete", "checks", "receipt_sha256"}
-    version = ARCHIVED_RECEIPT if archived_v12 else VERSION
+    version = ARCHIVED_RECEIPT if archived_v12 else ARCHIVED_V13_RECEIPT if archived_v13 else VERSION
     if set(value) != fields or value.get("schema_version") != version:
         raise ValueError("Unsupported input-contract review receipt")
     if value["receipt_sha256"] != canonical_sha256({key: row for key, row in value.items() if key != "receipt_sha256"}):
@@ -375,10 +406,13 @@ def checked_input_contract_review(value, *, files, cfg, annotation, archived_v12
     response = {"schema_version": core.get("schema_version"), "outcome": "completed", "findings": core.get("findings", []),
         "input_contract_checks": core.get("checks", []), "input_projection_checks": core.get("projection_checks", []),
         "source_input_findings": core.get("source_input_candidates", [])}
-    checked = _build_core(files=files, cfg=cfg, annotation=annotation, archived_v12=archived_v12,
+    if not archived_v12 and not archived_v13:
+        response["gap_checks"] = core.get("gap_checks", [])
+    checked = _build_core(files=files, cfg=cfg, annotation=annotation, archived_v12=archived_v12, archived_v13=archived_v13,
         reviewed={"status": core.get("status"), "availability": core["availability"], "review": response,
                 "validation": core.get("review_validation"), "isolation_context": core.get("isolation_context")},
-        material={"partial": core["partial"], "input_contract_binding": binding, "input_contract_inventory":
+        material={"partial": core["partial"], "placeholder_review_view": core.get("placeholder_review_view"),
+              "input_contract_binding": binding, "input_contract_inventory":
             input_contract_review_inventory(cfg=cfg, raw_annotation=annotation["raw_annotation"],
                 compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])})
     if _seal_core(checked, version) != value:

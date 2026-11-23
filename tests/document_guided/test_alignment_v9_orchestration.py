@@ -25,9 +25,9 @@ def test_new_policy_is_explicit_and_observation_keeps_seven_calls_and_replay(tmp
     harness = Harness(tmp_path / "run")
     harness.prepare(tmp_path / "package")
     manifest = read(harness.directory / "manifest.json")
-    assert manifest["identity"] == "skillflow-document-guided-run-v20"
-    assert STEP_IDENTITY == "skillflow-document-step-v17"
-    assert ANNOTATION_IDENTITY == "skillflow-document-annotation-v12"
+    assert manifest["identity"] == "skillflow-document-guided-run-v21"
+    assert STEP_IDENTITY == "skillflow-document-step-v18"
+    assert ANNOTATION_IDENTITY == "skillflow-document-annotation-v13"
     assert manifest["policy"]["semantic_source_view"] == "complete_frozen_source"
     assert manifest["policy"]["ordinary_write_default"] == "replace"
     assert manifest["policy"]["dispatch_successors"] == "binary"

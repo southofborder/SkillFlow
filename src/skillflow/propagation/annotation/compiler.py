@@ -19,6 +19,7 @@ from skillflow.propagation.contracts.specs import ProcessingSpec
 from skillflow.propagation.contracts.specs import ReadOp
 from skillflow.propagation.contracts.specs import ReceiveOp
 from skillflow.propagation.contracts.specs import MergeOp
+from skillflow.propagation.contracts.specs import PlaceholderOp
 from skillflow.propagation.contracts.specs import LocalRef
 from skillflow.propagation.contracts.specs import AlternativesRef
 from skillflow.propagation.contracts.specs import _validate_ref
@@ -37,7 +38,7 @@ from skillflow.propagation.material import checked_material
 from skillflow.propagation.contracts.profiles import RawAnnotationResponse
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
 
-COMPILER_VERSION = "skillflow-processing-compiler-v15"
+COMPILER_VERSION = "skillflow-processing-compiler-v16"
 
 
 class InternalCompilationError(RuntimeError):
@@ -65,7 +66,7 @@ def compile_response(raw, material):
     compiled.pop("task_revision_id")
     compiled.update(normalized)
     compiled["ir_semantics"] = {}
-    mapping = {"schema_version": "skillflow-processing-compilation-v15",
+    mapping = {"schema_version": "skillflow-processing-compilation-v16",
                "compiler_version": COMPILER_VERSION,
                "runtime_contract": runtime_contract_binding(material["runtime_contract"]),
                "events": [], "goals": goal_mapping(raw, normalized),
@@ -208,7 +209,7 @@ def compile_response(raw, material):
                 for position, op in enumerate(event.atomic_ops):
                     should_observe = segment.mode == "model" or (
                         segment.mode == "default" and op.op in TRANSFORM_OPERATIONS)
-                    if should_observe and not isinstance(op, (ReadOp, ReceiveOp, MergeOp)):
+                    if should_observe and not isinstance(op, (ReadOp, ReceiveOp, MergeOp, PlaceholderOp)):
                         groups = {}
                         for use in value_uses(op):
                             value = external_reference(use.value)

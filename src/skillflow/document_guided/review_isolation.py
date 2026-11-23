@@ -211,7 +211,8 @@ def isolate_source_review(candidate, material):
         else:
             barrier(path, "review_record_" + status, "; ".join(d["message"] for d in ds), locate(table, row))
 
-    extras = set(value) - {"outcome", *TABLES}
+    gap_protocol = "processing_gap_inventory" in material
+    extras = set(value) - {"outcome", *TABLES} - ({"gap_checks"} if gap_protocol else set())
     envelope_ok = value.get("outcome") == "completed" and not extras
     if not envelope_ok:
         failure("" if extras else "/outcome", "envelope", value,
@@ -344,6 +345,17 @@ def isolate_source_review(candidate, material):
     checks = sorted([row for _, row in valid["input_contract_checks"]], key=lambda r: r["obligation_id"])
     projection_checks = [row for _, row in valid["input_projection_checks"]]
     findings = ordinary + repair_findings(checks, projection_checks, material)
+    gap_checks = []
+    if gap_protocol and envelope_ok:
+        from .gap_review import check_gaps
+        gap_checks, gap_findings, gap_errors = check_gaps(value, material["processing_gap_inventory"], material["files"])
+        diagnostics.extend(gap_errors)
+        for i, row in enumerate(value.get("gap_checks", []) if isinstance(value.get("gap_checks"), list) else []):
+            path = f"/gap_checks/{i}"
+            problems = [d for d in gap_errors if d["path"] == path]
+            records.append({"path": path, "status": "invalid" if problems else "validated",
+                            "record_sha256": canonical_sha256(row), "diagnostics": problems})
+        findings.extend(gap_findings)
     if material.get("sensitivity_entry_gaps"):
         from .sensitivity_entries import ingress_gap_rechecks
         findings += ingress_gap_rechecks(material)
@@ -352,6 +364,8 @@ def isolate_source_review(candidate, material):
     review = {"schema_version": material["identity"], "outcome": "completed", "findings": findings,
         "input_contract_checks": checks, "input_projection_checks": projection_checks,
         "source_input_findings": [row for _, row in valid["source_input_findings"]]}
+    if gap_protocol:
+        review["gap_checks"] = gap_checks
     validation = {"schema_version": IDENTITY, "candidate": deepcopy(value), "candidate_sha256": canonical_sha256(value),
         "binding": deepcopy(material["input_contract_binding"]), "inventory": deepcopy(inventory),
         "records": sorted(records, key=lambda r: r["path"]), "diagnostics": diagnostics,

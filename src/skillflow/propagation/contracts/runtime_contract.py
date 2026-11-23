@@ -15,8 +15,10 @@ from typing import Any
 from .abstraction import BOUNDARY_GRANULARITY
 
 
-CONTRACT_VERSION = "skillflow-abstract-runtime-v13"
+CONTRACT_VERSION = "skillflow-abstract-runtime-v14"
 LEGACY_CONTRACT_VERSION = "skillflow-abstract-runtime-v12"
+_SELECTOR_CONTRACT = "skillflow-abstract-runtime-v13"
+_ARCHIVED = (LEGACY_CONTRACT_VERSION, _SELECTOR_CONTRACT)
 
 # Stable evidence IDs. A revised meaning or text requires a new contract version.
 _RULES = (
@@ -94,10 +96,10 @@ _OPERATION_CONTRACT = {
 
 def runtime_contract(*, version=CONTRACT_VERSION) -> dict[str, Any]:
     """Return current rules or the pinned previous rule text for inspection."""
-    if version not in (CONTRACT_VERSION, LEGACY_CONTRACT_VERSION):
+    if version not in (CONTRACT_VERSION, *_ARCHIVED):
         raise ValueError("Unsupported abstract runtime contract version")
     inventory = deepcopy(_OPERATION_CONTRACT)
-    if version == CONTRACT_VERSION:
+    if version != LEGACY_CONTRACT_VERSION:
         inventory["common"]["selectors"] = (
             "A source-backed case guard tests an immutable entry operand and field path using an ordered finite "
             "partition. First matching test wins; the remaining domain is the final outcome. Known fields, scalar "
@@ -107,6 +109,9 @@ def runtime_contract(*, version=CONTRACT_VERSION) -> dict[str, Any]:
             "Keep normal/exception routes, effect occurrences, and decision controls with their source evidence. "
             "An explicit branch can use the same typed selector on its actual operand; case names and prose "
             "cannot prove route compatibility.")
+    if version == CONTRACT_VERSION:
+        inventory["rows"].append(["placeholder", "atomic", "possible inputs", "value or effect",
+            "site, versions, member", "possible influence", "optional weak write; no implied observation or delivery"])
     return {"version": version,
             "rules": [{"id": rule_id, "text": text} for rule_id, text in _RULES],
             "operation_contract": inventory}
@@ -120,7 +125,7 @@ def _sha256(value: Any) -> str:
 
 def validate_runtime_contract(model: Any, *, read_only=False) -> dict[str, Any]:
     """Reject old, altered, or expanded rules; never silently substitute them."""
-    version = LEGACY_CONTRACT_VERSION if read_only and isinstance(model, dict) and model.get("version") == LEGACY_CONTRACT_VERSION else CONTRACT_VERSION
+    version = model["version"] if read_only and isinstance(model, dict) and model.get("version") in _ARCHIVED else CONTRACT_VERSION
     expected = runtime_contract(version=version)
     if (type(model) is not dict or set(model) != {"version", "rules", "operation_contract"}
             or type(model.get("version")) is not str
@@ -142,7 +147,7 @@ def runtime_contract_binding(model: Any, *, read_only=False) -> dict[str, str]:
 
 def validate_runtime_contract_binding(binding: Any, *, read_only=False) -> dict[str, str]:
     """Validate the exact two-field identity of the supported contract."""
-    version = LEGACY_CONTRACT_VERSION if read_only and isinstance(binding, dict) and binding.get("version") == LEGACY_CONTRACT_VERSION else CONTRACT_VERSION
+    version = binding["version"] if read_only and isinstance(binding, dict) and binding.get("version") in _ARCHIVED else CONTRACT_VERSION
     expected = runtime_contract_binding(runtime_contract(version=version), read_only=read_only)
     if (type(binding) is not dict or set(binding) != {"version", "sha256"}
             or any(type(binding[key]) is not str for key in binding)

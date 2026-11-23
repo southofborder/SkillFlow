@@ -46,7 +46,7 @@ def test_bounded_information_requires_scoped_review_origin_and_exact_ancestry():
 
 def result():
     return {
-        "schema_version": "skillflow-demand-v13", "status": "complete",
+        "schema_version": "skillflow-demand-v14", "status": "complete",
         "input_assessments": [], "input_findings": [],
         "input_contract_review_sha256": None,
         "goals": [{"id": "G1", "requirement_id": "R1", "target": {"instruction_id": "send", "side": "input", "index": 0},
@@ -91,7 +91,7 @@ def test_strict_saved_result_preserves_repeated_parameter_positions_and_isolates
 def test_archived_demand_v12_is_read_only_and_never_accepts_selector_proof_fields():
     archived = {**result(), "schema_version": "skillflow-demand-v12"}
     assert validate_result_shape(archived, archived_v12=True) == archived
-    with pytest.raises(ValueError, match="v13"):
+    with pytest.raises(ValueError, match="v14"):
         validate_result_shape(archived)
     with pytest.raises(ValueError, match="v12"):
         validate_result_shape(result(), archived_v12=True)

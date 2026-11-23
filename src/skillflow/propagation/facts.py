@@ -13,13 +13,15 @@ from skillflow.propagation.contracts.boundaries import SinkBoundary, classify_si
 from skillflow.propagation.contracts.compatibility import INTERACTION_EFFECTS, validate_event_operations, validate_operation_boundary
 from skillflow.propagation.contracts.specs import LocationSpec
 from skillflow.propagation.models import FlowLocation, IRFlowRecord, ForEachRecord, AtomicOpRecord
+from skillflow.propagation.models import validate_placeholder_record
 from skillflow.propagation.conditions import payload_inputs, validate_record_consumption, record_consumption_shape
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 Status = Literal["complete", "incomplete", "unsupported_feedback", "resource_limit", "execution_error"]
-Coverage = Literal["processed", "not_reached", "infeasible", "not_solved", "unresolved_binding", "unmodeled", "blocked", "execution_error"]
+Coverage = Literal["processed", "processed_with_placeholder", "not_reached", "infeasible", "not_solved", "unresolved_binding", "unmodeled", "blocked", "execution_error"]
 
 
 class _OperationPosition(_Strict):
@@ -148,7 +150,7 @@ def _validate_locations(locations, instructions):
     return identities
 
 
-def _validate_records(records, instructions, data, declared):
+def _validate_records(records, instructions, data, declared, annotation):
     ids = {item.id for item in data}
     data_index = {item.id: item for item in data}
     result_names = {operand["identifier"] for ir in instructions.values() for operand in ir["outputs"]}
@@ -168,8 +170,12 @@ def _validate_records(records, instructions, data, declared):
         return value_bindings(value.origin.part_of) if value.origin.part_of else {}
 
     from skillflow.propagation.selectors import compatible_bindings, consistent_bindings
+    from skillflow.propagation.selectors import selector_outcomes
 
     for ir_id, record in records.items():
+        spec_events = annotation["ir_semantics"][ir_id]["events"]
+        if len(record.events) != len(spec_events):
+            raise ValueError("evaluated event coverage differs from the instruction")
         if any(record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"])) is None
                for operand in instructions[ir_id]["outputs"]):
             raise ValueError("processed IR is missing a public output binding in its exit state")
@@ -178,7 +184,10 @@ def _validate_records(records, instructions, data, declared):
                 location(binding.location)
                 data_refs(binding.data_ids)
         def effect_events():
-            for event in record.events:
+            for index, event in enumerate(record.events):
+                spec_event = spec_events[index]
+                if (spec_event.get("kind") == "for_each") != isinstance(event, ForEachRecord):
+                    raise ValueError("evaluated event scope differs from the declared event")
                 if isinstance(event, ForEachRecord):
                     data_refs(event.collections)
                     data_refs(event.outputs)
@@ -199,6 +208,8 @@ def _validate_records(records, instructions, data, declared):
                                     raise ValueError("mapped collection output differs from its member yields")
                     body_shape = None
                     for instance in event.instances:
+                        if len(instance.body) != len(spec_event["body"]):
+                            raise ValueError("member event coverage differs from its declaration")
                         shape = [(child.effect, [(record_consumption_shape(op), len(op.outputs),
                             [(endpoint.kind, endpoint.name) for endpoint in op.endpoints])
                             for op in child.atomic_ops]) for child in instance.body]
@@ -210,25 +221,42 @@ def _validate_records(records, instructions, data, declared):
                         data_refs([instance.collection, instance.element])
                         data_refs(instance.yielded)
                         validate_element_membership(data, instance.collection, instance.element)
-                        for child in instance.body:
+                        for body_index, child in enumerate(instance.body):
                             if any(op.op == "write" and not op.may_state for op in child.atomic_ops):
                                 raise ValueError("for_each cannot contain shared-state writes")
-                            yield child
+                            yield child, spec_event["body"][body_index]
                 else:
-                    yield event
+                    yield event, spec_event
 
-        for event in effect_events():
+        for event, spec_event in effect_events():
+            specs = spec_event.get("atomic_ops", [])
+            expected = {i for i, op in enumerate(specs) if op["op"] == "placeholder"}
+            actual = {i for i, op in enumerate(event.atomic_ops) if op.op == "placeholder"}
+            if expected != actual:
+                raise ValueError("placeholder record differs from its declared operation position")
             if event.atomic_ops or event.case is None or event.effect is not None:
                 validate_event_operations(event.effect, [op.op for op in event.atomic_ops])
-            for op in event.atomic_ops:
-                if op.may_state and (op.op != "write" or event.case is None
+            for index, op in enumerate(event.atomic_ops):
+                if op.skipped_case_inputs:
+                    if (event.case is None or event.case.guard is None
+                            or spec_event.get("case") != event.case.model_dump(mode="json")):
+                        raise ValueError("skipped operation requires a case selector")
+                    data_refs(op.skipped_case_inputs)
+                    guard = spec_event["case"]["guard"]
+                    if any(guard["outcome"] in selector_outcomes(data_index, identity, guard) for identity in op.skipped_case_inputs):
+                        raise ValueError("skipped operation has a feasible selector")
+                    continue
+                if op.op == "placeholder":
+                    validate_placeholder_record(op, specs[index], annotation["locations"], data_index)
+                if op.may_state and op.op != "placeholder" and (op.op != "write" or event.case is None
                         or any(endpoint.kind != "runtime_context" for endpoint in op.endpoints)
                         or any(change.update != "weak" for change in op.changes)):
                     raise ValueError("invalid bounded may state summary")
                 validate_record_consumption(op, data=data)
                 if op.when_input_index is not None and event.effect != "model_observe":
                     raise ValueError("conditional delivery must be a compiled model observation")
-                if len(op.outputs) != int(op.op not in {"deliver", "write", "branch"}):
+                expected_output = op.placeholder_kind == "value" if op.op == "placeholder" else op.op not in {"deliver", "write", "branch"}
+                if len(op.outputs) != int(expected_output):
                     raise ValueError("recorded atomic output arity differs from the operation")
                 if ((op.op == "read" and op.inputs)
                         or (op.op == "write" and len(op.inputs) > 1)
@@ -258,7 +286,7 @@ def _validate_records(records, instructions, data, declared):
                         for identity in slot:
                             if not compatible_bindings(alternative.bindings, value_bindings(identity)):
                                 raise ValueError("operation alternative context contradicts its Data binding")
-                if len(op.endpoints) != int(op.op in INTERACTION_EFFECTS):
+                if op.op != "placeholder" and len(op.endpoints) != int(op.op in INTERACTION_EFFECTS):
                     raise ValueError("recorded interaction endpoint arity differs")
                 validate_operation_boundary(op.op, event.effect, op.endpoints[0].kind if op.endpoints else None,
                                             input_count=(None if op.when_input_index is not None and not payload_inputs(op)
@@ -266,8 +294,8 @@ def _validate_records(records, instructions, data, declared):
                 for endpoint in op.endpoints:
                     if (endpoint.kind, endpoint.name) not in declared:
                         raise ValueError("recorded endpoint has no location declaration")
-                if bool(op.changes) != (op.op == "write"):
-                    raise ValueError("only write records contain state changes")
+                if bool(op.changes) != (op.op == "write" or (op.op == "placeholder" and op.may_state)):
+                    raise ValueError("state changes require a declared write")
                 for change in op.changes:
                     location(change.location)
                     data_refs(change.before)
@@ -408,7 +436,7 @@ def declared_boundary_coverage(annotation, sinks, coverage):
     for boundary in annotation["sink_boundaries"]:
         if boundary in sinks:
             status, reason = "resolved", "An actual static operation record resolves this boundary."
-        elif coverage[boundary["instruction_id"]] == "processed":
+        elif coverage[boundary["instruction_id"]] in RECORDED_COVERAGE:
             status, reason = "no_occurrence", "The instruction was evaluated, but this boundary has no active occurrence (for example an empty member scope or false conditional observation)."
         elif coverage[boundary["instruction_id"]] == "infeasible":
             status, reason = "infeasible", "Verified CFG reachability and recorded guards exclude this instruction."
@@ -436,11 +464,12 @@ def validate_propagation_facts(*, cfg, annotation, data, records, sinks, status,
     from skillflow.propagation.contracts.limitations import check_processing_coverage
     check_processing_coverage(graph, payload)
     declared = _validate_locations(payload.locations, instructions)
-    _validate_records(record_values, instructions, data_values, declared)
+    normalized = payload.model_dump(mode="json")
+    _validate_records(record_values, instructions, data_values, declared, normalized)
     checked_sinks = [SinkBoundary.model_validate(item).model_dump(mode="json") for item in sinks]
     if checked_sinks != resolved_sink_boundaries(payload.locations, record_values, _checked_records=True):
         raise ValueError("sink boundaries differ from recorded operations, targets or fixed levels")
-    return _validate_outcome(graph=graph, annotation=payload.model_dump(mode="json"),
+    return _validate_outcome(graph=graph, annotation=normalized,
         data={item.id: item for item in data_values}, records=record_values, sinks=checked_sinks,
         status=status, coverage=coverage, diagnostics=diagnostics)
 
@@ -466,12 +495,17 @@ def _validate_outcome(*, graph, annotation, data, records, sinks, status, covera
         raise ValueError("annotation and coverage must cover all real IRs exactly")
     if set(records) - expected:
         raise ValueError("propagation record refers to an unknown IR")
-    processed = {ir for ir, state in outcome.coverage.items() if state == "processed"}
+    processed = {ir for ir, state in outcome.coverage.items() if state in RECORDED_COVERAGE}
+    placeholders = {ir for ir, state in outcome.coverage.items() if state == "processed_with_placeholder"}
     barriers = unmodeled_ids(annotation)
     if processed & barriers or {ir for ir, state in outcome.coverage.items() if state == "unmodeled"} - barriers:
         raise ValueError("Explicitly unmodeled IRs cannot have evaluated records or fabricated semantics")
     if set(records) != processed:
         raise ValueError("records must match processed coverage exactly")
+    if placeholders != {ir for ir, record in records.items() if record.used_placeholder()}:
+        raise ValueError("placeholder coverage differs from the actually evaluated operations")
+    if placeholders and outcome.status == "complete":
+        raise ValueError("an explicitly approximate operation requires incomplete status")
     from skillflow.propagation.loop_guards import admitted_instructions
     uncertain = {ir for item in result["diagnostics"] for ir in item.get("affected_instruction_ids", [])}
     uncertain.update(item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unresolved_path")
@@ -499,7 +533,7 @@ def _validate_outcome(*, graph, annotation, data, records, sinks, status, covera
         unmodeled_reported = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unmodeled_processing"}
         partial_paths = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "unresolved_path"}
         execution = {item["instruction_id"] for item in result["diagnostics"] if item["code"] == "operation_execution_error"}
-        if (not (missing or unmodeled or partial_paths or execution) or missing != reported or unmodeled != unmodeled_reported
+        if (not (missing or unmodeled or partial_paths or execution or placeholders) or missing != reported or unmodeled != unmodeled_reported
                 or not unmodeled <= barriers):
             raise ValueError("incomplete coverage and unresolved binding diagnostics must agree")
     return result

@@ -1,19 +1,21 @@
 """Evidence-bound revision of processing records against stable CFG identities."""
-from collections import defaultdict
+from collections import Counter, defaultdict
 from copy import deepcopy
 
 from pydantic import ValidationError
 
+from skillflow.common.prompt_format import compact_json
 from skillflow.common.recording import canonical_sha256
-from skillflow.common.source_evidence import _json_object, json_pointer, resolve_pointer
+from skillflow.common.source_evidence import SourceRef, _json_object, json_pointer, resolve_pointer, validate_source_ref
 from skillflow.common.validation import StructuralValidationError, schema_error, structural_error
+from skillflow.propagation.contracts.input_requirements import unspecific_gap_reason
 from skillflow.propagation.contracts.references import cfg_instructions, resolve_cfg_target
 
 from .processing_correction import gap_positions, merge_slots
 
 
-IDENTITY = "skillflow-processing-revision-scope-v2"
-SENSITIVITY_IDENTITY = "skillflow-sensitivity-revision-scope-v2"
+IDENTITY = "skillflow-processing-revision-scope-v3"
+SENSITIVITY_IDENTITY = "skillflow-sensitivity-revision-scope-v3"
 CORRESPONDENCE_IDENTITY = "skillflow-correspondence-revision-scope-v1"
 
 
@@ -68,7 +70,7 @@ def _changed_instructions(old_cfg, new_cfg):
     return changed
 
 
-def _anchored_owner(target, fragment):
+def _anchored_owner(target, fragment, validation_gaps=()):
     for prefix in ("annotation:", "fragment:processing:"):
         if target.startswith(prefix):
             pointer = target[len(prefix):]
@@ -76,7 +78,13 @@ def _anchored_owner(target, fragment):
     else:
         return None
     tokens = pointer.split("/")
-    if len(tokens) < 3 or tokens[1] not in {"ir_semantics", "processing_gaps"}:
+    if len(tokens) < 3:
+        return None
+    if tokens[1] == "_validation_gaps":
+        if tokens[2].isdigit() and int(tokens[2]) < len(validation_gaps):
+            return validation_gaps[int(tokens[2])]["instruction_id"]
+        return None
+    if tokens[1] not in {"ir_semantics", "processing_gaps"}:
         return None
     owner = "/".join(tokens[:3])
     try:
@@ -175,10 +183,22 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
         if finding.get("domain", "annotation") != "annotation" or finding.get("owner", "processing") != "processing":
             continue
         for target in finding["target_ids"]:
-            owner = _anchored_owner(target, prior_processing)
+            owner = _anchored_owner(target, prior_processing, validation_gaps)
             if owner in new:
                 located[owner].append(target)
-                source_rechecks[owner].append({"target_id": target, "source_refs": deepcopy(finding.get("source_refs", []))})
+                check = {"target_id": target, "source_refs": deepcopy(finding.get("source_refs", []))}
+                raw_path = target.split(":/", 1)[-1]
+                located_op = None
+                if "/ops/" in raw_path:
+                    try:
+                        located_op = resolve_pointer(prior_processing, "/" + raw_path)
+                    except (ValueError, TypeError):
+                        pass
+                if isinstance(located_op, dict) and located_op.get("op") == "placeholder":
+                    check["placeholder_operation"] = "/" + raw_path.split("/", 2)[-1]
+                if "placeholder_operation" in check or ":/processing_gaps/" in target or ":/_validation_gaps/" in target:
+                    check.update(challenge=finding.get("explanation"), proposed_change=finding.get("suggestion"))
+                source_rechecks[owner].append(check)
             else:
                 unresolved.append(target)
     previous_gaps = gap_positions(prior_processing)
@@ -220,7 +240,66 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
     return {**plan, "scope_sha256": canonical_sha256(plan)}
 
 
-def merge_processing_revision(previous, scope, response):
+def _new_scoped_declarations(row, slot, owner, path, previous, locations, expressions):
+    if "new_locations" in row or "new_expressions" in row:
+        if slot is None or not isinstance(row.get("modeled"), dict):
+            raise structural_error("processing_declaration_owner", path, "New declarations need an authorized modeled operation.")
+        new_locations = row.pop("new_locations", {})
+        new_expressions = row.pop("new_expressions", [])
+        if not isinstance(new_locations, dict) or not isinstance(new_expressions, list):
+            raise structural_error("processing_declaration_shape", path, "Use a new_locations object and a new_expressions array.")
+        used = {op.get("location", op.get("target")) for op in _operations(row["modeled"])
+                if isinstance(op.get("location", op.get("target")), str)}
+        for name, value in new_locations.items():
+            if (name not in used or name in locations or name in previous.get("locations", {})
+                    or not isinstance(value, dict) or not isinstance(value.get("evidences"), list)
+                    or not any(isinstance(e, dict) and "file" in e for e in value["evidences"])
+                    or not isinstance(value.get("operand_refs", []), list)
+                    or any(not isinstance(ref, dict) or ref.get("instruction_id") != owner for ref in value.get("operand_refs", []))):
+                raise structural_error("processing_declaration_owner", path + "/new_locations",
+                    "Introduce only a new, physically sourced location used within this IR, with operand references in this IR.")
+            locations[name] = value
+        for declaration in new_expressions:
+            target = declaration.get("target") if isinstance(declaration, dict) else None
+            if (not isinstance(target, dict) or target.get("instruction_id") != owner
+                    or any(old.get("target") == target for old in [*previous.get("expressions", []), *expressions])):
+                raise structural_error("processing_declaration_owner", path + "/new_expressions",
+                    "A new expression must have an unused operation target within this IR.")
+            expressions.append(declaration)
+
+
+
+def _retention_evidence(row, slot, owner, path, previous, files, retentions):
+    if row.get("keep") == "unmodeled" and slot is not None and slot["allow_keep"]:
+        retention = row.pop("retention", None)
+        prior = list(slot["unmodeled_gaps"].values())
+        if not isinstance(retention, dict) or set(retention) != {"reason", "affected", "source_refs"}:
+            raise structural_error("processing_gap_retention", path + "/retention",
+                "Keeping a whole-IR gap requires a concrete response to the challenge, its affected scope and physical source_refs.")
+        affected = retention["affected"]
+        if (not isinstance(retention["reason"], str) or not retention["reason"].strip()
+                or unspecific_gap_reason(retention["reason"])
+                or any(retention["reason"].strip() == g["reason"].strip() for g in prior)
+                or not isinstance(affected, dict) or set(affected) != {"outputs", "locations", "control", "effect"}
+                or not isinstance(affected["outputs"], list) or not isinstance(affected["locations"], list)
+                or not all(type(i) is int and 0 <= i < len(slot["instruction"]["outputs"]) for i in affected["outputs"])
+                or not all(isinstance(k, str) and k in previous.get("locations", {}) for k in affected["locations"])
+                or not all(type(affected[k]) is bool for k in ("control", "effect")) or not any(affected.values())
+                or not isinstance(retention["source_refs"], list) or not retention["source_refs"]):
+            raise structural_error("processing_gap_retention", path + "/retention",
+                "Identify the remaining relationship and an affected output, known location, control or effect.")
+        try:
+            for ref in retention["source_refs"]:
+                if files is not None:
+                    validate_source_ref(ref, files)
+                else:
+                    SourceRef.model_validate(ref)
+        except (ValueError, TypeError) as exc:
+            raise structural_error("processing_gap_retention", path + "/retention/source_refs", str(exc)) from exc
+        retentions[owner] = retention
+
+
+def merge_processing_revision(previous, scope, response, *, files=None):
     """Merge exact processing IR updates for a checked semantic revision plan."""
     from .annotation_wire import FlatProcessingGap
     from .fragment_wire import expand_processing_response
@@ -246,7 +325,30 @@ def merge_processing_revision(previous, scope, response):
     # second copy of every other operation, evidence row and contract in the IR.
     # Compile the signed typed edits to the same full rows validated below.
     response = deepcopy(response)
+    locations, expressions, retentions = {}, [], {}
     for index, row in enumerate(response["coverage_slots"]):
+        if isinstance(row, dict):
+            owner = row.get("instruction_id")
+            slot = scope["slots"].get(owner) if isinstance(owner, str) else None
+            path = json_pointer("coverage_slots", index)
+            if "operations" in row:
+                edits = row.pop("operations")
+                if (slot is None or slot["changed_cfg"] or slot["modeled"] is None or "modeled" in row
+                        or row.get("keep") or not isinstance(edits, list) or not edits):
+                    raise structural_error("processing_operation_edits", path, "Supply edits to exact reviewed placeholder positions within one unchanged instruction.")
+                allowed = {check["placeholder_operation"] for check in slot["source_rechecks"] if "placeholder_operation" in check}
+                replacement = deepcopy(slot["modeled"])
+                for edit in edits:
+                    if (not isinstance(edit, dict) or set(edit) != {"path", "value"} or not isinstance(edit["path"], str)
+                            or edit["path"] not in allowed or not isinstance(edit["value"], dict)):
+                        raise structural_error("processing_operation_edits", path + "/operations",
+                            "Replace only a listed placeholder_operation, once, with a complete source-backed operation.")
+                    allowed.remove(edit["path"])
+                    container, pos = edit["path"].rsplit("/", 1)
+                    resolve_pointer(replacement, container)[int(pos)] = deepcopy(edit["value"])
+                row["modeled"] = replacement
+            _new_scoped_declarations(row, slot, owner, path, previous, locations, expressions)
+            _retention_evidence(row, slot, owner, path, previous, files, retentions)
         if isinstance(row, dict) and "attachments" in row:
             pointer = json_pointer("coverage_slots", index)
             ir = row.get("instruction_id")
@@ -275,6 +377,17 @@ def merge_processing_revision(previous, scope, response):
                     "A changed CFG slot or a validation-excluded slot needs an explicit processing record or source-backed unmodeled gap.")
     merged = merge_slots(previous, response, {"candidate_sha256": scope["candidate_sha256"],
         "records": {}, "coverage_slots": scope["slots"], "field_slots": {}}, validate_gap=validate_gap)
+    if locations:
+        merged.setdefault("locations", {}).update(locations)
+    if expressions:
+        merged.setdefault("expressions", []).extend(expressions)
+    for gap in merged.get("processing_gaps", []):
+        retention = retentions.get(gap["instruction_id"])
+        if retention and gap.get("unmodeled"):
+            gap["reason"] += " Revision evidence: " + retention["reason"] + " Affected scope: " + compact_json(retention["affected"])
+            for ref in retention["source_refs"]:
+                if ref not in gap["evidences"]:
+                    gap["evidences"].append(ref)
     seen = {row["instruction_id"] for row in response["coverage_slots"]}
     missing = scope["slots"].keys() - seen
     if missing:
@@ -320,7 +433,7 @@ def _location_uses(processing, cfg):
             uses[ir].add(ref)
             if op["op"] == "read":
                 reads[ir].append(locations[ref])
-            if op["op"] == "write":
+            if op["op"] == "write" or (op["op"] == "placeholder" and op.get("may_write") is True):
                 writes[ir].append(locations[ref])
     for ir, instruction in cfg_instructions(cfg).items():
         for i, operand in enumerate(instruction["inputs"]):
@@ -388,14 +501,17 @@ def sensitivity_scope(old_cfg, new_cfg, old_processing, new_processing, findings
     new = cfg_instructions(new_cfg)
     slots = {ir: {"instruction": deepcopy(new[ir]), "processing": deepcopy(new_specs[ir]),
                   "prior_entry_labels": prior_entry_labels(declarations[ir]),
-                  "prior_entry_gaps": deepcopy(prior_gaps[ir]), "source_rechecks": source_rechecks[ir]}
+                  "prior_entry_gaps": deepcopy(prior_gaps[ir]),
+                  "prior_gap_ids": [canonical_sha256(gap) for gap in prior_gaps[ir]],
+                  "source_rechecks": source_rechecks[ir]}
              for ir in sorted((affected | source_rechecks.keys()) & new_specs.keys())}
     plan = {"identity": SENSITIVITY_IDENTITY, "candidate_sha256": canonical_sha256(prior_sensitivity),
         "entry_catalogue": entry_catalogue(new_cfg, new_processing, owners=slots),
         "old_cfg_sha256": canonical_sha256(old_cfg), "new_cfg_sha256": canonical_sha256(new_cfg),
         "old_processing_sha256": canonical_sha256(old_processing), "new_processing_sha256": canonical_sha256(new_processing),
         "findings_sha256": canonical_sha256(findings), "slots": slots,
-        "removed_instruction_ids": sorted((declarations.keys() | prior_gaps.keys()) - new_specs.keys()),
+        "removed_instruction_ids": sorted((declarations.keys() | prior_gaps.keys()) - new.keys()),
+        "unmodeled_declaration_owners": sorted((declarations.keys() & new.keys()) - new_specs.keys()),
         "unresolved_targets": sorted(set(unresolved))}
     return {**plan, "scope_sha256": canonical_sha256(plan)}
 
@@ -417,24 +533,45 @@ def merge_sensitivity_revision(previous, scope, response, *, files=None):
     slots, updates, gaps = scope["slots"], {}, []
     for index, row in enumerate(response["slots"]):
         path = json_pointer("slots", index)
-        if (not isinstance(row, dict) or set(row) - {"instruction_id", "declarations", "entry_gaps"}
+        if (not isinstance(row, dict) or set(row) - {"instruction_id", "declarations", "entry_gaps", "resolved_entry_gaps"}
                 or not isinstance(row.get("declarations"), list) or "instruction_id" not in row):
             raise structural_error("sensitivity_revision_shape", path, "Each slot requires instruction_id and a declarations array.")
         ir = row["instruction_id"]
         if not isinstance(ir, str) or ir not in slots or ir in updates:
             raise structural_error("sensitivity_revision_identity", path + "/instruction_id", "Use each authorized instruction_id at most once.")
         declarations = row["declarations"]
+        prior = slots[ir]["prior_entry_gaps"]
+        resolved_ids = set()
+        submitted_gaps = row.get("entry_gaps", [])
+        if not isinstance(submitted_gaps, list) or not isinstance(row.get("resolved_entry_gaps", []), list):
+            raise structural_error("ingress_gap_resolution", path, "Entry gaps and gap resolutions must be arrays.")
+        for evidence in row.get("resolved_entry_gaps", []):
+            if (not isinstance(evidence, dict) or set(evidence) != {"gap_sha256", "entry_id", "reason"}
+                    or not isinstance(evidence["reason"], str) or not evidence["reason"].strip()
+                    or not isinstance(evidence["gap_sha256"], str) or not isinstance(evidence["entry_id"], str)
+                    or evidence["gap_sha256"] in resolved_ids
+                    or evidence["gap_sha256"] not in {canonical_sha256(gap) for gap in prior}
+                    or not any(site["instruction_id"] == ir for site in
+                        scope["entry_catalogue"].get(evidence["entry_id"], {}).get("accesses", []))):
+                raise structural_error("ingress_gap_resolution", path + "/resolved_entry_gaps",
+                    "Identify a distinct prior gap by its digest, a current data entry at this instruction and the source relationship.")
+            resolved_ids.add(evidence["gap_sha256"])
+        if resolved_ids & {canonical_sha256(gap) for gap in submitted_gaps}:
+            raise structural_error("ingress_gap_resolution", path, "An entry gap cannot be both retained and resolved.")
+        gaps.extend(deepcopy(gap) for gap in prior if canonical_sha256(gap) not in resolved_ids and gap not in submitted_gaps)
         if files is not None:
             from .sensitivity_entries import resolve_labels
             catalogue = {key: {**entry, "accesses": [site for site in entry["accesses"] if site["instruction_id"] == ir]}
                          for key, entry in scope["entry_catalogue"].items()
                          if any(site["instruction_id"] == ir for site in entry["accesses"])}
             try:
-                resolved = resolve_labels({k:v for k,v in row.items() if k != "instruction_id"}, catalogue, {ir}, files)
+                resolved = resolve_labels({k:v for k,v in row.items() if k in {"declarations", "entry_gaps"}}, catalogue, {ir}, files)
             except StructuralValidationError as error:
                 raise StructuralValidationError([{**d, "path": path + d["path"]} for d in error.diagnostics]) from error
             declarations = resolved["declarations"]
             gaps.extend(resolved.get("entry_gaps", []))
+        else:
+            gaps.extend(deepcopy(submitted_gaps))
         for decl_index, declaration in enumerate(declarations):
             pointer = path + f"/declarations/{decl_index}"
             try:
@@ -455,15 +592,31 @@ def merge_sensitivity_revision(previous, scope, response, *, files=None):
         owner = row["instruction_id"]
         if owner in slots:
             declarations.extend(deepcopy(updates.pop(owner, [])))
-        elif owner not in retired:
+        elif owner not in retired and owner not in scope["unmodeled_declaration_owners"]:
             declarations.append(row)
     for ir in sorted(updates):
         declarations.extend(deepcopy(updates[ir]))
     if declarations or "declarations" in result:
         result["declarations"] = declarations
-    retained_gaps = [g for g in previous.get("entry_gaps", []) if g["instruction_id"] not in slots and g["instruction_id"] not in retired]
-    if gaps or retained_gaps or "entry_gaps" in result:
-        result["entry_gaps"] = [*retained_gaps, *gaps]
+    if gaps or "entry_gaps" in previous:
+        # Rechecked rows keep their original order and multiplicity. Only new
+        # rows have no prior coordinate and go at the end.
+        pending = Counter(canonical_sha256(gap) for gap in gaps)
+        retained = []
+        for gap in previous.get("entry_gaps", []):
+            ir = gap["instruction_id"]
+            key = canonical_sha256(gap)
+            if ir in retired or (ir in slots and not pending[key]):
+                continue
+            retained.append(deepcopy(gap))
+            if ir in slots:
+                pending[key] -= 1
+        for gap in gaps:
+            key = canonical_sha256(gap)
+            if pending[key]:
+                retained.append(gap)
+                pending[key] -= 1
+        result["entry_gaps"] = retained
     return result
 
 

@@ -43,7 +43,8 @@ def evidence():
             "reason": "The offline fixture associates this expression with the frozen source."}
 
 
-def fixture(operations, *, mode="default", returned=None, custom=None, graph_change=None, source_text=None):
+def fixture(operations, *, mode="default", returned=None, custom=None, graph_change=None, source_text=None,
+            expected_status="complete"):
     if source_text is None:
         prepared = material()
     else:
@@ -62,7 +63,7 @@ def fixture(operations, *, mode="default", returned=None, custom=None, graph_cha
     raw["realizations"] = [{"requirement_id": "R", "status": "expressed", "bindings": [], "gaps": []}]
     segment = raw["ir_semantics"]["ir_filter"]["events"][0]
     ev = deepcopy(segment["evidences"])
-    operations = [{**op, "evidences": deepcopy(ev)} for op in operations]
+    operations = [{"evidences": deepcopy(ev), **op} for op in operations]
     segment.update(mode=mode, returns=[] if returned is None else returned)
     segment["events"][0]["atomic_ops"] = operations
     set_operator(raw, prepared, "ir_filter", ["llm"] if mode == "model" else ["agent_runtime"])
@@ -72,7 +73,7 @@ def fixture(operations, *, mode="default", returned=None, custom=None, graph_cha
     checked, compiled, mapping = compile_response(raw, prepared)
     payload = to_payload(compiled)
     solved = propagate(prepared["cfg"], payload)
-    assert solved.status == "complete", solved.diagnostics
+    assert solved.status == expected_status, solved.diagnostics
     metadata = {"files": [{"path": row["path"], "size": len(row["content"].encode()), "kind": "markdown",
                             "raw_sha256": row["sha256"], "decoded_sha256": row["sha256"]}
                            for row in prepared["source"]["files"]],

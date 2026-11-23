@@ -86,7 +86,7 @@ def fixture_annotation(cfg, plans, location_shapes=None, partial_irs=(), *, retu
             "order": "partial" if ir_id in partial_irs else "fixed", "precedence": [],
             "events": [{"effect": effects[index_] if index_ is not None else None,
                         "evidences": [deepcopy(basis)] if index_ is not None else [], "atomic_ops": [
-                {**deepcopy(op), "evidences": [deepcopy(basis)]} for op in ops
+                {"evidences": [deepcopy(basis)], **deepcopy(op)} for op in ops
             ]} for index_, ops in operations],
             "output_bindings": [{"output_index": index_, "value": deepcopy(ref),
                                  "evidences": [deepcopy(basis)]} for index_, ref in enumerate(aliases)],

@@ -36,7 +36,7 @@ def corrected_stage(tmp_path, monkeypatch, *, archived):
     base = build_graph_facts_prompt(files=files, documents={"flow": "Read and return the source value."},
         global_requirements="Preserve source-supported control and data references.")
     owner = harness.directory / "steps/graph"
-    initial = graph_facts_fixture(harness.graph)
+    initial = graph_facts_fixture(harness.graph, archived=bool(archived))
     initial["entry"] = "missing-block"
     calls = []
 
@@ -56,7 +56,9 @@ def corrected_stage(tmp_path, monkeypatch, *, archived):
 
     with monkeypatch.context() as producing:
         if archived:
-            producing.setattr(online, "STEP_IDENTITY", "skillflow-document-step-v15" if archived is True else "skillflow-document-step-v16")
+            version = "v15" if archived is True else archived
+            producing.setattr(online, "STEP_IDENTITY", "skillflow-document-step-" + version)
+        if archived is True or archived == "v16":
             producing.setattr(graph_steps.GraphFactsCorrection, "identity", "skillflow-graph-facts-correction-v1")
             if archived is True:
                 producing.setattr(graph_steps.GraphFactsCorrection, "build_prompt", archived_v15_prompt)
@@ -85,7 +87,7 @@ def forbid_execution(monkeypatch):
     monkeypatch.setattr("skillflow.common.structural_correction.ResponseChain.run", fail)
 
 
-@pytest.mark.parametrize("archived", [True, "v16", False])
+@pytest.mark.parametrize("archived", [True, "v16", "v17", False])
 def test_archived_and_current_graph_correction_displays_are_exact_pure_reads(tmp_path, monkeypatch, archived):
     owner, source, expected = corrected_stage(tmp_path, monkeypatch, archived=archived)
     before = online.inventory(owner)
@@ -95,6 +97,12 @@ def test_archived_and_current_graph_correction_displays_are_exact_pure_reads(tmp
             lambda *args: pytest.fail("The current stage must keep its current renderer"))
     assert accepted_stage_reader.accepted_stage_value(owner, online.read(owner / "manifest.json"), source=source) == expected
     assert online.inventory(owner) == before
+
+
+def test_archived_v17_correction_uses_its_original_graph_facts_schema():
+    from skillflow.document_guided.graph_facts import ARCHIVED_GRAPH_FACTS_SCHEMA
+
+    assert canonical_sha256(ARCHIVED_GRAPH_FACTS_SCHEMA) == "b6cfe0375ff0af931e44ee8bfc27247ff21f8cca7f9278fca3ee99621956fe3b"
 
 
 def test_rehashed_altered_v15_correction_prompt_is_rejected(tmp_path, monkeypatch):

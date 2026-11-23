@@ -37,6 +37,17 @@ class InputInformationRequirement(InformationRequirement):
         return result
 
 
+def unspecific_gap_reason(text):
+    generic = {"opaque", "unknown", "unresolved", "not known", "black box",
+               "blackbox", "opaque computation", "insufficient information",
+               "more information", "review source", "inspect source", "clarify",
+               "resolve ambiguity", "check the source", "check source"}
+    value = text.strip().lower().rstrip(".!")
+    value = re.sub(r"^(?:the|this|an?)\s+", "", value)
+    value = re.sub(r"^(?:computation|operation|function|calculation|implementation)\s+(?:is|remains)\s+", "", value)
+    return value in generic
+
+
 class InputRequirementGap(StrictSpec):
     code: Literal["missing_source", "missing_interface", "ambiguous_semantics",
                   "conflicting_evidence", "unsupported_relation", "unmatched_output"]
@@ -47,16 +58,7 @@ class InputRequirementGap(StrictSpec):
 
     @model_validator(mode="after")
     def concrete_barrier(self):
-        generic = {"opaque", "unknown", "unresolved", "not known", "black box",
-                   "blackbox", "opaque computation", "insufficient information",
-                   "more information", "review source", "inspect source", "clarify",
-                   "resolve ambiguity", "check the source", "check source"}
-        def vague(text):
-            value = text.strip().lower().rstrip(".!")
-            value = re.sub(r"^(?:the|this|an?)\s+", "", value)
-            value = re.sub(r"^(?:computation|operation|function|calculation|implementation)\s+(?:is|remains)\s+", "", value)
-            return value in generic
-        if any(vague(text) for text in (self.reason, self.missing, self.resolution)):
+        if any(unspecific_gap_reason(text) for text in (self.reason, self.missing, self.resolution)):
             raise ValueError("An input-requirement gap must identify the specific missing fact and its resolution; generic opacity is not a reason")
         return self
 

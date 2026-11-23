@@ -278,6 +278,16 @@ def build_graph_facts_prompt(*, files, documents, global_requirements, self_chec
               "Use stable local references to the actual producer and result version; do not use a nearby "
               "replacement value. Identify the entry, each operation's operands and results, and every exit's "
               "target, conditions or return values. An empty list asserts absence; do not use it to hide uncertainty. "
+              "Split the CFG where an action has a different execution condition, collection iteration, exception "
+              "route or externally consumed result version. Actions that run together may share an IR: list its "
+              "source_actions with a stable local ref, concrete kind and physical source lines for each. Include "
+              "the log, invocation, response projection and save when the source has each; processing will bind "
+              "these refs to ordered operations. A single sourced action inherits its ref, opcode and source. "
+              "For a free-text opcode, fill operation.role for a single action, or fill the role on every "
+              "free-text kind in source_actions. An exact canonical kind or opcode supplies its own role. "
+              "Use call for an invocation, receive for an acquisition from a sender, read/write for a resource "
+              "access, deliver for a send, branch or loop for control, value for local data and other for a "
+              "supported action outside those roles. Preserve each known boundary even when its response value is unknown. "
               "Localize unknown required facts, keep other supported facts, and cite exact physical source lines. "
               "Do not include source text as a generated value, blocks of machine-authored CFG structure, or a whole-analysis refusal.\n"
               + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n" + render_prompt_format(GRAPH_FACTS_SCHEMA))
@@ -298,18 +308,27 @@ def _fragment_format(step):
     return output
 
 
-def build_graph_updates_prompt(*, files, plan, archived_v16=False):
+def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False):
     from .graph_slots import GRAPH_UPDATES_SCHEMA
     from .fragment_display import render_fragment_material
     output = "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA)
     if not archived_v16:
-        from .graph_facts import GRAPH_FACTS_SCHEMA
+        from .graph_facts import ARCHIVED_GRAPH_FACTS_SCHEMA, GRAPH_FACTS_SCHEMA
+        action_rule = ("An action addition, removal or move cannot be encoded by a region. Leave that finding open.\n"
+                       if archived_v17 else
+                       "For kind=action_region the value is also a NONEMPTY ARRAY of Block. Editable action "
+                       "refs may be replaced or split; new actions and internal branches/loops cite the supplied "
+                       "finding or replaced action source. Preserve unlisted actions and their ordering on every "
+                       "path. Preserve external entry, result ports, exits, returns and existing constraints. "
+                       "List same-path source_actions for processing. For a single free-text opcode specify role; "
+                       "for a composite specify each free-text action's role. Preserve the known call, receive, "
+                       "read/write, delivery or control role even when a value needs a placeholder. "
+                       "A topology-only region cannot edit actions.\n")
         output += ("\nFor kind=field use the exact value type at slot.path in GraphFacts below. "
             "For kind=region the value is a NONEMPTY ARRAY of Block, e.g. [block], with no enclosing object. "
             "Preserve all original operations in the entry block exactly. Additional blocks contain zero operations. "
             "Preserve source kinds, constraints, frozen boundary, result ports, return values and action effects. "
-            "An action addition, removal or move cannot be encoded by a region. Leave that finding open.\n"
-            + render_prompt_format(GRAPH_FACTS_SCHEMA))
+            + action_rule + render_prompt_format(ARCHIVED_GRAPH_FACTS_SCHEMA if archived_v17 else GRAPH_FACTS_SCHEMA))
     return _render("Supply only the listed, missing or challenged graph facts.",
         render_fragment_material("cfg", {"scope": plan}),
         "Inputs, outputs, conditions and effects at the region boundary are frozen. Check the complete source. "
@@ -331,7 +350,14 @@ def build_processing_revision_prompt(*, files, flow, runtime_contract, scope, gl
         'instruction, return attachments:[{"path":"<copy attachment_pointer>",'
         '"value":<complete typed contract>}]. The program fills the unedited fields from the signed original row '
         'and validates the result. Return exactly one disposition for every required slot. '
-        "Retired IDs and shared declarations are program-owned in this scope. The program keeps other records "
+        "For a challenged placeholder, operations:[{path:<listed placeholder_operation>,value:<complete operation>}] "
+        "edits only that operation and retains all siblings. Its actual source-backed call must include its interface contract. "
+        "A modeled slot may introduce new_locations and new_expressions when its actual operations require them. "
+        "The new location must be referenced by the submitted record and have physical source evidence. "
+        "Existing declarations stay read-only. To keep an unmodeled claim, supply retention:{reason,affected:"
+        "{outputs:[indexes],locations:[IDs],control:boolean,effect:boolean},source_refs:[{file,start_line,end_line}]}. "
+        "Respond to the specific review challenge and explain why that affected portion cannot use precise operations or a placeholder. "
+        "Retired IDs are program-owned in this scope. The program keeps other records "
         "and strictly validates the whole composition. The schema below defines the slot value types; "
         "do not submit the complete fragment. slots.required_attachments lists the required field, operation coordinate "
         "and input count for the retained or rejected shape. Fill every required attachment on modeled operations, "
@@ -349,7 +375,9 @@ def build_sensitivity_revision_prompt(*, files, scope, global_requirements):
         "requires one slot, with [] when it has no source-supported declaration. The program retains "
         "all unrelated declarations. For each slot use only the entries with accesses at that instruction. "
         "Each slot supplies prior_entry_labels and prior_entry_gaps in submission format. Recheck them against "
-        "the current catalogue and source. Copy supported records, correct changed bindings, and supply every "
+        "the current catalogue and source. Prior gaps remain until resolved. To resolve one, include "
+        "resolved_entry_gaps:[{gap_sha256:<prior_gap_id>,entry_id:<current entry at this instruction>,reason:<specific binding>}]. "
+        "Copy supported records, correct changed bindings, and supply every "
         "required field. The declarations array uses entry_id, origin, applicability, label and evidences.\n"
         + _fragment_format("sensitivity"))
 

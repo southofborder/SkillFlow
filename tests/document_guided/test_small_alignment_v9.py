@@ -347,6 +347,22 @@ def test_013_unanchored_cfg_finding_keeps_original_bundle_and_finishes_doe(tmp_p
             edge["target_block_id"] = "retry"
     before_wire["ir_semantics"].pop("ir_transient_guard")
     before_wire["ir_semantics"]["ir_first_guard"]["segments"][0]["ops"][0]["false_target"] = "retry"
+    # The chosen failed attempts emit a genuine request, then acquire a
+    # different protected exception channel. A successful response was never
+    # received from fast.fetch at these two sites.
+    from skillflow.propagation.contracts.specs import RawIRSemantics, flatten_raw_spec
+    from skillflow.propagation.contracts.uses import request_pairs
+    lowered = compile_flat_response(before_wire, before_material)[1]
+    failures = {"fast": (9, 10), "retry": (10, 11)}
+    for opcode in failures:
+        ir = "ir_" + opcode
+        assert not request_pairs(flatten_raw_spec(RawIRSemantics.model_validate(lowered["ir_semantics"][ir])))
+        record = before_wire["ir_semantics"][ir]
+        request, exception = record["segments"][0]["ops"]
+        assert request["op"] == "deliver" and exception["op"] == "receive"
+        assert request["target"] == "fast" and exception["location"] == opcode + "_error"
+        record["action_bindings"] = {"attempt": [["segments", 0, "ops", 0]],
+            "failure_outcome": [["segments", 0, "ops", 1], *[["output_bindings", i] for i in range(len(record["output_bindings"]))]]}
     initial_graph, initial_wire = _guided_fixture(before_material, before_wire)
 
     class FallbackHarness(Harness):
@@ -364,6 +380,15 @@ def test_013_unanchored_cfg_finding_keeps_original_bundle_and_finishes_doe(tmp_p
 
         def complete(self, stage, prompt):
             answer = super().complete(stage, prompt)
+            if stage == "graph":
+                for block in answer["blocks"]:
+                    for op in block["operations"]:
+                        if op["opcode"] in failures:
+                            send_line, error_line = failures[op["opcode"]]
+                            del op["role"]
+                            op["source_actions"] = [
+                                {"ref":"attempt", "kind":"deliver", "source":{"file":"skill/SKILL.md","start_line":send_line,"end_line":send_line}},
+                                {"ref":"failure_outcome", "kind":"receive", "source":{"file":"skill/SKILL.md","start_line":error_line,"end_line":error_line}}]
             if stage == "sensitivity":
                 from skillflow.document_guided.fragment_display import fragment_prompt_parts
                 entries = fragment_prompt_parts(prompt)[1]["entry_catalogue"]

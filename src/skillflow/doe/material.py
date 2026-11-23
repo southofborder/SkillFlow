@@ -438,6 +438,8 @@ class _Index:
         record = self.operations[operation_id]["record"]
         values = {value for change in record["changes"]
                   if _location(change["location"]) == location for value in change["after"]}
+        if record["op"] == "placeholder":
+            return values.intersection(record.get("possible_writes", []))
         if record.get("may_state"):
             # Supported may-state operations are replacements. Their after set
             # is old union new; only the actual payload belongs to this write.

@@ -322,7 +322,7 @@ def test_conditional_member_observation_and_control_use_share_guard():
     assert observations[1]["inputs"] == [{"kind": "input", "index": 0}]
     assert observations[1]["when"] == {"kind": "literal", "value": False}
     assert atoms[-1]["parts"][0]["when"] == observations[1]["when"]
-    assert mapping["compiler_version"] == "skillflow-processing-compiler-v15"
+    assert mapping["compiler_version"] == "skillflow-processing-compiler-v16"
     assert compile_response(checked, prepared)[1:] == (compiled, mapping)
 
 

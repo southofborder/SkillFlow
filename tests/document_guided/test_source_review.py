@@ -255,7 +255,8 @@ def test_fragment_review_partial_gaps_are_not_unknown_as_safe_and_replay_zero_ca
     gap = {"instruction_id": "ir_001", "reason": "The result's internal member acquisition is not represented.",
         "evidences": [{"file": "skill/SKILL.md", "start_line": 1, "end_line": 1}], "unmodeled": True}
     args = {"files": files, "task": task, "cfg": cfg, "generation": "fragment-v1", "processing_gaps": [gap]}
-    client = Client({"outcome": "completed", "input_contract_checks": [], "input_projection_checks": [], "source_input_findings": [], "findings": []})
+    from tests.doe.input_review_helpers import source_review_response
+    client = Client(source_review_response(prepare_review_material(**args), []))
     result = run_source_review(tmp_path, **args, client=client)
     assert result["status"] == "complete" and result["diagnostic_only"]
     assert result["availability"] == {"task": True, "cfg": True, "annotation": False,

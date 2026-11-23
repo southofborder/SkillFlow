@@ -128,12 +128,16 @@ class FragmentSourceFinding(ArchivedFragmentSourceFinding):
         return self
 
 
+from .gap_review import GapCheck, gap_inventory
+
+
 class CompletedFragmentSourceReview(StrictRecord):
     outcome: Literal["completed"]
     findings: list[FragmentSourceFinding]
     input_contract_checks: list[InputContractCheck]
     input_projection_checks: list[InputScopeCheck]
     source_input_findings: list[SourceInputFindingCandidate]
+    gap_checks: list[GapCheck] = Field(default_factory=list)
 
 
 FRAGMENT_RESPONSE_ADAPTER = TypeAdapter(CompletedFragmentSourceReview)
@@ -200,7 +204,7 @@ def _target_index(collections, fragment_origins=None, fragments=None, failures=N
     return targets
 
 
-def _observations(annotation, compiled, mapping):
+def _observations(annotation, compiled, mapping, *, raw_view=False):
     if annotation is None or compiled is None or mapping is None:
         return []
     result = []
@@ -213,7 +217,10 @@ def _observations(annotation, compiled, mapping):
         operation = event["atomic_ops"][0]
         location = compiled["locations"][operation["target"]]
         wire_path = item.get("wire_path")
-        if wire_path is None:
+        if raw_view:
+            wire_pointer = json_pointer(*item["raw_path"])
+            resolve_pointer(annotation, wire_pointer)
+        elif wire_path is None:
             wire_pointer = mapping.get("wire_paths", {}).get(json_pointer(*item["raw_path"]))
             if wire_pointer is None:
                 raise ValueError("Compiler observation has no actual wire coordinate")
@@ -250,9 +257,12 @@ def prepare_review_material(*, files, task=None, cfg=None, annotation=None, raw_
     cfg = None if cfg is None else checked_cfg(cfg)
     for value in (annotation, raw_annotation, compiled, mapping, runtime_contract, stage_failures, processing_gaps, fragments):
         _require_json(value, "")
+    if (generation == "fragment-v1" and annotation is None and raw_annotation is not None
+            and cfg is not None and task is not None):
+        annotation = raw_annotation
     if annotation is not None and (cfg is None or task is None or not isinstance(annotation, dict)):
         raise ValueError("An actual annotation requires its Task and CFG")
-    observations = _observations(annotation, compiled, mapping)
+    observations = _observations(annotation, compiled, mapping, raw_view=raw_annotation is not None and annotation == raw_annotation)
     collections = {"task": task, "cfg": cfg, "annotation": deepcopy(annotation),
                    "observations": observations}
     failures = {}
@@ -296,6 +306,7 @@ def prepare_review_material(*, files, task=None, cfg=None, annotation=None, raw_
     if generation == "fragment-v1":
         result.update(generation=generation, processing_gaps=gaps, partial=partial or bool(gaps),
                       fragment_origins=saved_origins, fragments=actual_fragments)
+        result["processing_gap_inventory"] = gap_inventory(result)
         entry_gaps = deepcopy((mapping or {}).get("sensitivity_entry_gaps",
             actual_fragments.get("sensitivity", {}).get("entry_gaps", [])))
         if entry_gaps:
@@ -494,6 +505,18 @@ def build_source_review_prompt(material):
                        failed_stage_targets=deepcopy(expected_stages),
                        input_contract_inventory=compact_review_inventory(material["input_contract_inventory"],
                            material["input_contract_obligation_targets"]))
+        if material.get("processing_gap_inventory"):
+            payload["processing_gap_inventory"] = deepcopy(material["processing_gap_inventory"])
+            instructions += ("\nReturn gap_checks with one source-backed decision for each processing_gap_inventory ID. "
+                "Specify gap_id, disposition (retain or decompose), reason, affected scope and physical source_refs. "
+                "A retain decision must explain which relation prevents a local value/effect placeholder or exact operation. "
+                "For decompose, give supported_action: the representable operation, boundary, or local placeholder to preserve. "
+                "For each kind=placeholder row independently inspect its physical source. Supply masked_boundary "
+                "(none/call/receive/read/write/deliver/branch/loop) and cfg_action_missing (boolean). When the "
+                "placeholder replaces a known call, response, read, write or other boundary, choose decompose and "
+                "give its actual interface, receiver, scope and operation. Flag missing or mislabeled CFG actions "
+                "even if processing follows the declared CFG role. A separate unknown local/log effect alongside "
+                "a faithfully represented boundary may be retained with masked_boundary=none and its evidence.\n")
         instructions = instructions.replace(
             "barrier; report cannot_assess only for a concrete necessary judgment that the\n"
             "available material cannot support.",
@@ -516,6 +539,11 @@ def build_source_review_prompt(material):
             "not a fabricated candidate; a finding there needs original source_refs and a concrete "
             "source-supported semantic omission or defect. Do not repeat its mechanical failure, "
             "request another sample merely because it failed, or treat unavailable claims as reviewed.\n")
+        instructions += ("\nCheck source-action coverage against each ordered CFG inventory and the bound processing coordinates. "
+            "Check the action kind, actual operands, produced values, output links, order on the same control path, "
+            "and effects. Cite the distinct missing or mismatched action at an editable CFG or processing target. "
+            "For an inherited graph lacking an inventory, compare the instruction span and complete original source, "
+            "including calls, state writes, outputs, control and exceptional boundaries.\n")
         instructions += "\n" + FAILED_STAGE_GUIDANCE
         instructions += ("\nINPUT CONTRACT AUDIT\n"
             "Return input_contract_checks with exactly one check per expected obligation_id and its exact contract_id (null for an absent attachment), even when findings is empty. "
@@ -744,8 +772,8 @@ def _retain_after_delivery_failure(directory, chain, material):
                 "response_sha256": canonical_sha256(response), "validation_sha256": canonical_sha256(old_validation)}):
         raise ValueError("Retained source review does not match the immutable prior answer and failed correction")
     isolated = isolate_source_review(candidate, material)
-    if not any(isolated["review"][name] for name in (
-            "findings", "input_contract_checks", "input_projection_checks", "source_input_findings")):
+    if not any(isolated["review"].get(name) for name in (
+            "gap_checks", "findings", "input_contract_checks", "input_projection_checks", "source_input_findings")):
         return None
     proof = {"identity": "skillflow-review-delivery-retention-v1",
         "material_sha256": canonical_sha256(material), "candidate_sha256": canonical_sha256(candidate),
@@ -838,8 +866,8 @@ def run_source_review(directory, *, files, task=None, cfg=None, annotation=None,
                     pass
                 else:
                     isolated = isolate_source_review(terminal, material)
-                    retained = any(isolated["review"][name] for name in (
-                        "findings", "input_contract_checks", "input_projection_checks", "source_input_findings"))
+                    retained = any(isolated["review"].get(name) for name in (
+                        "gap_checks", "findings", "input_contract_checks", "input_projection_checks", "source_input_findings"))
                     result.update(status="partial" if retained else "structural_failure", **isolated)
                     result["objections"] = task_objections(result["review"])
         except SemanticFailure as error:

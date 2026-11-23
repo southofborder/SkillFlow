@@ -6,6 +6,7 @@ they neither execute a reduced Skill nor establish global irreplacability.
 """
 from __future__ import annotations
 
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 from collections import defaultdict, deque
 from copy import deepcopy
 
@@ -92,8 +93,8 @@ def _below(exclusions, path):
 
 
 class DemandEngine:
-    def __init__(self, facts, task, annotation, candidate, targets, *, input_contract_review=None, archived_v12=False):
-        self._archive_validation = archived_v12
+    def __init__(self, facts, task, annotation, candidate, targets, *, input_contract_review=None, archived_v12=False, archived_v13=False):
+        self._archive_validation = archived_v12 or archived_v13
         self.facts, self.task, self.annotation = facts, task, annotation
         self.candidate, self.targets = candidate, targets
         self.index = _Index(facts)
@@ -129,7 +130,7 @@ class DemandEngine:
         from .unavailable_actions import UnavailableDependencies
         self.unavailable_dependencies = UnavailableDependencies(self)
         from .input_contracts import InputContracts
-        self.contracts = InputContracts(self, input_contract_review, archived_v12=archived_v12)
+        self.contracts = InputContracts(self, input_contract_review, archived_v12=archived_v12, archived_v13=archived_v13)
         from .source_input_findings import SourceInputMismatchIndex
         self.source_input_mismatches = SourceInputMismatchIndex(self.contracts.receipt)
         from .review_barriers import ReviewValidationBarriers
@@ -324,6 +325,20 @@ class DemandEngine:
                            "input_contract_gap:" + diagnostic, parent, True,
                            information_bound=gap["information_bound"])
         return result
+
+    def _placeholder_inputs(self, operation, demand, requirement, parent):
+        """An unknown relation may use its declared operands only at this occurrence."""
+        info = self.ops[operation]
+        spec = info["spec"]
+        ir = info["position"]["instruction_id"]
+        reason = (f"The {spec['kind']} placeholder at {ir} has no established transfer for "
+                  f"{demand['property']} at {demand['path']}. {spec['reason']} "
+                  f"Source evidence: {spec['evidences']}. Resolve this operation's transfer "
+                  "for the selected output or effect and its declared inputs.")
+        diagnostic = self.diagnostic("input_contract_placeholder", reason, ir, requirement,
+                                     operation, affected=[ir])
+        for slot in self.slots(operation):
+            self.input(operation, slot, need(), requirement, "input_contract_gap:" + diagnostic, parent, True)
 
     def _review_validation_errors(self, key, node, information, requirement, conservative):
         """Retain affected real inputs without treating invalid findings as facts."""
@@ -663,7 +678,8 @@ class DemandEngine:
                     info = self.ops[key]
                     if prop == "action":
                         action = self.node("action", ir=ir, op=key)
-                        self.emit(action, need("action"), req, "task_action")
+                        self.emit(action, need("action"), req, "task_action",
+                                  conservative=info["spec"]["op"] == "placeholder")
                         continue
                     if target["kind"] == "local_output" or target["kind"] == "operation":
                         node = self.node_at("op_output", ir, key, 0)
@@ -705,6 +721,13 @@ class DemandEngine:
                 self.bound_goals.add(req)
             elif prop == "action" and ir:
                 self.emit(self.node("action", ir=ir), n, req, "task_action")
+                for op_key in self.index.ir_operations.get(ir, []):
+                    info = self.ops[op_key]
+                    op = info["spec"]
+                    possible = op["op"] == "placeholder" and op["kind"] == "effect"
+                    if possible or (not info["generated"] and op["op"] in {"deliver", "receive", "read", "write"}):
+                        self.emit(self.node("action", ir=ir, op=op_key), n, req,
+                                  "task_action", conservative=possible)
                 self.bound_goals.add(req)
             else:
                 self.diagnostic("unbound_goal", "The selected target cannot carry this executable preservation property.", ir, req)
@@ -899,7 +922,10 @@ class DemandEngine:
                 for location in locations:
                     for write in self.index.entry_writes.get(ir, {}).get(location, set()):
                         info = self.ops[write]
-                        if info["spec"]["mode"] != "delete":
+                        if info["spec"]["op"] == "placeholder":
+                            if self.index.written_values(write, location).intersection(meta["data_ids"]):
+                                self._placeholder_inputs(write, n, req, key)
+                        elif info["spec"]["mode"] != "delete":
                             stored = self.index.written_values(write, location)
                             if not stored.intersection(meta["data_ids"]):
                                 continue
@@ -938,7 +964,9 @@ class DemandEngine:
                 info = self.ops[op_key]
                 contract = self.contracts.entry(op_key)
                 boundary = self.compiled["locations"].get(info["spec"].get("target"), {})
-                if contract is not None:
+                if info["spec"]["op"] == "placeholder":
+                    self._placeholder_inputs(op_key, n, req, key)
+                elif contract is not None:
                     self._contract_transfer(op_key, need() if contract["kind"] == "compute" else need("action"), req, key, conservative)
                 elif (info["spec"]["op"] == "deliver" and not info["generated"]
                       and boundary.get("kind") in {"tool", "remote"} and self.slots(op_key)):
@@ -954,7 +982,7 @@ class DemandEngine:
             ref, role = self.slots(op_key)[meta["slot"]]
             for source in self.resolve(ref, ir, scope):
                 self.emit(source, n, req, "actual_operand", key, conservative)
-                if not info["generated"] and info["mode"] != "local":
+                if info["spec"]["op"] != "placeholder" and not info["generated"] and info["mode"] != "local":
                     self._observe(source, ir, scope, info["segment"], n, req, key, conservative)
             # Retain an observation's guard separately from its payload.
             if info["spec"].get("when") is not None and role != "control":
@@ -968,7 +996,9 @@ class DemandEngine:
         op = info["spec"]
         operation = op["op"]
         expression = self.expressions.get((ir, info["raw_op"]))
-        if operation == "merge":
+        if operation == "placeholder":
+            self._placeholder_inputs(op_key, n, req, key)
+        elif operation == "merge":
             for slot in self.slots(op_key):
                 if info["record"]["inputs"][slot]:
                     self.input(op_key, slot, n, req, "incoming_value", key, conservative)
@@ -1029,6 +1059,9 @@ class DemandEngine:
             for link in self.index.links.values():
                 if link["kind"] == "saved_read" and link["target"] == op_key:
                     write = link["source"]
+                    if self.ops[write]["spec"]["op"] == "placeholder":
+                        self._placeholder_inputs(write, n, req, key)
+                        continue
                     mode = self.ops[write]["spec"]["mode"]
                     if mode == "append":
                         self.input(write, 0, need(), req, "append_dependency", key, True)
@@ -1120,7 +1153,7 @@ class DemandEngine:
             self.diagnostic("upstream_diagnostic", d.get("reason", str(d)), d.get("instruction_id"),
                             affected=d.get("affected_instruction_ids"))
         for ir, state in self.index.coverage.items():
-            if state not in {"processed", "infeasible"}:
+            if state != "infeasible" and state not in RECORDED_COVERAGE:
                 self.diagnostic("upstream_coverage", "Upstream propagation has not established this instruction's execution; coverage: " + state + ".", ir)
         impacts = processing_impacts(self.index.cfg, self.compiled)
         for gap in self.compiled.get("processing_gaps", []):
@@ -1136,7 +1169,7 @@ class DemandEngine:
         from skillflow.propagation.facts import declared_boundary_coverage
         unresolved = [row["boundary"] for row in declared_boundary_coverage(self.compiled, self.index.sinks, self.index.coverage)
                       if row["status"] == "unresolved"]
-        return {"schema_version": "skillflow-demand-v13",
+        return {"schema_version": "skillflow-demand-v14",
                 "status": "partial" if any(d["blocking"] for d in self.diagnostics.values()) else "complete",
                 "goals": deepcopy(self.candidate["goals"]),
                 "traceability": self._traceability(),

@@ -10,7 +10,7 @@ from skillflow.doe.input_assessments import deletable_reduction
 from skillflow.propagation.contracts.demand import validate_demand_candidate
 from skillflow.propagation.contracts.joint import joint_source_files
 from tests.doe.test_demand_engine import fixture, inp, local, literal, evidence, candidate
-from tests.doe.input_review_helpers import checks_for_inventory, projection_checks
+from tests.doe.input_review_helpers import checks_for_inventory, projection_checks, retained_gap_checks
 
 
 def row(index, *paths, gap=None):
@@ -45,11 +45,16 @@ def receipt(values, *, status="accepted", partial=False):
              if entries else [{"file": next(iter(files)), "start_line": 1, "end_line": 1,
                                 "reason": "The synthetic source defines the represented operation."}])
     checks = checks_for_inventory(inventory, cited, status=status)
+    from skillflow.document_guided.gap_review import gap_inventory
+    physical = annotation.get("wire_annotation") or annotation["raw_annotation"]
+    gaps = gap_inventory({"cfg": facts.cfg, "annotation": physical,
+                          "processing_gaps": annotation["compiled_annotation"].get("processing_gaps", [])})
     material = {"partial": partial, "input_contract_inventory": inventory, "input_contract_binding": input_contract_binding(files=files,
         cfg=facts.cfg, task=annotation["task"], raw_annotation=annotation["raw_annotation"],
         compiled=annotation["compiled_annotation"], mapping=annotation["mapping"])}
     review = {"status": "complete", "availability": {"task": True, "cfg": True, "annotation": True},
               "review": {"schema_version": SOURCE_REVIEW_VERSION, "outcome": "completed",
+                         **retained_gap_checks({"processing_gap_inventory": gaps}, cited),
                          "findings": [], "input_contract_checks": checks,
                          "input_projection_checks": projection_checks(inventory, cited), "source_input_findings": []}}
     return build_input_contract_review(files=files, cfg=facts.cfg, annotation=annotation,

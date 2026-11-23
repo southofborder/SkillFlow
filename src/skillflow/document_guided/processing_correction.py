@@ -8,7 +8,7 @@ from skillflow.common.source_evidence import json_pointer, resolve_pointer
 from skillflow.common.validation import structural_error
 
 
-VERSION = "finite-processing-slots-v2"
+VERSION = "finite-processing-slots-v3"
 
 
 def gap_positions(value):
@@ -64,6 +64,10 @@ def _field_slot(candidate, owner, row):
         row["code"] == "validate_ref" and re.fullmatch(r"/output_bindings/\d+/value", relative)
         or row["code"] == "mechanism_evidence_reference" and path.endswith("/evidences")
         or row["code"] == "input_contract_required" and path.endswith(("/input_contract", "/demand_transfer"))
+        or row["code"] in {"source_action_order", "source_action_binding", "source_action_role"} and relative == "/action_bindings"
+        or row["code"] == "schema" and re.search(r"/ops/\d+(?:/|$)", relative)
+            and row.get("context", {}).get("type") != "extra_forbidden"
+        or row["code"] == "source_action_inventory" and relative == "/source_actions"
     )
     if not local_field:
         return None
@@ -72,6 +76,8 @@ def _field_slot(candidate, owner, row):
         container = resolve_pointer(candidate, parent)
     except ValueError:
         return None
+    if isinstance(container, list) and name.isdigit() and int(name) < len(container):
+        return {"record_id": owner, "present": True, "value": container[int(name)]}
     if not isinstance(container, dict):
         return None
     slot = {"record_id": owner, "present": name in container}
@@ -101,14 +107,30 @@ def correction_scope(candidate, diagnostics, records):
                 scoped[ir] = {"problem": slot["problem"], "modeled": specs.get(ir),
                     "unmodeled_gaps": {pointer: records[pointer] for pointer in gap_paths}}
                 reserved.update([row["path"], *gap_paths])
-    selected, field_slots, read_only = {}, {}, {}
+    selected, field_slots, insertions, read_only = {}, {}, {}, {}
+    def insertion_points(segments, path):
+        yield path
+        for index, item in enumerate(segments):
+            if not isinstance(item, dict):
+                continue
+            base = f"{path}/{index}"
+            if item.get("kind", "processing") == "processing":
+                yield base + "/ops"
+            for j, case in enumerate(item.get("cases", [])):
+                yield from insertion_points(case.get("segments", []), f"{base}/cases/{j}/segments")
+            if "body" in item:
+                yield from insertion_points(item["body"], base + "/body")
     for key, value in records.items():
         if key in reserved:
             continue
         owned = [row for row in diagnostics if _owns(key, row["path"])]
         if not owned:
             continue
-        fields = {row["path"]: _field_slot(candidate, key, row) for row in owned}
+        # A legacy instruction with no independent action manifest reports its
+        # missing role on segments. That array permits insertions or replacing
+        # one implicated placeholder, never a bulk overwrite of valid siblings.
+        fields = {row["path"]: _field_slot(candidate, key, row) for row in owned
+                  if not (row["code"] == "source_action_role" and row["path"] == key + "/segments")}
         if all(slot is not None for slot in fields.values()):
             field_slots.update(fields)
             # If the required local has no producer the binding leaf alone
@@ -121,11 +143,20 @@ def correction_scope(candidate, diagnostics, records):
             if missing_producer and isinstance(value, dict) and isinstance(value.get("segments"), list):
                 field_slots[key + "/segments"] = {"record_id": key, "present": True,
                     "value": value["segments"], "purpose": "Define or select the missing source-backed local producer inside this IR."}
+            for row in owned:
+                if row["code"] == "source_action_role":
+                    for suffix in row.get("context", {}).get("placeholder_operations", []):
+                        pointer = key + suffix
+                        field_slots[pointer] = {"record_id": key, "present": True,
+                                                "value": resolve_pointer(candidate, pointer)}
+            if any(row["code"] in {"source_action_binding", "source_action_role"} for row in owned):
+                for path in insertion_points(value.get("segments", []), key + "/segments"):
+                    insertions[path] = key
             read_only[key] = value
         else:
             selected[key] = value
     return {"candidate_sha256": canonical_sha256(candidate), "records": selected,
-        "coverage_slots": scoped, "field_slots": field_slots, "read_only_records": read_only}
+        "coverage_slots": scoped, "field_slots": field_slots, "read_only_records": read_only, "insertion_points": insertions}
 
 
 def remove_coverage_claims(candidate, instruction_ids):
@@ -147,7 +178,7 @@ def merge_slots(candidate, correction, scope, *, validate_gap):
     """Apply typed occurrence changes; the caller still validates the whole result."""
     records, slots, field_slots = scope["records"], scope["coverage_slots"], scope["field_slots"]
     if (canonical_sha256(candidate) != scope["candidate_sha256"]
-            or not correction or not set(correction) <= {"replacements", "coverage_slots", "fields"}):
+            or not correction or not set(correction) <= {"replacements", "coverage_slots", "fields", "insertions"}):
         raise structural_error("processing_correction_scope", "", "Return only authorized corrections for the exact prior candidate.")
     for key in correction:
         if not isinstance(correction[key], list):
@@ -181,7 +212,27 @@ def merge_slots(candidate, correction, scope, *, validate_gap):
                 "Use each authorized field path at most once.")
         seen.add(path)
         parent, name = path.rsplit("/", 1)
-        resolve_pointer(result, parent)[name] = deepcopy(row["value"])
+        container = resolve_pointer(result, parent)
+        container[int(name) if isinstance(container, list) else name.replace("~1", "/").replace("~0", "~")] = deepcopy(row["value"])
+    # Indices are coordinates in the immutable candidate. Work backwards so
+    # old operations keep their order even when several actions are inserted.
+    additions = []
+    for i, patch in enumerate(correction.get("insertions", [])):
+        if not isinstance(patch, dict) or set(patch) != {"path", "index", "values"}:
+            raise structural_error("processing_insertion", f"/insertions/{i}", "Supply an authorized array path, original index and nonempty values.")
+        path, index, values = patch["path"], patch["index"], patch["values"]
+        if (not isinstance(path, str) or path not in scope.get("insertion_points", {}) or type(index) is not int
+                or not isinstance(values, list) or not values or not all(isinstance(v, dict) for v in values)
+                or (path, index) in seen):
+            raise structural_error("processing_insertion", f"/insertions/{i}", "Use distinct authorized insertion coordinates.")
+        parent, field = path.rsplit("/", 1)
+        target = resolve_pointer(result, parent).setdefault(field, [])
+        if not 0 <= index <= len(target):
+            raise structural_error("processing_insertion", f"/insertions/{i}/index", "Index is outside the original array.")
+        seen.add((path, index))
+        additions.append((target, index, values, path))
+    for target, index, values, _ in sorted(additions, key=lambda change: change[1], reverse=True):
+        target[index:index] = deepcopy(values)
     supplied, replacements, keep_modeled, keep_unmodeled = set(), [], set(), set()
     for index, row in enumerate(correction.get("coverage_slots", [])):
         pointer = json_pointer("coverage_slots", index)

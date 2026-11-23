@@ -18,7 +18,7 @@ EFFECT_BOUNDARIES = {
     "net_send": {"remote"}, "net_receive": {"remote"},
     "model_observe": {"model_context"}, "user_output": {"user"},
 }
-TRANSFORM_OPERATIONS = {"select_part", "exclude_parts", "update_fields", "build", "compute", "filter_items", "merge", "member", "append"}
+TRANSFORM_OPERATIONS = {"select_part", "exclude_parts", "update_fields", "build", "compute", "placeholder", "filter_items", "merge", "member", "append"}
 
 
 def validate_event_operations(effect: str | None, operations: list[str]) -> None:
@@ -44,10 +44,10 @@ def validate_operation_boundary(
         if operation == "compute":
             if dependencies is not None and any(value != "possible" for value in dependencies):
                 raise structural_error("validate_operation_boundary", "", "effect-free compute only permits possible dependencies")
-        elif operation in {"merge", "member", "branch", "append"}:
+        elif operation in {"merge", "member", "branch", "append", "placeholder"}:
             pass
         elif not (operation in {"receive", "deliver"} and boundary_kind == "tool"):
-            raise structural_error("validate_operation_boundary", "", "effect-free event only permits possible compute or receive/deliver with tool")
+            raise structural_error("validate_operation_boundary", "", f"unsupported operation in an effect-free event: {operation}")
     elif operation in INTERACTION_EFFECTS and effect not in INTERACTION_EFFECTS[operation]:
         raise structural_error("validate_operation_boundary", "", f"atomic operation/effect mismatch: {operation}/{effect}")
 
@@ -57,5 +57,5 @@ def validate_operation_boundary(
             raise structural_error("validate_operation_boundary", "", f"effect location kind mismatch: {operation}/{effect}/{boundary_kind}")
         if operation == "deliver" and input_count == 0 and not (effect is None and boundary_kind == "tool"):
             raise structural_error("validate_operation_boundary", "", "empty delivery inputs are allowed only for an effect-free tool request")
-    elif boundary_kind is not None:
+    elif boundary_kind is not None and operation != "placeholder":
         raise structural_error("validate_operation_boundary", "", "non-interaction operation must not declare a boundary")

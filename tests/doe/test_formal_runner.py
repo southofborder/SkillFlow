@@ -74,7 +74,7 @@ def test_one_solve_and_one_result_with_joint_projection(propagation_run, tmp_pat
     directory = tmp_path / "doe"
     loaded = runner.run_doe(propagation_run, run_dir=directory)
     assert calls == [1]
-    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v13"
+    assert loaded["manifest"]["identity"] == "skillflow-doe-run-v14"
     assert (directory / "audit/input-contract-review.json").is_file()
     assert loaded["input_contract_review"]["source_review_complete"] is False
     assert loaded["manifest"]["policy"]["candidate_origin"] == "model_annotation"

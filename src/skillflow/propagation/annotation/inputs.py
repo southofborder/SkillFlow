@@ -8,7 +8,14 @@ from skillflow.common.inputs.snapshot import read_snapshot
 from skillflow.common.recording import canonical_sha256, sha_file
 from skillflow.common.upstream import checked_run_path, resolve_run_reference
 from skillflow.propagation.contracts.profiles import SCHEMA_VERSION
-from skillflow.propagation.material import checked_material
+from skillflow.propagation.material import checked_material, prepare_material
+
+# These compositions published profile v24 with distinct immutable runtime
+# contracts. Select the archived verifier by producer, never by candidate text.
+_ARCHIVED_RUNTIMES = {
+    "skillflow-document-annotation-v11": "skillflow-abstract-runtime-v12",
+    "skillflow-document-annotation-v12": "skillflow-abstract-runtime-v13",
+}
 
 
 def read_component(path):
@@ -54,8 +61,7 @@ def read_source_parts(directory):
 
 def read_material_parts(directory, *, task_baseline=None):
     if (checked_run_path(directory) / "inputs/references.json").is_file():
-        from skillflow.document_guided.online import ARCHIVED_ANNOTATION_IDENTITY
-        if read_component(checked_run_path(directory) / "manifest.json").get("identity") == ARCHIVED_ANNOTATION_IDENTITY:
+        if read_component(checked_run_path(directory) / "manifest.json").get("identity") in _ARCHIVED_RUNTIMES:
             return load_prepared_material(directory, task_baseline=task_baseline)
     parts = read_source_parts(directory)
     if task_baseline is None:
@@ -113,7 +119,6 @@ def resolve_material_owner(run_dir):
 
 def load_prepared_material(run_dir, *, task_baseline=None):
     """Resolve each stage's Task separately; a revised Task never reuses old goals."""
-    from skillflow.document_guided.online import ARCHIVED_ANNOTATION_IDENTITY
     chain = _material_chain(run_dir)
     parts = read_source_parts(chain[-1][0])
     current = None
@@ -136,12 +141,13 @@ def load_prepared_material(run_dir, *, task_baseline=None):
         else:
             from skillflow.task.runner import load_task_run
             task = load_task_run(resolve_run_reference(directory, reference))["task"]
-        if manifest["identity"] == ARCHIVED_ANNOTATION_IDENTITY:
+        if manifest["identity"] in _ARCHIVED_RUNTIMES:
             from skillflow.propagation.contracts.runtime_contract import validate_runtime_contract
-            validate_runtime_contract(parts["runtime_contract"], read_only=True)
-            if parts["runtime_contract"]["version"] != "skillflow-abstract-runtime-v12":
-                raise ValueError("Unsupported archived v11 runtime contract")
-            value = {"version": "security-profile-v24", **parts, "task": task}
+            runtime = validate_runtime_contract(parts["runtime_contract"], read_only=True)
+            if runtime["version"] != _ARCHIVED_RUNTIMES[manifest["identity"]]:
+                raise ValueError("Archived runtime contract differs from its annotation producer")
+            value = prepare_material(parts["source"], parts["cfg"], task_baseline=task)
+            value.update(version="security-profile-v24", runtime_contract=runtime)
         else:
             value = checked_material({"version": SCHEMA_VERSION, **parts, "task": task})
         if manifest.get("material_sha256") != canonical_sha256(value):
@@ -149,7 +155,7 @@ def load_prepared_material(run_dir, *, task_baseline=None):
         if current is None:
             current = value
     if task_baseline is not None:
-        if current is not None and chain[0][1]["identity"] == ARCHIVED_ANNOTATION_IDENTITY:
+        if current is not None and chain[0][1]["identity"] in _ARCHIVED_RUNTIMES:
             if current["task"] != task_baseline:
                 raise ValueError("An archived annotation may be read only with its sealed Task")
             return current

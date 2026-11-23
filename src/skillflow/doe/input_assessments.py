@@ -1,6 +1,7 @@
 """Complete input inventory and actionable demand-complement assessments."""
 from __future__ import annotations
 
+from skillflow.propagation.coverage import RECORDED_COVERAGE
 from collections import defaultdict, deque
 from copy import deepcopy
 from typing import Literal
@@ -378,7 +379,7 @@ def build_input_assessments(engine):
                 "reason": " ".join(barrier_reason(barrier) for barrier in barriers)})
             results.append(assessment)
             continue
-        if limits or state != "processed":
+        if limits or state not in RECORDED_COVERAGE:
             ranges.append({"status": "unresolved", "property": "value", "path": [], "excluded_paths": [],
                 "demand_refs": [], "diagnostic_refs": sorted(limits), "contract_refs": contracts,
                 "reason": "Input coverage is blocked by the referenced material diagnostics; coverage state: " + state + "."})
@@ -502,7 +503,7 @@ def deletable_reduction(result, operation_id, input_index, data_id, path):
     whole = False
     for item in result.get("input_assessments", []):
         if (item["node_kind"] != "op_input" or item["operation_id"] != operation_id
-            or item["input_index"] != input_index or data_id not in item["data_ids"] or item["coverage"] != "processed"):
+            or item["input_index"] != input_index or data_id not in item["data_ids"] or item["coverage"] not in RECORDED_COVERAGE):
             continue
         for row in item["ranges"]:
             if row["status"] != "deletable" or not covers(row["path"], path):

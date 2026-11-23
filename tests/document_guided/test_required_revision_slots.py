@@ -131,14 +131,17 @@ def test_archived_aggregate_validation_errors_are_scoped_by_physical_owner():
     assert all(gap["validation_errors"] == failures for gap in gaps)
 
 
-def test_action_inventory_cannot_be_offered_a_topology_only_edit():
+def test_action_inventory_has_a_separate_source_bound_edit_capability():
     from skillflow.document_guided.graph_slots import plan_graph_repair
     from skillflow.document_guided.prompts import build_graph_updates_prompt
     base, old, _ = _revision()
     finding = {**old["remaining_findings"][0], "required_graph_edit": "action_inventory"}
     plan = plan_graph_repair(base, files=FILES, findings=[finding])
-    assert plan["slots"] == {} and plan["unaddressable_findings"] == [finding["id"]]
-    assert "NONEMPTY ARRAY of Block" in build_graph_updates_prompt(files=FILES, plan=old)
+    action_region, = plan["slots"].values()
+    assert action_region["kind"] == "action_region" and action_region["source_refs"] == finding["source_refs"]
+    assert action_region["editable_action_refs"] == [] and not plan["unaddressable_findings"]
+    prompt = build_graph_updates_prompt(files=FILES, plan=plan)
+    assert "NONEMPTY ARRAY of Block" in prompt and "kind=action_region" in prompt
     edge = {**finding, "target_ids": ["cfg:/edges/0"], "required_graph_edit": "topology"}
     region, = plan_graph_repair(base, files=FILES, findings=[edge])["slots"].values()
     assert region["kind"] == "region"

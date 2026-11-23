@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import Field, ValidationError
 
@@ -19,7 +19,8 @@ from skillflow.graph.extraction.candidate import IRAnalysisCandidate
 from skillflow.graph.extraction.compiler import allocate_candidate_ids, compile_candidate
 from skillflow.graph.ir.cfg import ControlFlowGraph
 
-IDENTITY = "skillflow-graph-facts-v1"
+IDENTITY = "skillflow-graph-facts-v2"
+ARCHIVED_IDENTITY = "skillflow-graph-facts-v1"
 
 
 class ResultValue(StrictRecord):
@@ -41,7 +42,28 @@ class LiteralValue(StrictRecord):
 Value = ResultValue | ContextValue | ResourceValue | LiteralValue
 
 
-class Action(StrictRecord):
+SourceRole = Literal["call", "receive", "read", "write", "deliver", "branch", "loop", "value", "other"]
+SOURCE_ROLES = get_args(SourceRole)
+
+
+def source_action_role(action: dict) -> str | None:
+    """Resolve explicit semantics or an exact protocol role, including for legacy callers."""
+    explicit, kind = action.get("role"), action.get("kind")
+    canonical = kind if kind in SOURCE_ROLES else None
+    if explicit is not None and (explicit not in SOURCE_ROLES or canonical and canonical != explicit):
+        raise ValueError("The explicit role must be a protocol role consistent with the canonical action kind.")
+    return explicit or canonical
+
+
+class SourceAction(StrictRecord):
+    ref: Text
+    kind: Text
+    source: SourceRef
+    role: SourceRole | None = Field(default=None,
+        description="Required for a new free-text kind. Use the actual source role; only an exact role name in kind can supply it implicitly.")
+
+
+class _ActionFields(StrictRecord):
     ref: Text
     opcode: Text
     inputs: list[Value]
@@ -49,6 +71,13 @@ class Action(StrictRecord):
     source: SourceRef | None
     constraints: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Action(_ActionFields):
+    role: SourceRole | None = Field(default=None,
+        description="Required for a single free-text opcode without an explicit action inventory. For multiple actions specify the role of each item.")
+    source_actions: list[SourceAction] = Field(default_factory=list, min_length=1,
+        description="For several actions on the same control path, list them in source order. Each ref is local to this instruction. A single action inherits the operation ref, opcode and source.")
 
 
 class Exit(StrictRecord):
@@ -96,6 +125,14 @@ class Facts(StrictRecord):
     constraints: list[str] = Field(default_factory=list)
 
 
+class ArchivedBlock(Block):
+    operations: list[_ActionFields]
+
+
+class _ArchivedFacts(Facts):
+    blocks: list[ArchivedBlock] = Field(min_length=1)
+
+
 GRAPH_FACTS_SCHEMA = Facts.model_json_schema()
 # The nullable variant is reserved for importing old accepted records internally.
 for _name in ("Action", "Jump", "Branch", "Return"):
@@ -103,6 +140,10 @@ for _name in ("Action", "Jump", "Branch", "Return"):
 _arm_condition = GRAPH_FACTS_SCHEMA["$defs"]["Arm"]["properties"]["condition"]
 GRAPH_FACTS_SCHEMA["$defs"]["Arm"]["properties"]["condition"] = _arm_condition["anyOf"][0]
 GRAPH_FACTS_SCHEMA["$defs"]["Branch"]["properties"]["arms"]["maxItems"] = 2
+ARCHIVED_GRAPH_FACTS_SCHEMA = deepcopy(GRAPH_FACTS_SCHEMA)
+del ARCHIVED_GRAPH_FACTS_SCHEMA["$defs"]["Action"]["properties"]["source_actions"]
+del ARCHIVED_GRAPH_FACTS_SCHEMA["$defs"]["Action"]["properties"]["role"]
+del ARCHIVED_GRAPH_FACTS_SCHEMA["$defs"]["SourceAction"]
 
 
 @dataclass(frozen=True)
@@ -117,9 +158,10 @@ class GraphAssembly:
     origin: str = "model_facts"
     legacy_cfg: dict | None = None
     patch_diagnostics: list = field(default_factory=list)
+    archived: bool = False
 
     def to_receipt(self):
-        return {"identity": IDENTITY, "origin": self.origin, "source_sha256": self.source_sha256,
+        return {"identity": ARCHIVED_IDENTITY if self.archived else IDENTITY, "origin": self.origin, "source_sha256": self.source_sha256,
             "facts_sha256": canonical_sha256(self.facts),
             "candidate_sha256": _digest(self.candidate), "cfg_sha256": _digest(self.cfg),
             "legacy_cfg_sha256": _digest(self.legacy_cfg), "facts": deepcopy(self.facts),
@@ -217,9 +259,9 @@ def _add_gap(facts, slots, gaps, code, path, message, *, editable=True):
         gaps.append(row)
 
 
-def _validate_facts(raw, slots, gaps):
+def _validate_facts(raw, slots, gaps, *, archived):
     try:
-        return Facts.model_validate(raw)
+        return (_ArchivedFacts if archived else Facts).model_validate(raw)
     except ValidationError as error:
         # A union error at an operand is repaired by replacing the single operand,
         # not by editing a field that exists only in another union alternative.
@@ -245,10 +287,54 @@ def _operand(value):
             else {"type": selector, "identifier": content})
 
 
-def _lower(facts, raw, *, files, slots, gaps, legacy_cfg):
+def _check_authored_roles(raw, slots, gaps, *, imported, prior):
+    """Check all legible role obligations even when a sibling field fails schema validation."""
+    def resolve(kind, explicit, path, required):
+        if not isinstance(kind, str):
+            return None
+        try:
+            role = source_action_role({"kind": kind, "role": explicit})
+        except ValueError as error:
+            _add_gap(raw, slots, gaps, "source_action_role", (*path, "role"), str(error))
+            return None
+        if required and role is None:
+            _add_gap(raw, slots, gaps, "source_action_role", (*path, "role"),
+                     "Supply the role supported by this source action: " + ", ".join(SOURCE_ROLES) + ".")
+        return role
+
+    blocks = raw.get("blocks")
+    if not isinstance(blocks, list):
+        return
+    for bi, block in enumerate(blocks):
+        if not isinstance(block, dict) or not isinstance(block.get("operations"), list):
+            continue
+        for oi, op in enumerate(block["operations"]):
+            if not isinstance(op, dict):
+                continue
+            path = ("blocks", bi, "operations", oi)
+            is_legacy = imported and instruction_ref(block.get("ref"), op.get("ref")) in prior.get("instructions", {})
+            if is_legacy and op.get("source") is None:
+                if op.get("role") is not None:
+                    _add_gap(raw, slots, gaps, "source_required", (*path, "source"),
+                             "A changed role needs the source of the reviewed operation.")
+                continue
+            actions = op.get("source_actions")
+            if actions is not None and not isinstance(actions, list):
+                continue
+            primary = resolve(op.get("opcode"), op.get("role"), path, not actions)
+            roles = {resolve(a.get("kind"), a.get("role"), (*path, "source_actions", i), True)
+                     for i, a in enumerate(actions or []) if isinstance(a, dict)}
+            if (actions and None not in roles and all(isinstance(a, dict) for a in actions)
+                    and primary in {"call", "receive", "read", "write", "deliver", "branch", "loop"} and primary not in roles):
+                _add_gap(raw, slots, gaps, "source_action_role", (*path, "source_actions"),
+                         "The source action inventory must contain the operation's declared role: " + primary)
+
+
+def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_ids):
     blocks, edges, contexts = [], [], []
     previous = {(block["block_id"], insn["id"]): insn for block in (legacy_cfg or {}).get("blocks", {}).values()
                 for insn in block["instructions"]}
+    previous_ids = {op["id"]: op for op in previous.values()}
     known_blocks = Counter(block.ref for block in facts.blocks)
     known_outputs = Counter(value for block in facts.blocks
                             for action in block.operations for value in action.outputs)
@@ -267,7 +353,9 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg):
 
     def instruction(ref, opcode, values, outputs, fact, path, prior_id):
         metadata = deepcopy(fact.metadata)
-        legacy = previous.get((facts.blocks[path[1]].ref, prior_id))
+        legacy = (previous.get((facts.blocks[path[1]].ref, prior_id)) if archived else
+                  previous_ids.get(canonical_ids.get("instructions", {}).get(ref)))
+        actions = getattr(fact, "source_actions", [])
         if fact.source is None:
             if legacy is None:
                 _add_gap(raw, slots, gaps, "source_required", (*path, "source"),
@@ -275,6 +363,9 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg):
             elif metadata != legacy["metadata"]:
                 _add_gap(raw, slots, gaps, "source_required", (*path, "source"),
                          "Changed source metadata needs a new frozen source location.")
+            if actions:
+                _add_gap(raw, slots, gaps, "source_required", (*path, "source"),
+                         "A new source action inventory needs an authored instruction source.")
         else:
             try:
                 span = validate_source_ref(fact.source.model_dump(), files)
@@ -282,13 +373,38 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg):
                 _add_gap(raw, slots, gaps, "source_span", (*path, "source"), str(error))
             else:
                 generated = {"script_content", "_source_span", "source_span"}
+                if not archived:
+                    generated.add("source_actions")
                 if legacy is not None and metadata == legacy["metadata"]:
                     metadata = {name: content for name, content in metadata.items() if name not in generated}
                 elif generated & metadata.keys():
                     _add_gap(raw, slots, gaps, "generated_metadata", (*path, "metadata"),
-                             "Source span and exact script text are generated by the program.")
+                             "Source span, action metadata and exact script text are generated by the program."
+                             if not archived else "Source span and exact script text are generated by the program.")
                 metadata["source_span"] = span.model_dump()
                 metadata["script_content"] = extract_source_lines(files[span.file], span.start_line, span.end_line)
+                if not archived:
+                    if actions:
+                        refs = set()
+                        for i, action in enumerate(actions):
+                            if not _name(action.ref) or action.ref in refs:
+                                _add_gap(raw, slots, gaps, "source_action_ref", (*path, "source_actions", i, "ref"),
+                                         "Each local source action needs a unique reference.")
+                            refs.add(action.ref)
+                            try:
+                                validate_source_ref(action.source.model_dump(), files)
+                            except ValueError as error:
+                                _add_gap(raw, slots, gaps, "source_action_span", (*path, "source_actions", i, "source"),
+                                         str(error))
+                        metadata["source_actions"] = [action.model_dump(mode="json", exclude_none=True) for action in actions]
+                    elif (legacy and legacy["opcode"] == opcode and legacy["metadata"].get("source_span") == span.model_dump()
+                          and legacy["metadata"].get("source_actions") and getattr(fact, "role", None) is None):
+                        metadata["source_actions"] = deepcopy(legacy["metadata"]["source_actions"])
+                    else:
+                        role = ((fact.role or opcode) if isinstance(fact, Action)
+                                else "branch" if isinstance(fact, Branch) else "other")
+                        metadata["source_actions"] = [{"ref": getattr(fact, "ref", "exit"), "kind": opcode,
+                                                       "source": span.model_dump(), "role": role}]
         inputs = [_operand(value) for value in values]
         input_field = "conditions" if isinstance(fact, Branch) else "values" if isinstance(fact, Return) else "inputs"
         for index, operand in enumerate(inputs):
@@ -426,7 +542,7 @@ def _restore_legacy_labels(cfg, inherited_refs):
                         item["semantic_name"] = old["semantic_name"]
 
 
-def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None):
+def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, archived=False):
     """Lower complete facts and revalidate the entire CFG without synthesizing semantics."""
     sha = source_digest(files)
     if not isinstance(value, dict):
@@ -435,12 +551,15 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None):
     raw, slots, gaps = deepcopy(value), {}, []
     origin = "accepted_cfg" if legacy_cfg is not None else "model_facts"
     prior = deepcopy(canonical_ids or {})
-    facts = _validate_facts(raw, slots, gaps)
+    if not archived:
+        _check_authored_roles(raw, slots, gaps, imported=legacy_cfg is not None, prior=prior)
+    facts = _validate_facts(raw, slots, gaps, archived=archived)
     if facts is None:
-        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg)
-    candidate, locators, inherited_refs = _lower(facts, raw, files=files, slots=slots, gaps=gaps, legacy_cfg=legacy_cfg)
+        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived)
+    candidate, locators, inherited_refs = _lower(facts, raw, files=files, slots=slots, gaps=gaps,
+                                                legacy_cfg=legacy_cfg, archived=archived, canonical_ids=prior)
     if gaps:
-        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg)
+        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived)
     try:
         parsed = IRAnalysisCandidate.model_validate(candidate)
     except ValidationError as error:
@@ -452,7 +571,7 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None):
                     _add_gap(raw, slots, gaps, row["type"], locator, row["msg"])
                     continue
             _add_gap(raw, slots, gaps, row["type"], (), row["msg"], editable=False)
-        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg)
+        return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived)
     ids = allocate_candidate_ids(parsed, canonical_ids)
     compiled = compile_candidate(parsed, canonical_ids=ids)
     for row in compiled.diagnostics:
@@ -465,7 +584,7 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None):
         cfg = json.loads(compiled.cfg.to_json())
         _restore_legacy_labels(cfg, inherited_refs)
         ControlFlowGraph.model_validate(cfg).validate_integrity()
-    return GraphAssembly(raw, candidate, cfg, slots, gaps, ids, sha, origin, legacy_cfg)
+    return GraphAssembly(raw, candidate, cfg, slots, gaps, ids, sha, origin, legacy_cfg, archived=archived)
 
 
 def _fact_input(operand):
@@ -473,7 +592,7 @@ def _fact_input(operand):
             else {operand["type"]: operand["identifier"]})
 
 
-def from_accepted_cfg(cfg, *, files):
+def from_accepted_cfg(cfg, *, files, archived=False):
     """Bind old canonical material without representing it as new model-authored facts."""
     verified = ControlFlowGraph.model_validate(cfg)
     verified.validate_integrity()
@@ -514,7 +633,7 @@ def from_accepted_cfg(cfg, *, files):
                 arms=[{"target": row["target_block_id"], "condition": row["condition_text"]} for row in edges])
         draft["exit"] = exit
         facts["blocks"].append(draft)
-    assembly = assemble_graph_facts(facts, files=files, canonical_ids=ids, legacy_cfg=cfg)
+    assembly = assemble_graph_facts(facts, files=files, canonical_ids=ids, legacy_cfg=cfg, archived=archived)
     if assembly.cfg != cfg:
         raise ValueError("Cannot reconstruct the accepted CFG exactly from editable facts")
     return assembly

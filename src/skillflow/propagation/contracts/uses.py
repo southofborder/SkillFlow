@@ -28,6 +28,7 @@ def value_uses(operation) -> list[ValueUse]:
     from skillflow.propagation.contracts.specs import DeliverOp
     from skillflow.propagation.contracts.specs import RawDeliverOp
     from skillflow.propagation.contracts.specs import ComputeOp
+    from skillflow.propagation.contracts.specs import PlaceholderOp
     from skillflow.propagation.contracts.specs import WriteOp
     from skillflow.propagation.contracts.specs import SelectPartOp
     from skillflow.propagation.contracts.specs import ExcludePartsOp
@@ -49,7 +50,7 @@ def value_uses(operation) -> list[ValueUse]:
                 uses.append(ValueUse(member.when, role="control", member_index=index))
             uses.append(ValueUse(member.value, when=member.when, member_index=index))
         return uses
-    if isinstance(operation, (ReceiveOp, DeliverOp, RawDeliverOp, ComputeOp)):
+    if isinstance(operation, (ReceiveOp, DeliverOp, RawDeliverOp, ComputeOp, PlaceholderOp)):
         guard = getattr(operation, "when", None)
         uses = [ValueUse(ref, when=guard) for ref in operation.inputs]
         if guard is not None:

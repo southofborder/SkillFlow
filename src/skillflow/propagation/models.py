@@ -154,7 +154,7 @@ def _candidate_ids(value: object) -> frozenset[str]:
 CandidateIDs = Annotated[frozenset[Text], BeforeValidator(_candidate_ids)]
 AtomicOperation = Literal[
     "read", "receive", "deliver", "write", "select_part", "exclude_parts",
-    "update_fields", "build", "compute",
+    "update_fields", "build", "compute", "placeholder",
     "filter_items",
     "merge", "member", "branch", "append",
 ]
@@ -199,6 +199,8 @@ class OperationAlternative(StrictRecord):
 
 class AtomicOpRecord(StrictRecord):
     op: AtomicOperation
+    placeholder_kind: Literal["value", "effect"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    possible_writes: CandidateIDs = Field(default=frozenset(), exclude_if=lambda values: not values)
     skipped_case_inputs: list[Text] = Field(default_factory=list, exclude_if=lambda value: not value)
     inputs: StrictList[CandidateIDs] = Field(default_factory=list)
     outputs: StrictList[DataIDs] = Field(default_factory=list)
@@ -213,10 +215,24 @@ class AtomicOpRecord(StrictRecord):
     @model_validator(mode="after")
     def validate_consumption(self):
         if self.skipped_case_inputs:
-            if (self.inputs or self.outputs or self.endpoints or self.changes or self.alternatives
+            if (self.inputs or self.outputs or self.endpoints or self.changes or self.alternatives or self.possible_writes
                     or self.members is not None or self.when_input_index is not None or self.branch_targets):
                 raise ValueError("an infeasible case operation cannot have effects, inputs, outputs or alternatives")
             return self
+        if (self.op == "placeholder") != (self.placeholder_kind is not None):
+            raise ValueError("a placeholder record requires its value or effect kind")
+        if self.op == "placeholder":
+            if (len(self.outputs) != int(self.placeholder_kind == "value")
+                    or len(self.endpoints) > int(self.placeholder_kind == "effect")
+                    or self.may_state != bool(self.changes)
+                    or self.may_state != bool(self.possible_writes)):
+                raise ValueError("placeholder record differs from its value or state footprint")
+            if self.may_state and (not self.endpoints or self.endpoints[0].kind not in {"runtime_context", "storage"}
+                    or any(change.update != "weak" or change.after != change.before | self.possible_writes
+                           for change in self.changes)):
+                raise ValueError("a possible write must preserve prior candidates and publish its symbolic versions")
+        elif self.possible_writes:
+            raise ValueError("possible write versions belong only to an effect placeholder")
         from skillflow.propagation.conditions import validate_record_consumption
         validate_record_consumption(self)
         if self.op != "merge" and any(not values for values in self.inputs):
@@ -256,6 +272,53 @@ class AtomicOpRecord(StrictRecord):
     def serialize_bindings(self, values: list[frozenset[str]]) -> list[list[str]]:
         # Slot order and repeated parameter uses matter; only each may-set sorts.
         return [sorted(ids) for ids in values]
+
+    @field_serializer("possible_writes", when_used="json")
+    def serialize_possible_writes(self, values):
+        return sorted(values)
+
+
+def validate_placeholder_record(record, specification, locations, data):
+    """Cross-check a scoped placeholder's declared input and address footprint."""
+    from skillflow.propagation.contracts.locations import locations_may_alias
+
+    if record.placeholder_kind != specification["kind"] or len(record.inputs) != len(specification["inputs"]):
+        raise ValueError("placeholder record differs from its declared kind or inputs")
+    location_id = specification.get("location")
+    endpoint = locations[location_id] if location_id else None
+    actual = [(item.kind, item.name) for item in record.endpoints]
+    expected = [(endpoint["kind"], endpoint["name"])] if endpoint else []
+    if actual != expected or record.may_state != specification.get("may_write", False):
+        raise ValueError("placeholder record differs from its declared endpoint or possible write")
+    if record.may_state:
+        targets = {(loc["kind"], loc["name"]) for loc in locations.values() if locations_may_alias(endpoint, loc)}
+        actual_targets = [(change.location.kind, change.location.name) for change in record.changes]
+        if set(actual_targets) != targets or len(actual_targets) != len(targets):
+            raise ValueError("possible write must cover precisely its declared alias domain")
+    # Case-guarded outputs may wrap a symbolic value in the ordinary selection
+    # that carries control provenance. The symbolic value itself never acquires
+    # external data or turns a candidate input into a definite dependency.
+    pending = set(record.possible_writes).union(*record.outputs)
+    visited = set()
+    while pending:
+        identity = pending.pop()
+        if identity in visited:
+            continue
+        visited.add(identity)
+        value = data.get(identity)
+        if value is None or value.origin.at is None or value.origin.acquired_from is not None:
+            raise ValueError("a placeholder must produce an operation value without an external acquisition")
+        variants = value.content.variants if value.content.form == "loop_summary" else [value]
+        for variant in variants:
+            content = variant.content
+            origin = variant if value.content.form == "loop_summary" else value.origin
+            if content.form == "selection" and not content.path and content.base in origin.inputs:
+                pending.add(content.base)
+                continue
+            if (content.form not in {"opaque", "known_parts"} or origin.acquired_from is not None
+                    or {dep.data for dep in origin.dependencies} != set(origin.inputs)
+                    or any(dep.relation != "possible" for dep in origin.dependencies)):
+                raise ValueError("placeholder origin must retain possible input influence")
 
 
 class EffectEvent(StrictRecord):
@@ -338,6 +401,13 @@ class IRFlowRecord(StrictRecord):
     entry_state: FlowState
     exit_state: FlowState
     events: StrictList[EffectEvent | ForEachRecord] = Field(default_factory=list)
+
+    def used_placeholder(self) -> bool:
+        for event in self.events:
+            children = (child for instance in event.instances for child in instance.body) if isinstance(event, ForEachRecord) else (event,)
+            if any(op.op == "placeholder" and not op.skipped_case_inputs for child in children for op in child.atomic_ops):
+                return True
+        return False
 
 
     @model_validator(mode="after")
