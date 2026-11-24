@@ -27,6 +27,7 @@ FRAGMENT_RULES = {
         **flat.PROCESSING_RULES,
         "source_action_bindings": "Use the ordered metadata.source_actions when present. For a single action the program binds its operations and outputs. For a composite IR provide action_bindings:{ref:[path,...]} in source order, partitioning its exact IR-relative op paths, case guard (or condition) and throwing disposition, loop collection, returns, yields, output_bindings and the synthetic [terminator] path for dispatch/return. Example path: [segments,0,ops,1]. A legacy CFG missing source_actions may acquire a source-located inventory in this processing record. Preserve supported actions and use a local placeholder only for the missing value or effect.",
         "processing_coverage": "No Task demands or sensitivity fields belong in processing. A genuinely unrepresentable required operation uses a source-backed processing_gap with unmodeled=true instead of executable semantics. Name affected output indexes, locations or control; unspecified scope retains the control-reachable continuation. Precision limits on otherwise complete may facts use unmodeled=false, never to conceal a missing actual effect.",
+        "entry_acquisition": "Bind each caller argument to the matching output of its own source occurrence. A direct context input snapshot can implement receive. For optional_context_inputs, bind the snapshot before testing its immutable result for omission, null or an empty value. Use a real packet read and its actual projections when the source supplies one object. Preserve known reads and sibling outputs with their existing operations; place a source-backed placeholder only at the unknown value or effect. Cite module initialization at its own execution site.",
     },
     "task-correspondence": {
         "realization_coverage": "Use each existing Task requirement_id exactly once in realizations. Keep its bindings, supported constraints and remaining gaps; do not repeat Task text or add status. A gap does not erase the representable part of a requirement.",
@@ -466,9 +467,40 @@ def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=
     if kind == "processing":
         from skillflow.propagation.contracts.limitations import unmodeled_ids
         from .processing_correction import coverage_diagnostics
+        from .entry_transfers import assemble_entry_transfers, scope_entry_gaps
         expected = set(cfg_instructions(material["cfg"]))
-        diagnostics.extend(coverage_diagnostics(value, expected,
-            fixed_unmodeled=unmodeled_ids({"processing_gaps": validation_gaps})))
+        fixed = unmodeled_ids({"processing_gaps": validation_gaps})
+        entry_errors = []
+        if not diagnostics:
+            assembled = deepcopy(value)
+            diagnostics.extend(scope_entry_gaps(assembled, material))
+            assemble_entry_transfers(assembled, material, fixed=fixed)
+            if not diagnostics and assembled != value:
+                invalid = coverage_diagnostics(assembled, expected, fixed_unmodeled=fixed)
+                if not invalid:
+                    try:
+                        expansion = flat._processing_expansion(_base_wire(assembled), material, validation_gaps=validation_gaps)
+                    except StructuralValidationError as error:
+                        invalid = error.diagnostics
+                    else:
+                        return assembled, expansion
+                # Report against submitted owners; relocated gap indexes
+                # belong to the constructed candidate, not the reply.
+                for i, gap in enumerate(value.get("processing_gaps", [])):
+                    if gap not in assembled.get("processing_gaps", []):
+                        entry_errors.extend(structural_error("entry_acquisition_required", json_pointer("processing_gaps", i),
+                            "The source supports a local entry transfer. Recheck its remaining scope with the affected "
+                            "current record at " + invalid[0]["path"] + ": " + invalid[0]["message"]).diagnostics)
+        coverage = coverage_diagnostics(value, expected, fixed_unmodeled=fixed)
+        if coverage:
+            source_reads = {block["instructions"][0]["id"] for block in material["cfg"]["blocks"].values()
+                            if block.get("data_source_kind") in {"context", "external"} and block.get("instructions")}
+            for row in coverage:
+                slot = row.get("context", {}).get("coverage_slot", {})
+                if slot.get("instruction_id") in source_reads and slot.get("problem") == "conflict":
+                    slot["retain_acquisition"] = True
+                    row["message"] += " Preserve validated acquisition operations and localize the unknown value or effect."
+        diagnostics.extend(coverage)
         if not diagnostics:
             try:
                 processing_expansion = flat._processing_expansion(_base_wire(value), material,
@@ -476,7 +508,9 @@ def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=
             except StructuralValidationError as error:
                 diagnostics.extend(error.diagnostics)
             else:
-                return value, processing_expansion
+                if not entry_errors:
+                    return value, processing_expansion
+                diagnostics.extend(entry_errors)
         diagnostics = _processing_probe(value, material, diagnostics, validation_gaps, expected)
         raise _fragment_error(kind, value, diagnostics)
     if processing is None:
@@ -936,6 +970,22 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
             gap = validation_gap(ir, diagnostics, unmodeled=unmodeled)
             gaps.append(gap)
     attempted_bindings = set()
+    repaired_acquisitions = set()
+    if kind == "processing":
+        from .entry_transfers import acquisition_ports, assemble_entry_transfers, scope_entry_gaps
+        from skillflow.propagation.contracts.limitations import unmodeled_ids
+        fixed = unmodeled_ids({"processing_gaps": upstream_gaps})
+        entries = acquisition_ports(material)
+        # A malformed record must still be removed by the normal typed
+        # validation below. Recovery operates only on its proven signature.
+        try:
+            _parse(kind, value)
+        except StructuralValidationError:
+            pass
+        else:
+            for row in scope_entry_gaps(value, material, quarantine=True):
+                add_gap(row["context"]["instruction_id"], [row], unmodeled=False)
+            assemble_entry_transfers(value, material, fixed=fixed)
     for _ in range(len(_records(kind, value)) + len(instructions) + len(requirements) + 2):
         if kind == "processing":
             modeled = set(value.get("ir_semantics", {})) if isinstance(value.get("ir_semantics"), dict) else set()
@@ -956,6 +1006,16 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
             records = _records(kind, value)
             if kind == "processing":
                 from .processing_correction import remove_coverage_claims
+                entry_errors = {ir for ir in entries.keys() - repaired_acquisitions - fixed
+                                if any(row["path"] == json_pointer("ir_semantics", ir)
+                                       or row["path"].startswith(json_pointer("ir_semantics", ir) + "/")
+                                       for row in error.diagnostics)}
+                if entry_errors:
+                    # Only replace a failed *pure receive*. Other IRs retain
+                    # the normal correction and quarantine rules.
+                    repaired_acquisitions.update(entry_errors)
+                    assemble_entry_transfers(value, material, repair=entry_errors, fixed=fixed)
+                    continue
                 conflicts = {row["context"]["coverage_slot"]["instruction_id"]: row
                     for row in error.diagnostics if row["code"] == "instruction_coverage"
                     and row.get("context", {}).get("coverage_slot", {}).get("problem") == "conflict"}

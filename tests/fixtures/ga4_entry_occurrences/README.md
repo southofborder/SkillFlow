@@ -1,0 +1,7 @@
+# GA4 invocation regression
+
+`regression.json` retains ten original GraphFacts blocks and the expanded initial processing records for the entry of `document-guided-ga4-cfg-assembly-high-20261123-234230`. The reply digests are computed over the UTF-8 model response strings stored inside the corresponding `steps/{graph,processing}/calls/a001/response.json`. Shared value references in the processing excerpt have been expanded with the normal wire decoder. The fixture uses the repository's public 16-file case without executing the Skill or contacting Google.
+
+The preflight test submits the archived 18-key acquisition, the seven-export report selector and its actual shared consumer. It closes outbound cuts with empty test boundaries. A separate closed projection restricts routing to two report wrappers and their shared overview caller. An injected scoped correction replaces the pooled entry with three signature-bound acquisitions. The original conflicting processing entry, its 18 location anchors and its whole-instruction gap go through one scoped correction. All other processing records are retained.
+
+The propagation test starts with three distinct caller data versions and the configuration inputs. Each SDK request, response tuple, selected index, saved value and returned field is obtained from actual propagation records. Logging has a localized effect placeholder. The overview projection follows the two tested fields. Its other two fields and downstream workflow remain outside this projection.

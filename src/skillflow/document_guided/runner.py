@@ -18,7 +18,7 @@ from skillflow.common.upstream import checked_run_path
 from .online import (analysis_config, checked_manifest, file_reference, inventory, prepare_step,
                      read, resolve_file, run_step, save_assembled_annotation, seal)
 
-IDENTITY = "skillflow-document-guided-run-v22"
+IDENTITY = "skillflow-document-guided-run-v23"
 SOURCE_IDENTITY = "skillflow-document-source-v6"
 POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_calls": 7,
           "annotation_assembly": "program", "whole_analysis_refusal": False,

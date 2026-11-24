@@ -143,6 +143,9 @@ DIAGNOSTIC_RULES = {
     "sensitivity_duplicate": "sensitivity_value", "sensitivity_scope": "sensitivity_scope",
     "dispatch_inputs": "dispatch_inputs", "external_acquisition_inputs": "external_acquisition_inputs",
     "binary_dispatch": "binary_dispatch",
+    "entry_acquisition_required": "entry_acquisition", "entry_acquisition": "entry_acquisition",
+    "entry_location_alias": "entry_acquisition", "entry_output_binding": "entry_acquisition",
+    "entry_gap_scope": "entry_acquisition",
 }
 CORRECTION_OR_JSON = {"json_format", "correction_candidate", "correction_json", "record_identity", "record_replacement",
                       "review_correction_envelope", "processing_wire", "processing_wire_raw_diagnostics",
@@ -150,10 +153,10 @@ CORRECTION_OR_JSON = {"json_format", "correction_candidate", "correction_json", 
 
 
 def test_every_interface_custom_diagnostic_has_a_visible_rule_or_correction_contract():
-    from skillflow.document_guided import fragments, cfg_wire
+    from skillflow.document_guided import fragments, cfg_wire, entry_transfers
     exposed = set(CFG_RULES) | {key for rules in FRAGMENT_RULES.values() for key in rules}
     assert set(DIAGNOSTIC_RULES.values()) <= exposed
-    for module in (flat, fragments, cfg_wire):
+    for module in (flat, fragments, cfg_wire, entry_transfers):
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
         codes = {call.args[0].value for call in ast.walk(tree) if isinstance(call, ast.Call)
                  and isinstance(call.func, ast.Name) and call.func.id in {"structural_error", "error"}

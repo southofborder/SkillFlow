@@ -23,11 +23,13 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 from skillflow.common.semantic_failure import SemanticFailure
 from .batches import validate_batch, batch_model, combine_annotation
 
-STEP_IDENTITY = "skillflow-document-step-v19"
-PREVIOUS_STEP_IDENTITY = "skillflow-document-step-v18"
-ANNOTATION_IDENTITY = "skillflow-document-annotation-v13"
+STEP_IDENTITY = "skillflow-document-step-v20"
+PREVIOUS_STEP_IDENTITY = "skillflow-document-step-v19"
+READABLE_STEP_IDENTITIES = {STEP_IDENTITY, PREVIOUS_STEP_IDENTITY, "skillflow-document-step-v18"}
+ANNOTATION_IDENTITY = "skillflow-document-annotation-v14"
 ARCHIVED_ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
-READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v12", ARCHIVED_ANNOTATION_IDENTITY})
+READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v13",
+                                          "skillflow-document-annotation-v12", ARCHIVED_ANNOTATION_IDENTITY})
 FRAGMENT_KINDS = {name + "_fragment": name for name in
                   ("processing", "task-correspondence", "sensitivity")}
 _SCOPED = ("processing_revision", "sensitivity_revision", "correspondence_revision")
@@ -145,7 +147,8 @@ def _step_context(directory, manifest):
     context = manifest.get("context", {})
     value = {}
     if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"}:
-        value["normalize_blocks"] = manifest.get("identity") == STEP_IDENTITY
+        value["normalize_blocks"] = manifest.get("identity") in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}
+        value["check_occurrences"] = manifest.get("identity") == STEP_IDENTITY
     if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"} and manifest.get("identity") in {
             "skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}:
         value["archived_graph"] = True
@@ -169,7 +172,7 @@ def _step_context(directory, manifest):
         from .graph_steps import load_revision_input
         value["graph_repair"] = load_revision_input(directory, value["graph_repair_path"], value["files"],
             [resolve_file(directory, ref) for ref in manifest["dependencies"]], archived=value.get("archived_graph", False),
-            normalize_blocks=value.get("normalize_blocks", True))
+            normalize_blocks=value["normalize_blocks"], check_occurrences=value["check_occurrences"])
     if "processing_scope_path" in value:
         from .fragment_revision import processing_scope
         run = directory.parent.parent
@@ -184,7 +187,7 @@ def _step_context(directory, manifest):
         findings = (read(review).get("review") or {}).get("findings", [])
         gaps, rejected = processing_revision_evidence(old_step)
         expected = processing_scope(read(old_graph)["cfg"], value["cfg"], findings, previous,
-            validation_gaps=gaps, rejected_records=rejected)
+            validation_gaps=gaps, rejected_records=rejected, current_joins=manifest["identity"] == STEP_IDENTITY)
         if expected is None or expected != read(path):
             raise ValueError("Processing revision scope differs from its bound dependency proof")
         value["processing_revision"] = {"scope": expected, "previous": previous}
@@ -251,7 +254,8 @@ def _correction_strategy(kind, context=None):
     from .graph_steps import FACTS, GraphFactsCorrection
     if kind == FACTS:
         return GraphFactsCorrection(context["files"], archived=context.get("archived_graph", False),
-                                    normalize_blocks=context.get("normalize_blocks", True))
+                                    normalize_blocks=context.get("normalize_blocks", True),
+                                    check_occurrences=context.get("check_occurrences", True))
     if kind == "cfg_wire_v5":
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy("cfg")
@@ -657,7 +661,7 @@ def _saved_step_value(directory, manifest, *, expected_identity=STEP_IDENTITY):
 def load_step(directory, *, recompute=False):
     directory = checked_run_path(directory)
     identity = read(directory / "manifest.json")["identity"] if not recompute else STEP_IDENTITY
-    if identity not in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}:
+    if identity not in READABLE_STEP_IDENTITIES:
         raise ValueError("Unsupported document step identity")
     manifest = checked_manifest(directory, identity, recompute=recompute)
     config = analysis_config(manifest["config"])
@@ -894,6 +898,10 @@ def _check_annotation_steps(directory, manifest, refs):
 def _read_archived_step(directory, annotation_identity):
     """Read a terminal archived constituent with its recorded step/producer identity."""
     identity = read(directory / "manifest.json")["identity"]
+    if annotation_identity == "skillflow-document-annotation-v13":
+        if identity not in {"skillflow-document-step-v18", "skillflow-document-step-v19"}:
+            raise ValueError("Unsupported step producer for archived annotation")
+        return load_step(directory)
     v11 = annotation_identity == ARCHIVED_ANNOTATION_IDENTITY
     versions = range(13, 17) if v11 else (17,)
     if identity not in {f"skillflow-document-step-v{i}" for i in versions}:

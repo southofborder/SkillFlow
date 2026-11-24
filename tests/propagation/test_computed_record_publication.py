@@ -99,7 +99,7 @@ def test_current_publication_reuses_computed_materials(annotation_run, tmp_path,
         save.setattr(loading, "validate_propagation_facts", repeated)
         saved = runner.save_propagation_run(tmp_path / "computed", annotation_run=annotation_run,
                                             solved=solved, _loaded_annotation=loaded)
-    assert saved.manifest["identity"] == "skill-ir-propagation-v24"
+    assert saved.manifest["identity"] == "skill-ir-propagation-v25"
     assert saved.manifest["records_schema_version"] == "skillflow-propagation-record-v17"
     assert components(load_propagation_materials(tmp_path / "computed")) == components(saved)
 
@@ -143,13 +143,15 @@ def test_mixed_record_and_run_versions_are_rejected(annotation_run, tmp_path):
         load_propagation_materials(directory)
 
 
-def test_v23_v16_pair_is_read_only(annotation_run, tmp_path):
+@pytest.mark.parametrize(("version", "records"), [(23, 16), (24, 17)])
+def test_previous_propagation_pair_is_read_only(annotation_run, tmp_path, version, records):
     directory = tmp_path / "previous-producer"
     run_propagation(annotation_run, run_dir=directory)
     manifest = read_json(directory / "manifest.json")
-    manifest.update(identity="skill-ir-propagation-v23", schema_version=23,
-                    records_schema_version="skillflow-propagation-record-v16")
+    identity = f"skill-ir-propagation-v{version}"
+    manifest.update(identity=identity, schema_version=version,
+                    records_schema_version=f"skillflow-propagation-record-v{records}")
     reseal(directory, manifest)
-    assert load_propagation_materials(directory).manifest["identity"] == "skill-ir-propagation-v23"
+    assert load_propagation_materials(directory).manifest["identity"] == identity
     with pytest.raises(ValueError, match="read-only"):
         replay_propagation(directory)

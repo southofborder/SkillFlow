@@ -207,6 +207,13 @@ def processing_impacts(cfg, annotation):
     for gap in annotation.get("processing_gaps", []):
         source = gap["instruction_id"]
         affected = {source}
+        if (gap.get("origin") == "validation" and not gap.get("unmodeled")
+                and {e["code"] for e in gap.get("validation_errors", [])} == {"entry_gap_scope"}):
+            # The evidence describes a different invocation whose program
+            # position is still unknown. Do not assign its effects to every
+            # consumer of a validated caller argument.
+            result[gap_id(gap)] = [source]
+            continue
         pending_values = [instructions[source]["outputs"][index]["identifier"] for index in gap.get("outputs", [])]
         pending_locations = list(gap.get("locations", []))
         if gap.get("control") or gap.get("unmodeled") or not (pending_values or pending_locations):

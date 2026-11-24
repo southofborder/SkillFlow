@@ -8,7 +8,7 @@ FRAGMENTS = frozenset({"processing", "task-correspondence", "sensitivity"})
 
 
 def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_only=False, processing_gaps=(),
-                    normalize_blocks=True):
+                    normalize_blocks=True, check_occurrences=True):
     findings = (reviewed.get("review") or {}).get("findings", [])
     domains = {row["domain"] for row in findings}
     reviewed_status = reviewed.get("status")
@@ -33,6 +33,7 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
         from .graph_steps import rejected_facts, repair_input, repair_slots
         candidate = rejected_facts(evidence) if recovery else values["graph"]["value"]
         plan = repair_input(files=files, previous=candidate, accepted=not recovery, normalize_blocks=normalize_blocks,
+                            check_occurrences=check_occurrences,
                             failure_evidence=evidence if recovery else None,
                             findings=[row for row in findings if row["domain"] == "cfg"])
         if plan is None or not repair_slots(plan["plan"]):

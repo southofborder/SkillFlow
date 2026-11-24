@@ -14,7 +14,8 @@ from skillflow.common.validation import structural_error
 from .graph_facts import assemble_graph_facts, field_slot, instruction_ref, source_digest
 
 
-IDENTITY = "skillflow-graph-slot-plan-v3"
+IDENTITY = "skillflow-graph-slot-plan-v4"
+BLOCK_LAYOUT_IDENTITY = "skillflow-graph-slot-plan-v3"
 PRIOR_IDENTITY = "skillflow-graph-slot-plan-v2"
 ARCHIVED_IDENTITY = "skillflow-graph-slot-plan-v1"
 
@@ -263,7 +264,36 @@ def _acquisition_slots(assembly, slots, gaps):
 def structural_slots(assembly):
     slots, gaps = deepcopy(assembly.slots), deepcopy(assembly.gaps)
     regions = _acquisition_slots(assembly, slots, gaps) if assembly.normalize_blocks else {}
+    if assembly.check_occurrences:
+        from .occurrence_region import occurrence_slots
+        occurrence_slots(assembly, slots, gaps, regions)
     return slots, gaps, regions
+
+
+def _reviewed_occurrences(assembly, findings, files):
+    """A source review can locate a cross-block acquisition outside the signature recognizer."""
+    if not assembly.check_occurrences or assembly.cfg is None:
+        return []
+    blocks = assembly.facts["blocks"]
+    result = []
+    for finding in findings:
+        if finding.get("required_graph_edit") not in {"action_inventory", "topology"}:
+            continue
+        grants = _targets(assembly, finding, files)
+        targets = {s["path"][1] for s in grants if s["path"][0] == "blocks"}
+        if len(targets) < 2:
+            continue
+        for bi in sorted(targets):
+            b = blocks[bi]
+            if b["source_kind"] != "context" or not b["operations"]:
+                continue
+            outputs = set(b["operations"][0]["outputs"])
+            related = {i for i, block in enumerate(blocks) if outputs & _uses(block)}
+            if not (targets - {bi}) & related:
+                continue
+            result.append({"code": "acquisition_occurrence", "acquisition_block": bi, "action_index": 0,
+                           "block_indices": sorted(related | {bi}), "source_sites": finding["source_refs"]})
+    return result
 
 
 def _context(assembly, slots):
@@ -271,7 +301,8 @@ def _context(assembly, slots):
     rows = assembly.facts.get("blocks")
     if not slots or not isinstance(rows, list):
         return []
-    affected = {slot["path"][1] for slot in slots.values() if slot["path"][0] == "blocks"}
+    affected = {bi for slot in slots.values() if slot["path"][0] == "blocks"
+                for bi in slot.get("block_indices", [slot["path"][1]])}
     known = {bi: block for bi, block in enumerate(rows) if isinstance(block, dict)
              and isinstance(block.get("ref"), str) and block["ref"]}
     roots = {block["ref"] for bi, block in known.items() if bi in affected}
@@ -328,6 +359,10 @@ def plan_graph_repair(assembly, *, findings=(), files):
     if assembly.cfg is not None and assembly.gaps:
         raise ValueError("An accepted graph cannot carry assembly failures")
     slots, gaps, regions = structural_slots(assembly)
+    reviewed = _reviewed_occurrences(assembly, findings, files)
+    if reviewed:
+        from .occurrence_region import occurrence_slots
+        occurrence_slots(assembly, slots, reviewed, regions)
     current = assembly.normalize_blocks and not assembly.archived
     unsupported = []
     for finding in findings:
@@ -356,7 +391,8 @@ def plan_graph_repair(assembly, *, findings=(), files):
                 finding_ids = saved.setdefault("finding_ids", [])
                 if finding["id"] not in finding_ids:
                     finding_ids.append(finding["id"])
-    identity = ARCHIVED_IDENTITY if assembly.archived else IDENTITY if current else PRIOR_IDENTITY
+    identity = (IDENTITY if assembly.check_occurrences else BLOCK_LAYOUT_IDENTITY if current else
+                ARCHIVED_IDENTITY if assembly.archived else PRIOR_IDENTITY)
     body = {"identity": identity, "base": {key: value for key, value in assembly.to_receipt().items()
             if key not in {"facts", "slots", "gaps", "id_map"}},
         "mode": "slots" if slots else "unaddressable" if assembly.gaps or findings else "no_patch",
@@ -657,7 +693,12 @@ def _compile_edits(assembly, edits, files):
     edited_anchors = set()
     ids = deepcopy(assembly.id_map) or None
     for _, slot, value in edits:
-        if slot["kind"] in {"region", "action_region"}:
+        if slot["kind"] == "occurrence_region":
+            original = {b["ref"]: i for i, b in zip(slot["block_indices"], slot["old_value"])}
+            changed = {original[b["ref"]]: [b] for b in value if b["ref"] in original}
+            changed[slot["block_indices"][-1]].extend(b for b in value if b["ref"] not in original)
+            regions.extend(changed.items())
+        elif slot["kind"] in {"region", "action_region"}:
             regions.append((slot["path"][1], value))
             if ids and slot["kind"] == "action_region":
                 old_refs = {op["ref"] for op in slot["old_value"]["operations"]}
@@ -687,7 +728,7 @@ def _compile_edits(assembly, edits, files):
         merged["blocks"][index:index + 1] = rows
     return assemble_graph_facts(merged, files=files, canonical_ids=ids,
                                 legacy_cfg=assembly.legacy_cfg, archived=assembly.archived,
-                                normalize_blocks=assembly.normalize_blocks)
+                                normalize_blocks=assembly.normalize_blocks, check_occurrences=assembly.check_occurrences)
 
 
 def apply_graph_updates(assembly, plan, updates, *, files):
@@ -730,7 +771,14 @@ def apply_graph_updates(assembly, plan, updates, *, files):
                for other in [tuple(other_slot["path"])]):
             reject(index, "cfg_slot_conflict", "Two updates address overlapping facts.", slot["slot_id"])
             continue
-        if slot["kind"] in {"region", "action_region"}:
+        if slot["kind"] == "occurrence_region":
+            from .occurrence_region import validate_region
+            try:
+                value = validate_region(assembly.facts, slot, value, files)
+            except (ValueError, TypeError) as error:
+                reject(index, "cfg_region_boundary", str(error), slot["slot_id"])
+                continue
+        elif slot["kind"] in {"region", "action_region"}:
             try:
                 permissions = (_acquisition_permissions(assembly, plan, slot, files)
                                if slot["slot_id"] in acquisition_regions else None)

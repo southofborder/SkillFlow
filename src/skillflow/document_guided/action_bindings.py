@@ -90,7 +90,7 @@ def verified_split_calls(ir, raw_spec, wire_paths, record):
     return pairs
 
 
-def _role_errors(record, instruction, processing, ref, role, paths, split_calls=None):
+def _role_errors(record, instruction, processing, ref, role, paths, split_calls=None, *, context_acquisition=False):
     """Prove presence on normal alternatives without enumerating path products.
 
     Each case group is a disjunction. An unconditional operation, or one
@@ -109,6 +109,8 @@ def _role_errors(record, instruction, processing, ref, role, paths, split_calls=
             return role == "loop"
         if path[-1] in {"guard", "condition"}:
             return role == "branch"
+        if context_acquisition and role == "receive" and path[0] == "output_bindings":
+            return _at(record, path)["value"].get("kind") == "input"
         if len(path) < 2 or path[-2] != "ops":
             return False
         op = _at(record, path)
@@ -125,6 +127,12 @@ def _role_errors(record, instruction, processing, ref, role, paths, split_calls=
             paired = kind == "receive" and split_calls is not None and split_calls.get(path) in selected
             return boundary in {"tool", "remote"} and (kind == "call" or paired or phase == "post_request_error" and kind == "deliver")
         if role == "receive":
+            if context_acquisition:
+                from .entry_transfers import _read_index
+                if _read_index(op, instruction, locations) is not None:
+                    return True
+                if kind == "select_part" and op["input"]["kind"] == "input":
+                    return True
             return kind in {"call", "receive"} and boundary in {"user", "tool", "remote"}
         return kind in {"call", "deliver"} and boundary in {"tool", "remote", "user", "model_context"}
 
@@ -151,7 +159,8 @@ def _role_errors(record, instruction, processing, ref, role, paths, split_calls=
                 return True
         return False
 
-    if witness(("terminator",)) or reached(record.get("segments", []), ("segments",)):
+    if (witness(("terminator",)) or reached(record.get("segments", []), ("segments",))
+            or any(witness(p) for p in selected if p[:1] == ("output_bindings",))):
         return []
     # Iteration-local semantics must hold inside every body representing this
     # action. A known operation in another collection cannot satisfy its peer.
@@ -260,11 +269,18 @@ def recover_linear_bindings(record, instruction, processing):
 
 def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=None):
     instructions, result, errors = cfg_instructions(material["cfg"]), {}, []
+    from .entry_transfers import acquisition_ports, entry_binding_errors, location_errors
+    entries = acquisition_ports(material)
+    errors.extend(location_errors(entries, processing.get("locations", {})))
+    context_acquisitions = {b["instructions"][0]["id"] for b in material["cfg"]["blocks"].values()
+                            if b.get("data_source_kind") == "context" and b.get("instructions")}
     files = None
     for ir, record in processing.get("ir_semantics", {}).items():
         if ir not in instructions:
             continue
         cfg = instructions[ir]
+        if ir in entries:
+            errors.extend(entry_binding_errors(cfg, entries[ir][1], record, processing.get("locations", {})))
         declared = cfg.get("metadata", {}).get("source_actions", [])
         supplied = record.get("source_actions", [])
         prefix = json_pointer("ir_semantics", ir)
@@ -290,7 +306,8 @@ def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=
                     # The ordinary backend validator still reports the original
                     # malformed or ambiguous request. It cannot witness a call.
                     pairs = {}
-            return _role_errors(record, cfg, processing, name, role, bound, pairs)
+            return _role_errors(record, cfg, processing, name, role, bound, pairs,
+                                context_acquisition=ir in context_acquisitions)
         if not actions:
             role = source_action_role({"kind": cfg["opcode"]})
             if role in BOUNDARY_ROLES:

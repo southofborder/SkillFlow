@@ -18,6 +18,7 @@ _STRATEGIES = {
     "skillflow-document-step-v17": "skillflow-graph-facts-correction-v2",
     "skillflow-document-step-v18": "skillflow-graph-facts-correction-v3",
     "skillflow-document-step-v19": "skillflow-graph-facts-correction-v4",
+    "skillflow-document-step-v20": "skillflow-graph-facts-correction-v5",
 }
 
 
@@ -48,7 +49,7 @@ def accepted_stage_value(owner, manifest, *, source):
     owner = checked_run_path(owner)
     kind, identity = manifest.get("kind"), manifest.get("identity")
     from .graph_steps import FACTS, UPDATES
-    current = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18", "skillflow-document-step-v19"}
+    current = identity in _STRATEGIES and identity not in {"skillflow-document-step-v13", "skillflow-document-step-v14"}
     kinds = {FACTS, UPDATES} if current else {"cfg_wire_v5"}
     if identity not in _STRATEGIES or kind not in {"flow_document", *kinds}:
         raise ValueError("Unsupported accepted upstream stage protocol")
@@ -63,7 +64,8 @@ def accepted_stage_value(owner, manifest, *, source):
     context = {"source": source, "files": {"skill/" + row["path"]: row["content"] for row in source["files"]}}
     if current:
         context["archived_graph"] = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}
-        context["normalize_blocks"] = identity == "skillflow-document-step-v19"
+        context["normalize_blocks"] = identity in {"skillflow-document-step-v19", "skillflow-document-step-v20"}
+        context["check_occurrences"] = identity == "skillflow-document-step-v20"
     if kind == UPDATES:
         context = _step_context(owner, manifest)
     strategy = _bind_strategy(kind, context)

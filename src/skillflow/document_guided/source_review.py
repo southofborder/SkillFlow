@@ -518,7 +518,8 @@ def build_source_review_prompt(material):
                 "A retain decision must explain which relation prevents a local value/effect placeholder or exact operation. "
                 "For decompose, give supported_action: the representable operation, boundary, or local placeholder to preserve. "
                 "For each kind=placeholder row independently inspect its physical source. Supply masked_boundary "
-                "(none/call/receive/read/write/deliver/branch/loop) and cfg_action_missing (boolean). When the "
+                "(none/call/receive/read/write/deliver/branch/loop) and cfg_action_missing (boolean). Omit both "
+                "fields on whole-instruction gaps. When the "
                 "placeholder replaces a known call, response, read, write or other boundary, choose decompose and "
                 "give its actual interface, receiver, scope and operation. Flag missing or mislabeled CFG actions "
                 "even if processing follows the declared CFG role. A separate unknown local/log effect alongside "
@@ -547,7 +548,10 @@ def build_source_review_prompt(material):
             "request another sample merely because it failed, or treat unavailable claims as reviewed.\n")
         instructions += ("\nCheck source-action coverage against each ordered CFG inventory and the bound processing coordinates. "
             "Check the action kind, actual operands, produced values, output links, order on the same control path, "
-            "and effects. Cite the distinct missing or mismatched action at an editable CFG or processing target. "
+            "and effects. Verify each entry acquisition against one actual invocation or read: check its source, "
+            "active signature, optional argument presence and downstream call operands. Scope unknown module "
+            "initialization to its own occurrence and preserve supported argument bindings. Cite the distinct "
+            "missing or mismatched action at an editable CFG or processing target. "
             "For an inherited graph lacking an inventory, compare the instruction span and complete original source, "
             "including calls, state writes, outputs, control and exceptional boundaries.\n")
         instructions += "\n" + FAILED_STAGE_GUIDANCE

@@ -152,6 +152,10 @@ def test_whole_instruction_review_is_required_locally_correctable_and_routed_to_
     generic = {**gap, "reason": "The operation is opaque."}
     rejected = isolate_source_review({**answer, "gap_checks": [generic]}, review)
     assert rejected["review"]["gap_checks"] == [] and rejected["validation"]["diagnostics"]
+    mixed = {**gap, "masked_boundary": "none", "cfg_action_missing": False}
+    misplaced = isolate_source_review({**answer, "gap_checks": [mixed]}, review)
+    assert any("Remove masked_boundary and cfg_action_missing" in d["message"]
+               for d in misplaced["validation"]["diagnostics"])
     strategy = ReviewCorrectionStrategy(review, fragment_correction_strategy("review"))
     strategy.build_prompt("Full source.", answer, isolation["validation"]["diagnostics"])
     gap.update(disposition="decompose", supported_action="Retain the terminal return and localize the callback selection.")

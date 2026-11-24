@@ -404,12 +404,20 @@ def _generation_feedback(cfg, annotation, interpreter, reachable, roots, predece
 def _seed_state(cfg, annotation, interpreter, registry, supplied):
     state = mapping(supplied) if supplied is not None else {}
     locations = interpreter.initial_locations()
+    optional = set()
+    if supplied is None:
+        for block in cfg["blocks"].values():
+            if block.get("data_source_kind") == "context":
+                ir = block["instructions"][0]
+                for index in ir.get("metadata", {}).get("optional_context_inputs", []):
+                    optional.update(interpreter.context_locations(ir, index))
     for location in sorted(locations, key=lambda loc: (loc.kind, loc.name)):
         # An explicitly supplied full seed state is authoritative, including absence.
         if supplied is not None or location in state:
             continue
+        at = static_key("optional entry", location.kind, location.name) if location in optional else None
         data = registry.register_source(static_key("initial", location.kind, location.name),
-                                        acquired_from=f"{location.kind}:{location.name}")
+                                        acquired_from=f"{location.kind}:{location.name}", at=at)
         state[location] = frozenset([data.id])
     known = {item["data"]["id"] for item in registry.to_dict()["records"]}
     for ids in state.values():
@@ -455,7 +463,8 @@ def propagate(cfg, annotation, *, initial_registry=None, initial_state=None,
         for spec in annotation.ir_semantics.values() for _, _, event in iter_scoped_events(spec) for op in event.atomic_ops)
     guarded_cases = any(event.case and event.case.guard for spec in annotation.ir_semantics.values()
                         for _, _, event in iter_scoped_events(spec))
-    if loop_scopes or has_loop_ops or guarded_cases:
+    optional_arguments = any(ir.get("metadata", {}).get("optional_context_inputs") for ir in instructions.values())
+    if loop_scopes or has_loop_ops or guarded_cases or optional_arguments:
         from skillflow.propagation.loop_domain import LoopFactRegistry
         registry = LoopFactRegistry(registry, loop_scopes)
         registry.max_facts = max_variants

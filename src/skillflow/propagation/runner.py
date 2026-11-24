@@ -21,9 +21,10 @@ from skillflow.propagation.models import FlowState
 from skillflow.propagation.records import PropagationRecords, SCHEMA_VERSION as RECORD_VERSION, LEGACY_SCHEMA_VERSION
 from skillflow.propagation.report import write_reports
 
-IDENTITY = "skill-ir-propagation-v24"
-FORMAT_VERSION = 24
+IDENTITY = "skill-ir-propagation-v25"
+FORMAT_VERSION = 25
 _READABLE_VERSIONS = ((IDENTITY, FORMAT_VERSION, RECORD_VERSION),
+                      ("skill-ir-propagation-v24", 24, "skillflow-propagation-record-v17"),
                       ("skill-ir-propagation-v23", 23, "skillflow-propagation-record-v16"),
                       ("skill-ir-propagation-v22", 22, "skillflow-propagation-record-v16"),
                       ("skill-ir-propagation-v20", 20, LEGACY_SCHEMA_VERSION))

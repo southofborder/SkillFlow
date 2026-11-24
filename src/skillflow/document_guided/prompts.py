@@ -272,8 +272,10 @@ def build_compact_graph_prompt(**kwargs):
         previous, kwargs["global_requirements"], packet, _pre_submit(output, "cfg", kwargs.get("self_check", False)))
 
 
-def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False, normalize_blocks=True):
+def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False, normalize_blocks=True,
+                             check_occurrences=True):
     from .graph_facts import BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA
+    from .entry_occurrences import ENTRY_OCCURRENCE_RULES
     output = ("Return source-located GraphFacts. The program builds and validates the CFG. "
               "Use stable local references to the actual producer and result version; do not use a nearby "
               "replacement value. Identify the entry, each operation's operands and results, and every exit's "
@@ -291,6 +293,7 @@ def build_graph_facts_prompt(*, files, documents, global_requirements, self_chec
               "Localize unknown required facts, keep other supported facts, and cite exact physical source lines. "
               "Do not include source text as a generated value, blocks of machine-authored CFG structure, or a whole-analysis refusal.\n"
               + (BLOCK_KIND_RULES + "\n" if normalize_blocks else "")
+              + (ENTRY_OCCURRENCE_RULES + "\n" if normalize_blocks and check_occurrences else "")
               + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n" + render_prompt_format(GRAPH_FACTS_SCHEMA))
     return _render("Identify the control and data facts in the frozen Skill.",
         _working_documents(documents, ("flow",)), global_requirements, source_packet(files),
@@ -305,11 +308,16 @@ def _fragment_format(step):
     output = render_prompt_format(fragment_adapter(step).json_schema()) + "\n" + fragment_contract_rules(step) + "\n" + phase_examples(step)
     if step == "processing":
         from .fragment_wire import output_wire_instructions
-        output += "\n" + output_wire_instructions()
+        output += ("\nBind each acquired argument to the actual input and output of its invocation. "
+            "A shared caller can forward one value to multiple calls. Separate module evaluation from invocation. "
+            "On omission preserve the sourced default without observing a supplied argument; unknown presence "
+            "keeps both supported alternatives. Keep verified operations and use a local source-backed value "
+            "or effect placeholder for the specific unknown.\n" + output_wire_instructions())
     return output
 
 
-def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False, normalize_blocks=True):
+def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False, normalize_blocks=True,
+                               check_occurrences=True):
     from .graph_slots import GRAPH_UPDATES_SCHEMA
     from .fragment_display import render_fragment_material
     output = "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA)
@@ -335,6 +343,12 @@ def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=
                "Keep existing results, external ports and source-supported actions in order.\n"
                if normalize_blocks and not archived_v17 else "")
             + render_prompt_format(ARCHIVED_GRAPH_FACTS_SCHEMA if archived_v17 else GRAPH_FACTS_SCHEMA))
+    if normalize_blocks and check_occurrences and not archived_v16 and not archived_v17:
+        from .entry_occurrences import ENTRY_OCCURRENCE_RULES
+        output += ("\n" + ENTRY_OCCURRENCE_RULES + "\nAn occurrence_region accepts one Block[] keyed by ref. "
+                   "Return only changed and new blocks. The program retains every omitted block. New local refs "
+                   "use the slot's new_block_prefix. Reconnect the actual argument producers, selector arms and "
+                   "uses within the supplied boundary.\n")
     return _render("Supply only the listed, missing or challenged graph facts.",
         render_fragment_material("cfg", {"scope": plan}),
         "Inputs, outputs, conditions and effects at the region boundary are frozen. Check the complete source. "
@@ -368,7 +382,9 @@ def build_processing_revision_prompt(*, files, flow, runtime_contract, scope, gl
         "do not submit the complete fragment. slots.required_attachments lists the required field, operation coordinate "
         "and input count for the retained or rejected shape. Fill every required attachment on modeled operations, "
         "including new operations; apply the same conditional rules if operations move or change. Use the read_only "
-        "declarations to bind actual locations and expressions. validation_gaps and rejected_record are prior diagnostics "
+        "declarations to bind actual locations and expressions. For merge operations use the current CFG's "
+        "read_only.current_joins, its incoming block IDs and the producer of each input version. Reachability alone "
+        "does not establish which value the source selects. validation_gaps and rejected_record are prior diagnostics "
         "and failed evidence: resolve their causes within this owner, including required local producer definitions.\n"
         + _fragment_format("processing"))
 

@@ -117,10 +117,10 @@ def check_gaps(candidate, inventory, files):
                 raise ValueError("Unknown whole-instruction gap identity")
             subject = expected[check["gap_id"]]
             placeholder = subject.get("kind") == "placeholder"
-            if placeholder != ("masked_boundary" in check and "cfg_action_missing" in check):
+            if placeholder and not ("masked_boundary" in check and "cfg_action_missing" in check):
                 raise ValueError("Every placeholder decision requires masked_boundary and cfg_action_missing.")
             if not placeholder and ("masked_boundary" in check or "cfg_action_missing" in check):
-                raise ValueError("Boundary fields are only valid for an actual placeholder.")
+                raise ValueError("Remove masked_boundary and cfg_action_missing from this whole-instruction gap.")
             if placeholder:
                 masked = check["masked_boundary"]
                 if masked == "none" and check["cfg_action_missing"]:

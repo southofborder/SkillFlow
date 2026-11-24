@@ -116,7 +116,15 @@ class BasicBlock(BaseModel):
         # itself defines is still enough to catch a read placed before its own
         # definition, which no upstream block can excuse.
         block_definitions: dict[str, str] = {}
-        for instruction in self.instructions:
+        for position, instruction in enumerate(self.instructions):
+            if "optional_context_inputs" in instruction.metadata:
+                ports = instruction.metadata["optional_context_inputs"]
+                if (self.data_source_kind != "context" or position != 0 or not isinstance(ports, list)
+                        or any(type(i) != int or i < 0 or i >= len(instruction.inputs)
+                               or instruction.inputs[i].type != OperandType.CONTEXT_KEY for i in ports)
+                        or len(ports) != len(set(ports))):
+                    errors.append(f"block {self.block_id!r}, instruction {instruction.id!r}: "
+                                  "optional_context_inputs must name distinct context acquisition input indexes")
             for operand in instruction.outputs:
                 if (
                     operand.type is OperandType.RESULT

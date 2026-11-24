@@ -106,6 +106,8 @@ def correction_scope(candidate, diagnostics, records):
                     and slot.get("gap_paths") == gap_paths and not slot.get("fixed_unmodeled")):
                 scoped[ir] = {"problem": slot["problem"], "modeled": specs.get(ir),
                     "unmodeled_gaps": {pointer: records[pointer] for pointer in gap_paths}}
+                if slot.get("retain_acquisition"):
+                    scoped[ir]["retain_acquisition"] = True
                 reserved.update([row["path"], *gap_paths])
     selected, field_slots, insertions, read_only = {}, {}, {}, {}
     def insertion_points(segments, path):
@@ -270,6 +272,8 @@ def merge_slots(candidate, correction, scope, *, validate_gap):
                     "The existing processing_gaps table is malformed; a slot cannot replace its container.")
         replacements.append(row)
     for ir in keep_unmodeled:
+        if slots[ir].get("retain_acquisition"):
+            continue  # Revalidate its known transfers with the localized gap.
         result["ir_semantics"].pop(ir, None)
     _remove_unmodeled(result, keep_modeled)
     remove_coverage_claims(result, supplied - keep_modeled - keep_unmodeled)
@@ -277,5 +281,8 @@ def merge_slots(candidate, correction, scope, *, validate_gap):
         if "modeled" in row:
             result.setdefault("ir_semantics", {})[row["instruction_id"]] = deepcopy(row["modeled"])
         else:
+            ir = row["instruction_id"]
+            if slots[ir].get("retain_acquisition") and ir in candidate.get("ir_semantics", {}):
+                result.setdefault("ir_semantics", {})[ir] = deepcopy(candidate["ir_semantics"][ir])
             result.setdefault("processing_gaps", []).extend(deepcopy(row["unmodeled_gaps"]))
     return result

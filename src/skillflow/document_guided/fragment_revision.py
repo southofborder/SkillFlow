@@ -14,7 +14,8 @@ from skillflow.propagation.contracts.references import cfg_instructions, resolve
 from .processing_correction import gap_positions, merge_slots
 
 
-IDENTITY = "skillflow-processing-revision-scope-v3"
+IDENTITY = "skillflow-processing-revision-scope-v4"
+PREVIOUS_IDENTITY = "skillflow-processing-revision-scope-v3"
 SENSITIVITY_IDENTITY = "skillflow-sensitivity-revision-scope-v3"
 CORRESPONDENCE_IDENTITY = "skillflow-correspondence-revision-scope-v1"
 
@@ -157,7 +158,48 @@ def processing_slot_obligations(ir, record, locations, expressions):
     return rows
 
 
-def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_gaps=(), *, rejected_records=None):
+def _current_joins(cfg, slots):
+    """Supply the incoming edges and actual input definitions for writable joins.
+
+    Reachability identifies which predecessor a definition can reach in this
+    graph. Guards and the source still determine whether that value is used.
+    """
+    members = _block_members(cfg)
+    parents = defaultdict(set)
+    edges = defaultdict(list)
+    for edge in cfg["edges"]:
+        target = edge["target_block_id"]
+        parents[target].add(edge["source_block_id"])
+        edges[target].append(edge)
+    definitions = {value["identifier"]: (block, instruction["id"], index)
+                   for block, record in cfg["blocks"].items() for instruction in record["instructions"]
+                   for index, value in enumerate(instruction["outputs"]) if value["type"] == "result"}
+    upstream = {}
+    joins = {}
+    for ir, slot in slots.items():
+        block = members[ir]
+        incoming = parents[block]
+        prior = slot["modeled"] or slot["rejected_record"] or {}
+        if len(incoming) < 2 and not any(op.get("op") == "merge" for op in _operations(prior)):
+            continue
+        if block not in joins:
+            joins[block] = {"incoming_edges": deepcopy(edges[block]), "input_producers": {}}
+            for predecessor in incoming - upstream.keys():
+                upstream[predecessor] = _downstream(parents, {predecessor})
+        operands = {}
+        for index, operand in enumerate(slot["instruction"]["inputs"]):
+            if operand["type"] != "result":
+                continue
+            producer, owner, output = definitions[operand["identifier"]]
+            operands[str(index)] = {"result": operand["identifier"], "instruction_id": owner,
+                "block_id": producer, "output_index": output,
+                "reachable_predecessors": sorted(pred for pred in incoming if producer in upstream[pred])}
+        joins[block]["input_producers"][ir] = operands
+    return joins
+
+
+def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_gaps=(), *, rejected_records=None,
+                     current_joins=True):
     """Compute edit permissions using executable references and checked finding anchors.
 
     Shared locations and standalone expression declarations are held immutable.
@@ -228,7 +270,7 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
             "required_attachments": processing_slot_obligations(ir, records.get(ir, rejected_records.get(ir)), locations, expressions),
             "unmodeled_gaps": {json_pointer("processing_gaps", index): deepcopy(gaps[index])
                                for index in previous_gaps[ir]}}
-    plan = {"identity": IDENTITY, "candidate_sha256": canonical_sha256(prior_processing),
+    plan = {"identity": IDENTITY if current_joins else PREVIOUS_IDENTITY, "candidate_sha256": canonical_sha256(prior_processing),
         "old_cfg_sha256": canonical_sha256(old_cfg), "new_cfg_sha256": canonical_sha256(new_cfg),
         "findings_sha256": canonical_sha256(findings), "slots": slots,
         "validation_gaps_sha256": canonical_sha256(list(validation_gaps)),
@@ -237,6 +279,15 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
         "retained_validation_gaps": [deepcopy(gap) for gap in validation_gaps
             if gap["instruction_id"] in new and gap["instruction_id"] not in slots],
         "unresolved_targets": sorted(set(unresolved))}
+    if current_joins:
+        for block in new_cfg["blocks"].values():
+            if block.get("data_source_kind") in {"context", "external"} and block.get("instructions"):
+                ir = block["instructions"][0]["id"]
+                if ir in slots and slots[ir]["modeled"] is not None and not slots[ir]["changed_cfg"]:
+                    slots[ir]["retain_acquisition"] = True
+        joins = _current_joins(new_cfg, slots)
+        if joins:
+            plan["read_only"]["current_joins"] = joins
     return {**plan, "scope_sha256": canonical_sha256(plan)}
 
 

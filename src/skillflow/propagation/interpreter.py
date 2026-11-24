@@ -193,6 +193,47 @@ class TransferInterpreter:
             return locations
         return set()
 
+    def omitted_argument(self, ir, index):
+        """Use an absent member of this empty argument packet as the omission value.
+
+        This internal result has no external source, unlike a supplied null.
+        The existing missing-field selector can inspect it after forwarding.
+        """
+        key = ir["inputs"][index]["identifier"]
+        site = ["omitted_argument", key]
+        packet = self.literal({}, site)
+        return self.registry.create_result(static_key(self.rule_identity, site),
+            content=SelectionContent(base=packet, path=[key]), origin=Origin(at=str(site), inputs=[packet])).id
+
+    def optional_snapshot(self, ir, index, ids):
+        from skillflow.propagation.selectors import routed_identity, selector_binding, selector_outcomes
+        if not ids:
+            return frozenset([self.omitted_argument(ir, index)])
+        if not hasattr(self.registry, "facts"):
+            return ids
+        # The unspecialized solver seed represents an unknown invocation.
+        # Keep omission on its result alternatives only: the input location
+        # must never report a missing marker as externally acquired data.
+        implicit = {static_key("optional entry", loc.kind, loc.name) for loc in self.context_locations(ir, index)}
+        omitted = None
+        if any(self.registry.get(i).origin.at in implicit for i in ids):
+            omitted = self.omitted_argument(ir, index)
+            ids = ids | {omitted}
+        selector = {"path": [], "tests": [{"kind": "missing"}]}
+        presence = "argument-presence:" + canonical_sha256(ir["inputs"][index]["identifier"])
+        versions = set()
+        for identity in ids:
+            absent = identity == omitted
+            choices = selector_binding(self.registry, identity, selector, 0 if absent else 1)
+            # A concrete supplied value needs no wrapper when it is already
+            # known to be present. An opaque supplied value still excludes
+            # omission, even though its content (including null) is unknown.
+            if len(ids) == 1 and (absent or selector_outcomes(self.registry, identity, selector) == {1}):
+                versions.add(identity)
+                continue
+            versions.add(routed_identity(self.registry, identity, {presence: str(int(not absent)), **choices}))
+        return frozenset(versions)
+
     def initial_locations(self):
         """Only explicit reads/appends and actually used context values seed Data.
 
@@ -270,6 +311,8 @@ class TransferInterpreter:
             else:
                 ids = frozenset().union(*(self.read_location(loc, self._entry_state)
                                          for loc in self.context_locations(ir, index)))
+                if index in ir.get("metadata", {}).get("optional_context_inputs", []):
+                    ids = self.optional_snapshot(ir, index, ids)
                 ids = self._use_aliases(ids, ir, self._entry_state, locals_, [ir["id"], "input-use", index])
             self._entry_inputs[index] = ids
         if index == self.case_input_index and self.case_contexts is not None:
