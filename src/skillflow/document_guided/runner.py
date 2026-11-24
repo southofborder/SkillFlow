@@ -18,7 +18,7 @@ from skillflow.common.upstream import checked_run_path
 from .online import (analysis_config, checked_manifest, file_reference, inventory, prepare_step,
                      read, resolve_file, run_step, save_assembled_annotation, seal)
 
-IDENTITY = "skillflow-document-guided-run-v23"
+IDENTITY = "skillflow-document-guided-run-v24"
 SOURCE_IDENTITY = "skillflow-document-source-v6"
 POLICY = {"independent_requests": True, "whole_objects": True, "normal_semantic_calls": 7,
           "annotation_assembly": "program", "whole_analysis_refusal": False,
@@ -445,7 +445,12 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                                     raise failure
                             raise RuntimeError(outcome.get("reason", "Task execution failed"))
                         raise _StageFailure(outcome["status"], outcome.get("reason", "Task failed"), outcome.get("failure"))
-                    return {"value": load_task_run(owner)["task"], "path": owner / "task.json", "owner": owner}
+                    item = {"value": load_task_run(owner)["task"], "path": owner / "task.json", "owner": owner}
+                    diagnostics = outcome.get("revision_slots", {}).get("diagnostics", [])
+                    if diagnostics:
+                        item["local_gap"] = "Task revision retains source objections at " + ", ".join(
+                            sorted({d["path"] for d in diagnostics}))
+                    return item
                 if key == "flow":
                     return step(name, build_flow_prompt(files=files, global_requirements=rules,
                         self_check=POLICY["submission_self_check"]), kind="flow_document")
@@ -699,7 +704,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
 
         review_materials = {}
 
-        def source_review(values, errors, revision=False):
+        def source_review(values, errors, revision=False, rechecks=None):
             name = "revision/review" if revision else "review"
             mark(name)
             annotation = values.get("annotation", {}).get("value")
@@ -709,7 +714,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 raw_annotation=None if annotation is None else annotation["raw_annotation"],
                 compiled=None if annotation is None else annotation["compiled_annotation"],
                 mapping=None if annotation is None else annotation["mapping"], runtime_contract=runtime_contract(),
-                stage_failures=errors, client=client(name, run / name),
+                stage_failures=errors, client=client(name, run / name), revision_rechecks=rechecks,
                 replay=replay, max_corrections=1, stop_event=stopping, config=config,
                 generation="fragment-v1", prompt_view=POLICY["review_protocol"],
                 partial=bool(errors) or annotation is None,
@@ -773,7 +778,9 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                         "rereview": None, "prior_finding_count": len(findings), "reason": reason}
                     result["limitations"].append(reason)
                 else:
-                    revised_review = source_review(revised, repair_errors, revision=True)
+                    from .revision_rechecks import retained_source_rechecks
+                    rechecks = retained_source_rechecks(reviewed.get("review"), values, revised)
+                    revised_review = source_review(revised, repair_errors, revision=True, rechecks=rechecks)
                 if revised_review["status"] != "complete":
                     if revised_review["status"] != "not_run":
                         result["repair_review"] = {"status": "unconfirmed", "prior_review": "review/result.json",

@@ -33,7 +33,7 @@ PRE_SUBMIT_CHECK = ("Before submitting, check this response against the supplied
     "Submit only the requested result, without self-check notes, pass tables or hidden reasoning.")
 
 
-def build_task_prompt(material, revision=None, *, allow_cannot_assess=True, self_check=False):
+def build_task_prompt(material, revision=None, *, allow_cannot_assess=True, self_check=False, slot_revisions=True):
     # Import the actual validator's failure type lazily; no parallel wire schema.
     from skillflow.task.services import _FailureResponse
     material = checked_task_material(material)
@@ -56,5 +56,11 @@ def build_task_prompt(material, revision=None, *, allow_cannot_assess=True, self
         prompt_block("FORMAT", "3. RESPONSE FORMAT\n" + render_prompt_format(schema)),
         prompt_block("WORKFLOW", TASK_WORKFLOW), prompt_block("SELF_CHECK", check)]
     if revision is not None:
-        blocks.append(prompt_block("REPAIR", REVISION_RULES + "\n\nISOLATED_REVISION_DATA\n\n" + compact_json(revision)))
+        rules = REVISION_RULES
+        if slot_revisions:
+            rules += ("\nKeep purpose, requirements and issues in the same JSON object. Inside each array write one "
+                      "complete claim on each physical line, with id first. Preserve unaffected claims and their IDs. "
+                      "Use the cited spans and requirement IDs to correct, split, add or retire claims affected "
+                      "by the objections. All surviving claims must be present.")
+        blocks.append(prompt_block("REPAIR", rules + "\n\nISOLATED_REVISION_DATA\n\n" + compact_json(revision)))
     return "\n\n".join(blocks)

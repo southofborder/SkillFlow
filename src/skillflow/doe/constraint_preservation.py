@@ -215,17 +215,30 @@ class ForwardInfluence:
                 instruction = e.index.instructions[current_ir]
                 if instruction["opcode"] == "dispatch" and current_ir not in self.typed_dispatches:
                     dispatch_change(current_ir, identity)
+            from .review_barriers import operation_barriers, barrier_reason, barrier_index
+            from .review_ranges import overlap_information
+            if kind in {"op_output", "ir_input"}:
+                changed_value = {"property": "value", "path": changed}
+                if kind == "op_output":
+                    localized = [b for b in operation_barriers(e, key, role="response", information=changed_value) if b.get("range")]
+                else:
+                    localized = [b for b in barrier_index(e).for_receiver_input(e, current_ir, node["slot"])
+                                 if overlap_information(changed_value, b["range"]["information"])]
+                if localized:
+                    missing = True
+                    gaps.update(barrier_reason(b) for b in localized)
+                    review_barriers.update(b["id"] for b in localized)
             if kind != "op_input":
                 continue
             affected.add(key)
             info, input_slot = e.ops[key], node["slot"]
-            from .review_barriers import operation_barriers, barrier_reason
-            barriers = operation_barriers(e, key)
+            barriers = operation_barriers(e, key, role="argument", slot=input_slot, information={"property": "value", "path": changed})
             if barriers:
                 missing = True
                 review_barriers.update(barrier["id"] for barrier in barriers)
                 gaps.update(barrier_reason(barrier) for barrier in barriers)
-                whole_operation(key, identity, "review_validation_barrier")
+                if any("range" not in barrier for barrier in barriers):
+                    whole_operation(key, identity, "review_validation_barrier")
             if e.slots(key).get(input_slot, (None, None))[1] == "control" and not info["spec"].get("selector"):
                 behavior.add(key)
             spec, record = info["spec"], info["record"]

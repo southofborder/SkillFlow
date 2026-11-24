@@ -116,10 +116,10 @@ def prepare_demand_review(facts, task, annotation, candidate, *, queue_order="fi
     return DemandReview(deepcopy(result), {"targets": deepcopy(targets)})
 
 
-def validate_demand_result(result, *, archived_v12=False, archived_v13=False):
+def validate_demand_result(result, *, archived_v12=False, archived_v13=False, archived_v14=False):
     """Validate a stored business result; recomputation is the replay's job."""
     from .demand_results import validate_result_shape
-    result = validate_result_shape(result, archived_v12=archived_v12, archived_v13=archived_v13)
+    result = validate_result_shape(result, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
     if set(result) != {"schema_version", "status", "goals", "derivations", "sinks", "diagnostics", "coverage", "traceability", "input_assessments", "input_findings", "input_contract_review_sha256"}:
         raise ValueError("Demand result fields differ")
     if not isinstance(result["derivations"], dict) or not isinstance(result["sinks"], list):

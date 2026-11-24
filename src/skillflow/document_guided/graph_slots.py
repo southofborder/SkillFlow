@@ -14,7 +14,8 @@ from skillflow.common.validation import structural_error
 from .graph_facts import assemble_graph_facts, field_slot, instruction_ref, source_digest
 
 
-IDENTITY = "skillflow-graph-slot-plan-v4"
+IDENTITY = "skillflow-graph-slot-plan-v5"
+OCCURRENCE_IDENTITY = "skillflow-graph-slot-plan-v4"
 BLOCK_LAYOUT_IDENTITY = "skillflow-graph-slot-plan-v3"
 PRIOR_IDENTITY = "skillflow-graph-slot-plan-v2"
 ARCHIVED_IDENTITY = "skillflow-graph-slot-plan-v1"
@@ -359,6 +360,9 @@ def plan_graph_repair(assembly, *, findings=(), files):
     if assembly.cfg is not None and assembly.gaps:
         raise ValueError("An accepted graph cannot carry assembly failures")
     slots, gaps, regions = structural_slots(assembly)
+    if assembly.check_calls:
+        from .call_region import register_slots
+        register_slots(assembly, slots, gaps, regions, findings, files)
     reviewed = _reviewed_occurrences(assembly, findings, files)
     if reviewed:
         from .occurrence_region import occurrence_slots
@@ -376,6 +380,15 @@ def plan_graph_repair(assembly, *, findings=(), files):
         for slot in local:
             path = slot["path"]
             saved = regions.get(path[1]) if len(path) >= 2 and path[0] == "blocks" else None
+            if saved is not None and saved["kind"] == "call_region":
+                block_ref = assembly.facts["blocks"][path[1]]["ref"]
+                granted = saved["editable_actions"][block_ref]
+                covered = (slot["kind"] == "action_region" and bool(slot["editable_action_refs"])
+                           and set(slot["editable_action_refs"]) <= granted.keys())
+                if slot["kind"] == "region" and "$exit" in granted:
+                    covered = True
+                if not covered:
+                    saved = None
             if saved is None:
                 saved = slots.setdefault(slot["slot_id"], slot)
             if saved["kind"] == slot["kind"] == "action_region" and saved is not slot:
@@ -391,7 +404,7 @@ def plan_graph_repair(assembly, *, findings=(), files):
                 finding_ids = saved.setdefault("finding_ids", [])
                 if finding["id"] not in finding_ids:
                     finding_ids.append(finding["id"])
-    identity = (IDENTITY if assembly.check_occurrences else BLOCK_LAYOUT_IDENTITY if current else
+    identity = (IDENTITY if assembly.check_calls else OCCURRENCE_IDENTITY if assembly.check_occurrences else BLOCK_LAYOUT_IDENTITY if current else
                 ARCHIVED_IDENTITY if assembly.archived else PRIOR_IDENTITY)
     body = {"identity": identity, "base": {key: value for key, value in assembly.to_receipt().items()
             if key not in {"facts", "slots", "gaps", "id_map"}},
@@ -693,7 +706,7 @@ def _compile_edits(assembly, edits, files):
     edited_anchors = set()
     ids = deepcopy(assembly.id_map) or None
     for _, slot, value in edits:
-        if slot["kind"] == "occurrence_region":
+        if slot["kind"] in {"occurrence_region", "call_region"}:
             original = {b["ref"]: i for i, b in zip(slot["block_indices"], slot["old_value"])}
             changed = {original[b["ref"]]: [b] for b in value if b["ref"] in original}
             changed[slot["block_indices"][-1]].extend(b for b in value if b["ref"] not in original)
@@ -728,7 +741,76 @@ def _compile_edits(assembly, edits, files):
         merged["blocks"][index:index + 1] = rows
     return assemble_graph_facts(merged, files=files, canonical_ids=ids,
                                 legacy_cfg=assembly.legacy_cfg, archived=assembly.archived,
-                                normalize_blocks=assembly.normalize_blocks, check_occurrences=assembly.check_occurrences)
+                                normalize_blocks=assembly.normalize_blocks, check_occurrences=assembly.check_occurrences,
+                                check_calls=assembly.check_calls)
+
+
+def _edit_components(assembly, edits):
+    """Group changes that create/consume the same result version or control target."""
+    parents = list(range(len(edits)))
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    producers, consumers = defaultdict(set), defaultdict(set)
+
+    def values(node, key):
+        items = node.get(key)
+        return items if isinstance(items, list) else []
+
+    def ports(blocks):
+        defines, uses = set(), set()
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if isinstance(block.get("ref"), str):
+                defines.add(("block", block["ref"]))
+            for operation in values(block, "operations"):
+                if not isinstance(operation, dict):
+                    continue
+                defines.update(("result", output) for output in values(operation, "outputs")
+                               if isinstance(output, str))
+                uses.update(("result", operand["result"]) for operand in values(operation, "inputs")
+                            if isinstance(operand, dict) and isinstance(operand.get("result"), str))
+            terminator = block.get("exit", {})
+            if isinstance(terminator, dict):
+                for edge in [terminator, *values(terminator, "arms")]:
+                    if isinstance(edge, dict) and isinstance(edge.get("target"), str):
+                        uses.add(("block", edge["target"]))
+                for operand in [*values(terminator, "values"), *values(terminator, "conditions")]:
+                    if isinstance(operand, dict) and isinstance(operand.get("result"), str):
+                        uses.add(("result", operand["result"]))
+        return defines, uses
+
+    for i, (_, slot, value) in enumerate(edits):
+        if slot["kind"] in {"occurrence_region", "call_region"}:
+            before, after = slot["old_value"], value
+        elif slot["kind"] in {"action_region", "region"}:
+            before, after = [slot["old_value"]], value
+        else:
+            path = slot["path"]
+            if len(path) < 3 or path[0] != "blocks":
+                continue
+            original = assembly.facts["blocks"][path[1]]
+            updated = deepcopy(original)
+            _replace(updated, path[2:], value)
+            before, after = [original], [updated]
+        left, uses_before = ports(before)
+        right, uses_after = ports(after)
+        for k in left ^ right:
+            producers[k].add(i)
+        for k in uses_before ^ uses_after:
+            consumers[k].add(i)
+    for key, definitions in producers.items():
+        linked = sorted(definitions | consumers.get(key, set()))
+        for i in linked[1:]:
+            parents[root(i)] = root(linked[0])
+    groups = defaultdict(list)
+    for i, edit in enumerate(edits):
+        groups[root(i)].append(edit)
+    return list(groups.values())
 
 
 def apply_graph_updates(assembly, plan, updates, *, files):
@@ -766,12 +848,22 @@ def apply_graph_updates(assembly, plan, updates, *, files):
     acquisition_regions = {g.get("slot_id") for g in plan["gaps"] if g["code"] == "acquisition_shape"}
     for index, slot, value in modifications:
         path = tuple(slot["path"])
-        if any(path[:len(other)] == other or other[:len(path)] == path
+        footprint = [("blocks", b) for b in slot.get("block_indices", [])] or [path]
+        if any(current[:len(other)] == other or other[:len(current)] == current
                for other_index, other_slot, _ in modifications if other_index != index
-               for other in [tuple(other_slot["path"])]):
+               for current in footprint
+               for other in ([("blocks", b) for b in other_slot.get("block_indices", [])]
+                             or [tuple(other_slot["path"])])):
             reject(index, "cfg_slot_conflict", "Two updates address overlapping facts.", slot["slot_id"])
             continue
-        if slot["kind"] == "occurrence_region":
+        if slot["kind"] == "call_region":
+            from .call_region import validate_call_region
+            try:
+                value = validate_call_region(assembly.facts, slot, value, files)
+            except (ValueError, TypeError) as error:
+                reject(index, "cfg_region_boundary", str(error), slot["slot_id"])
+                continue
+        elif slot["kind"] == "occurrence_region":
             from .occurrence_region import validate_region
             try:
                 value = validate_region(assembly.facts, slot, value, files)
@@ -791,14 +883,15 @@ def apply_graph_updates(assembly, plan, updates, *, files):
     result = _compile_edits(assembly, edits, files)
     if assembly.cfg is not None and result.cfg is None:
         independent = []
-        for edit in edits:
-            index, slot, _ = edit
-            single = _compile_edits(assembly, [edit], files)
-            if single.cfg is not None:
-                independent.append(edit)
+        components = _edit_components(assembly, edits) if assembly.check_calls else [[edit] for edit in edits]
+        for group in components:
+            candidate = _compile_edits(assembly, group, files)
+            if candidate.cfg is not None:
+                independent.extend(group)
             else:
-                reject(index, "cfg_slot_rejected", "This change has no independently valid merge.",
-                       slot["slot_id"], single.gaps)
+                for index,slot,_ in group:
+                    reject(index, "cfg_slot_rejected", "This dependency group has no independently valid merge.",
+                           slot["slot_id"], candidate.gaps)
         result = _compile_edits(assembly, independent, files)
         if result.cfg is None:
             for index, slot, _ in independent:

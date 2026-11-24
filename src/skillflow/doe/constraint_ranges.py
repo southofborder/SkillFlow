@@ -91,7 +91,7 @@ class ContentRanges:
             else:
                 attach(identity, content, origin)
 
-    def track(self, sources, path):
+    def track(self, sources, path, *, allowed_edges=None):
         found, queue = defaultdict(dict), deque()
         parents, roots = defaultdict(set), set()
         def emit(identity, signal, parent=None):
@@ -132,6 +132,8 @@ class ContentRanges:
             identity, signal = queue.popleft()
             node = identity, canonical_sha256(signal)
             for target, kind, parameter in self.edges[identity]:
+                if allowed_edges is not None and (identity, target, kind, canonical_sha256(parameter)) not in allowed_edges:
+                    continue
                 if kind in {"map_project", "family_project", "family_embed"}:
                     if not supported(identity, target, node, set()):
                         continue

@@ -93,8 +93,8 @@ def _below(exclusions, path):
 
 
 class DemandEngine:
-    def __init__(self, facts, task, annotation, candidate, targets, *, input_contract_review=None, archived_v12=False, archived_v13=False):
-        self._archive_validation = archived_v12 or archived_v13
+    def __init__(self, facts, task, annotation, candidate, targets, *, input_contract_review=None, archived_v12=False, archived_v13=False, archived_v14=False):
+        self._archive_validation = archived_v12 or archived_v13 or archived_v14
         self.facts, self.task, self.annotation = facts, task, annotation
         self.candidate, self.targets = candidate, targets
         self.index = _Index(facts)
@@ -130,7 +130,7 @@ class DemandEngine:
         from .unavailable_actions import UnavailableDependencies
         self.unavailable_dependencies = UnavailableDependencies(self)
         from .input_contracts import InputContracts
-        self.contracts = InputContracts(self, input_contract_review, archived_v12=archived_v12, archived_v13=archived_v13)
+        self.contracts = InputContracts(self, input_contract_review, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
         from .source_input_findings import SourceInputMismatchIndex
         self.source_input_mismatches = SourceInputMismatchIndex(self.contracts.receipt)
         from .review_barriers import ReviewValidationBarriers
@@ -345,19 +345,43 @@ class DemandEngine:
         from .review_barriers import operation_barriers, barrier_diagnostic
         meta = self.nodes[node]
         operation = meta["operation_id"]
-        if operation is None or meta["kind"] not in {"action", "op_output"}:
+        if operation is None or meta["kind"] not in {"action", "op_output", "op_input"}:
             return False
-        barriers = operation_barriers(self, operation)
+        from .input_contracts import selector, covers
+        role = {"op_input": "argument", "op_output": "response", "action": "receiver"}[meta["kind"]]
+        wanted = {**selector(information), "excluded_paths": information.get("excluded_paths", [])}
+        barriers = operation_barriers(self, operation, role=role, slot=meta["slot"], information=wanted)
+        full = False
         for barrier in barriers:
+            subject = barrier.get("range")
+            if subject is None and meta["kind"] == "op_input":
+                continue
             diagnostic = barrier_diagnostic(self, barrier, meta["instruction_id"], operation, requirement)
             rule = "input_contract_gap:" + diagnostic
-            self.emit(node, information, requirement, rule, key, True)
-            # The invalid record does not establish a narrower field relation.
-            # Preserve every real operand even when an earlier gap already
-            # made the arriving output demand conservative.
-            for slot in self.slots(operation):
-                self.input(operation, slot, need(), requirement, rule, key, True)
-        return bool(barriers) and not conservative
+            if subject is None:
+                full = True
+                self.emit(node, information, requirement, rule, key, True)
+                for slot in self.slots(operation):
+                    self.input(operation, slot, need(), requirement, rule, key, True)
+            else:
+                bound = subject["information"]
+                if role == "receiver":
+                    spec = self.ops[operation]["spec"]
+                    address = self.compiled["locations"].get(spec.get("target", spec.get("location")), {})
+                    for ref in address.get("operand_refs", []):
+                        if ref["instruction_id"] == meta["instruction_id"] and ref["side"] == "input":
+                            operand = self.node_at("ir_input", ref["instruction_id"], slot=ref["index"])
+                            self.emit(operand, need(bound["property"], bound["path"]), requirement, rule, key, True)
+                    continue
+                if role == "response" and self.ops[operation]["spec"]["op"] == "receive":
+                    # The loaded field is disputed. Its paired request still
+                    # has an independently checked explicit argument interface.
+                    continue
+                covered = covers(bound["path"], wanted["path"]) and bound["property"] in {"value", wanted["property"]}
+                full |= covered
+                item = information if covered or role == "receiver" else need(bound["property"], bound["path"])
+                self.emit(node, item, requirement, rule, key, True)
+        return full and not conservative
 
     def _source_input_errors(self, key, node, information, requirement, conservative):
         """Record known native-output errors without inventing corrected inputs."""
@@ -1169,7 +1193,7 @@ class DemandEngine:
         from skillflow.propagation.facts import declared_boundary_coverage
         unresolved = [row["boundary"] for row in declared_boundary_coverage(self.compiled, self.index.sinks, self.index.coverage)
                       if row["status"] == "unresolved"]
-        return {"schema_version": "skillflow-demand-v14",
+        return {"schema_version": "skillflow-demand-v15",
                 "status": "partial" if any(d["blocking"] for d in self.diagnostics.values()) else "complete",
                 "goals": deepcopy(self.candidate["goals"]),
                 "traceability": self._traceability(),

@@ -125,7 +125,7 @@ class Coverage(Strict):
 
 
 class SensitivityResult(Strict):
-    schema_version: Literal["skillflow-sensitivity-review-v10", "skillflow-sensitivity-review-v11", "skillflow-sensitivity-review-v12"]
+    schema_version: Literal["skillflow-sensitivity-review-v10", "skillflow-sensitivity-review-v11", "skillflow-sensitivity-review-v12", "skillflow-sensitivity-review-v13"]
     declaration_aliases: dict[Text, list[Text]] = Field(default_factory=dict)
     status: Literal["complete", "partial"]
     sinks: list[SinkReview]
@@ -138,7 +138,7 @@ class SensitivityResult(Strict):
     @classmethod
     def versioned_alias_table(cls, value):
         if isinstance(value, dict):
-            if (value.get("schema_version") in {"skillflow-sensitivity-review-v11", "skillflow-sensitivity-review-v12"}) != ("declaration_aliases" in value):
+            if (value.get("schema_version") in {"skillflow-sensitivity-review-v11", "skillflow-sensitivity-review-v12", "skillflow-sensitivity-review-v13"}) != ("declaration_aliases" in value):
                 raise ValueError("Only sensitivity review v11 carries the required declaration_aliases table")
             if value.get("schema_version") == "skillflow-sensitivity-review-v10" and isinstance(value.get("derivations"), dict):
                 from .demand_results import reject_archived_selectors

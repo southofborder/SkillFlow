@@ -14,7 +14,8 @@ from skillflow.propagation.contracts.references import cfg_instructions, resolve
 from .processing_correction import gap_positions, merge_slots
 
 
-IDENTITY = "skillflow-processing-revision-scope-v4"
+IDENTITY = "skillflow-processing-revision-scope-v5"
+JOIN_SCOPE_IDENTITY = "skillflow-processing-revision-scope-v4"
 PREVIOUS_IDENTITY = "skillflow-processing-revision-scope-v3"
 SENSITIVITY_IDENTITY = "skillflow-sensitivity-revision-scope-v3"
 CORRESPONDENCE_IDENTITY = "skillflow-correspondence-revision-scope-v1"
@@ -199,7 +200,7 @@ def _current_joins(cfg, slots):
 
 
 def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_gaps=(), *, rejected_records=None,
-                     current_joins=True):
+                     current_joins=True, scoped_rechecks=True):
     """Compute edit permissions using executable references and checked finding anchors.
 
     Shared locations and standalone expression declarations are held immutable.
@@ -229,6 +230,11 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
             if owner in new:
                 located[owner].append(target)
                 check = {"target_id": target, "source_refs": deepcopy(finding.get("source_refs", []))}
+                if current_joins and scoped_rechecks and finding.get("input_contract_obligation_id"):
+                    # Only a program-authored contract finding has this bound ID.
+                    # Hand the disputed obligation back to its semantic owner.
+                    check.update(obligation_id=finding["input_contract_obligation_id"],
+                                 challenge=finding["explanation"], proposed_change=finding["suggestion"])
                 raw_path = target.split(":/", 1)[-1]
                 located_op = None
                 if "/ops/" in raw_path:
@@ -270,7 +276,8 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
             "required_attachments": processing_slot_obligations(ir, records.get(ir, rejected_records.get(ir)), locations, expressions),
             "unmodeled_gaps": {json_pointer("processing_gaps", index): deepcopy(gaps[index])
                                for index in previous_gaps[ir]}}
-    plan = {"identity": IDENTITY if current_joins else PREVIOUS_IDENTITY, "candidate_sha256": canonical_sha256(prior_processing),
+    identity = (IDENTITY if scoped_rechecks else JOIN_SCOPE_IDENTITY) if current_joins else PREVIOUS_IDENTITY
+    plan = {"identity": identity, "candidate_sha256": canonical_sha256(prior_processing),
         "old_cfg_sha256": canonical_sha256(old_cfg), "new_cfg_sha256": canonical_sha256(new_cfg),
         "findings_sha256": canonical_sha256(findings), "slots": slots,
         "validation_gaps_sha256": canonical_sha256(list(validation_gaps)),
@@ -280,6 +287,14 @@ def processing_scope(old_cfg, new_cfg, findings, prior_processing, validation_ga
             if gap["instruction_id"] in new and gap["instruction_id"] not in slots],
         "unresolved_targets": sorted(set(unresolved))}
     if current_joins:
+        if scoped_rechecks:
+            # IR values and operands are local source facts and carry no Task interpretation.
+            disputed = {ir for ir, checks in source_rechecks.items() if any(c.get("obligation_id") for c in checks)}
+            consumers = _data_consumers(new_cfg)
+            if disputed:
+                plan["read_only"]["result_consumers"] = {
+                    ir: {child: deepcopy(new[child]["inputs"]) for child in sorted(consumers.get(ir, ()))}
+                    for ir in sorted(disputed)}
         for block in new_cfg["blocks"].values():
             if block.get("data_source_kind") in {"context", "external"} and block.get("instructions"):
                 ir = block["instructions"][0]["id"]
@@ -828,7 +843,7 @@ def merge_correspondence_revision(previous, scope, response):
             key = operation["instruction_id"], tuple(operation["operation_path"])
             if key in seen:
                 raise structural_error("correspondence_revision_operation", "/slots",
-                    "Use one operation demand record per exact operation within a requirement slot.")
+                    "Use one operation demand record per exact operation within a requirement slot.", requirement_id=req)
             seen.add(key)
             group = operations.setdefault(key, {**operation, "demands": []})
             group["demands"].extend(deepcopy(operation["demands"]))

@@ -96,7 +96,7 @@ def gap_inventory(material):
     return table
 
 
-def check_gaps(candidate, inventory, files):
+def check_gaps(candidate, inventory, files, *, historical_boundary_diagnostics=False):
     rows = candidate.get("gap_checks", [])
     expected = {row["id"]: row for row in inventory}
     valid, errors, findings = [], [], []
@@ -117,6 +117,11 @@ def check_gaps(candidate, inventory, files):
                 raise ValueError("Unknown whole-instruction gap identity")
             subject = expected[check["gap_id"]]
             placeholder = subject.get("kind") == "placeholder"
+            if historical_boundary_diagnostics:
+                if placeholder != ("masked_boundary" in check and "cfg_action_missing" in check):
+                    raise ValueError("Every placeholder decision requires masked_boundary and cfg_action_missing.")
+                if not placeholder and ("masked_boundary" in check or "cfg_action_missing" in check):
+                    raise ValueError("Boundary fields are only valid for an actual placeholder.")
             if placeholder and not ("masked_boundary" in check and "cfg_action_missing" in check):
                 raise ValueError("Every placeholder decision requires masked_boundary and cfg_action_missing.")
             if not placeholder and ("masked_boundary" in check or "cfg_action_missing" in check):

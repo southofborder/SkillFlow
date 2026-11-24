@@ -24,9 +24,31 @@ class _FailureResponse(BaseModel):
     failure: _TaskFailure
 
 
-def validate_task_response(raw, material):
+def validate_task_response(raw, material, *, revision=None, slot_receipt=None):
     material = checked_task_material(material)
     files = task_source_files(material["source"])
+    if revision is not None:
+        from skillflow.common.revision_slots import read_revision_object
+        from skillflow.task.material import validate_revision
+        from skillflow.task.revision import assemble_task_revision
+        revision = validate_revision(revision, material)
+        parsed = read_revision_object(raw)
+        if parsed.value.get("outcome") != "cannot_assess":
+            if slot_receipt is not None:
+                from skillflow.common.recording import canonical_sha256
+                slot_receipt.clear()
+                slot_receipt.update(scope_sha256=canonical_sha256(revision), raw_sha256=canonical_sha256(raw),
+                                    repairs=parsed.repairs, diagnostics=parsed.diagnostics)
+            task, receipt = assemble_task_revision(parsed, material, revision)
+            if slot_receipt is not None:
+                slot_receipt.update(receipt)
+            elif receipt["diagnostics"]:
+                # The direct service returns only Task. Resolve outstanding
+                # diagnostics in its correction loop before it can return one.
+                from skillflow.common.validation import StructuralValidationError
+                raise StructuralValidationError(receipt["diagnostics"])
+            return task
+        raw = parsed.value
     try:
         raw = _json_object(raw)
     except (ValueError, TypeError) as error:
@@ -50,7 +72,14 @@ def validate_task_response(raw, material):
 
 def extract_task(source, *, client, revision=None, stop_event=None):
     material = prepare_task_material(source)
-    return correct_response(build_task_prompt(material, revision), complete=client.complete,
+    prompt = build_task_prompt(material, revision)
+    if revision is not None:
+        from skillflow.task.revision import TaskRevisionCorrection
+        receipt = {}
+        return correct_response(prompt, complete=client.complete, stop_event=stop_event,
+            max_corrections=1, correction_strategy=TaskRevisionCorrection(),
+            validate=lambda raw: validate_task_response(raw, material, revision=revision, slot_receipt=receipt))
+    return correct_response(prompt, complete=client.complete,
                             validate=lambda raw: validate_task_response(raw, material), stop_event=stop_event)
 
 

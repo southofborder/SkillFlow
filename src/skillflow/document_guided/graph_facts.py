@@ -19,7 +19,8 @@ from skillflow.graph.extraction.candidate import IRAnalysisCandidate
 from skillflow.graph.extraction.compiler import allocate_candidate_ids, compile_candidate
 from skillflow.graph.ir.cfg import ControlFlowGraph
 
-IDENTITY = "skillflow-graph-facts-v4"
+IDENTITY = "skillflow-graph-facts-v5"
+OCCURRENCE_IDENTITY = "skillflow-graph-facts-v4"
 BLOCK_LAYOUT_IDENTITY = "skillflow-graph-facts-v3"
 PREVIOUS_IDENTITY = "skillflow-graph-facts-v2"
 ARCHIVED_IDENTITY = "skillflow-graph-facts-v1"
@@ -172,9 +173,10 @@ class GraphAssembly:
     normalize_blocks: bool = True
     block_layout: dict = field(default_factory=dict)
     check_occurrences: bool = True
+    check_calls: bool = True
 
     def to_receipt(self):
-        identity = (IDENTITY if self.check_occurrences else BLOCK_LAYOUT_IDENTITY if self.normalize_blocks
+        identity = (IDENTITY if self.check_calls else OCCURRENCE_IDENTITY if self.check_occurrences else BLOCK_LAYOUT_IDENTITY if self.normalize_blocks
                     else ARCHIVED_IDENTITY if self.archived else PREVIOUS_IDENTITY)
         return {"identity": identity, "origin": self.origin, "source_sha256": self.source_sha256,
             "facts_sha256": canonical_sha256(self.facts),
@@ -639,7 +641,7 @@ def _restore_legacy_labels(cfg, inherited_refs):
 
 
 def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, archived=False,
-                         normalize_blocks=True, check_occurrences=True):
+                         normalize_blocks=True, check_occurrences=True, check_calls=True, _retained=False):
     """Lower complete facts and revalidate the entire CFG without synthesizing semantics."""
     sha = source_digest(files)
     if not isinstance(value, dict):
@@ -650,15 +652,20 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
     prior = deepcopy(canonical_ids or {})
     normalize_blocks = normalize_blocks and not archived
     check_occurrences = check_occurrences and normalize_blocks
+    check_calls = check_calls and check_occurrences
     if not archived:
         _check_authored_roles(raw, slots, gaps, imported=legacy_cfg is not None, prior=prior)
     facts = _validate_facts(raw, slots, gaps, archived=archived)
     if facts is None:
         return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived,
-                             normalize_blocks=normalize_blocks, check_occurrences=check_occurrences)
+                             normalize_blocks=normalize_blocks, check_occurrences=check_occurrences, check_calls=check_calls)
+    if check_calls:
+        from .source_calls import bind_source_calls
+        bind_source_calls(raw, files)
+        facts = Facts.model_validate(raw)
     layout = _acquisition_layout(facts) if normalize_blocks else {}
     options = {"archived": archived, "normalize_blocks": normalize_blocks, "block_layout": layout,
-               "check_occurrences": check_occurrences}
+               "check_occurrences": check_occurrences, "check_calls": check_calls}
     candidate, locators, inherited_refs = _lower(facts, raw, files=files, slots=slots, gaps=gaps,
                                                 legacy_cfg=legacy_cfg, archived=archived, canonical_ids=prior,
                                                 block_layout=layout)
@@ -676,6 +683,15 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
                 if "optional_context_inputs" in op.get("metadata", {}) and op.get("source") is not None:
                     _add_gap(raw, slots, gaps, "generated_metadata", ("blocks", bi, "operations", oi, "metadata"),
                              "Optional context input indices are derived from the physical signature.")
+    if check_calls and not gaps and not _retained:
+        from .call_region import call_sites
+        by_ref = {b["ref"]: i for i, b in enumerate(raw["blocks"])}
+        for site in call_sites(raw, files):
+            if site["errors"]:
+                bi = by_ref[site["caller"]]
+                path = ("blocks", bi, "operations", len(raw["blocks"][bi]["operations"]) - 1, "inputs")
+                _add_gap(raw, slots, gaps, "call_return_binding", path, " ".join(site["errors"]))
+                gaps[-1]["call_site"] = site["caller"]
     if gaps:
         return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, **options)
     if check_occurrences:
@@ -713,7 +729,7 @@ def _fact_input(operand):
             else {operand["type"]: operand["identifier"]})
 
 
-def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, check_occurrences=True):
+def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True):
     """Bind old canonical material without representing it as new model-authored facts."""
     verified = ControlFlowGraph.model_validate(cfg)
     verified.validate_integrity()
@@ -755,7 +771,8 @@ def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, chec
         draft["exit"] = exit
         facts["blocks"].append(draft)
     assembly = assemble_graph_facts(facts, files=files, canonical_ids=ids, legacy_cfg=cfg, archived=archived,
-                                    normalize_blocks=normalize_blocks, check_occurrences=check_occurrences)
+                                    normalize_blocks=normalize_blocks, check_occurrences=check_occurrences, check_calls=check_calls,
+                                    _retained=True)
     if assembly.cfg != cfg:
         raise ValueError("Cannot reconstruct the accepted CFG exactly from editable facts")
     return assembly

@@ -303,7 +303,7 @@ def retain_valid_entries(raw, cfg, processing, files):
     return resolved, [validation_gap(ir, ds, unmodeled=False) for ir, ds in sorted(issues.items())]
 
 
-def ingress_gap_rechecks(material):
+def ingress_gap_rechecks(material, *, bind=False):
     """Route a retained limitation to an existing producer target in this bundle."""
     from skillflow.common.source_evidence import json_pointer
     targets = {row["id"] for row in material["target_index"]}
@@ -326,7 +326,8 @@ def ingress_gap_rechecks(material):
             domain = {"domain": "annotation", "owner": "processing"}
         target = next((item for item in candidates if item in targets), None)
         if target:
-            result.append({**domain, "target_ids": [target], "explanation":
+            result.append({**domain, "target_ids": [target],
+                **({"sensitivity_entry_gap_id": canonical_sha256(gap)} if bind else {}), "explanation":
                 "An ingress classification remains unbound: " + gap["missing_entry"] + ". " + gap["reason"],
                 "source_refs": [{k: e[k] for k in ("file", "start_line", "end_line")} for e in gap["evidences"]],
                 "suggestion": "Verify the cited ingress relation at its producer and bind the actual access if supported."})

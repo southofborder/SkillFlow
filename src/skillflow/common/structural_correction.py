@@ -144,10 +144,11 @@ def correction_prompt(base_prompt, response, diagnostics):
 
 
 def correct_response(base_prompt, *, complete, validate, stop_event=None, on_attempt=None,
-                     on_normalization=None, correction_builder=correction_prompt):
-    """In-memory counterpart using the same typed transition and prompt builder."""
+                     on_normalization=None, correction_builder=correction_prompt,
+                     max_corrections=None, correction_strategy=None):
+    """In-memory counterpart using the same typed transition and correction budget."""
     stopping = stop_event or Event()
-    prompt, number = base_prompt, 1
+    prompt, number, previous = base_prompt, 1, None
     while True:
         if stopping.is_set():
             raise KeyboardInterrupt("User interrupted; no new structural correction is started.")
@@ -158,11 +159,19 @@ def correct_response(base_prompt, *, complete, validate, stop_event=None, on_att
         if receipt is not None and on_normalization:
             on_normalization(number, response, deepcopy(receipt))
         try:
+            if previous is not None and correction_strategy is not None:
+                candidate = correction_strategy.merge(previous, candidate)
             value = validate(candidate)
         except StructuralValidationError as error:
             if on_attempt:
                 on_attempt(number, response, deepcopy(error.diagnostics))
-            prompt = correction_builder(base_prompt, response, error.diagnostics)
+            if max_corrections is not None and number > max_corrections:
+                raise StructuralCorrectionLimitReached(max_corrections, error.diagnostics) from error
+            previous = candidate
+            if correction_strategy is None:
+                prompt = correction_builder(base_prompt, response, error.diagnostics)
+            else:
+                prompt = correction_strategy.build_prompt(base_prompt, candidate, error.diagnostics)
             number += 1
             continue
         if on_attempt:
@@ -245,7 +254,8 @@ class ResponseChain:
                  validate, client_factory=None, stop_event=None, replay=False, read_only=False,
                  progress=None, recording_client=RecordingClient, saved_client=SavedResponseClient,
                  interruption=None, factory_provider=None, correction_builder=correction_prompt,
-                 max_corrections=None, correction_strategy=None):
+                 max_corrections=None, correction_strategy=None, validation_evidence=None):
+        self.validation_evidence = validation_evidence
         if read_only and not replay:
             raise ValueError("Read-only response-chain verification requires replay")
         if max_corrections is not None and (type(max_corrections) is not int or max_corrections < 0):
@@ -389,6 +399,10 @@ class ResponseChain:
                       "candidate_sha256": canonical_sha256(self.candidate),
                       "normalization_sha256": (None if self.normalization is None else canonical_sha256(self.normalization)),
                       "status": status, **extra}
+        if self.validation_evidence is not None:
+            evidence = self.validation_evidence(self.candidate)
+            if evidence is not None:
+                validation["revision_slots_sha256"] = canonical_sha256(evidence)
         was_validated = self._saved is not None and any(
             old.get("call") == row["call"] and old.get("status") != "pending"
             for old in self._saved["attempts"])

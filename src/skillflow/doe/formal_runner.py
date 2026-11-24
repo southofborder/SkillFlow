@@ -27,8 +27,8 @@ from .sensitivity_report import build_view, placeholder_sites, report_chunks
 from .input_contract_review import build_input_contract_review, checked_input_contract_review
 
 
-IDENTITY = "skillflow-doe-run-v14"
-FORMAT_VERSION = 14
+IDENTITY = "skillflow-doe-run-v15"
+FORMAT_VERSION = 15
 _MARKER = ".preparing.json"
 _ARTIFACTS = frozenset({"audit/index.json",
     "audit/demand-support.json", "audit/input-contract-review.json", "doe-result.json", "report.html", "report.md"})
@@ -128,7 +128,7 @@ def _demand_support(demand, result):
                    if key not in _SHARED_SINK_FIELDS - {"id"}} for sink in demand["sinks"]]}
 
 
-def _restore_demand(result, support, annotation, *, archived_v12=False, archived_v13=False):
+def _restore_demand(result, support, annotation, *, archived_v12=False, archived_v13=False, archived_v14=False):
     from .demand_results import DemandResult
     if set(support) != (set(DemandResult.model_fields) - {"goals", "derivations"} | {"extra_derivations"}):
         raise ValueError("Formal DOE demand support fields differ")
@@ -144,7 +144,7 @@ def _restore_demand(result, support, annotation, *, archived_v12=False, archived
         "derivations": {**deepcopy(support["extra_derivations"]), **deepcopy(result["derivations"]["demand"])},
         "sinks": [{**{key: deepcopy(sinks[row["id"]][key]) for key in _SHARED_SINK_FIELDS},
                    **deepcopy(row)} for row in support["sinks"]]}
-    return validate_demand_result(value, archived_v12=archived_v12, archived_v13=archived_v13)
+    return validate_demand_result(value, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
 
 
 def _index_snapshot(index):
@@ -154,7 +154,7 @@ def _index_snapshot(index):
             for identifier, row in index["declarations"].items()}}
 
 
-def _validate(result, index, support, facts, annotation, input_contract_review, *, archived_v12=False, archived_v13=False):
+def _validate(result, index, support, facts, annotation, input_contract_review, *, archived_v12=False, archived_v13=False, archived_v14=False):
     task = annotation["task"]
     demands = joint_demands(annotation)
     candidate = extract_sensitivity_candidate(annotation["raw_annotation"])
@@ -162,9 +162,9 @@ def _validate(result, index, support, facts, annotation, input_contract_review, 
     full_index = build_sensitivity_index(annotation, candidate)
     if canonical_sha256(index) != canonical_sha256(_index_snapshot(full_index)):
         raise ValueError("Formal DOE declaration index differs from joint annotation")
-    demand = _restore_demand(result, support, annotation, archived_v12=archived_v12, archived_v13=archived_v13)
+    demand = _restore_demand(result, support, annotation, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
     validate_sensitivity_result(result, facts, task, annotation, demands, candidate, demand_result=demand,
-                                input_contract_review=input_contract_review, archived_v12=archived_v12, archived_v13=archived_v13)
+                                input_contract_review=input_contract_review, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
     return SensitivityReview(deepcopy(result), full_index, demand)
 
 
@@ -199,12 +199,12 @@ def _compute(facts, annotation, input_contract_review):
     return review, result, index, support
 
 
-def _checked_review(facts, annotation, value, *, archived_v12=False, archived_v13=False):
+def _checked_review(facts, annotation, value, *, archived_v12=False, archived_v13=False, archived_v14=False):
     files = joint_source_files(annotation["material"])
     if value is None:
         value = build_input_contract_review(files=files, cfg=facts.cfg, annotation=annotation)
     return checked_input_contract_review(value, files=files, cfg=facts.cfg, annotation=annotation,
-                                         archived_v12=archived_v12, archived_v13=archived_v13)
+                                         archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
 
 
 def verify_uncommitted_doe(propagation_run, *, run_dir, input_contract_review=None):
@@ -307,7 +307,7 @@ def run_doe(propagation_run, *, run_dir, input_contract_review=None):
 
 
 def _load_materials(directory, manifest, *, upstream=None):
-    formats = {(IDENTITY, FORMAT_VERSION), ("skillflow-doe-run-v12", 12), ("skillflow-doe-run-v13", 13)}
+    formats = {(IDENTITY, FORMAT_VERSION), ("skillflow-doe-run-v12", 12), ("skillflow-doe-run-v13", 13), ("skillflow-doe-run-v14", 14)}
     if (type(manifest.get("schema_version")) is not int
             or (manifest.get("identity"), manifest["schema_version"]) not in formats):
         raise ValueError("Unsupported formal DOE run version")
@@ -341,10 +341,10 @@ def _load_materials(directory, manifest, *, upstream=None):
     facts, annotation = upstream, upstream.annotation
     archived = manifest["schema_version"] == 12
     receipt = _checked_review(facts, annotation, _read(directory / "audit/input-contract-review.json"),
-                              archived_v12=archived, archived_v13=manifest["schema_version"] == 13)
+                              archived_v12=archived, archived_v13=manifest["schema_version"] == 13, archived_v14=manifest["schema_version"] == 14)
     if canonical_sha256(receipt) != manifest["input_contract_review_sha256"]:
         raise ValueError("Formal DOE input-contract review digest mismatch")
-    review = _validate(result, index, support, facts, annotation, receipt, archived_v12=archived, archived_v13=manifest["schema_version"] == 13)
+    review = _validate(result, index, support, facts, annotation, receipt, archived_v12=archived, archived_v13=manifest["schema_version"] == 13, archived_v14=manifest["schema_version"] == 14)
     metadata = _metadata(result, annotation, upstream.provenance)
     if "task_provenance" not in manifest["metadata"]:
         # Existing current-format runs stay byte-for-byte intact. Their missing

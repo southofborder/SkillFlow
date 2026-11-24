@@ -1,4 +1,5 @@
 """Short isolated prompts; understanding does not receive final JSON schemas."""
+from skillflow.common.revision_slots import slot_wire_instructions
 from skillflow.common.prompt_format import compact_json, render_prompt_format
 from skillflow.propagation.contracts.abstraction import BOUNDARY_GRANULARITY, NECESSITY_EXAMPLE
 from skillflow.task.prompts import PRE_SUBMIT_CHECK
@@ -241,6 +242,9 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
             "merely because it has no output. Precision-only gaps do not replace its record. Do not return only edited records.\n"
             "REQUIRED_IR_IDS\n" + compact_json(ids) + "\n")
     output = common + necessity + coverage + "FRAGMENT FORMAT\n" + _fragment_format(step)
+    if repair_context is not None:
+        output += ("\nWrite each current IR, declaration and requirement record on its own physical line, "
+                   "using the existing table and owner keys. Keep each shared_values definition on its own line.")
     return _render(_STEPS[step][1], "\n\n".join(previous), global_requirements, packet, _pre_submit(output, step, self_check))
 
 
@@ -273,9 +277,10 @@ def build_compact_graph_prompt(**kwargs):
 
 
 def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False, normalize_blocks=True,
-                             check_occurrences=True):
+                             check_occurrences=True, check_calls=True):
     from .graph_facts import BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA
     from .entry_occurrences import ENTRY_OCCURRENCE_RULES
+    from .source_calls import CALL_RULES
     output = ("Return source-located GraphFacts. The program builds and validates the CFG. "
               "Use stable local references to the actual producer and result version; do not use a nearby "
               "replacement value. Identify the entry, each operation's operands and results, and every exit's "
@@ -294,6 +299,7 @@ def build_graph_facts_prompt(*, files, documents, global_requirements, self_chec
               "Do not include source text as a generated value, blocks of machine-authored CFG structure, or a whole-analysis refusal.\n"
               + (BLOCK_KIND_RULES + "\n" if normalize_blocks else "")
               + (ENTRY_OCCURRENCE_RULES + "\n" if normalize_blocks and check_occurrences else "")
+              + (CALL_RULES + "\n" if normalize_blocks and check_occurrences and check_calls else "")
               + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n" + render_prompt_format(GRAPH_FACTS_SCHEMA))
     return _render("Identify the control and data facts in the frozen Skill.",
         _working_documents(documents, ("flow",)), global_requirements, source_packet(files),
@@ -317,7 +323,7 @@ def _fragment_format(step):
 
 
 def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False, normalize_blocks=True,
-                               check_occurrences=True):
+                               check_occurrences=True, check_calls=True, revision_slots=True):
     from .graph_slots import GRAPH_UPDATES_SCHEMA
     from .fragment_display import render_fragment_material
     output = "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA)
@@ -349,6 +355,11 @@ def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=
                    "Return only changed and new blocks. The program retains every omitted block. New local refs "
                    "use the slot's new_block_prefix. Reconnect the actual argument producers, selector arms and "
                    "uses within the supplied boundary.\n")
+    if normalize_blocks and check_occurrences and check_calls and not archived_v16 and not archived_v17:
+        from .source_calls import CALL_RULES
+        output += "\n" + CALL_RULES + " For a call_region return only changed Block[] rows at the listed call, parameter, return and consumer sites."
+    if revision_slots and check_calls and check_occurrences and not archived_v16 and not archived_v17:
+        output += "\n" + slot_wire_instructions("updates", "slot_id")
     return _render("Supply only the listed, missing or challenged graph facts.",
         render_fragment_material("cfg", {"scope": plan}),
         "Inputs, outputs, conditions and effects at the region boundary are frozen. Check the complete source. "
@@ -386,7 +397,7 @@ def build_processing_revision_prompt(*, files, flow, runtime_contract, scope, gl
         "read_only.current_joins, its incoming block IDs and the producer of each input version. Reachability alone "
         "does not establish which value the source selects. validation_gaps and rejected_record are prior diagnostics "
         "and failed evidence: resolve their causes within this owner, including required local producer definitions.\n"
-        + _fragment_format("processing"))
+        + _fragment_format("processing") + "\n" + slot_wire_instructions("coverage_slots", "instruction_id"))
 
 
 def build_sensitivity_revision_prompt(*, files, scope, global_requirements):
@@ -401,7 +412,7 @@ def build_sensitivity_revision_prompt(*, files, scope, global_requirements):
         "resolved_entry_gaps:[{gap_sha256:<prior_gap_id>,entry_id:<current entry at this instruction>,reason:<specific binding>}]. "
         "Copy supported records, correct changed bindings, and supply every "
         "required field. The declarations array uses entry_id, origin, applicability, label and evidences.\n"
-        + _fragment_format("sensitivity"))
+        + _fragment_format("sensitivity") + "\n" + slot_wire_instructions("slots", "instruction_id"))
 
 
 def build_correspondence_revision_prompt(*, files, scope, cfg, processing, global_requirements):
@@ -417,7 +428,7 @@ def build_correspondence_revision_prompt(*, files, scope, cfg, processing, globa
         "Only a slot marked keepable may use keep:true instead. Preserve each requirement's full constraints "
         "and actual receiver, field, and operation identities. A permitted requirement can use any supported "
         "current target. The program retains every other requirement and validates the merged fragment.\n"
-        + _fragment_format("task-correspondence"))
+        + _fragment_format("task-correspondence") + "\n" + slot_wire_instructions("slots", "requirement_id"))
 
 
 def build_annotation_prompt(material, *, documents, spans=None, global_requirements,

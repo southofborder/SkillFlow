@@ -23,12 +23,12 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 from skillflow.common.semantic_failure import SemanticFailure
 from .batches import validate_batch, batch_model, combine_annotation
 
-STEP_IDENTITY = "skillflow-document-step-v20"
-PREVIOUS_STEP_IDENTITY = "skillflow-document-step-v19"
-READABLE_STEP_IDENTITIES = {STEP_IDENTITY, PREVIOUS_STEP_IDENTITY, "skillflow-document-step-v18"}
-ANNOTATION_IDENTITY = "skillflow-document-annotation-v14"
+STEP_IDENTITY = "skillflow-document-step-v21"
+PREVIOUS_STEP_IDENTITY = "skillflow-document-step-v20"
+READABLE_STEP_IDENTITIES = {STEP_IDENTITY, PREVIOUS_STEP_IDENTITY, "skillflow-document-step-v19", "skillflow-document-step-v18"}
+ANNOTATION_IDENTITY = "skillflow-document-annotation-v15"
 ARCHIVED_ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
-READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v13",
+READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v14", "skillflow-document-annotation-v13",
                                           "skillflow-document-annotation-v12", ARCHIVED_ANNOTATION_IDENTITY})
 FRAGMENT_KINDS = {name + "_fragment": name for name in
                   ("processing", "task-correspondence", "sensitivity")}
@@ -145,10 +145,12 @@ def scoped_dependencies(run, kind):
 def _step_context(directory, manifest):
     """Resolve explicit owners; never copy the full material into a step."""
     context = manifest.get("context", {})
-    value = {}
+    value = {"slot_revisions": manifest.get("identity") == STEP_IDENTITY,
+             "full_revision": directory.name.startswith("revision-")}
     if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"}:
-        value["normalize_blocks"] = manifest.get("identity") in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}
-        value["check_occurrences"] = manifest.get("identity") == STEP_IDENTITY
+        value["normalize_blocks"] = manifest.get("identity") in {"skillflow-document-step-v19", PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}
+        value["check_occurrences"] = manifest.get("identity") in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}
+        value["check_calls"] = manifest.get("identity") == STEP_IDENTITY
     if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"} and manifest.get("identity") in {
             "skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}:
         value["archived_graph"] = True
@@ -172,7 +174,7 @@ def _step_context(directory, manifest):
         from .graph_steps import load_revision_input
         value["graph_repair"] = load_revision_input(directory, value["graph_repair_path"], value["files"],
             [resolve_file(directory, ref) for ref in manifest["dependencies"]], archived=value.get("archived_graph", False),
-            normalize_blocks=value["normalize_blocks"], check_occurrences=value["check_occurrences"])
+            normalize_blocks=value["normalize_blocks"], check_occurrences=value["check_occurrences"], check_calls=value["check_calls"])
     if "processing_scope_path" in value:
         from .fragment_revision import processing_scope
         run = directory.parent.parent
@@ -187,7 +189,8 @@ def _step_context(directory, manifest):
         findings = (read(review).get("review") or {}).get("findings", [])
         gaps, rejected = processing_revision_evidence(old_step)
         expected = processing_scope(read(old_graph)["cfg"], value["cfg"], findings, previous,
-            validation_gaps=gaps, rejected_records=rejected, current_joins=manifest["identity"] == STEP_IDENTITY)
+            validation_gaps=gaps, rejected_records=rejected, current_joins=manifest["identity"] in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY},
+            scoped_rechecks=manifest["identity"] == STEP_IDENTITY)
         if expected is None or expected != read(path):
             raise ValueError("Processing revision scope differs from its bound dependency proof")
         value["processing_revision"] = {"scope": expected, "previous": previous}
@@ -255,7 +258,7 @@ def _correction_strategy(kind, context=None):
     if kind == FACTS:
         return GraphFactsCorrection(context["files"], archived=context.get("archived_graph", False),
                                     normalize_blocks=context.get("normalize_blocks", True),
-                                    check_occurrences=context.get("check_occurrences", True))
+                                    check_occurrences=context.get("check_occurrences", True), check_calls=context.get("check_calls", True))
     if kind == "cfg_wire_v5":
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy("cfg")
@@ -281,6 +284,9 @@ def _run_candidate(chain, kind, context):
         value = chain.run()
         return value, (context.get("validation_gaps") or None) if context.get("processing_revision") else None
     except StructuralCorrectionLimitReached:
+        if ("_revision_partial" in context and context["revision_slots"]["raw_sha256"]
+                == canonical_sha256(chain.last_candidate)):
+            return context["_revision_partial"]
         if kind not in FRAGMENT_KINDS or any(context.get(key) for key in _SCOPED):
             raise
         from .fragments import salvage_fragment
@@ -340,6 +346,29 @@ def _full_graph(value, context):
 
 def validate_step(kind, response, *, context=None):
     if kind in FRAGMENT_KINDS:
+        if context and context.get("slot_revisions"):
+            context.pop("_revision_partial",None)
+            context.pop("revision_slots",None)
+            if context.get("full_revision") and not any(context.get(k) for k in _SCOPED):
+                from .revision_assembly import full_revision
+                result = full_revision(FRAGMENT_KINDS[kind],response,context,_fragment_material(context))
+                if result is not None:
+                    value, gaps, receipt = result
+                    context["revision_slots"] = receipt
+                    if receipt["diagnostics"]:
+                        context["_revision_partial"] = value, gaps
+                        raise StructuralValidationError(receipt["diagnostics"])
+                    return value
+        if context and context.get("slot_revisions") and any(context.get(k) for k in _SCOPED):
+            from .revision_assembly import assemble_revision
+            value, gaps, receipt = assemble_revision(FRAGMENT_KINDS[kind], response, context, _fragment_material(context))
+            context["revision_slots"] = receipt
+            if receipt["diagnostics"] or gaps:
+                context["_revision_partial"] = value, gaps
+                raise StructuralValidationError(receipt["diagnostics"] or [
+                    {"code":"revision_upstream_gap", "path":"/ir_semantics/" + gap["instruction_id"],
+                     "message":"A previously recorded validation gap remains at this instruction."} for gap in gaps])
+            return value
         from .fragments import validate_fragment
         revision = (context or {}).get("processing_revision")
         if revision:
@@ -377,11 +406,20 @@ def validate_step(kind, response, *, context=None):
         if not isinstance(response, str) or not response.strip():
             raise structural_error("document", "", "Return a nonempty Markdown working document")
         return response
+    context = context or {}
+    if kind == "graph_updates_v1" and context.get("slot_revisions"):
+        from .graph_steps import validate_graph
+        graph = validate_graph(kind, response, context)
+        receipt = context["revision_slots"]
+        receipt.update(assembled_sha256=canonical_sha256(graph), validation_gaps_sha256=canonical_sha256([]))
+        if receipt["diagnostics"]:
+            context["_revision_partial"] = graph, []
+            raise StructuralValidationError(receipt["diagnostics"])
+        return graph
     try:
         value = _json_object(response)
     except (ValueError, TypeError) as error:
         raise structural_error("json_format", "", str(error)) from error
-    context = context or {}
     from .graph_steps import FACTS, UPDATES, validate_graph
     if kind in {FACTS, UPDATES}:
         return validate_graph(kind, value, context)
@@ -557,6 +595,9 @@ def run_step(directory, *, client=None, replay=False, stop_event=None, config=No
             client_factory=None if client is None else injected_factory(client), replay=replay,
             max_corrections=manifest.get("max_corrections"), stop_event=stop_event,
             correction_strategy=_bind_strategy(manifest["kind"], context),
+            validation_evidence=lambda candidate: (
+                context["revision_slots"] if context.get("revision_slots")
+                and context["revision_slots"]["raw_sha256"] == canonical_sha256(candidate) else None),
             interruption=(read(directory / "result.json").get("interruption")
                           if replay and (directory / "result.json").exists() else None))
         try:
@@ -602,6 +643,9 @@ def run_step(directory, *, client=None, replay=False, stop_event=None, config=No
         result = {"identity": STEP_IDENTITY, "accepted_call": chain.accepted_call,
             "value_file": name, "value_sha256": sha_file(directory / name),
             "response_chain_sha256": canonical_sha256(chain.snapshot()), "counts": _local_counts(directory, "calls")}
+        if (context.get("revision_slots") is not None and
+                context["revision_slots"]["raw_sha256"] == canonical_sha256(chain.last_candidate)):
+            result["revision_slots"] = context["revision_slots"]
         if salvage is not None:
             result.update(status="partial", validation_gaps=salvage,
                           reason="Only independently validated records are available after the single correction")
@@ -648,6 +692,15 @@ def _saved_step_value(directory, manifest, *, expected_identity=STEP_IDENTITY):
             digest = sha_file(owner / name) if name == "call.json" else canonical_sha256(read(owner / name))
             if digest != row.get(key):
                 raise ValueError("Saved request artifact changed: " + row["call"] + "/" + name)
+        if number == len(attempts):
+            validation = read(owner / "validation.json")
+            receipt = result.get("revision_slots")
+            if ((validation.get("revision_slots_sha256") is not None or receipt is not None)
+                    and (not isinstance(receipt,dict) or canonical_sha256(receipt) != validation.get("revision_slots_sha256")
+                        or receipt["raw_sha256"] != validation["candidate_sha256"]
+                        or receipt.get("assembled_sha256") != canonical_sha256(read(directory / expected_name))
+                        or receipt.get("validation_gaps_sha256") != canonical_sha256(result.get("validation_gaps",[])))):
+                raise ValueError("Saved revision slot assembly differs from its verified terminal decision")
         call = read(owner / "call.json")
         if (call.get("status") != "complete"
                 or canonical_sha256(call.get("response")) != call.get("response_sha256")
@@ -898,6 +951,10 @@ def _check_annotation_steps(directory, manifest, refs):
 def _read_archived_step(directory, annotation_identity):
     """Read a terminal archived constituent with its recorded step/producer identity."""
     identity = read(directory / "manifest.json")["identity"]
+    if annotation_identity == "skillflow-document-annotation-v14":
+        if identity != "skillflow-document-step-v20":
+            raise ValueError("Unsupported step producer for archived annotation")
+        return load_step(directory)
     if annotation_identity == "skillflow-document-annotation-v13":
         if identity not in {"skillflow-document-step-v18", "skillflow-document-step-v19"}:
             raise ValueError("Unsupported step producer for archived annotation")

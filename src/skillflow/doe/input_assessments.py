@@ -242,19 +242,26 @@ class InputReviewBarrierIndex:
     def for_node(self, node):
         rows = {row["id"]: row for row in self.barriers.global_barriers}
 
-        def collect(operation):
+        def collect(operation, role, slot):
             info = self.engine.ops[operation]
-            rows.update((row["id"], row) for row in self.barriers.for_operation(
-                info["position"]["instruction_id"], info["raw_op"]))
+            for row in self.barriers.for_operation(info["position"]["instruction_id"], info["raw_op"]):
+                subject = row.get("range")
+                if subject is None or (subject["role"] == role and
+                        (role != "argument" or subject["input_index"] == slot)):
+                    rows[row["id"]] = row
 
         if node["operation_id"] is not None:
-            collect(node["operation_id"])
-        # Follow actual lexical aliases, never global equality of Data values.
+            collect(node["operation_id"], "response" if node["kind"] == "op_output" else "argument", node["slot"])
         if self.consumers is not None and node["kind"] in {"ir_input", "op_output"}:
             identity = self.nodes[(node["kind"], node["instruction_id"], node["operation_id"], node["slot"])]
             uses, _ = self.consumers(identity)
-            for operation, _, _ in uses:
-                collect(operation)
+            versions = set(node["data_ids"])
+            for operation, slot, used_versions in uses:
+                if not versions or not used_versions or versions.intersection(used_versions):
+                    collect(operation, "argument", slot)
+        if node["kind"] == "ir_input":
+            for row in self.barriers.for_receiver_input(self.engine, node["instruction_id"], node["slot"]):
+                rows[row["id"]] = row
         return [deepcopy(rows[key]) for key in sorted(rows)]
 
     def for_assessment(self, assessment):
@@ -372,11 +379,15 @@ def build_input_assessments(engine):
                            else "This information preserves the task goal through ") + ", ".join(sorted(row["rules"])) + "."
                           + (" " + selector_reason(engine.selector_sources[row["selector_ref"]])
                              if row.get("selector_ref") else "")})
-        if barriers:
-            refs = sorted({barrier_diagnostic(engine, barrier, ir, operation) for barrier in barriers})
-            ranges.append({"status": "unresolved", "property": "value", "path": [], "excluded_paths": [],
-                "demand_refs": [], "diagnostic_refs": refs, "contract_refs": contracts,
-                "reason": " ".join(barrier_reason(barrier) for barrier in barriers)})
+        blocked_fields = []
+        for barrier in barriers:
+            information = barrier.get("range", {}).get("information", {"property": "value", "path": []})
+            item = {**deepcopy(information), "excluded_paths": []}
+            blocked_fields.append(item)
+            ranges.append({"status": "unresolved", **item, "demand_refs": [],
+                "diagnostic_refs": [barrier_diagnostic(engine, barrier, ir, operation)], "contract_refs": contracts,
+                "reason": barrier_reason(barrier)})
+        if any(row["path"] == [] and row["property"] == "value" for row in blocked_fields):
             results.append(assessment)
             continue
         if limits or state not in RECORDED_COVERAGE:
@@ -388,6 +399,8 @@ def build_input_assessments(engine):
         # Explicit exclusions, observed member paths and the complement of all
         # retained ranges provide finite candidates without inventing fields.
         retained = {_id("path_", _range(row)["path"]): _range(row)["path"] for _, row in demands}
+        for field in blocked_fields:
+            retained[_id("path_", field["path"])] = field["path"]
         for _, row in demands:
             if row.get("selector_ref"):
                 subject = _range(row)["path"]
@@ -412,6 +425,8 @@ def build_input_assessments(engine):
                 candidates[canonical_sha256(path)] = path
         for path in candidates.values():
             signal = {"property": "value", "path": path, "excluded_paths": []}
+            if any(demand_overlap(signal, {**field, "each": False, "conservative": False}) != "none" for field in blocked_fields):
+                continue
             if any(demand_overlap(signal, row) != "none" for _, row in demands):
                 continue
             preserved, preservation_reasons = preservation(node, path)
@@ -423,7 +438,7 @@ def build_input_assessments(engine):
                 "contract_refs": contracts, "reason": "No task-preservation demand covers this range; applicable declared constraints are preserved."
                 + (" This is an acquired-result use assessment; the interface has not established support for narrower retrieval."
                    if kind == "op_output" else "")})
-        if demands and [] not in retained.values():
+        if (demands or blocked_fields) and [] not in retained.values():
             excluded = [retained[key] for key in sorted(retained)]
             # A complement can be represented even when an opaque record does
             # not enumerate its unrelated fields. Check concrete exclusions on

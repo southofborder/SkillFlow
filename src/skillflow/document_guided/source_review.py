@@ -117,7 +117,10 @@ class ArchivedFragmentSourceFinding(SourceFinding):
         return self
 
 
-class FragmentSourceFinding(ArchivedFragmentSourceFinding):
+from skillflow.doe.review_ranges import FindingRange
+
+
+class V9FragmentSourceFinding(ArchivedFragmentSourceFinding):
     required_graph_edit: Literal["field", "topology", "action_inventory"] | None = Field(default=None,
         description="CFG findings only. Use action_inventory when repair requires adding, removing or moving action sites.")
 
@@ -125,6 +128,18 @@ class FragmentSourceFinding(ArchivedFragmentSourceFinding):
     def cfg_edit_only(self):
         if self.required_graph_edit is not None and self.domain != "cfg":
             raise ValueError("Only a CFG finding can specify its required graph edit")
+        return self
+
+
+class FragmentSourceFinding(V9FragmentSourceFinding):
+    affected_ranges: list[FindingRange] | None = Field(default=None, min_length=1, description=(
+        "When a finding affects a particular argument field, response field or receiver, cite its actual "
+        "annotation operation, role and information range here. The target_ids locate the edit."))
+
+    @model_validator(mode="after")
+    def range_sources(self):
+        if self.affected_ranges and (self.domain == "task" or not self.source_refs):
+            raise ValueError("An operation-range finding requires original source evidence and an operation domain.")
         return self
 
 
@@ -239,7 +254,7 @@ def _observations(annotation, compiled, mapping, *, raw_view=False):
 def prepare_review_material(*, files, task=None, cfg=None, annotation=None, raw_annotation=None,
                             compiled=None, mapping=None, runtime_contract=None,
                             stage_failures=None, generation="legacy", processing_gaps=None,
-                            partial=False, fragments=None, prompt_view=SHARED_VIEW):
+                            partial=False, fragments=None, prompt_view=SHARED_VIEW, revision_rechecks=None):
     """Build targets only for available objects; absent annotation stays absent."""
     if not isinstance(files, dict) or not files or any(
             type(name) is not str or not name or type(content) is not str
@@ -306,6 +321,9 @@ def prepare_review_material(*, files, task=None, cfg=None, annotation=None, raw_
     if generation == "fragment-v1":
         result.update(generation=generation, processing_gaps=gaps, partial=partial or bool(gaps),
                       fragment_origins=saved_origins, fragments=actual_fragments)
+        if revision_rechecks:
+            from .revision_rechecks import checked_retention_targets
+            result["revision_rechecks"] = checked_retention_targets(revision_rechecks, result)
         result["processing_gap_inventory"] = gap_inventory(result)
         entry_gaps = deepcopy((mapping or {}).get("sensitivity_entry_gaps",
             actual_fragments.get("sensitivity", {}).get("entry_gaps", [])))
@@ -488,6 +506,10 @@ def build_source_review_prompt(material):
             payload["annotation"].pop("_fragment_origins", None)
     payload["cfg"] = compact_semantic_cfg(material["cfg"], material["files"])
     instructions, adapter = _INSTRUCTIONS + "\n" + BOUNDARY_GRANULARITY + "\n" + NECESSITY_EXAMPLE, RESPONSE_ADAPTER
+    if material.get("revision_rechecks"):
+        payload["revision_rechecks"] = deepcopy(material["revision_rechecks"])
+        instructions += ("\nRecheck the retained operation and its original source locations. For each "
+            "listed obligation give the current decision, reason and physical evidence in its existing check.")
     if material.get("generation") == "fragment-v1":
         expected_stages = inventory_for_material(material)
         if (material.get("failed_stage_targets") != expected_stages
@@ -556,6 +578,10 @@ def build_source_review_prompt(material):
             "including calls, state writes, outputs, control and exceptional boundaries.\n")
         instructions += "\n" + FAILED_STAGE_GUIDANCE
         instructions += ("\nINPUT CONTRACT AUDIT\n"
+            "For a localized defect use optional affected_ranges with the existing annotation operation target, role "
+            "(argument plus input_index, response, or receiver), and information (property, path). "
+            "Use the operation inside its actual branch, preserving its pair and receiver. A hole in ingress provenance "
+            "is not by itself a defect in the explicit argument interface. "
             "Return input_contract_checks with exactly one check per expected obligation_id and its exact contract_id (null for an absent attachment), even when findings is empty. "
             "The inventory is derived from actual operations independently of supplied attachments. Missing required attachments are processing-owned representation rejections, not source ambiguity. "
             "This finite contract table is required in addition to sparse findings. Each check gives status accepted, "
@@ -802,7 +828,7 @@ def run_source_review(directory, *, files, task=None, cfg=None, annotation=None,
                       stage_failures=None, client=None, client_factory=None,
                       replay=False, max_corrections=1, config=None, stop_event=None,
                       generation="legacy", processing_gaps=None, partial=False, fragments=None,
-                      _prepared_material=None, prompt_view=SHARED_VIEW):
+                      _prepared_material=None, prompt_view=SHARED_VIEW, revision_rechecks=None):
     """Record one sparse review, or replay its immutable calls without a client."""
     if replay and (client is not None or client_factory is not None):
         raise ValueError("Source-review replay cannot accept a live client")
@@ -820,8 +846,36 @@ def run_source_review(directory, *, files, task=None, cfg=None, annotation=None,
         material = prepare_review_material(files=files, task=task, cfg=cfg, annotation=annotation, raw_annotation=raw_annotation,
             compiled=compiled, mapping=mapping, runtime_contract=runtime_contract, stage_failures=stage_failures,
             generation=generation, processing_gaps=processing_gaps, partial=partial, fragments=fragments,
-            prompt_view=prompt_view)
+            prompt_view=prompt_view, revision_rechecks=revision_rechecks)
+    slot_audit = {}
+    scoped_rereview = (material["identity"] == FRAGMENT_IDENTITY and directory.name == "review"
+                       and directory.parent.name == "revision")
+
+    def decode_review(raw):
+        if not scoped_rereview:
+            return _json_object(raw)
+        from skillflow.common.revision_slots import read_revision_object
+        decoded = read_revision_object(raw)
+        if not decoded.diagnostics and not decoded.repairs:
+            return decoded.value
+        digest = canonical_sha256(raw)
+        slot_audit[digest] = {"raw_sha256": digest, "repairs": decoded.repairs, "diagnostics": decoded.diagnostics}
+        # Put rejected rows back at their true table positions. Typed review
+        # isolation then owns the missing obligation or the affected finding.
+        value = deepcopy(decoded.value)
+        for row in decoded.diagnostics:
+            path = row["path"].strip("/").split("/")
+            if len(path) != 2 or not path[1].isdigit() or not isinstance(value.get(path[0]), list):
+                raise StructuralValidationError([row])
+            evidence = row.get("context", {})
+            target = {k: evidence[k] for k in ("obligation_id", "gap_id", "record_id", "target_id", "target_ids", "scope_ids") if k in evidence}
+            target["_rejected_revision_record"] = evidence.get("record_sha256", digest)
+            value[path[0]].insert(int(path[1]), target)
+        return value
     prompt, writer = build_source_review_prompt(material), ArtifactWriter(())
+    if scoped_rereview:
+        prompt += ("\nFor this re-review, place each finding and check on its own physical line within the "
+                   "existing JSON arrays. Keep its obligation, gap or target identity first. Review the current material.")
     config = analysis_config(config)
     identity = {"identity": material["identity"], "material_sha256": canonical_sha256(material),
                 "prompt_sha256": canonical_sha256(prompt), "config": config,
@@ -851,11 +905,17 @@ def run_source_review(directory, *, files, task=None, cfg=None, annotation=None,
         if material.get("generation") == "fragment-v1":
             from .fragments import fragment_correction_strategy
             from .review_correction import ReviewCorrectionStrategy
-            strategy = ReviewCorrectionStrategy(material, fragment_correction_strategy("review"))
+            strategy = ReviewCorrectionStrategy(material, fragment_correction_strategy("review"), decoder=decode_review if scoped_rereview else _json_object)
+        def validate_review(raw):
+            result = validate_source_review(decode_review(raw) if scoped_rereview else raw, material)
+            if scoped_rereview and strategy is not None and strategy.slot_rejections:
+                raise StructuralValidationError(strategy.slot_rejections)
+            return result
+
         chain = ResponseChain(directory, prefix="calls/review", base_prompt=prompt,
             request_kind=("document_source_review_fragment_v1" if material.get("generation") == "fragment-v1"
                           else "document_source_review_v1"), config=config, writer=writer,
-            validate=lambda raw: validate_source_review(raw, material),
+            validate=validate_review,
             client_factory=client_factory or (injected_factory(client) if client is not None else None),
             replay=replay, max_corrections=max_corrections, stop_event=stop_event,
             correction_strategy=strategy,
@@ -871,7 +931,7 @@ def run_source_review(directory, *, files, task=None, cfg=None, annotation=None,
             result.update(status="structural_failure", reason=str(error), diagnostics=error.diagnostics)
             if material.get("generation") == "fragment-v1" and chain.last_candidate is not None:
                 try:
-                    terminal = _json_object(chain.last_candidate)
+                    terminal = decode_review(chain.last_candidate)
                 except (ValueError, TypeError):
                     pass
                 else:
@@ -914,6 +974,10 @@ def run_source_review(directory, *, files, task=None, cfg=None, annotation=None,
         except Exception:
             counts = {"status": "unavailable"}
         result.update(counts=counts, response_chain=chain.snapshot())
+        if scoped_rereview and strategy is not None and strategy.slot_rejections:
+            result["revision_slot_rejections"] = strategy.slot_rejections
+        if slot_audit:
+            result["revision_slots"] = list(slot_audit.values())
         path = directory / "result.json"
         if path.exists():
             saved = _read(path)

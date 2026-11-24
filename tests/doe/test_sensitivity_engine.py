@@ -259,7 +259,7 @@ def test_repeated_parameters_keep_receiver_slot_specific_demands():
                for r in delivery if r["input_index"] == 1)
 
 
-def test_access_specific_label_follows_the_selected_read_to_its_own_receiver_only():
+def independent_reads_and_receivers():
     def change(prepared, raw, ev):
         events = raw["ir_semantics"]["ir_filter"]["events"][0]["events"]
         events.append({"effect": "fs_read", "evidences": ev, "atomic_ops": [{"op": "read",
@@ -274,8 +274,12 @@ def test_access_specific_label_follows_the_selected_read_to_its_own_receiver_onl
             raw["location_evidences"][name] = ev
             events.append({"effect": None, "evidences": [], "atomic_ops": [{"op": "deliver",
                            "inputs": [use], "target": name, "evidences": ev}]})
-    values = fixture([{"op": "compute", "inputs": [inp()], "dependencies": ["possible"], "output": "unused"}],
+    return fixture([{"op": "compute", "inputs": [inp()], "dependencies": ["possible"], "output": "unused"}],
                      mode="local", custom=change)
+
+
+def test_access_specific_label_follows_the_selected_read_to_its_own_receiver_only():
+    values = independent_reads_and_receivers()
     decl = declarations(ir="ir_read", value=local("stage_0"))
     row = decl["scopes"][0]["declarations"][0]
     row.update(source_entry_id="entry_" + "1" * 24, source_access_id="access_" + "2" * 24,

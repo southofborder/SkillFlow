@@ -29,6 +29,8 @@ from skillflow.task.services import validate_task_response
 
 IDENTITY = "skillflow-task-extraction-v3"
 FORMAT_VERSION = 3
+REVISION_IDENTITY = "skillflow-task-extraction-v4"
+REVISION_FORMAT_VERSION = 4
 CALL_PREFIX = "calls/task"
 POLICY = {"source_only": True, "semantic_repairs": 0, "structural_correction": STRUCTURAL_VERSION,
           "automatic_resend_after_acceptance": False}
@@ -50,7 +52,7 @@ class TaskRunIdentityError(ValueError):
     """Task run inputs, accepted response, or saved identities have changed."""
 
 
-def _validate_task_candidate(raw, material, policy):
+def _validate_task_candidate(raw, material, policy, revision=None, slot_receipt=None):
     if not policy.get("allow_cannot_assess", True):
         from skillflow.common.validation import structural_error
         try:
@@ -60,7 +62,14 @@ def _validate_task_candidate(raw, material, policy):
         if isinstance(value, dict) and value.get("outcome") == "cannot_assess":
             raise structural_error("whole_failure_forbidden", "/outcome",
                 "Submit source-supported requirements and unresolved source issues instead of a whole-analysis refusal")
-    return validate_task_response(raw, material)
+    try:
+        return validate_task_response(raw, material, revision=revision, slot_receipt=slot_receipt)
+    except SemanticFailure:
+        if policy.get("allow_cannot_assess", True):
+            raise
+        from skillflow.common.validation import structural_error
+        raise structural_error("whole_failure_forbidden", "/outcome",
+            "Submit source-supported requirements and unresolved source issues instead of a whole-analysis refusal")
 
 
 def _read(path):
@@ -161,7 +170,8 @@ def prepare_task_run(run_dir, source=None, *, revision=None,
             writer.json(directory / "inputs/source.json", material["source"])
         writer.json(directory / "inputs/request.json", {"revision": revision})
         _write_exact_text(directory / "inputs/prompt.txt", prompt, writer)
-        manifest = {"identity": IDENTITY, "schema_version": FORMAT_VERSION,
+        manifest = {"identity": REVISION_IDENTITY if revision is not None else IDENTITY,
+            "schema_version": REVISION_FORMAT_VERSION if revision is not None else FORMAT_VERSION,
             "task_schema_version": TASK_SCHEMA_VERSION, "run_id": directory.name,
             "created_at": now(), "config": public, "implementation": implementation_provenance(),
             "preparation_status": "ready", "source_owner": None if owner is None else make_run_reference(directory, owner),
@@ -221,8 +231,10 @@ def _verify(directory, *, config=None, check_implementation=True):
             self_check=saved_policy.get("self_check", False)) if isinstance(saved_policy, dict) else None
     except ValueError as error:
         raise TaskRunIdentityError("Unsupported Task correction policy") from error
-    if (manifest.get("identity") != IDENTITY or type(manifest.get("schema_version")) is not int
-            or manifest.get("schema_version") != FORMAT_VERSION
+    protocol = manifest.get("identity"), manifest.get("schema_version")
+    if (protocol not in {(IDENTITY, FORMAT_VERSION), (REVISION_IDENTITY, REVISION_FORMAT_VERSION)}
+            or type(manifest.get("schema_version")) is not int
+            or protocol[0] == REVISION_IDENTITY and manifest.get("request_kind") != "task_revision"
             or manifest.get("task_schema_version") != TASK_SCHEMA_VERSION
             or manifest.get("preparation_status") != "ready"
             or canonical_sha256(saved_policy) != canonical_sha256(policy)):
@@ -251,7 +263,8 @@ def _verify(directory, *, config=None, check_implementation=True):
     revision = validate_revision(request["revision"], material)
     prompt = build_task_prompt(material, revision,
                                allow_cannot_assess=manifest["policy"].get("allow_cannot_assess", True),
-                               self_check=manifest["policy"].get("self_check", False))
+                               self_check=manifest["policy"].get("self_check", False),
+                               slot_revisions=manifest["identity"] == REVISION_IDENTITY)
     if (canonical_sha256(material) != manifest["material_sha256"]
             or canonical_sha256(revision) != manifest["revision_sha256"]
             or canonical_sha256(prompt) != manifest["prompt_sha256"]
@@ -263,7 +276,7 @@ def _verify(directory, *, config=None, check_implementation=True):
 
 
 def _base_result(manifest):
-    return {"identity": IDENTITY, "schema_version": FORMAT_VERSION, "run_id": manifest["run_id"],
+    return {"identity": manifest["identity"], "schema_version": manifest["schema_version"], "run_id": manifest["run_id"],
             "status": "interrupted", "reason": "Task extraction has not completed.", "error_kind": None,
             "source_sha256": manifest["source_sha256"], "task_ref": None, "failure": None,
             "accepted_call": None, "response_chain": None, "request_validation": None, "counts": {}}
@@ -307,6 +320,9 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
             raise ValueError("A credential overlaps verified Task input")
         saved = _read(directory / "result.json") if (directory / "result.json").is_file() else None
         result, task, chain = _base_result(manifest), None, None
+        revision = (_read(directory / "inputs/request.json")["revision"]
+                    if manifest["identity"] == REVISION_IDENTITY else None)
+        slot_receipt = {}
         marker_path = directory / "execution-boundary.json"
         marker = _unseal(_read(marker_path)) if replay and marker_path.is_file() else {"kind": "none"}
         if not replay:
@@ -314,14 +330,27 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
         try:
             factory = client_factory or (injected_factory(client) if client is not None else None)
             strategy = None
-            if not manifest["policy"].get("allow_cannot_assess", True):
+            if revision is not None:
+                from skillflow.task.revision import TaskRevisionCorrection
+                strategy = TaskRevisionCorrection()
+            elif not manifest["policy"].get("allow_cannot_assess", True):
                 # This imports the mechanical record strategy only; Task still
                 # receives solely its frozen source and finite revision inputs.
                 from skillflow.document_guided.fragments import fragment_correction_strategy
                 strategy = fragment_correction_strategy("task")
+            def validate(raw):
+                try:
+                    return _validate_task_candidate(raw, material, manifest["policy"], revision, slot_receipt)
+                finally:
+                    if revision is not None and strategy.correction_evidence and slot_receipt:
+                        slot_receipt["correction"] = strategy.correction_evidence
+
             chain = ResponseChain(directory, prefix=CALL_PREFIX, base_prompt=prompt,
                 request_kind=manifest["request_kind"], config=manifest["config"], writer=writer,
-                validate=lambda raw: _validate_task_candidate(raw, material, manifest["policy"]), client_factory=factory,
+                validate=validate,
+                client_factory=factory,
+                validation_evidence=(lambda candidate: slot_receipt if slot_receipt.get("raw_sha256") ==
+                                     canonical_sha256(candidate) else None) if revision is not None else None,
                 factory_provider=factory_provider, stop_event=stopping, progress=progress,
                 replay=replay, read_only=read_only,
                 correction_strategy=strategy,
@@ -339,6 +368,8 @@ def run_task(run_dir, *, client=None, client_factory=None, factory_provider=None
                 writer.json(task_path, task)
             result.update(status="complete", reason="Independent Task extraction and source-evidence validation completed; semantics still require whole-chain review.",
                           task_ref=reference)
+            if slot_receipt:
+                result["revision_slots"] = slot_receipt
         except (TaskRunIdentityError, ResponseChainError, ResponseIntegrityError) as error:
             raise TaskRunIdentityError(str(error)) from error
         except SemanticFailure as error:

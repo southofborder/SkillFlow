@@ -15,7 +15,7 @@ from skillflow.common.prompt_format import compact_json
 from skillflow.common.source_evidence import _json_object
 from skillflow.common.recording import canonical_sha256
 from skillflow.common.structural_correction import correction_base_prompt
-from skillflow.common.validation import structural_error, diagnostic_materials
+from skillflow.common.validation import StructuralValidationError, structural_error, diagnostic_materials
 from .review_display import (
     DISPLAY_IDENTITY, display_instructions, expand_review_payload, pack_review_payload,
     _shared_values,
@@ -274,9 +274,11 @@ def _diagnostic_display(diagnostics, missing, inventory_ids):
 class ReviewCorrectionStrategy:
     """One source/material-bound correction; the ordinary validator stays final."""
 
-    def __init__(self, material, fallback):
+    def __init__(self, material, fallback, *, decoder=_json_object):
         self.material = deepcopy(material)
         self.fallback = fallback
+        self.decode = decoder
+        self.slot_rejections = []
         self.identity = fallback.identity + ":finite-obligation-slots-v2"
         self.scope = None
         self.diagnostics = None
@@ -284,13 +286,13 @@ class ReviewCorrectionStrategy:
     def build_prompt(self, base_prompt, candidate, diagnostics):
         self.diagnostics = deepcopy(diagnostics)
         try:
-            parsed = _json_object(candidate)
+            parsed = self.decode(candidate)
         except (ValueError, TypeError):
             self.scope = None
             return self.fallback.build_prompt(base_prompt, candidate, diagnostics)
         self.scope = review_correction_scope(parsed, diagnostics, self.material)
         if self.scope["mode"] != "records":
-            return self.fallback.build_prompt(base_prompt, candidate, diagnostics)
+            return self.fallback.build_prompt(base_prompt, parsed, diagnostics)
         shown = diagnostic_materials(diagnostics)["diagnostics"]
         inventory_ids = [row["id"] for row in self.material["input_contract_inventory"]["obligations"]]
         positions = {identity: index for index, identity in enumerate(inventory_ids)}
@@ -322,10 +324,41 @@ class ReviewCorrectionStrategy:
 
     def merge(self, candidate, correction):
         if self.scope is None or self.scope["mode"] != "records":
-            return self.fallback.merge(candidate, correction)
-        original, changed = _json_object(candidate), _json_object(correction)
+            if self.decode is _json_object:
+                return self.fallback.merge(candidate, correction)
+            return self.fallback.merge(self.decode(candidate), self.decode(correction))
+        original, changed = self.decode(candidate), self.decode(correction)
         if review_correction_scope(original, self.diagnostics, self.material) != self.scope:
             raise structural_error("review_correction_identity", "", "Finite review correction scope belongs to another candidate or material")
+        if self.decode is not _json_object:
+            from collections import Counter
+            if set(changed) != {"replacements", "insertions"} or any(not isinstance(v, list) for v in changed.values()):
+                raise structural_error("review_correction_envelope", "", "Expected replacements and insertions arrays.")
+            clean = {"replacements": [], "insertions": []}
+            for table, rows in changed.items():
+                def identity(row):
+                    if not isinstance(row, dict):
+                        return None
+                    name = row.get("record_id") if table == "replacements" else row.get("gap_id", row.get("obligation_id"))
+                    return name if isinstance(name, str) else None
+                counts = Counter(identity(row) for row in rows)
+                for index, row in enumerate(rows):
+                    owner = identity(row)
+                    try:
+                        if owner is not None and counts[owner] > 1:
+                            raise structural_error("review_correction_duplicate", "",
+                                                   "Every owner must have a single disposition.")
+                        self._apply(original, {**dict.fromkeys(clean, []), table: [row]})
+                    except StructuralValidationError as error:
+                        for diagnostic in error.diagnostics:
+                            self.slot_rejections.append({**diagnostic, "path": f"/{table}/{index}",
+                                                        "context": {"record_owner": owner}})
+                    else:
+                        clean[table].append(row)
+            changed = clean
+        return self._apply(original, changed)
+
+    def _apply(self, original, changed):
         from .failed_stage_targets import correction_guard
         # The guard accepts the replacement-only view; insertion cannot erase
         # or retarget an existing unrepresentable finding.

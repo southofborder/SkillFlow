@@ -13,7 +13,7 @@ from skillflow.common.recording import canonical_sha256
 from skillflow.common.source_evidence import _json_object, json_pointer, resolve_pointer
 from skillflow.common.validation import StructuralValidationError, schema_error
 from skillflow.doe.input_contract_review import (
-    ARCHIVED_SOURCE_REVIEW,
+    ARCHIVED_SOURCE_REVIEW, ARCHIVED_V14_SOURCE_REVIEW, SOURCE_REVIEW_VERSION,
     InputContractCheck, InputScopeCheck, checked_contract_record, _evidence,
     check_contract_finding_consistency,
 )
@@ -27,8 +27,10 @@ TABLES = ("findings", "input_contract_checks", "input_projection_checks", "sourc
 
 
 def _finding_model(material):
-    from .source_review import ArchivedFragmentSourceFinding, FragmentSourceFinding
-    return ArchivedFragmentSourceFinding if material.get("identity") == ARCHIVED_SOURCE_REVIEW else FragmentSourceFinding
+    from .source_review import ArchivedFragmentSourceFinding, V9FragmentSourceFinding, FragmentSourceFinding
+    if material.get("identity") == SOURCE_REVIEW_VERSION:
+        return FragmentSourceFinding
+    return ArchivedFragmentSourceFinding if material.get("identity") == ARCHIVED_SOURCE_REVIEW else V9FragmentSourceFinding
 
 
 def checked_finding(value, material, path):
@@ -118,6 +120,10 @@ def isolate_source_review(candidate, material):
                for entries in targets.values() for e in entries}
     cfg_sites = {ir["id"]: "cfg:" + json_pointer("blocks", bid, "instructions", i)
         for bid, block in (material["cfg"] or {}).get("blocks", {}).items() for i, ir in enumerate(block["instructions"])}
+    from skillflow.doe.review_ranges import FindingRanges
+    scoped = material.get("identity") == SOURCE_REVIEW_VERSION
+    ranges = FindingRanges(inventory, material["input_contract_targets"], material["cfg"],
+                          input_material["raw_annotation"], input_material["mapping"]) if scoped else None
     allowed = {row["id"] for row in material["target_index"]}
     records, diagnostics, barriers, conflicts = [], [], [], []
     valid = {table: [] for table in TABLES}
@@ -237,6 +243,8 @@ def isolate_source_review(candidate, material):
             try:
                 if table == "findings":
                     parsed = checked_finding(row, material, path)
+                    if scoped:
+                        ranges.resolve(parsed)
                 elif table == "input_contract_checks":
                     parsed = checked_contract_record(row, inventory=inventory, files=material["files"],
                         archived_v7=material.get("identity") == ARCHIVED_SOURCE_REVIEW)
@@ -265,29 +273,74 @@ def isolate_source_review(candidate, material):
         valid[table] = retained
 
     ordinary = [row for _, row in valid["findings"]]
+    checks = sorted([row for _, row in valid["input_contract_checks"]], key=lambda r: r["obligation_id"])
+    projection_checks = [row for _, row in valid["input_projection_checks"]]
+    repair = repair_findings(checks, projection_checks, material)
+    findings = ordinary + repair
+    gap_findings = []
+    gap_checks = []
+    gap_errors = []
+    if gap_protocol and envelope_ok:
+        from .gap_review import check_gaps
+        gap_checks, gap_findings, gap_errors = check_gaps(value, material["processing_gap_inventory"], material["files"],
+            historical_boundary_diagnostics=material.get("_archived_gap_messages") is True)
+        if scoped:
+            diagnostics.extend(gap_errors)
+        for i, row in enumerate(value.get("gap_checks", []) if isinstance(value.get("gap_checks"), list) else []):
+            path = f"/gap_checks/{i}"
+            problems = [d for d in gap_errors if d["path"] == path]
+            records.append({"path": path, "status": "invalid" if problems else "validated",
+                            "record_sha256": canonical_sha256(row), "diagnostics": problems})
+        findings.extend(gap_findings)
+    if material.get("sensitivity_entry_gaps"):
+        from .sensitivity_entries import ingress_gap_rechecks
+        findings += ingress_gap_rechecks(material, bind=scoped)
+    checked_findings = list(valid["findings"])
+    if scoped:
+        retained = []
+        if material.get("revision_rechecks"):
+            from .revision_rechecks import pending_retention_findings
+            retained = pending_retention_findings(material, checks, findings)
+        findings.extend(retained)
+        checked_findings.extend(("/derived_findings", f) for f in repair + retained)
+        checked_findings.extend(("/gap_checks", f) for f in gap_findings if f["domain"] != "cfg")
+        checked_findings.extend(("/sensitivity_entry_gaps", f) for f in findings if f.get("sensitivity_entry_gap_id"))
     conflict_groups = defaultdict(list)
     for path, check in valid["input_contract_checks"]:
-        for finding_path, finding in valid["findings"]:
+        for finding_path, finding in checked_findings:
             try:
+                if scoped:
+                    hits = ranges.conflicts(check, finding)
+                    if not hits:
+                        continue
+                    raise ValueError("Accepted input-contract scopes conflict with the finding at "
+                                     + ", ".join(finding["target_ids"]) + ": " + ", ".join(hits))
                 check_contract_finding_consistency([check], [finding], material["input_contract_targets"])
             except ValueError as error:
-                conflicts.append({"record_path": path, "finding_path": finding_path, "reason": str(error)})
-                conflict_groups[finding_path].append({"record_path": path, "obligation_id": check["obligation_id"],
+                item = {"record_path": path, "finding_path": finding_path, "reason": str(error)}
+                if scoped and ranges.resolve(finding):
+                    item["scope_ids"] = hits
+                else:
+                    blocked.add(check["obligation_id"])
+                    barrier(path, "input_contract_review_conflict", str(error), locate("input_contract_checks", check))
+                conflicts.append(item)
+                conflict_groups[(finding_path, tuple(finding["target_ids"]))].append({"record_path": path, "obligation_id": check["obligation_id"],
                     "diagnostic": {"code": "input_contract_review_conflict", "path": path, "message": str(error)}})
-                blocked.add(check["obligation_id"])
-                barrier(path, "input_contract_review_conflict", str(error), locate("input_contract_checks", check))
-    for finding_path, rows in sorted(conflict_groups.items()):
-        finding = next(row for path, row in valid["findings"] if path == finding_path)
+    for (finding_path, affected_targets), rows in sorted(conflict_groups.items()):
         diagnostics.append({"code": "input_contract_review_conflict", "path": finding_path,
             "message": "Each listed accepted input-contract scope conflicts with a finding at its operation or CFG location.",
-            "context": {"target_ids": deepcopy(finding["target_ids"]), "conflicting_checks": [
+            "context": {"target_ids": list(affected_targets), "conflicting_checks": [
                 {key: row[key] for key in ("record_path", "obligation_id")} for row in rows]},
             "audit": {"raw_diagnostics": [row["diagnostic"] for row in rows]}})
     usable_sources = []
     for path, row in valid["source_input_findings"]:
         normalized = normalize_source_input_findings([row], files=material["files"], cfg=material["cfg"], **input_material)
         try:
-            check_source_input_finding_consistency(normalized, ordinary, mapping=input_material["mapping"], cfg=material["cfg"])
+            if scoped:
+                ranges.source_consistency(normalized, [f for _, f in checked_findings],
+                                          mapping=input_material["mapping"], cfg=material["cfg"])
+            else:
+                check_source_input_finding_consistency(normalized, ordinary, mapping=input_material["mapping"], cfg=material["cfg"])
         except ValueError as error:
             failure(path, "source_input_findings", row, error, status="conflict")
             conflicts.append({"record_path": path, "reason": str(error)})
@@ -342,31 +395,18 @@ def isolate_source_review(candidate, material):
             if path not in present_records:
                 original = value[table][int(path.rsplit("/", 1)[1])]
                 records.append({"path": path, "status": "validated", "record_sha256": canonical_sha256(original), "diagnostics": []})
-    checks = sorted([row for _, row in valid["input_contract_checks"]], key=lambda r: r["obligation_id"])
-    projection_checks = [row for _, row in valid["input_projection_checks"]]
-    findings = ordinary + repair_findings(checks, projection_checks, material)
-    gap_checks = []
-    if gap_protocol and envelope_ok:
-        from .gap_review import check_gaps
-        gap_checks, gap_findings, gap_errors = check_gaps(value, material["processing_gap_inventory"], material["files"])
-        diagnostics.extend(gap_errors)
-        for i, row in enumerate(value.get("gap_checks", []) if isinstance(value.get("gap_checks"), list) else []):
-            path = f"/gap_checks/{i}"
-            problems = [d for d in gap_errors if d["path"] == path]
-            records.append({"path": path, "status": "invalid" if problems else "validated",
-                            "record_sha256": canonical_sha256(row), "diagnostics": problems})
-        findings.extend(gap_findings)
-    if material.get("sensitivity_entry_gaps"):
-        from .sensitivity_entries import ingress_gap_rechecks
-        findings += ingress_gap_rechecks(material)
     for i, finding in enumerate(findings):
         finding["id"] = f"F{i + 1:03d}"
+    if scoped:
+        barriers.extend(ranges.barriers(findings))
+    else:
+        diagnostics.extend(gap_errors)
     review = {"schema_version": material["identity"], "outcome": "completed", "findings": findings,
         "input_contract_checks": checks, "input_projection_checks": projection_checks,
         "source_input_findings": [row for _, row in valid["source_input_findings"]]}
     if gap_protocol:
         review["gap_checks"] = gap_checks
-    validation = {"schema_version": IDENTITY, "candidate": deepcopy(value), "candidate_sha256": canonical_sha256(value),
+    validation = {"schema_version": ("skillflow-source-review-isolation-v2" if scoped else IDENTITY), "candidate": deepcopy(value), "candidate_sha256": canonical_sha256(value),
         "binding": deepcopy(material["input_contract_binding"]), "inventory": deepcopy(inventory),
         "records": sorted(records, key=lambda r: r["path"]), "diagnostics": diagnostics,
         "contract_coverage": coverage, "projection_coverage": projection_coverage,

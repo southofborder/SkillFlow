@@ -277,7 +277,7 @@ from .input_assessments import InputAssessment, InputSemanticFinding
 
 
 class DemandResult(Strict):
-    schema_version: Literal["skillflow-demand-v14"]
+    schema_version: Literal["skillflow-demand-v15"]
     status: Literal["complete", "partial"]
     goals: list[DemandGoal]
     traceability: Traceability
@@ -462,6 +462,10 @@ def reject_archived_selectors(derivations):
         raise ValueError("Archived demand v12 derivations cannot carry selector_ref")
 
 
+class ArchivedDemand14(DemandResult):
+    schema_version: Literal["skillflow-demand-v14"]
+
+
 class ArchivedDemand13(DemandResult):
     schema_version: Literal["skillflow-demand-v13"]
 
@@ -483,22 +487,22 @@ class ArchivedDemandResult(ArchivedDemand13):
         return value
 
 
-def validate_result_shape(value, *, archived_v12=False, archived_v13=False):
+def validate_result_shape(value, *, archived_v12=False, archived_v13=False, archived_v14=False):
     """Strict fields and internal references only; replay checks derivation truth."""
     _require_json(value, "")
-    schema = ArchivedDemandResult if archived_v12 else ArchivedDemand13 if archived_v13 else DemandResult
+    schema = ArchivedDemandResult if archived_v12 else ArchivedDemand13 if archived_v13 else ArchivedDemand14 if archived_v14 else DemandResult
     checked = schema.model_validate(value).model_dump(mode="json")
     if checked != value:
         raise ValueError("Demand result must preserve its explicit wire fields")
     return deepcopy(checked)
 
 
-def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None, archived_v12=False, archived_v13=False):
+def validate_result_references(value, facts, targets, *, input_contract_review=None, engine=None, archived_v12=False, archived_v13=False, archived_v14=False):
     """Bind saved references to facts without re-solving preservation semantics."""
     from types import SimpleNamespace
     from .material import _Index, _id, payload_alternatives
     from skillflow.propagation.conditions import payload_inputs
-    checked = validate_result_shape(value, archived_v12=archived_v12, archived_v13=archived_v13)
+    checked = validate_result_shape(value, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
     index = _Index(facts)
     annotation = facts.annotation
     task = annotation["task"]
@@ -741,17 +745,23 @@ def validate_result_references(value, facts, targets, *, input_contract_review=N
                 raise ValueError("Input assessment omits or changes an applicable source-review validation barrier")
             expected.add(identity)
         expected_barrier_diagnostics.update(expected)
-        if (any(row["status"] == "deletable" for row in assessment["ranges"])
-                or not any(row["status"] == "unresolved" and row["property"] == "value"
-                    and row["path"] == [] and row["excluded_paths"] == []
-                    and expected <= set(row["diagnostic_refs"]) for row in assessment["ranges"])):
-            raise ValueError("Input assessment clears an unvalidated actual-operation range")
+        from .sensitivity_engine import demand_overlap
+        for barrier in applicable:
+            located = barrier.get("range", {}).get("information", {"property": "value", "path": []})
+            identity = barrier_diagnostic_value(barrier, assessment["instruction_id"], assessment["operation_id"])["id"]
+            if not any(row["status"] == "unresolved" and row["property"] == located["property"]
+                       and row["path"] == located["path"] and not row["excluded_paths"] and identity in row["diagnostic_refs"]
+                       for row in assessment["ranges"]) or any(row["status"] == "deletable"
+                       and demand_overlap(row, {**located, "each": False, "conservative": False, "excluded_paths": []}) != "none"
+                       for row in assessment["ranges"]):
+                raise ValueError("Input assessment clears an unvalidated actual-operation range")
     for diagnostic in checked["diagnostics"]:
         if diagnostic["code"] != "input_contract_review_validation" or diagnostic["id"] in expected_barrier_diagnostics:
             continue
         operation = diagnostic["operation_id"]
         if operation is None or not any(diagnostic["reason"] == barrier_reason(barrier)
-                                       for barrier in operation_barriers(engine, operation)):
+                                       for barrier in barriers.barriers.for_operation(
+                                           engine.ops[operation]["position"]["instruction_id"], engine.ops[operation]["raw_op"])):
             raise ValueError("Source-review diagnostic lacks its exact validated operation barrier")
     from .input_locations import InputLocationBuilder
     builder = getattr(engine, "input_location_builder", None) or InputLocationBuilder(engine)

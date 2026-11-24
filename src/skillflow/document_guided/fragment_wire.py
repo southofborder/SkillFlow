@@ -199,3 +199,61 @@ def output_wire_instructions() -> str:
         "its example_* fields are explanatory only, so replace its payload with the required complete stage response.\n"
         + json.dumps(output_wire_example(), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     )
+
+
+def expand_revision_rows(rows, definitions, *, owner, field):
+    """Isolate a bad definition to its actual users, enforcing the whole-payload budget."""
+    def wire(items, shared):
+        return expand_processing_response({"format": PROCESSING_WIRE_IDENTITY, "shared_values": shared,
+            "payload": {field: list(items.values())}})[field]
+
+    try:
+        return dict(zip(rows, wire(rows, definitions), strict=True)), []
+    except (ValueError, TypeError):
+        pass
+
+    def dependencies(value):
+        referenced, stack = set(), [value]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, list):
+                stack.extend(item)
+            elif isinstance(item, dict):
+                if set(item) == {"$ref"} and isinstance(item["$ref"], str):
+                    name = item["$ref"]
+                    if name not in referenced:
+                        referenced.add(name)
+                        if name in definitions:
+                            stack.append(definitions[name])
+                else:
+                    stack.extend(item.values())
+        return {name: definitions[name] for name in referenced if name in definitions}
+
+    # Validate even unused definitions. An invalid definition cannot enter any
+    # accepted row. The final combined expansion rechecks the original size limits.
+    valid, diagnostics = {}, []
+    for name in definitions:
+        value = {"$ref": name}
+        try:
+            wire({0: value}, dependencies(value))
+        except (ValueError, TypeError) as error:
+            diagnostics.append({"code": "revision_shared_definition", "path": json_pointer("shared_values", name),
+                "message": str(error), "context": {"member": name}})
+        else:
+            valid[name] = definitions[name]
+    retained = {}
+    for index, row in rows.items():
+        try:
+            refs = dependencies(row)
+            wire({index: row}, {n: v for n, v in refs.items() if n in valid})
+        except (ValueError, TypeError) as error:
+            identity = row.get(owner) if isinstance(row, dict) else None
+            diagnostics.append({"code": "revision_shared_reference", "path": json_pointer(field, index),
+                "message": str(error), "context": {owner: identity} if isinstance(identity, str) else {}})
+        else:
+            retained[index] = row
+    try:
+        return dict(zip(retained, wire(retained, valid), strict=True)), diagnostics
+    except (TypeError, ValueError) as error:
+        from skillflow.common.validation import structural_error
+        raise structural_error("revision_shared_limit", "", str(error)) from error

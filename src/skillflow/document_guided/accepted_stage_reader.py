@@ -19,6 +19,7 @@ _STRATEGIES = {
     "skillflow-document-step-v18": "skillflow-graph-facts-correction-v3",
     "skillflow-document-step-v19": "skillflow-graph-facts-correction-v4",
     "skillflow-document-step-v20": "skillflow-graph-facts-correction-v5",
+    "skillflow-document-step-v21": "skillflow-graph-facts-correction-v6",
 }
 
 
@@ -64,8 +65,9 @@ def accepted_stage_value(owner, manifest, *, source):
     context = {"source": source, "files": {"skill/" + row["path"]: row["content"] for row in source["files"]}}
     if current:
         context["archived_graph"] = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}
-        context["normalize_blocks"] = identity in {"skillflow-document-step-v19", "skillflow-document-step-v20"}
-        context["check_occurrences"] = identity == "skillflow-document-step-v20"
+        context["normalize_blocks"] = identity in {"skillflow-document-step-v19", "skillflow-document-step-v20", "skillflow-document-step-v21"}
+        context["check_occurrences"] = identity in {"skillflow-document-step-v20", "skillflow-document-step-v21"}
+        context["check_calls"] = identity == "skillflow-document-step-v21"
     if kind == UPDATES:
         context = _step_context(owner, manifest)
     strategy = _bind_strategy(kind, context)
@@ -168,7 +170,10 @@ def checked_task_artifacts(owner, manifest, result, *, source):
     from skillflow.propagation.contracts.task import TASK_SCHEMA_VERSION
     from skillflow.task.runner import _policy
     policy = manifest.get("policy", {})
-    if (manifest.get("schema_version") != 3 or manifest.get("task_schema_version") != TASK_SCHEMA_VERSION
+    if ((manifest.get("identity"), manifest.get("schema_version")) not in {
+            ("skillflow-task-extraction-v3", 3), ("skillflow-task-extraction-v4", 4)}
+            or manifest.get("identity") == "skillflow-task-extraction-v4" and manifest.get("request_kind") != "task_revision"
+            or manifest.get("task_schema_version") != TASK_SCHEMA_VERSION
             or manifest.get("preparation_status") != "ready" or manifest.get("source_sha256") != source["source_sha256"]
             or policy != _policy(1, allow_cannot_assess=False, self_check=True)
             or manifest.get("request_kind") not in {"task_extraction", "task_revision"}):
@@ -179,7 +184,9 @@ def checked_task_artifacts(owner, manifest, result, *, source):
     chain = read(owner / "calls/task/chain.json")
     expected = {"version": VERSION, "normalization_policy": NORMALIZATION_VERSION, "prefix": "calls/task",
         "request_kind": manifest["request_kind"], "max_corrections": 1,
-        "correction_strategy": "skillflow-document-fragments-v8:task:record-replacement-v1"}
+        "correction_strategy": ("skillflow-task-revision-correction-v1"
+            if manifest["identity"] == "skillflow-task-extraction-v4"
+            else "skillflow-document-fragments-v8:task:record-replacement-v1")}
     attempts = chain.get("attempts")
     if (set(chain) != {*expected, "attempts", "accepted_call"} or any(chain[key] != value for key, value in expected.items())
             or not isinstance(attempts, list) or not 1 <= len(attempts) <= 2
@@ -228,6 +235,12 @@ def checked_task_artifacts(owner, manifest, result, *, source):
         bindings = {"version": VERSION, "response_sha256": canonical_sha256(response),
             "candidate_sha256": canonical_sha256(candidate), "normalization_sha256": None if normalization is None else canonical_sha256(normalization),
             "status": status}
+        if manifest["identity"] == "skillflow-task-extraction-v4" and status == "valid":
+            receipt = result.get("revision_slots")
+            if (not isinstance(receipt, dict) or receipt.get("scope_sha256") != manifest["revision_sha256"]
+                    or receipt.get("raw_sha256") != bindings["candidate_sha256"]):
+                raise ValueError("Inherited Task revision slots differ from their source-only request.")
+            bindings["revision_slots_sha256"] = canonical_sha256(receipt)
         if (any(validation.get(key) != value for key, value in bindings.items())
                 or canonical_sha256(validation) != row["validation_sha256"]):
             raise ValueError("Accepted Task validation linkage differs")

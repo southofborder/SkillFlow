@@ -30,7 +30,7 @@ def selector(need):
 class InputContracts:
     """Resolve only checks bound to the selected source and annotation."""
 
-    def __init__(self, engine, receipt=None, *, archived_v12=False, archived_v13=False):
+    def __init__(self, engine, receipt=None, *, archived_v12=False, archived_v13=False, archived_v14=False):
         self.engine = engine
         self.entries = {(row["instruction_id"], tuple(row["raw_path"])): row
                         for row in engine.compiled.get("input_contracts", [])}
@@ -44,7 +44,7 @@ class InputContracts:
             from skillflow.propagation.contracts.joint import joint_source_files
             self.receipt = checked_input_contract_review(receipt,
                 files=joint_source_files(engine.annotation["material"]), cfg=engine.index.cfg,
-                annotation=engine.annotation, archived_v12=archived_v12, archived_v13=archived_v13)
+                annotation=engine.annotation, archived_v12=archived_v12, archived_v13=archived_v13, archived_v14=archived_v14)
             self.checks = {row["contract_id"]: row for row in self.receipt["checks"] if row["contract_id"] is not None}
             self.obligation_checks = {row["obligation_id"]: row for row in self.receipt["checks"]}
             self.obligations = {(row["instruction_id"], tuple(row["raw_path"])): row
@@ -158,6 +158,11 @@ class InputContracts:
             checked_inputs = {row["input_index"]: row for row in checked["inputs"]}
             for row in rule["inputs"]:
                 checked_row = checked_inputs[row["input_index"]]
+                for barrier in operation_barriers(self.engine, key, role="argument", slot=row["input_index"]):
+                    if barrier.get("range"):
+                        information = barrier["range"]["information"]
+                        result["gaps"].append(self._gap(entry, key, output, barrier_reason(barrier),
+                            row=row, information=information, code="input_contract_review_range"))
                 for wanted_row in checked_row["required"]:
                     wanted = wanted_row["information"]
                     if review_gap(wanted_row["decision"], row=row, information=wanted):
@@ -181,7 +186,7 @@ class InputContracts:
     def influenced_outputs(self, key, input_slot, path):
         """Return complete affected output selectors, or None for a real gap."""
         from .review_barriers import operation_barriers
-        if operation_barriers(self.engine, key):
+        if operation_barriers(self.engine, key, role="argument", slot=input_slot, information={"property": "value", "path": path}):
             return None
         entry = self.entry(key)
         reviewed = self.reviewed(entry)

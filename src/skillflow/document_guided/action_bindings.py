@@ -271,6 +271,8 @@ def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=
     instructions, result, errors = cfg_instructions(material["cfg"]), {}, []
     from .entry_transfers import acquisition_ports, entry_binding_errors, location_errors
     entries = acquisition_ports(material)
+    parameters = {ir["outputs"][p["output_index"]]["identifier"]: p["parameter"]
+                  for ir, ports in entries.values() for p in ports}
     errors.extend(location_errors(entries, processing.get("locations", {})))
     context_acquisitions = {b["instructions"][0]["id"] for b in material["cfg"]["blocks"].values()
                             if b.get("data_source_kind") == "context" and b.get("instructions")}
@@ -338,6 +340,11 @@ def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=
             coords.append((("terminator",), {}))
         paths = [p for p, _ in coords]
         binding = record.get("action_bindings")
+        if binding is None and len(refs) == 2 and actions[1]["kind"] == "call_result_projection":
+            # The compiler has proved there is one source call and one projection.
+            # Flat coordinates still need an unambiguous, data-linked allocation.
+            from .source_calls import projection_bindings
+            binding = projection_bindings(record, actions, coords, _at)
         if binding is None and len(refs) == 1 and paths:
             binding = {refs[0]: [list(p) for p in paths]}
         if not isinstance(binding, dict) or set(binding) != set(refs):
@@ -373,6 +380,10 @@ def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=
             if role in BOUNDARY_ROLES:
                 for message in role_diagnostics(row.ref, role, binding[row.ref]):
                     role_error("action_bindings", message, binding[row.ref])
+        from .source_calls import ARGUMENTS, PROJECTION, binding_issues
+        if any(action["kind"] in {ARGUMENTS, PROJECTION} for action in actions):
+            for message in binding_issues(cfg, record, actions, binding, processing, files, coords, _at, pairs, parameters):
+                error("source_action_binding", "action_bindings", message)
         primary = source_action_role({"kind": cfg["opcode"]})
         if primary in BOUNDARY_ROLES and primary not in roles:
             error("source_action_inventory", "source_actions", "The action inventory omits the CFG instruction's declared " + primary + " role.")

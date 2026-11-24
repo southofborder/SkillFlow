@@ -18,10 +18,10 @@ IDENTITY = "skillflow-accepted-upstream-v1"
 PATH = "accepted-upstream.json"
 _PARENTS = {"skillflow-document-guided-run-v16", "skillflow-document-guided-run-v17", "skillflow-document-guided-run-v18",
             "skillflow-document-guided-run-v19", "skillflow-document-guided-run-v20", "skillflow-document-guided-run-v21",
-            "skillflow-document-guided-run-v22", "skillflow-document-guided-run-v23"}
+            "skillflow-document-guided-run-v22", "skillflow-document-guided-run-v23", "skillflow-document-guided-run-v24"}
 _STEPS = {"skillflow-document-step-v13", "skillflow-document-step-v14", "skillflow-document-step-v15",
           "skillflow-document-step-v16", "skillflow-document-step-v17", "skillflow-document-step-v18",
-          "skillflow-document-step-v19", "skillflow-document-step-v20"}
+          "skillflow-document-step-v19", "skillflow-document-step-v20", "skillflow-document-step-v21"}
 _SOURCE = "skillflow-document-source-v6"
 _EXCLUDED = {".runner.lock", "execution-boundary.json", "report.md"}
 MAX_LINEAGE = 8
@@ -171,10 +171,13 @@ def describe_accepted_upstream(parent, *, config=None):
             parent / "graph/initial.json", parent / "graph/revision.json"}:
         raise ValueError("Accepted upstream selection does not identify a supported Task/CFG owner")
     task_owner = task_path.parent
-    task_manifest = checked_manifest(task_owner, "skillflow-task-extraction-v3")
+    task_identity = read(task_owner / "manifest.json").get("identity")
+    if task_identity not in {"skillflow-task-extraction-v3", "skillflow-task-extraction-v4"}:
+        raise ValueError("Unsupported inherited Task producer")
+    task_manifest = checked_manifest(task_owner, task_identity)
     task_result = read(task_owner / "result.json")
     if (task_result.get("status") != "complete" or not task_result.get("accepted_call")
-            or task_manifest.get("config") != config or task_manifest.get("identity") != "skillflow-task-extraction-v3"):
+            or task_manifest.get("config") != config):
         raise ValueError("Inherited Task lacks a complete accepted source-only result")
     checked_task_artifacts(task_owner, task_manifest, task_result, source=snapshot)
     graph_owner = (_owner(parent, "graph") if cfg_path.name == "initial.json"

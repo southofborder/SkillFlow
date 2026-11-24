@@ -743,6 +743,11 @@ class SensitivityEngine:
         from .constraint_preservation import ConstraintAnalysis
         from .input_assessments import deletable_reduction, derivation_problem_refs
         from types import SimpleNamespace
+        from .ingress_limits import IngressLimits
+        from .review_ranges import AssessmentRangeLimits
+        range_limits = AssessmentRangeLimits(self.demand)
+        ingress = IngressLimits(self.engine) if any(d["code"] == "missing_sensitivity_ingress"
+            for d in self.diagnostics.values()) else None
         constraints = ConstraintAnalysis(self.engine)
         problem_refs = derivation_problem_refs(SimpleNamespace(derivations=self.demand["derivations"]))
         self.track()
@@ -756,7 +761,7 @@ class SensitivityEngine:
             relevant = set(self.engine.index.slice(sink["boundary"])["usage_context"]["instructions"])
             relevant.update(self.engine.ops[key]["position"]["instruction_id"] for key in
                 self.engine.index.slice(sink["boundary"])["backward_slice"]["operations"])
-            limits = sorted(set(sink["limitations"]) | {identity for identity, diagnostic in self.diagnostics.items()
+            limits = sorted(set(sink["limitations"]) | range_limits.for_boundary(sink["actual_payload"]) | {identity for identity, diagnostic in self.diagnostics.items()
                 if diagnostic["blocking"] and not diagnostic["code"].startswith("input_contract_")
                 and diagnostic_applies(diagnostic, relevant,
                     scoped_instructions=self.engine.index.slice(sink["boundary"])["usage_context"]["instructions"])})
@@ -785,6 +790,9 @@ class SensitivityEngine:
                             signal = self.rows[identity]
                             reduction, assessment_refs = deletable_reduction(self.demand, key, slot, data_id, signal["path"])
                             local_limits = comparison_limitations(signal, demands, limits, self.diagnostics, problem_refs)
+                            local_limits = sorted(set(local_limits) | range_limits.for_signal(key, slot, data_id, signal))
+                            if ingress is not None:
+                                local_limits = ingress.filter(local_limits, self.diagnostics, key, slot, data_id, signal, relevant)
                             conclusion, reason, overlaps = self._compare(signal, demands, local_limits, reduction)
                             if conclusion == "excess_supported" and reduction is None:
                                 reduction = {"kind": "exclude_field", "path": deepcopy(signal["path"])}
@@ -817,7 +825,7 @@ class SensitivityEngine:
                         if field != "id"} for k in sorted(ids)}
         partial = (self.demand["status"] == "partial" or any(d["blocking"] for d in self.diagnostics.values())
                    or any(c["status"] == "not_established" for c in constraints.checks.values()))
-        return {"schema_version": "skillflow-sensitivity-review-v12", "status": "partial" if partial else "complete",
+        return {"schema_version": "skillflow-sensitivity-review-v13", "status": "partial" if partial else "complete",
             "declaration_aliases": self.aliases,
             "sinks": sinks, "derivations": {"sensitivity": closure(used_sensitivity, self.rows),
                 "demand": closure(used_demands, self.demand["derivations"])},
