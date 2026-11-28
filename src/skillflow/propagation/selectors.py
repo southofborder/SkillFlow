@@ -75,18 +75,35 @@ def _matches(test, value):
 def selector_outcomes(data, identity, selector):
     tests = selector["tests"]
     outcomes = set()
-    for value in _values(data, identity, selector["path"]):
-        if value is _UNKNOWN:
-            outcomes.update(range(len(tests) + 1))
-        else:
-            outcomes.add(next((i for i, test in enumerate(tests) if _matches(test, value)), len(tests)))
+    if tests[0]["kind"] == "python_exception":
+        from skillflow.propagation.data.summary import content_options
+        from skillflow.propagation.python_exceptions import exception_match
+        options = content_options(data, identity)
+        for content in options or [{}]:
+            outcomes.update(0 if match else 1 for match in
+                            exception_match(content.get("python_exception_type"), tests[0]["classes"]))
+    else:
+        outcomes = _json_outcomes(data, identity, selector)
     item = data.get(identity)
     content = item.model_dump(mode="json")["content"] if hasattr(item, "model_dump") else item["content"]
     saved = content.get("bindings", {})
     return {i for i in outcomes if compatible_bindings(saved, selector_binding(data, identity, selector, i))}
 
 
+def _json_outcomes(data, identity, selector):
+    tests = selector["tests"]
+    outcomes = set()
+    for value in _values(data, identity, selector["path"]):
+        if value is _UNKNOWN:
+            outcomes.update(range(len(tests) + 1))
+        else:
+            outcomes.add(next((i for i, test in enumerate(tests) if _matches(test, value)), len(tests)))
+    return outcomes
+
+
 def literal_choice(value, selector):
+    if selector["tests"][0]["kind"] == "python_exception":
+        raise ValueError("A JSON literal cannot identify a Python thrown exception")
     value = _select_literal(value, selector["path"])
     return next((i for i, test in enumerate(selector["tests"]) if _matches(test, value)), len(selector["tests"]))
 
@@ -201,6 +218,9 @@ def selector_binding(registry, identity, selector, outcome):
     decisions = {}
     for index, test in enumerate(selector["tests"][:outcome + 1]):
         key = test["kind"]
+        if key == "python_exception":
+            decisions["python-handler:" + prefix + ",".join(sorted(test["classes"]))] = "1" if index == outcome else "0"
+            continue
         if key == "equals":
             key += ":" + json.dumps(test["value"], ensure_ascii=False, separators=(",", ":"))
         decisions[prefix + key] = "1" if index == outcome else "0"

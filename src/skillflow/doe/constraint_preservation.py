@@ -29,6 +29,8 @@ class ForwardInfluence:
         self.member_sources = defaultdict(set)
         self.map_edges = defaultdict(list)
         self.selector_edges = defaultdict(set)
+        self.outcome_gaps = defaultdict(set)
+        self.unknown_dispatches = defaultdict(set)
         self.typed_dispatches = {info["position"]["instruction_id"] for info in engine.ops.values()
                                  if info["spec"]["op"] == "branch" and info["spec"].get("selector")}
         self.typed_dispatches.difference_update(info["position"]["instruction_id"] for info in engine.ops.values()
@@ -73,6 +75,31 @@ class ForwardInfluence:
                 yield_edges(binding["value"], ir, target)
                 for source in self._resolve(binding["value"], ir):
                     self.edges[source].add(target)
+        outcomes = getattr(e, "outcomes", None)
+        if outcomes is not None:
+            from .outcome_demands import intrinsic_exception
+            for (ir, slot), (binding, role) in outcomes.slots.items():
+                target = e.node_at("ir_output", ir, slot=slot)
+                for declaration in binding["cases"]:
+                    if role != "completion" and role != declaration["disposition"]:
+                        continue
+                    coordinate = (ir, binding["group"], declaration["case_id"])
+                    guard = outcomes.cases[coordinate].get("guard")
+                    selector_edges(guard, ir, "value", target)
+                    if (not guard and (role == "completion" or len(binding["cases"]) > 1)
+                            or role == "throw" and intrinsic_exception(declaration.get("value"))):
+                        for source in outcomes.possible_inputs(coordinate):
+                            self.outcome_gaps[source].add(target)
+                if role == "completion":
+                    continue
+                for _, declaration, versions in outcomes.candidates(ir, slot):
+                    value = declaration["value"]
+                    if intrinsic_exception(value):
+                        continue
+                    yield_edges(value, ir, target)
+                    for source in self._resolve(value, ir):
+                        if set(e.nodes[source]["data_ids"]).intersection(versions):
+                            self.edges[source].add(target)
         for ir, record in e.index.records.items():
             for i, event in enumerate(record.get("events", [])):
                 if event.get("kind") == "for_each":
@@ -93,6 +120,18 @@ class ForwardInfluence:
                     for source in self._resolve(event["collection"], ir):
                         self.member_sources[source].add((ir, index))
         for ir, instruction in e.index.instructions.items():
+            dispatch = instruction.get("metadata", {}).get("outcome_dispatch")
+            if dispatch is not None and outcomes is not None:
+                self.typed_dispatches.add(ir)
+                producer = dispatch["producer"]
+                for coordinate, case in outcomes.cases.items():
+                    if coordinate[0] != producer:
+                        continue
+                    if case.get("guard"):
+                        selector_edges(case["guard"], producer, "dispatch", ir)
+                    else:
+                        for source in outcomes.possible_inputs(coordinate):
+                            self.unknown_dispatches[source].add(ir)
             for slot, operand in enumerate(instruction["inputs"]):
                 if operand["type"] == "result":
                     producer, output = e.definitions[operand["identifier"]]
@@ -189,9 +228,21 @@ class ForwardInfluence:
                 gaps.add(f"Changed collection can alter member occurrences at {sorted(self.member_sources[row['node']])}.")
             for target in sorted(self.edges.get(row["node"], ())):
                 emit(target, changed, "symbolic_use", identity)
+            for target in sorted(self.outcome_gaps.get(row["node"], ())):
+                info = e.nodes[target]
+                missing = True
+                gaps.add(f"The change can affect an unresolved protected outcome at "
+                         f"{info['instruction_id']} output {info['slot']}.")
+                emit(target, [], "unknown_outcome_change", identity)
+            for dispatch in sorted(self.unknown_dispatches.get(row["node"], ())):
+                missing = True
+                gaps.add(f"The change can affect a protected call's unresolved selection at {dispatch}.")
+                dispatch_change(dispatch, identity)
             for path_, target_kind, target in self.selector_edges.get(row["node"], ()):
                 if _prefix(changed, list(path_)) or shifts_tested_index(changed, list(path_)):
-                    if target_kind == "operation":
+                    if target_kind == "dispatch":
+                        dispatch_change(target, identity)
+                    elif target_kind == "operation":
                         whole_operation(target, identity, "changed_case_selection")
                     elif target_kind == "skipped":
                         missing = True

@@ -25,7 +25,16 @@ TASK_CORRECTION_VERSION = "skillflow-document-fragments-v8"
 FRAGMENT_RULES = {
     "processing": {
         **flat.PROCESSING_RULES,
-        "source_action_bindings": "Use the ordered metadata.source_actions when present. For a single action the program binds its operations and outputs. For a composite IR provide action_bindings:{ref:[path,...]} in source order, partitioning its exact IR-relative op paths, case guard (or condition) and throwing disposition, loop collection, returns, yields, output_bindings and the synthetic [terminator] path for dispatch/return. Example path: [segments,0,ops,1]. A legacy CFG missing source_actions may acquire a source-located inventory in this processing record. Preserve supported actions and use a local placeholder only for the missing value or effect.",
+        "typed_dispatch": "For a CFG terminator with metadata.outcome_dispatch, its producer owns the cases. "
+            "Use the producer's actual output indexes. For a two-port read returning value or exception, "
+            "put the read and yield in the return case, and raise the actual exception in the throw case. "
+            "For a request, describe the supported send, response and pre/post-send alternatives in their own cases. "
+            "An unknown exception message does not erase a known request. The dispatch row itself can be omitted. "
+            "The program derives it from the CFG without an additional branch operation. Where the graph provides "
+            "python_argument_defaults, direct argument snapshots already apply the stated default on omission. "
+            "A generated python_handler_merge and its admission dispatch use the source handler class and the actual "
+            "incoming exception. The program supplies their processing rows when omitted.",
+        "source_action_bindings": "Use ordered metadata.source_actions. For a single action the program binds its operations and outputs. A composite IR supplies action_bindings:{ref:[path,...]} partitioning every IR-relative operation, case guard/condition, throw disposition, yield, raise, outcome, loop collection, returns, output_bindings and [terminator] for dispatch/return. One protected outcome group and all of its cases belong to the same source action. Example paths: [segments,0,ops,1], [segments,1,outcome], [segments,1,cases,0,yield]. A legacy CFG may supply its source-located inventory. Own sys.exit at its actual terminating instruction, not also the preceding print/format; use [terminator] there and do not invent a response or public output. Preserve supported facts and localize missing value/effect precision.",
         "processing_coverage": "No Task demands or sensitivity fields belong in processing. A genuinely unrepresentable required operation uses a source-backed processing_gap with unmodeled=true instead of executable semantics. Name affected output indexes, locations or control; unspecified scope retains the control-reachable continuation. Precision limits on otherwise complete may facts use unmodeled=false, never to conceal a missing actual effect.",
         "entry_acquisition": "Bind each caller argument to the matching output of its own source occurrence. A direct context input snapshot can implement receive. For optional_context_inputs, bind the snapshot before testing its immutable result for omission, null or an empty value. Use a real packet read and its actual projections when the source supplies one object. Preserve known reads and sibling outputs with their existing operations; place a source-backed placeholder only at the unknown value or effect. Cite module initialization at its own execution site.",
     },
@@ -114,6 +123,10 @@ class ProcessingIR(StrictSpec):
     evidences: flat.WireEvidences
     segments: list[ProcessingTopSegment] = Field(default_factory=list)
     output_bindings: list[flat.FlatBinding] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def protected_layout(self):
+        return flat.checked_outcome_layout(self)
 
 class ProcessingFragment(StrictSpec):
     ir_semantics: dict[Text, ProcessingIR]
@@ -460,6 +473,57 @@ def _processing_probe(value, material, diagnostics, validation_gaps, expected):
         blocked_paths.update(new_owners)
 
 
+def assemble_outcome_dispatches(value, material, *, fixed=()):
+    """Supply the control-only processing row for an already compiled outcome dispatch."""
+    from skillflow.propagation.contracts.task import task_source_files
+    from .entry_transfers import _checked_gaps
+    from .processing_correction import gap_positions
+
+    records = value["ir_semantics"]
+    positions = gap_positions(value)
+    gaps = value.get("processing_gaps", [])
+    files = None
+    resolved = set()
+    for block in material["cfg"]["blocks"].values():
+        if not block["instructions"]:
+            continue
+        terminal = block["instructions"][-1]
+        meta = terminal.get("metadata", {})
+        if terminal["opcode"] != "dispatch" or not meta.get("outcome_dispatch"):
+            continue
+        owner = terminal["id"]
+        span = meta.get("source_span")
+        if not span or owner in fixed:
+            continue
+        indexes = positions.get(owner, [])
+        if indexes:
+            if files is None:
+                files = task_source_files(material["source"])
+            if not _checked_gaps(terminal, value, indexes, files):
+                continue
+            if any(gaps[i].get("outputs") or gaps[i].get("locations") for i in indexes):
+                continue
+        if owner not in records:
+            records[owner] = {"evidences": [{**span, "reason":
+                "This terminator follows the named producer's return or throw continuation."}]}
+            resolved.update(indexes)
+    if resolved:
+        value["processing_gaps"] = [gap for i, gap in enumerate(gaps) if i not in resolved]
+
+
+def program_processing_controls(cfg, files):
+    """Exact executable control rows available without a semantic submission."""
+    from .python_arguments import argument_transfers
+    from .python_handlers import handler_transfers
+    rows = {"ir_semantics": {}, "processing_gaps": []}
+    assemble_outcome_dispatches(rows, {"cfg": cfg})
+    generated = rows["ir_semantics"]
+    generated.update(argument_transfers(cfg))
+    if any(b["instructions"] and b["instructions"][0]["opcode"] == "python_handler_merge" for b in cfg["blocks"].values()):
+        generated.update(handler_transfers(cfg, files))
+    return generated
+
+
 def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(), processing_expansion=None):
     """Share checked processing only within this validation/assembly operation."""
     kind, diagnostics = _kind(kind), []
@@ -470,11 +534,25 @@ def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=
         from .entry_transfers import assemble_entry_transfers, scope_entry_gaps
         expected = set(cfg_instructions(material["cfg"]))
         fixed = unmodeled_ids({"processing_gaps": validation_gaps})
+        # Omitted program transfers have no model record to correct. Include
+        # their real rows before reporting unrelated schema/coverage failures.
+        records = value.get("ir_semantics")
+        gaps = value.get("processing_gaps", [])
+        if isinstance(records, dict) and isinstance(gaps, list):
+            from skillflow.propagation.contracts.task import task_source_files
+            generated = program_processing_controls(material["cfg"], task_source_files(material["source"]))
+            claimed = {g["instruction_id"] for g in gaps if isinstance(g, dict) and isinstance(g.get("instruction_id"), str)}
+            missing = generated.keys() - records.keys() - claimed - fixed
+            if missing:
+                value = {**value, "ir_semantics": {**records, **{ir: generated[ir] for ir in sorted(missing)}}}
         entry_errors = []
         if not diagnostics:
             assembled = deepcopy(value)
             diagnostics.extend(scope_entry_gaps(assembled, material))
             assemble_entry_transfers(assembled, material, fixed=fixed)
+            assemble_outcome_dispatches(assembled, material, fixed=fixed)
+            from .python_handlers import assemble_handler_transfers
+            assemble_handler_transfers(assembled, material, fixed=fixed)
             if not diagnostics and assembled != value:
                 invalid = coverage_diagnostics(assembled, expected, fixed_unmodeled=fixed)
                 if not invalid:
@@ -486,11 +564,16 @@ def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=
                         return assembled, expansion
                 # Report against submitted owners; relocated gap indexes
                 # belong to the constructed candidate, not the reply.
+                cfg_rows = cfg_instructions(material["cfg"])
                 for i, gap in enumerate(value.get("processing_gaps", [])):
                     if gap not in assembled.get("processing_gaps", []):
-                        entry_errors.extend(structural_error("entry_acquisition_required", json_pointer("processing_gaps", i),
-                            "The source supports a local entry transfer. Recheck its remaining scope with the affected "
-                            "current record at " + invalid[0]["path"] + ": " + invalid[0]["message"]).diagnostics)
+                        ir = cfg_rows.get(gap["instruction_id"], {})
+                        routed = ir.get("metadata", {}).get("outcome_dispatch") is not None
+                        code = "outcome_dispatch_required" if routed else "entry_acquisition_required"
+                        transfer = "outcome dispatch" if routed else "local entry transfer"
+                        entry_errors.extend(structural_error(code, json_pointer("processing_gaps", i),
+                            f"The source supports a {transfer}. Recheck the affected current record at "
+                            + invalid[0]["path"] + ": " + invalid[0]["message"]).diagnostics)
         coverage = coverage_diagnostics(value, expected, fixed_unmodeled=fixed)
         if coverage:
             source_reads = {block["instructions"][0]["id"] for block in material["cfg"]["blocks"].values()
@@ -986,6 +1069,10 @@ def salvage_fragment(kind, raw, material, processing=None, *, validation_gaps=()
             for row in scope_entry_gaps(value, material, quarantine=True):
                 add_gap(row["context"]["instruction_id"], [row], unmodeled=False)
             assemble_entry_transfers(value, material, fixed=fixed)
+            assemble_outcome_dispatches(value, material, fixed=fixed)
+            from .python_handlers import assemble_handler_transfers
+            # Leave contradictory authored rows for the normal per-record isolation loop below.
+            assemble_handler_transfers(value, material, fixed=fixed, check_existing=False)
     for _ in range(len(_records(kind, value)) + len(instructions) + len(requirements) + 2):
         if kind == "processing":
             modeled = set(value.get("ir_semantics", {})) if isinstance(value.get("ir_semantics"), dict) else set()

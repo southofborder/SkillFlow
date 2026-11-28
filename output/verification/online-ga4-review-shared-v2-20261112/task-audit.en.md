@@ -1,0 +1,17 @@
+# Bounded audit of the current sealed Task
+
+No major Task/source mismatch was established in this snapshot. The 58 requirements cover the documented analytics, live/search/metadata outputs, indexing actions, storage and Markdown-summary workflow, with explicit range/member association and relevant failure behavior. This is a bounded source audit, not a necessity or DOE result.
+
+The audited Task is `9967fe0ad9072f303f5f9be261026827a87af3d62188011887cbc8bc7038c095` (Task v5), bound to the current frozen source `3b6eef9f43262d96949e30fe0c39797fe680c578ac5e90bf367da15592445bbd`. All 174 Task evidence ranges refer to existing frozen files and valid line bounds. Only the current Task and frozen source were used. Inspection focused on the twelve files listed in the JSON receipt, including SKILL.md, the full API reference and the relevant TypeScript modules; dependency-lock and build configuration semantics were not audited.
+
+One local output under-specification is recorded: `entry_points` (`task/task.json:153`, `/requirements/4`) says the entry module can be invoked directly with tsx but does not say that this path prints the toolkit help listing. The source explicitly declares that output at `scripts/src/index.ts:364-405`; SKILL.md:45-51 documents direct invocation. Its scope is the direct-entry console output. It does not imply that progress logs or analytics API calls are mandatory.
+
+A separate downstream caution concerns `client_validation` (`task/task.json:123`, `/requirements/3`). The actual shared validator checks GA4_PROPERTY_ID before all API clients (`settings.ts:51-74`; `client.ts:87-120`). This is source-supported as a precondition. It must not become a positive demand to include the GA4 property identifier or whole settings object in Search Console/Indexing request payloads: their displayed authentication/request construction uses credentials and site URL or notification URL/type (`client.ts:64-79`; `searchConsole.ts:98-111`; `indexing.ts:60-67,146-156`). This audit does not classify the Task as contradicting the source and makes no deletion decision.
+
+The Task correctly preserves the documented custom-report filters and sort-order obligations although the actual request omits both (`references/api-reference.md:37-41`; `reports.ts:77-100`). Its `custom_report_controls_omitted` issue records that source implementation mismatch. The absence of an implementation must not erase the obligation or create a fictional corrected request.
+
+The three existing unresolved Task issues have concrete grounds: pages ranked by clicks versus impressions; query-specific device breakdown versus separate query/device reports; and a top-level metadata array versus an object containing it. They do not use generic black-box or unknown-value explanations. This audit leaves their existing identities and scopes unchanged.
+
+For later demand mapping, preserve save=false and suppressed constituent saves as persistence restrictions; empty bulk input prohibits calls/writes while positively requiring empty rows and rowCount=0. Limits, filters, ordering, pagination, sequentiality, and member pairing constrain selected outputs/actions and do not seed extra reports, rows or URLs. Filename sanitization does not demand absent extra information. Details and exact source ranges are recorded in `task-audit.json`.
+
+No tests, analysis, replay, model calls or Skills were executed. No Task, run artifact, implementation or prompt was altered, and this audit was not injected as repair feedback. The review stops at this Task snapshot.

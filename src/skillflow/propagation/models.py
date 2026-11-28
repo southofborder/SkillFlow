@@ -389,6 +389,71 @@ class ForEachRecord(StrictRecord):
         return sorted(values)
 
 
+class CaseOutcomeRecord(StrictRecord):
+    """One protected invocation alternative, before joining public IR records."""
+
+    group: Text
+    case_id: Text
+    completion: CandidateIDs = Field(default=frozenset(), exclude_if=lambda ids: not ids)
+    values: CandidateIDs = frozenset()
+    selectors: CandidateIDs = frozenset()
+
+    @field_serializer("completion", "values", "selectors", when_used="json")
+    def serialize_versions(self, values):
+        return sorted(values)
+
+
+def validate_public_outputs(ir, spec, record, data):
+    """An outcome-owned slot exists exactly on the cases that produced it."""
+    declared = spec.get("outcome_bindings", [])
+    cases = {(group["group"], case["case_id"]): (group, case)
+             for group in declared for case in group["cases"]}
+    slots = {group[key]: set() for group in declared
+             for key in ("completion_index", "return_index", "exception_index") if key in group}
+    seen = set()
+    for row in record.outcomes:
+        pair = (row.group, row.case_id)
+        if pair not in cases:
+            raise ValueError("outcome record has no matching declared case")
+        group, case = cases[pair]
+        if bool(row.completion) != ("completion_index" in group):
+            raise ValueError("completion evidence disagrees with the declared completion port")
+        normal = case["disposition"] == "return"
+        index = group.get("return_index" if normal else "exception_index")
+        if bool(row.values) != (index is not None):
+            raise ValueError("outcome values disagree with the selected case port")
+        for identity in row.selectors | row.values | row.completion:
+            if data.get(identity) is None:
+                raise ValueError("unknown Data in protected outcome")
+        for identity in row.completion:
+            content = data.get(identity).content
+            variants = [v.content for v in content.variants] if content.form == "loop_summary" else [content]
+            if not variants or any(v.form != "literal" or v.value is not normal for v in variants):
+                raise ValueError("completion Data disagrees with the selected case disposition")
+        from skillflow.propagation.outcome_validation import validate_outcome_evidence
+        validate_outcome_evidence(ir, spec, record, data, row, case)
+        seen.add(row.group)
+        if "completion_index" in group:
+            slots[group["completion_index"]].update(row.completion)
+        if index is not None:
+            slots[index].update(row.values)
+    if seen != {group["group"] for group in declared}:
+        raise ValueError("evaluated protected group has no feasible outcome record")
+    for index, operand in enumerate(ir.get("outputs", [])):
+        found = record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"]))
+        if index in slots:
+            if (found or frozenset()) != slots[index]:
+                raise ValueError("public slot disagrees with the recorded outcome values")
+        elif found is None:
+            raise ValueError("processed IR is missing a public output binding in its exit state")
+
+
+class OutcomeRouteRecord(StrictRecord):
+    group: Text
+    case_id: Text
+    target: Text
+
+
 class IRFlowRecord(StrictRecord):
     """Computation/evidence state projections and per-spec events, not iteration logs.
 
@@ -401,6 +466,8 @@ class IRFlowRecord(StrictRecord):
     entry_state: FlowState
     exit_state: FlowState
     events: StrictList[EffectEvent | ForEachRecord] = Field(default_factory=list)
+    outcomes: StrictList[CaseOutcomeRecord] = Field(default_factory=list, exclude_if=lambda rows: not rows)
+    outcome_routes: StrictList[OutcomeRouteRecord] = Field(default_factory=list, exclude_if=lambda rows: not rows)
 
     def used_placeholder(self) -> bool:
         for event in self.events:

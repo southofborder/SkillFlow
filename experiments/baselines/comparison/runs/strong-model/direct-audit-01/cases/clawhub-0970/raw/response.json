@@ -1,0 +1,342 @@
+{
+  "status": "completed",
+  "declared_purpose": "Answer Garmin health, recovery, workout, time and route questions using health metrics and activity files; generate interactive HTML charts and framework-based insights for Clawdbot. JSON output and analysis workflows are explicit requirements. The referenced MCP server is a separate package. Sources: SKILL.md:1-19,110-180,218-231; references/mcp_setup.md:1-16,42-62.",
+  "data_operations": [
+    {
+      "operation": "Install dependencies and optionally create a configuration template",
+      "source": "install.sh",
+      "data_scope": "Dependency identifiers garminconnect, fitparse and gpxpy; example credential fields containing placeholders.",
+      "recipient_or_storage": "pip and its configured package sources if retrieval is needed; skill-local config.json.",
+      "condition": "Installation runs; alternative pip commands follow failures. The template is copied only when config.json is absent.",
+      "evidence": [
+        {"path": "install.sh", "start_line": 22, "end_line": 40},
+        {"path": "config.example.json", "start_line": 1, "end_line": 4}
+      ]
+    },
+    {
+      "operation": "Read login credentials locally; document optional credential persistence",
+      "source": "Authentication helper and setup instructions",
+      "data_scope": "Account email and password from CLI arguments, config.json or GARMIN_EMAIL/GARMIN_PASSWORD.",
+      "recipient_or_storage": "Authentication process memory; documented file options retain credentials in config.json or ~/.clawdbot/clawdbot.json.",
+      "condition": "Login uses per-field fallback: CLI, local configuration, then environment. The helper does not directly read clawdbot.json; host environment injection is unresolved.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 21, "end_line": 34},
+        {"path": "scripts/garmin_auth.py", "start_line": 136, "end_line": 149},
+        {"path": "SKILL.md", "start_line": 37, "end_line": 101}
+      ]
+    },
+    {
+      "operation": "Delegate account authentication",
+      "source": "garmin_auth.login",
+      "data_scope": "Account email and password; authentication exchange managed by the dependency.",
+      "recipient_or_storage": "Garmin Connect through garminconnect/garth; exact hosts and wire payloads are not supplied.",
+      "condition": "The login command has both credential fields. Authentication is necessary for private account access; dependency internals remain unresolved.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 37, "end_line": 48},
+        {"path": "references/api.md", "start_line": 19, "end_line": 23}
+      ]
+    },
+    {
+      "operation": "Persist reusable session tokens",
+      "source": "garmin_auth.login",
+      "data_scope": "Session tokens serialized by client.garth.dump.",
+      "recipient_or_storage": "~/.clawdbot/garmin directory.",
+      "condition": "Successful initial login. Directory permissions are changed to 0700 after token writing and the connection test; individual token files and serialization are dependency-controlled.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 21, "end_line": 22},
+        {"path": "scripts/garmin_auth.py", "start_line": 42, "end_line": 62}
+      ]
+    },
+    {
+      "operation": "Restore sessions and fetch daily summaries for validation",
+      "source": "garmin_auth.login, get_client and check_status",
+      "data_scope": "Saved tokens; today's user-summary response, including any daily statistics and identity fields returned.",
+      "recipient_or_storage": "Tokenstore and authentication-process memory; authenticated summary requests go to Garmin through the library.",
+      "condition": "Login tests the connection once. get_client restores tokens and fetches a summary before remote commands. Successful status additionally fetches another summary. Local activity parse/query/analyze branches do not call get_client.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 54, "end_line": 59},
+        {"path": "scripts/garmin_auth.py", "start_line": 75, "end_line": 116},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 272, "end_line": 342}
+      ]
+    },
+    {
+      "operation": "Emit identity and diagnostic information",
+      "source": "Authentication helper",
+      "data_scope": "Login email, returned displayName, tokenstore paths and exception text.",
+      "recipient_or_storage": "stderr and its caller; downstream logging or remote delivery is unspecified.",
+      "condition": "Email is printed during login; displayName during successful login/status tests; errors and paths are printed on their corresponding branches.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 37, "end_line": 71},
+        {"path": "scripts/garmin_auth.py", "start_line": 91, "end_line": 118}
+      ]
+    },
+    {
+      "operation": "Fetch selected core metrics and return projected fields",
+      "source": "garmin_data.py",
+      "data_scope": "Sleep stages and related measurements; HRV summaries/baselines/status; Body Battery charging and extrema; heart-rate summaries; activity names/types and performance fields; stress levels/durations.",
+      "recipient_or_storage": "Garmin receives authenticated date-based requests; responses enter Python memory and selected fields return through stdout to the caller.",
+      "condition": "The selected metric determines fetching. Both explicit dates override defaults; otherwise positive --days N produces daily loops from today minus N through today, inclusive. No health-data file write is implemented here.",
+      "evidence": [
+        {"path": "scripts/garmin_data.py", "start_line": 24, "end_line": 244},
+        {"path": "scripts/garmin_data.py", "start_line": 319, "end_line": 354},
+        {"path": "SKILL.md", "start_line": 110, "end_line": 143}
+      ]
+    },
+    {
+      "operation": "Fetch and return account profile identifiers",
+      "source": "garmin_data.fetch_profile",
+      "data_scope": "Full name, display_name and email, when returned.",
+      "recipient_or_storage": "Garmin library responses enter process memory; projected identifiers return through stdout to the caller.",
+      "condition": "The profile metric is explicitly selected; ordinary metric commands do not call fetch_profile.",
+      "evidence": [
+        {"path": "scripts/garmin_data.py", "start_line": 301, "end_line": 316},
+        {"path": "scripts/garmin_data.py", "start_line": 350, "end_line": 354}
+      ]
+    },
+    {
+      "operation": "Compute a combined summary and return its underlying records",
+      "source": "garmin_data.fetch_summary",
+      "data_scope": "Sleep, HRV, Body Battery, heart rate and activities; derived averages, activity count and calorie total. Stress is not fetched by this function.",
+      "recipient_or_storage": "Local computation; summary and all five projected record arrays return to the caller through stdout.",
+      "condition": "summary is selected, including the entry document's sleep-question recipe and general analysis workflow.",
+      "evidence": [
+        {"path": "scripts/garmin_data.py", "start_line": 250, "end_line": 295},
+        {"path": "scripts/garmin_data.py", "start_line": 348, "end_line": 354},
+        {"path": "SKILL.md", "start_line": 173, "end_line": 180},
+        {"path": "SKILL.md", "start_line": 227, "end_line": 231}
+      ]
+    },
+    {
+      "operation": "Fetch one extended metric and pass through its response",
+      "source": "garmin_data_extended.py",
+      "data_scope": "Selected training, body composition, weight, oxygen, respiration, movement, hydration, stress, fitness or intraday heart-rate response. Returned objects are not field-projected.",
+      "recipient_or_storage": "Garmin through the dependency; complete selected response in process memory and stdout to the caller.",
+      "condition": "One metric is selected. Dated metrics default to today; weight history defaults to a range beginning 30 days earlier. Exact response fields are unresolved.",
+      "evidence": [
+        {"path": "scripts/garmin_data_extended.py", "start_line": 15, "end_line": 198},
+        {"path": "scripts/garmin_data_extended.py", "start_line": 201, "end_line": 257}
+      ]
+    },
+    {
+      "operation": "Read daily time-series data and select a nearby measurement locally",
+      "source": "garmin_query.py",
+      "data_scope": "A day's selected heart-rate, stress, Body Battery or steps response; requested time/date and selected value, with actual time also returned for heart rate.",
+      "recipient_or_storage": "Garmin receives a date-based metric request; nearest-point selection occurs locally and its result returns through stdout.",
+      "condition": "A time query is selected and response formatting permits a match. The code does not send a narrower time window or persist the series.",
+      "evidence": [
+        {"path": "scripts/garmin_query.py", "start_line": 42, "end_line": 79},
+        {"path": "scripts/garmin_query.py", "start_line": 82, "end_line": 206},
+        {"path": "scripts/garmin_query.py", "start_line": 209, "end_line": 234}
+      ]
+    },
+    {
+      "operation": "Download and persist an activity export",
+      "source": "garmin_activity_files.download_activity_file",
+      "data_scope": "Selected activity ID and complete original/FIT, GPX or TCX response bytes; potentially route and physiological/performance data.",
+      "recipient_or_storage": "Garmin receives the authenticated activity/format request; bytes are written to output_dir/activity_<activity_id>.<format>, defaulting to /tmp.",
+      "condition": "download is selected with an activity ID and authentication succeeds. Persistent export is the requested outcome; no cleanup is implemented.",
+      "evidence": [
+        {"path": "scripts/garmin_activity_files.py", "start_line": 31, "end_line": 51},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 259, "end_line": 283},
+        {"path": "references/extended_capabilities.md", "start_line": 102, "end_line": 133}
+      ]
+    },
+    {
+      "operation": "Read local activity files and return parsed, selected or aggregate data",
+      "source": "garmin_activity_files.py local branches",
+      "data_scope": "All non-null FIT record/lap/session fields; GPX coordinates, elevation, time, speed, heart-rate field and bounds. Parse returns full extracted data; successful FIT queries return a whole matching record; analysis returns statistics.",
+      "recipient_or_storage": "Local parser/process memory and stdout to the caller; these branches contain no Garmin request or file write.",
+      "condition": "parse, query or analyze is selected with a supported file and dependency. Query/analysis success depends on available record fields; GPX parsing does not provide the FIT-style records expected by analysis.",
+      "evidence": [
+        {"path": "scripts/garmin_activity_files.py", "start_line": 54, "end_line": 136},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 139, "end_line": 253},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 285, "end_line": 342}
+      ]
+    },
+    {
+      "operation": "Project chart data, persist HTML and optionally open a browser",
+      "source": "garmin_chart.py",
+      "data_scope": "Selected sleep duration/score, Body Battery peaks, HRV/resting-HR series, activity-type counts/calories, averages/totals, dates and generation time; not complete API responses.",
+      "recipient_or_storage": "Explicit --output HTML file, or a system temporary HTML file with delete=False; default browser receives the temporary file URL.",
+      "condition": "Only selected chart categories are fetched; dashboard selects all four charts. --output writes without opening; the default path writes and automatically opens. No cleanup is implemented.",
+      "evidence": [
+        {"path": "scripts/garmin_chart.py", "start_line": 115, "end_line": 124},
+        {"path": "scripts/garmin_chart.py", "start_line": 173, "end_line": 483},
+        {"path": "scripts/garmin_chart.py", "start_line": 486, "end_line": 556}
+      ]
+    },
+    {
+      "operation": "Load an external chart script into the health-data page",
+      "source": "Generated chart HTML",
+      "data_scope": "Fixed Chart.js resource request and browser connection/request metadata. Embedded chart data shares the execution context with the loaded script; no explicit health-data upload is shown.",
+      "recipient_or_storage": "cdn.jsdelivr.net receives the resource request; externally supplied JavaScript executes locally in the browser page.",
+      "condition": "Generated HTML is opened and its external script is loaded. Actual CDN-script behavior, headers and subsequent requests are unresolved.",
+      "evidence": [
+        {"path": "scripts/garmin_chart.py", "start_line": 23, "end_line": 29},
+        {"path": "scripts/garmin_chart.py", "start_line": 120, "end_line": 164},
+        {"path": "scripts/garmin_chart.py", "start_line": 544, "end_line": 556}
+      ]
+    },
+    {
+      "operation": "Infer health and recovery attributes under the documented analysis workflow",
+      "source": "Entry document and health-analysis guide",
+      "data_scope": "Derived assessments of recovery, fitness, stress, possible illness and overtraining from metric trends; recommendations and flags.",
+      "recipient_or_storage": "Analyzing agent and its user/caller; provider routing or additional persistence is not specified.",
+      "condition": "The user requests insights and the agent applies the prescribed framework. These are conditional interpretations, not additional sensor measurements or automatic script outputs.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 218, "end_line": 231},
+        {"path": "references/health_analysis.md", "start_line": 21, "end_line": 37},
+        {"path": "references/health_analysis.md", "start_line": 86, "end_line": 95}
+      ]
+    },
+    {
+      "operation": "Recommend optional local caching",
+      "source": "API reference reliability guidance",
+      "data_scope": "Fetched historical health data and newly fetched dates.",
+      "recipient_or_storage": "An unspecified local cache.",
+      "condition": "A user or agent adopts the caching recommendations. No cache implementation, location, retention limit or deletion procedure is supplied.",
+      "evidence": [
+        {"path": "references/api.md", "start_line": 229, "end_line": 233},
+        {"path": "references/api.md", "start_line": 296, "end_line": 302}
+      ]
+    },
+    {
+      "operation": "Describe manual token deletion using a mismatched path",
+      "source": "Entry privacy note versus authentication implementation",
+      "data_scope": "Documented token file ~/.clawdbot/garmin-tokens.json; implemented tokenstore is ~/.clawdbot/garmin.",
+      "recipient_or_storage": "Local filesystem only; no supplied remote revocation operation.",
+      "condition": "A user follows the deletion advice. The referenced file differs from the helper's actual directory, so removal of current helper tokens is not established.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 249, "end_line": 254},
+        {"path": "scripts/garmin_auth.py", "start_line": 21, "end_line": 22},
+        {"path": "scripts/garmin_auth.py", "start_line": 43, "end_line": 51}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Today's complete user-summary response.",
+      "recipient_or_storage": "Extra authenticated requests to Garmin; summary responses in authentication-process memory.",
+      "condition": "Every successful get_client path performs a summary probe; successful status performs another. Login also fetches a summary after authentication.",
+      "purpose_basis": "Authentication validation is necessary; unconditional daily-statistics fetching is an implementation choice. The second status fetch is explicitly redundant.",
+      "necessary_behavior": "Detect invalid authentication and enable the requested operation.",
+      "proposed_reduction": "Use the requested metric request to detect failure where practical; retain one status probe and avoid the duplicate summary fetch. Use a lighter probe only if supported.",
+      "preservation_conditions": "Preserve invalid-token handling and status verification; upstream support for lighter probes is unknown.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 47, "end_line": 59},
+        {"path": "scripts/garmin_auth.py", "start_line": 82, "end_line": 89},
+        {"path": "scripts/garmin_auth.py", "start_line": 107, "end_line": 113}
+      ]
+    },
+    {
+      "data_scope": "Account email and returned displayName in progress/status messages.",
+      "recipient_or_storage": "stderr and any caller that captures it; further persistence is unknown.",
+      "condition": "Login and successful login/status validation.",
+      "purpose_basis": "Authentication feedback is useful; identifying the account in every diagnostic is additional data within that feedback.",
+      "necessary_behavior": "Report success, failure and actionable authentication state.",
+      "proposed_reduction": "Omit identity fields by default or expose them through an explicit account-identification option.",
+      "preservation_conditions": "Keep requested profile results and any explicitly needed multi-account identification.",
+      "evidence": [
+        {"path": "scripts/garmin_auth.py", "start_line": 40, "end_line": 40},
+        {"path": "scripts/garmin_auth.py", "start_line": 54, "end_line": 59},
+        {"path": "scripts/garmin_auth.py", "start_line": 109, "end_line": 113}
+      ]
+    },
+    {
+      "data_scope": "HRV, Body Battery, heart rate and activities fetched alongside sleep; all five underlying arrays returned.",
+      "recipient_or_storage": "Additional Garmin metric requests and stdout to the caller.",
+      "condition": "The entry's last-night sleep recipe invokes summary --days 1 solely to report sleep hours and score.",
+      "purpose_basis": "The broad command is explicitly prescribed by the entry document, although its stated answer requires only sleep. This reduction requires changing that recipe.",
+      "necessary_behavior": "Retrieve and report the relevant night's sleep duration and score.",
+      "proposed_reduction": "Use a sleep-only query for that question and return the required sleep fields. Preserve comprehensive summary for broad health analysis.",
+      "preservation_conditions": "Keep additional metrics when the question asks about recovery or combined health; preserve correct night/date selection.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 173, "end_line": 180},
+        {"path": "scripts/garmin_data.py", "start_line": 256, "end_line": 260},
+        {"path": "scripts/garmin_data.py", "start_line": 278, "end_line": 295}
+      ]
+    },
+    {
+      "data_scope": "One additional calendar day's metric request beyond N daily dates.",
+      "recipient_or_storage": "Garmin daily-query boundary; returned records may reach stdout or selected chart HTML.",
+      "condition": "Positive --days N is intended to mean N daily dates: start is today minus N and daily loops include both endpoints, producing N+1 attempted dates.",
+      "purpose_basis": "The entry describes last-N-day queries; inclusive explicit date ranges can legitimately cover both endpoints.",
+      "necessary_behavior": "Retrieve the requested period without adding an unintended day.",
+      "proposed_reduction": "Define --days semantics and use today minus N-1 when N calendar dates are intended.",
+      "preservation_conditions": "Preserve explicit inclusive --start/--end ranges and any deliberately defined rolling-window behavior.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 114, "end_line": 137},
+        {"path": "scripts/garmin_data.py", "start_line": 24, "end_line": 68},
+        {"path": "scripts/garmin_data.py", "start_line": 76, "end_line": 178},
+        {"path": "scripts/garmin_data.py", "start_line": 215, "end_line": 242}
+      ]
+    },
+    {
+      "data_scope": "All fields of a selected FIT record, including unrelated route or physiological fields when present.",
+      "recipient_or_storage": "Query result printed to stdout and returned to the caller; no remote disclosure is established.",
+      "condition": "A narrow elevation, pace or heart-rate question is answered using the generic activity query.",
+      "purpose_basis": "A matching data point is required; returning every field is additional data within that required result. Full-record queries remain a supported use.",
+      "necessary_behavior": "Locate the relevant point and provide the requested measurement with sufficient matching context.",
+      "proposed_reduction": "Add field selection or project the result to requested measurements and necessary time/distance context.",
+      "preservation_conditions": "Retain an explicit full-record mode and full parse/export behavior for comprehensive analysis.",
+      "evidence": [
+        {"path": "references/extended_capabilities.md", "start_line": 97, "end_line": 100},
+        {"path": "references/extended_capabilities.md", "start_line": 135, "end_line": 143},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 67, "end_line": 95},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 139, "end_line": 197},
+        {"path": "scripts/garmin_activity_files.py", "start_line": 317, "end_line": 325}
+      ]
+    },
+    {
+      "data_scope": "Browser resource-request metadata; embedded health chart data available to externally supplied page code.",
+      "recipient_or_storage": "cdn.jsdelivr.net receives the resource request; its script executes in the local health-data page. Health-data transmission to the CDN is not shown.",
+      "condition": "Generated chart HTML loads its external Chart.js dependency.",
+      "purpose_basis": "Interactive visualization is required; fetching its implementation from an external host is a replaceable implementation choice.",
+      "necessary_behavior": "Render the same interactive charts and tooltips.",
+      "proposed_reduction": "Package Chart.js locally and reference the local asset.",
+      "preservation_conditions": "Keep the required chart functionality and version compatibility. Actual third-party script behavior remains unknown.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 145, "end_line": 169},
+        {"path": "scripts/garmin_chart.py", "start_line": 23, "end_line": 29},
+        {"path": "scripts/garmin_chart.py", "start_line": 120, "end_line": 164}
+      ]
+    },
+    {
+      "data_scope": "Rendered health series, dates, derived statistics and generation time.",
+      "recipient_or_storage": "System temporary HTML file created with delete=False.",
+      "condition": "A chart is generated without --output; the file persists without an implemented cleanup step.",
+      "purpose_basis": "A browser-readable file is needed for automatic opening; indefinite retention after viewing is not specified as an outcome.",
+      "necessary_behavior": "Keep the chart available while the user views it.",
+      "proposed_reduction": "Provide a bounded cleanup lifecycle or session-based serving, with explicit saving for retention.",
+      "preservation_conditions": "Do not remove the file before browser loading or required reloads; preserve explicit --output exports.",
+      "evidence": [
+        {"path": "scripts/garmin_chart.py", "start_line": 124, "end_line": 124},
+        {"path": "scripts/garmin_chart.py", "start_line": 539, "end_line": 556}
+      ]
+    },
+    {
+      "data_scope": "Reusable session tokens left in the implemented tokenstore.",
+      "recipient_or_storage": "~/.clawdbot/garmin.",
+      "condition": "A user follows the entry's advice to delete ~/.clawdbot/garmin-tokens.json, expecting to remove the helper's access.",
+      "purpose_basis": "The entry promises user-controlled access removal; its deletion target differs from the implemented persistence boundary.",
+      "necessary_behavior": "Remove the actual locally reusable session credentials when access removal is requested.",
+      "proposed_reduction": "Correct the deletion instructions or supply a logout operation targeting TOKEN_DIR; separately explain remote revocation if supported.",
+      "preservation_conditions": "Account for intentionally shared clients before deletion. Local deletion alone must not be represented as proven Garmin-side token invalidation.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 251, "end_line": 254},
+        {"path": "scripts/garmin_auth.py", "start_line": 21, "end_line": 22},
+        {"path": "scripts/garmin_auth.py", "start_line": 43, "end_line": 51}
+      ]
+    }
+  ],
+  "unknowns": [
+    "The packaged-source audit is complete. Missing garminconnect/garth internals block verification of exact Garmin hosts, authentication payloads, additional library requests, token serialization, automatic refresh and token-file retention (scripts/garmin_auth.py:14-19,47-51,84-88).",
+    "Exact response schemas and upstream field/time-window filtering are unresolved. Extended helpers return unprojected dependency responses, so their complete data scope and opportunities for upstream narrowing cannot be established (scripts/garmin_data_extended.py:15-198; scripts/garmin_query.py:82-206).",
+    "The CDN script body is absent. Its access to page data does not establish remote health-data transmission; subsequent requests, headers, cookies and referrer behavior remain unknown (scripts/garmin_chart.py:23-29,120-164).",
+    "Standalone MCP behavior is unresolved: only a redirect/setup document is packaged. Its claimed shared token-file paths differ from the Python helper's directory; authentication sharing, disclosure and persistence cannot be verified (references/mcp_setup.md:1-16,54-62; scripts/garmin_auth.py:21-22).",
+    "Clawdbot environment injection, automation, report delivery, model routing and caller retention are not supplied. Ordinary stdout/stderr returns do not establish further remote sharing (SKILL.md:37-57,143-143; references/mcp_setup.md:42-48).",
+    "Actual filesystem ownership, token-file modes, backups and browser caches are unknown. Directory chmod occurs after token dumping; it does not establish individual file permissions or cleanup elsewhere (scripts/garmin_auth.py:43-62; scripts/garmin_chart.py:544-556).",
+    "Optional cache storage, retention and deletion remain unspecified; package-source recipients used by pip also depend on unprovided configuration (references/api.md:229-233,296-302; install.sh:22-32).",
+    "No supplied operation establishes remote token revocation. Deleting a local file or directory cannot be assumed to invalidate sessions retained by Garmin or the separate MCP implementation (SKILL.md:249-254; references/mcp_setup.md:54-62)."
+  ]
+}

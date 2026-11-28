@@ -27,6 +27,7 @@ from skillflow.propagation.models import EffectEvent
 from skillflow.propagation.models import FlowLocation
 from skillflow.propagation.models import FlowState
 from skillflow.propagation.models import IRFlowRecord
+from skillflow.propagation.models import CaseOutcomeRecord
 from skillflow.propagation.models import StateChange
 from skillflow.propagation.models import ForEachRecord
 from skillflow.propagation.models import ForEachInstance
@@ -37,6 +38,7 @@ from skillflow.propagation.contracts.specs import value_refs
 from skillflow.propagation.contracts.specs import iter_effect_events
 from skillflow.propagation.contracts.specs import iter_scoped_events
 from skillflow.propagation.conditions import guard_truths, ConditionDomainError
+from skillflow.propagation.expressions import evaluate_compute, operation_expressions
 from skillflow.propagation.contracts.uses import active_value_uses
 from skillflow.propagation.execution_errors import OperandDomainError, OperationExecutionError
 from skillflow.propagation.contracts.locations import address_is_unknown, locations_may_alias
@@ -95,6 +97,7 @@ class TransferInterpreter:
             identity: spec if isinstance(spec, IRSemantics) else IRSemantics.model_validate(spec)
             for identity, spec in annotation["ir_semantics"].items()
         })
+        self.expressions = operation_expressions(annotation)
         # A caller may intentionally reuse a registry namespace across runs.
         # Different frozen rules must still never refine an older result ID.
         self.rule_identity = canonical_sha256({"cfg": cfg, "annotation": annotation})
@@ -263,6 +266,10 @@ class TransferInterpreter:
                             locations.update(self.referenced_context_locations(ir, use.value))
                 for binding in typed_spec.output_bindings:
                     locations.update(self.referenced_context_locations(ir, binding.value))
+                for group in typed_spec.outcome_bindings:
+                    for case in group.cases:
+                        if case.value is not None:
+                            locations.update(self.referenced_context_locations(ir, case.value))
         return locations
 
     def literal(self, value, position):
@@ -836,8 +843,11 @@ class TransferInterpreter:
                         cursor += 1
                 add_output(self._result([pos, "members", shape], args, content), selected)
         elif kind == "compute":
+            expression = self.expressions.get((ir["id"], event_index, body_event_index, op_index))
             for args in self._tuples(inputs):
-                add_output(self._result(pos, args, OpaqueContent(), relations=op["dependencies"]), dict(enumerate(args)))
+                content = (OpaqueContent() if expression is None else
+                           evaluate_compute(expression, self.registry, op["inputs"], args))
+                add_output(self._result(pos, args, content, relations=op["dependencies"]), dict(enumerate(args)))
         else:
             raise ValueError(f"unsupported abstract operation: {kind}")
         resolved_outputs = []
@@ -883,9 +893,27 @@ class TransferInterpreter:
                               alternatives=alternatives, branch_targets=branch_targets)
 
     def bind_outputs(self, ir, spec, state, locals_):
+        defaults = {row["output_index"]: row for row in ir.get("metadata", {}).get("python_argument_defaults", [])}
         for binding in spec["output_bindings"]:
             index = binding["output_index"]
             ids = self.resolve(binding["value"], ir, state, locals_, [ir["id"], "output", index])
+            if index in defaults:
+                from skillflow.propagation.selectors import selector_outcomes, routed_identity
+                row = defaults[index]
+                if binding["value"] != {"kind": "input", "index": row["input_index"]}:
+                    raise ValueError("A Python parameter default must bind the invocation's actual input snapshot")
+                bound = set()
+                for identity in ids:
+                    if selector_outcomes(self.registry, identity, {"path": [], "tests": [{"kind": "missing"}]}) == {0}:
+                        value = self.literal(row["value"], [ir["id"], "parameter_default", index])
+                        # Carry the invocation's presence decision. The missing selector itself
+                        # describes the raw argument, so it must not constrain the default value.
+                        choices = {k: v for k, v in self.registry.bindings(identity).items()
+                                   if k.startswith("argument-presence:")}
+                        bound.add(routed_identity(self.registry, value, choices) if choices else value)
+                    else:
+                        bound.add(identity)
+                ids = frozenset(bound)
             if not ids:
                 raise PendingValue(f"{ir['id']}: output[{index}] has no available data candidates")
             operand = ir["outputs"][index]
@@ -897,6 +925,89 @@ class TransferInterpreter:
     def _effect_record(self, ir, event, operations):
         return EffectEvent(effect=event.effect, atomic_ops=operations, case=event.case,
                            requires_completion=event.requires_completion)
+
+    def _publish_case(self, ir, group, case, label, state, locals_):
+        """Bind only the slots available on this invocation's selected path."""
+        base = dict(state)
+        def slot(index):
+            return FlowLocation(kind="result", name=ir["outputs"][index]["identifier"])
+
+        # A previous iteration may have defined the opposite slot.
+        for index in (group.return_index, group.exception_index, group.completion_index):
+            if index is not None:
+                base.pop(slot(index), None)
+        pos = [ir["id"], group.group, case.case_id]
+        normal = case.disposition == "return"
+        index = group.return_index if normal else group.exception_index
+        ambient = self._ambient_bindings(ir, state, locals_)
+        choices = [(None, {})] if label.guard is None else self._case_choices(
+            plain(label.guard), ir, state, locals_, pos)[1]
+        intrinsic = case.value is not None and plain(case.value) == {"kind": "local", "name": "__raised__"}
+        if index is not None and not intrinsic:
+            versions = self.resolve(case.value, ir, state, locals_, pos)
+            if not versions:
+                self._failed_diagnostics.append({"code": "unresolved_path", "instruction_id": ir["id"],
+                    "reason": f"The selected {case.case_id} has no available value for its public outcome slot."})
+                return
+        else:
+            versions = [None]
+
+        # Include the input versions in the occurrence identifier, not the
+        # contents of the exception. Loop producer sites have finite identities.
+        activation = []
+        if ir["id"] not in getattr(self.registry, "scopes", {}):
+            for i, operand in enumerate(ir.get("inputs", [])):
+                if operand["type"] == "result":
+                    loc = FlowLocation(kind="result", name=operand["identifier"])
+                    activation.append(sorted(self._entry_state.get(loc, ())))
+                elif operand["type"] == "context_key":
+                    ids = set().union(*(self.read_location(loc, self._entry_state)
+                                       for loc in self.context_locations(ir, i)))
+                    activation.append(sorted(ids))
+        occurrence = canonical_sha256(activation)
+        for source, decision in choices:
+            selectors = frozenset([source]) if source is not None else frozenset()
+            for value in sorted(versions):
+                if (source is not None and case.value is not None and
+                        plain(case.value) == {"kind": "input", "index": label.guard.input_index} and value != source):
+                    continue
+                actual = [*selectors, *([value] if value is not None else [])]
+                for context in self._contexts_for(actual, ambient):
+                    if not compatible_bindings(context, decision):
+                        continue
+                    context = {**context, **decision}
+                    row = dict(base)
+                    if context and hasattr(self.registry, "bindings"):
+                        for location, ids in base.items():
+                            if location.kind == "result":
+                                kept = frozenset(n for n in ids if compatible_bindings(
+                                    context, self.registry.bindings(n)))
+                                if kept:
+                                    row[location] = kept
+                                else:
+                                    row.pop(location)
+                    completion = frozenset()
+                    if group.completion_index is not None:
+                        flag = self._result([*pos, "completion", occurrence], [], LiteralContent(value=normal), bindings=context)
+                        completion = frozenset([flag])
+                        row[slot(group.completion_index)] = completion
+                    if source is not None and decision and hasattr(self.registry, "bindings"):
+                        from skillflow.propagation.selectors import routed_identity
+                        operand = ir["inputs"][label.guard.input_index]
+                        if operand["type"] == "result":
+                            selected = FlowLocation(kind="result", name=operand["identifier"])
+                            row[selected] = frozenset([routed_identity(self.registry, source, decision)])
+                    values = frozenset()
+                    if index is not None:
+                        if intrinsic:
+                            content = OpaqueContent(python_exception_type=ir.get("metadata", {}).get("python_raised_class"))
+                            value_id = self._result([*pos, "raised", occurrence], [], content, bindings=context)
+                        else:
+                            value_id = value
+                        values = frozenset([value_id])
+                        row[slot(index)] = values
+                    yield row, CaseOutcomeRecord(group=group.group, case_id=case.case_id,
+                        completion=completion, values=values, selectors=selectors)
 
     def _for_each(self, ir, event_index, event, state, locals_, *, uncertain):
         collections = self.resolve(event.collection, ir, state, locals_,
@@ -930,7 +1041,7 @@ class TransferInterpreter:
                                               member_token=member_token)
                 if not outcomes:
                     raise PendingValue(f"{ir['id']}/{event_index}: member scope cannot resolve its body")
-                for final_state, final_locals, records, found in outcomes:
+                for final_state, final_locals, records, found, _ in outcomes:
                     if final_state != state:
                         writes = [op for op in records.values() if op.changes]
                         if any(not op.may_state for op in writes):
@@ -980,10 +1091,13 @@ class TransferInterpreter:
                  for o, op in ([(-1, event)] if getattr(event, "kind", None) == "for_each"
                                else enumerate(event.atomic_ops) if event.atomic_ops else [(-2, event)])]
         outcomes = []
-        group_atoms, returning_cases = {}, {}
+        group_atoms, returning_cases, labels = {}, {}, {}
+        protected = ({item.group: item for item in self._current_spec.outcome_bindings}
+                     if outer_event is None else {})
         for e, o, _ in atoms:
             case = getattr(events[e], "case", None)
             if case is not None:
+                labels[case.id] = case
                 group_atoms.setdefault(case.group, set()).add((e, o))
                 if case.disposition == "return":
                     returning_cases.setdefault(case.group, set()).add(case.id)
@@ -993,7 +1107,17 @@ class TransferInterpreter:
             if self._attempts > self.max_variants:
                 raise PropagationLimitError("partial-order arrangements exceed configured resource limit")
             if len(done) == len(atoms):
-                outcomes.append((current, local_values, records, diagnostics))
+                if protected:
+                    # A protected group is the terminal case summary. Every
+                    # alternative retains its own memory up to the next CFG edge.
+                    for group in protected.values():
+                        for case in group.cases:
+                            if case.case_id in case_states:
+                                for row, trace in self._publish_case(ir, group, case, labels[case.case_id],
+                                        case_states[case.case_id], local_values):
+                                    outcomes.append((row, local_values, records, diagnostics, trace))
+                else:
+                    outcomes.append((current, local_values, records, diagnostics, None))
                 return
             for ordinal, (e, o, op) in enumerate(atoms):
                 if (e, o) in done or not dependencies.get((e, o), set()) <= done:
@@ -1043,7 +1167,7 @@ class TransferInterpreter:
                         if choices != []:
                             branch_states[case.id] = dict(next_state)
                         next_state = join_states([current, next_state])
-                        if group_atoms[case.group] <= done | {(e, o)}:
+                        if case.group not in protected and group_atoms[case.group] <= done | {(e, o)}:
                             # Retain failure-prefix records, but never publish
                             # thrown-only changes as a normal continuation.
                             feasible = sorted(returning_cases[case.group] & branch_states.keys())
@@ -1123,16 +1247,18 @@ class TransferInterpreter:
         outcomes = []
         try:
             arrangements = self._arrangements(ir, typed_spec.events, mapping(entry_state), {}, uncertain=uncertain)
-            for state, locals_, records, diagnostics in arrangements:
+            for state, locals_, records, diagnostics, trace in arrangements:
                 try:
                     self.bind_outputs(ir, spec, state, locals_)
                 except PendingValue:
                     self._failed_diagnostics.extend(diagnostics)
                 else:
-                    outcomes.append((state, records, diagnostics))
+                    outcomes.append((state, records, diagnostics, trace))
         finally:
             findings = ([item for outcome in outcomes for item in outcome[2]]
                         if outcomes else self._failed_diagnostics)
+            if outcomes and typed_spec.outcome_bindings:
+                findings.extend(item for item in self._failed_diagnostics if item["code"] == "unresolved_path")
             unique = {json.dumps(item, ensure_ascii=True, sort_keys=True): item for item in findings}
             self._last_diagnostics = [unique[key] for key in sorted(unique)]
         if not outcomes:
@@ -1153,6 +1279,8 @@ class TransferInterpreter:
                 records = [self._merge_operations([out[1][(e, o)] for out in outcomes])
                            for o in range(len(event.atomic_ops))]
                 result_events.append(self._effect_record(ir, event, records))
+        self.outcome_states = [(out[0], out[3]) for out in outcomes if out[3] is not None]
+        traces = {canonical_sha256(plain(out[3])): out[3] for out in outcomes if out[3] is not None}
         return IRFlowRecord(order=typed_spec.order, precedence=typed_spec.precedence, entry_state=entry_state,
                             exit_state=FlowState.from_mapping(join_states(out[0] for out in outcomes)),
-                            events=result_events)
+                            events=result_events, outcomes=[traces[key] for key in sorted(traces)])

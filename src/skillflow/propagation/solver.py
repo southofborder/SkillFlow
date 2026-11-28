@@ -19,7 +19,7 @@ from skillflow.propagation.interpreter import mapping
 from skillflow.propagation.interpreter import plain
 from skillflow.propagation.interpreter import static_key
 from skillflow.propagation.models import FlowState, FlowLocation
-from skillflow.propagation.models import IRFlowRecord, ForEachRecord
+from skillflow.propagation.models import IRFlowRecord, ForEachRecord, OutcomeRouteRecord
 from skillflow.propagation.records import PropagationRecords
 from skillflow.propagation.records import cfg_sha256
 from skillflow.propagation.records import _validate_annotation
@@ -63,9 +63,12 @@ def _join_ir_records(variants):
         else:
             events.append(event.model_copy(update={"atomic_ops": [TransferInterpreter._merge_operations(
                 [item.atomic_ops[position] for item in items]) for position in range(len(event.atomic_ops))]}))
+    traces = {canonical_sha256(plain(row)): row for record in variants for row in record.outcomes}
+    routes = {(row.group, row.case_id, row.target): row for record in variants for row in record.outcome_routes}
     return IRFlowRecord(order=first.order, precedence=first.precedence,
         entry_state=FlowState.from_mapping(join_states(mapping(record.entry_state) for record in variants)),
-        exit_state=FlowState.from_mapping(join_states(mapping(record.exit_state) for record in variants)), events=events)
+        exit_state=FlowState.from_mapping(join_states(mapping(record.exit_state) for record in variants)), events=events,
+        outcomes=[traces[key] for key in sorted(traces)], outcome_routes=[routes[key] for key in sorted(routes)])
 
 
 def _guard_operand_origin(ir, spec, record, event_index, op_index):
@@ -143,7 +146,7 @@ def _guarded_outgoing(state, successors, decisions, registry, max_variants):
                     if roots_by_origin is not None and location == origin[0]:
                         compatible &= roots_by_origin
                     if raw.get("selector") and location.kind == "result" and any(
-                            axis.startswith("selector:") for axis in alternative.bindings):
+                            axis.startswith(("selector:", "python-handler:")) for axis in alternative.bindings):
                         from skillflow.propagation.selectors import routed_identity
                         compatible = frozenset(routed_identity(registry, identity, alternative.bindings)
                             if identity in alternative.inputs[0] or (
@@ -685,19 +688,22 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
         with registry.observe_reads() as observed:
             try:
                 interpreter.current_block = block
-                for row_key in sorted(rows):
-                    incoming = rows[row_key]
+                instructions = cfg["blocks"][block]["instructions"]
+                dispatch = instructions[-1].get("metadata", {}).get("outcome_dispatch") if instructions else None
+                paths = deque((0, rows[key], FailureRow(rows[key], unavailable=rows[key].unavailable,
+                    controls={cause: join for cause, join in rows[key].controls.items() if join != block}),
+                    set(successors[block]), [], None) for key in sorted(rows))
+                while paths:
+                    start, incoming, state, allowed, decisions, selected_route = paths.popleft()
                     # Only merge uses predecessor snapshots. Its selected row is
                     # authoritative; no joined sibling row may replace it.
                     interpreter.predecessor_states = ({predecessor: incoming}
                                                        if predecessor is not None else {})
                     interpreter.active_predecessor = predecessor
                     interpreter.loop_backedge_available = backedge
-                    state = FailureRow(incoming, unavailable=incoming.unavailable,
-                        controls={cause: join for cause, join in incoming.controls.items() if join != block})
-                    allowed, decisions = set(successors[block]), []
                     complete = True
-                    for ir in cfg["blocks"][block]["instructions"]:
+                    for index in range(start, len(instructions)):
+                        ir = instructions[index]
                         identity = ir["id"]
                         current["attempted"].add(identity)
                         if identity in unmodeled:
@@ -707,6 +713,8 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                         evaluated = False
                         attempt_diagnostics = None
                         try:
+                            if dispatch is not None and index == len(instructions) - 1 and selected_route is None:
+                                raise PendingValue(f"{identity}: its protected producer has no established outcome")
                             state = project(state, live.before[identity])
                             spec = annotation.ir_semantics[identity]
                             reads, writes, clears, evidence_reads, controls = dependencies(
@@ -741,6 +749,9 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                                 state.unavailable.pop(loc, None)
                             state = project(state, live.after[identity])
                             record = record.model_copy(update={"exit_state": FlowState.from_mapping(state)})
+                            if selected_route is not None and index == len(instructions) - 1:
+                                record = record.model_copy(update={"outcome_routes": [selected_route]})
+                                allowed &= {selected_route.target}
                             candidates[identity].append(record)
                             for event_index, event in enumerate(record.events):
                                 if hasattr(event, "atomic_ops"):
@@ -749,6 +760,26 @@ def _solve_relations(cfg, annotation, interpreter, registry, result, seed,
                                             allowed &= set(op.branch_targets)
                                             decisions.append((ir, annotation.ir_semantics[identity], record,
                                                               event_index, op_index, op))
+                            if record.outcomes:
+                                # Only the public record is joined. The next IR
+                                # runs with the full memory of one outcome.
+                                next_rows = {}
+                                dispositions = {case.case_id: case.disposition for binding in spec.outcome_bindings
+                                                for case in binding.cases}
+                                for exit_row, trace in interpreter.outcome_states:
+                                    row = project(state.with_state(exit_row), live.after[identity])
+                                    route = None
+                                    if dispatch is not None and dispatch["producer"] == identity:
+                                        target = dispatch["on_" + dispositions[trace.case_id]]
+                                        route = OutcomeRouteRecord(group=trace.group, case_id=trace.case_id, target=target)
+                                    key = (_row_key(row), trace.case_id if route is not None else None)
+                                    next_rows[key] = row, route
+                                if len(paths) + len(next_rows) > max_variants:
+                                    raise PropagationLimitError("outcome state relation exceeds configured resource budget")
+                                for row, route in next_rows.values():
+                                    paths.append((index + 1, incoming, row, set(allowed), list(decisions), route))
+                                complete = False
+                                break
                         except OperationExecutionError as error:
                             diagnostic = error.diagnostic
                             cause = canonical_sha256(diagnostic)

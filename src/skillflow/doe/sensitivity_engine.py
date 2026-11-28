@@ -421,21 +421,28 @@ class SensitivityEngine:
         return identity
 
     def _edges(self):
+        from skillflow.propagation.expressions import expression_slots
         expression_inputs = {}
         self.family_sources = defaultdict(set)
         for key, operation in self.engine.ops.items():
             spec, record = operation["spec"], operation["record"]
             expression = self.engine.expressions.get((operation["position"]["instruction_id"], operation["raw_op"]))
             if spec["op"] == "compute" and expression is not None:
-                requirements = defaultdict(list)
+                uses_by_slot = defaultdict(list)
+                operands = {slot: actual for slot, (actual, _) in self.engine.slots(key).items()}
                 for ref, needed in _expression_uses(expression):
-                    for slot, (actual, role) in self.engine.slots(key).items():
-                        if actual == ref:
-                            for data_id in record["inputs"][slot]:
-                                requirements[data_id].append(needed)
-                for slot in record["outputs"]:
-                    for output in slot:
-                        expression_inputs[output] = requirements
+                    if ref["kind"] == "literal":
+                        continue
+                    exact = expression_slots(ref, operands)
+                    for slot in exact or expression_slots(ref, operands, include_alternatives=True):
+                        uses_by_slot[slot].append(needed)
+                for alternative in record.get("alternatives") or [record]:
+                    for slot in alternative["outputs"]:
+                        for output in slot:
+                            requirements = expression_inputs.setdefault(output, defaultdict(list))
+                            for index, uses in uses_by_slot.items():
+                                for data_id in alternative["inputs"][index]:
+                                    requirements[data_id].extend(use for use in uses if use not in requirements[data_id])
             if spec["op"] == "build":
                 for member in record["members"]:
                     guard = member["when_input_index"]
@@ -497,8 +504,10 @@ class SensitivityEngine:
             # Refining an opaque acquired/computed value into open known parts
             # does not remove its original influence. Closed constructions and
             # explicit exclusions/updates still use their content edges only.
+            # An evaluated scalar may still disclose an input-derived property.
             # Acquisition influence does not imply copied request plaintext.
-            if (form == "opaque" or form == "known_parts" and not content["parts_complete"]) and not origin.get("part_of"):
+            if (form == "opaque" or form == "known_parts" and not content["parts_complete"]
+                    or form == "literal" and identity in expression_inputs) and not origin.get("part_of"):
                 for dependency in origin.get("dependencies", []):
                     requirements = expression_inputs[identity].get(dependency["data"], []) if identity in expression_inputs else None
                     self.edges[dependency["data"]].append((identity, dependency["relation"], requirements))

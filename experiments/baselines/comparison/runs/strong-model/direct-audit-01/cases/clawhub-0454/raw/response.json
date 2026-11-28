@@ -1,0 +1,312 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide API-key-free web search, rendered page reading, persistent interactive browsing, cookie-banner dismissal, screenshots, file downloads and PDF text extraction. Documented behavior includes open-and-extract, automatic cookie dismissal and caller-facing outputs; specific consent choices and intermediate storage mechanisms are implementation choices (SKILL.md:3-63; README.md:9-26,178-196).",
+  "data_operations": [
+    {
+      "operation": "Send search queries and pagination data to the selected search engine.",
+      "source": "CLI query and page count; DuckDuckGo response forms.",
+      "data_scope": "Query, configured User-Agent and language headers; Brave/Google offsets; all named inputs from DuckDuckGo's next-page form.",
+      "recipient_or_storage": "https://html.duckduckgo.com/html/, https://search.brave.com/search, or https://www.google.com/search.",
+      "condition": "Search invocation; DuckDuckGo is the default. Additional pages depend on the requested count and available pagination.",
+      "evidence": [
+        {"path": "scripts/google_search.py", "start_line": 28, "end_line": 42},
+        {"path": "scripts/google_search.py", "start_line": 61, "end_line": 74},
+        {"path": "scripts/google_search.py", "start_line": 79, "end_line": 88},
+        {"path": "scripts/google_search.py", "start_line": 114, "end_line": 127},
+        {"path": "scripts/google_search.py", "start_line": 156, "end_line": 166}
+      ]
+    },
+    {
+      "operation": "Read search-response HTML, extract results and return deduplicated results.",
+      "source": "Selected engine's HTTP responses.",
+      "data_scope": "Result titles, destination URLs and snippets; URL-based deduplication.",
+      "recipient_or_storage": "Local process memory, then stdout to the caller.",
+      "condition": "Successful search responses. This path parses result links without opening their destinations.",
+      "evidence": [
+        {"path": "scripts/google_search.py", "start_line": 42, "end_line": 59},
+        {"path": "scripts/google_search.py", "start_line": 88, "end_line": 106},
+        {"path": "scripts/google_search.py", "start_line": 129, "end_line": 140},
+        {"path": "scripts/google_search.py", "start_line": 168, "end_line": 176}
+      ]
+    },
+    {
+      "operation": "Open a supplied URL in a one-shot browser.",
+      "source": "read_page.py CLI URL.",
+      "data_scope": "Requested URL; configured User-Agent, locale and viewport in the browser context; loaded page content.",
+      "recipient_or_storage": "Requested website and local Chromium context. Additional website-driven requests are unresolved.",
+      "condition": "Every read_page.py invocation; browser visibility is optional.",
+      "evidence": [
+        {"path": "scripts/read_page.py", "start_line": 109, "end_line": 127}
+      ]
+    },
+    {
+      "operation": "Maintain a browser session and perform requested navigation.",
+      "source": "Persistent-browser open, navigate, tab and history commands.",
+      "data_scope": "URLs, live tabs, DOM content and any browser state created during browsing; configurable User-Agent, locale and viewport.",
+      "recipient_or_storage": "Long-running local Chromium context; navigated websites; configured browser proxy when supplied.",
+      "condition": "open forks the server. State survives individual CLI commands until browser closure; navigation, new tabs and history actions use that context.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 150, "end_line": 179},
+        {"path": "scripts/browser_session.py", "start_line": 206, "end_line": 225},
+        {"path": "scripts/browser_session.py", "start_line": 364, "end_line": 375},
+        {"path": "scripts/browser_session.py", "start_line": 468, "end_line": 477},
+        {"path": "scripts/browser_session.py", "start_line": 615, "end_line": 620},
+        {"path": "README.md", "start_line": 85, "end_line": 85}
+      ]
+    },
+    {
+      "operation": "Exchange browser commands and results through local IPC; maintain control files.",
+      "source": "CLI command arguments and browser-server results.",
+      "data_scope": "URLs, selectors, search strings, form values, JavaScript and returned content; server process identifier.",
+      "recipient_or_storage": "/tmp/web-pilot-browser.sock, its connected local client/server, and /tmp/web-pilot-browser.pid.",
+      "condition": "Persistent-browser operation. Commands and results use length-prefixed JSON or text; no application-level client authentication appears in this path.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 29, "end_line": 30},
+        {"path": "scripts/browser_session.py", "start_line": 185, "end_line": 199},
+        {"path": "scripts/browser_session.py", "start_line": 548, "end_line": 567},
+        {"path": "scripts/browser_session.py", "start_line": 741, "end_line": 755}
+      ]
+    },
+    {
+      "operation": "Persist initial page extraction for the parent process, then normally delete the handoff file.",
+      "source": "Initial browser page's extracted title and content.",
+      "data_scope": "Full initial extraction, without the later navigate/extract character cap.",
+      "recipient_or_storage": "/tmp/web-pilot-initial.json; parent process; stdout to the caller.",
+      "condition": "Server startup writes the file. The parent polls for it, reads it, deletes it and returns the result. Cleanup is not guaranteed if startup or the parent fails.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 181, "end_line": 183},
+        {"path": "scripts/browser_session.py", "start_line": 622, "end_line": 635},
+        {"path": "scripts/browser_session.py", "start_line": 529, "end_line": 534}
+      ]
+    },
+    {
+      "operation": "Read page text locally and return extraction results.",
+      "source": "Current page DOM.",
+      "data_scope": "Page title and selected main-content text, falling back to main-element innerText. Extraction reads the content before applying output truncation.",
+      "recipient_or_storage": "Local browser/script memory, then the caller through stdout or the local socket.",
+      "condition": "One-shot reads and persistent open/navigate/extract/tab-new. One-shot output defaults to 50,000 characters and is configurable; persistent CLI navigate/extract request 50,000. Open and tab-new have no equivalent cap.",
+      "evidence": [
+        {"path": "scripts/read_page.py", "start_line": 22, "end_line": 54},
+        {"path": "scripts/read_page.py", "start_line": 112, "end_line": 115},
+        {"path": "scripts/read_page.py", "start_line": 144, "end_line": 148},
+        {"path": "scripts/browser_session.py", "start_line": 32, "end_line": 64},
+        {"path": "scripts/browser_session.py", "start_line": 181, "end_line": 183},
+        {"path": "scripts/browser_session.py", "start_line": 217, "end_line": 235},
+        {"path": "scripts/browser_session.py", "start_line": 371, "end_line": 374},
+        {"path": "scripts/browser_session.py", "start_line": 637, "end_line": 649}
+      ]
+    },
+    {
+      "operation": "Search current-page text and inspect links or tab metadata locally.",
+      "source": "Current DOM and open tabs.",
+      "data_scope": "Matching lines and line numbers, with at most 50 returned matches; link URLs and text capped at 200 characters per link; tab titles, URLs, indexes and counts.",
+      "recipient_or_storage": "Local process memory and requesting caller through the socket/stdout.",
+      "condition": "Explicit search, links, tab-list/tab-switch or status command. In-page search performs local matching rather than sending the term to a search engine.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 347, "end_line": 362},
+        {"path": "scripts/browser_session.py", "start_line": 377, "end_line": 404},
+        {"path": "scripts/browser_session.py", "start_line": 488, "end_line": 496},
+        {"path": "scripts/browser_session.py", "start_line": 507, "end_line": 514}
+      ]
+    },
+    {
+      "operation": "Click page controls and fill or submit forms.",
+      "source": "Caller-provided target, selector and value.",
+      "data_scope": "Selected control and entered value, including any sensitive information supplied by the caller.",
+      "recipient_or_storage": "Current page DOM and website event handlers; resulting remote recipients depend on the page. Status and errors return to the caller.",
+      "condition": "Explicit click/fill commands. fill presses Enter only with submit enabled; page scripts may also react to ordinary interaction.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 313, "end_line": 340},
+        {"path": "scripts/browser_session.py", "start_line": 454, "end_line": 466},
+        {"path": "scripts/browser_session.py", "start_line": 741, "end_line": 746},
+        {"path": "README.md", "start_line": 110, "end_line": 112}
+      ]
+    },
+    {
+      "operation": "Execute caller-supplied JavaScript and return its result.",
+      "source": "eval command's code argument.",
+      "data_scope": "Whatever the supplied code accesses, changes or returns in the page context.",
+      "recipient_or_storage": "Current page JavaScript context; result or error returns to the caller. Further recipients and storage depend on the code.",
+      "condition": "Explicit eval command; the packaged implementation imposes no read-only restriction on that code.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 479, "end_line": 486},
+        {"path": "scripts/browser_session.py", "start_line": 751, "end_line": 755},
+        {"path": "README.md", "start_line": 119, "end_line": 120}
+      ]
+    },
+    {
+      "operation": "Attempt cookie-banner dismissal by clicking heuristic matches.",
+      "source": "Visible controls in the main document and, if needed, frames.",
+      "data_scope": "Consent/control choice, including Accept all, Allow all and ambiguous accept/agree/continue matches. Actual cookie values or downstream collection are not shown.",
+      "recipient_or_storage": "Loaded website/frame DOM and click handlers; subsequent server or third-party effects are unknown.",
+      "condition": "Automatic on persistent open/navigate/tab-new and one-shot reads unless --no-dismiss; also available through the explicit dismiss-cookies command.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 31, "end_line": 31},
+        {"path": "SKILL.md", "start_line": 46, "end_line": 50},
+        {"path": "scripts/browser_session.py", "start_line": 67, "end_line": 112},
+        {"path": "scripts/browser_session.py", "start_line": 130, "end_line": 147},
+        {"path": "scripts/browser_session.py", "start_line": 178, "end_line": 179},
+        {"path": "scripts/browser_session.py", "start_line": 216, "end_line": 216},
+        {"path": "scripts/browser_session.py", "start_line": 342, "end_line": 345},
+        {"path": "scripts/browser_session.py", "start_line": 368, "end_line": 370},
+        {"path": "scripts/read_page.py", "start_line": 56, "end_line": 93},
+        {"path": "scripts/read_page.py", "start_line": 129, "end_line": 142}
+      ]
+    },
+    {
+      "operation": "Save requested screenshot images.",
+      "source": "Rendered active page.",
+      "data_scope": "Viewport, full page, selected element or selected vertical range; result metadata can include URL, title, selectors and tab index.",
+      "recipient_or_storage": "Caller-selected local path, defaulting to /tmp/screenshot.png; metadata returns to the caller.",
+      "condition": "Explicit screenshot command. Final screenshot files have no deletion step in this implementation.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 237, "end_line": 259},
+        {"path": "scripts/browser_session.py", "start_line": 288, "end_line": 311},
+        {"path": "scripts/browser_session.py", "start_line": 651, "end_line": 683}
+      ]
+    },
+    {
+      "operation": "Persist and read a full-page intermediate for a range screenshot, then attempt deletion.",
+      "source": "Rendered active page and selected element bounds.",
+      "data_scope": "Entire page image, including pixels outside the requested range; cropped range image.",
+      "recipient_or_storage": "Temporary PNG from tempfile.mktemp; local Pillow processing; requested final screenshot path.",
+      "condition": "Range screenshot with both selectors found. The temporary file is removed after successful cropping and deletion is attempted after a caught crop error.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 260, "end_line": 300},
+        {"path": "README.md", "start_line": 172, "end_line": 172}
+      ]
+    },
+    {
+      "operation": "Export the current page to a local PDF.",
+      "source": "Active browser page.",
+      "data_scope": "PDF representation of the page.",
+      "recipient_or_storage": "Caller-selected local path, defaulting to /tmp/page.pdf; status/path or error returns to the caller.",
+      "condition": "Explicit pdf command; README documents headless operation. No final-PDF deletion step is implemented.",
+      "evidence": [
+        {"path": "scripts/browser_session.py", "start_line": 498, "end_line": 505},
+        {"path": "scripts/browser_session.py", "start_line": 760, "end_line": 762},
+        {"path": "README.md", "start_line": 131, "end_line": 132}
+      ]
+    },
+    {
+      "operation": "Request downloadable content, following redirects and optionally using a proxy.",
+      "source": "Download URL, optional proxy and User-Agent arguments.",
+      "data_scope": "Requested URL and configured request headers; downloaded response bytes.",
+      "recipient_or_storage": "Requested server, redirect destinations and configured proxy when used; response enters the local downloader.",
+      "condition": "Every download. An SSLError triggers a retry with certificate verification disabled, leaving that retry's peer identity unverified.",
+      "evidence": [
+        {"path": "scripts/download_file.py", "start_line": 106, "end_line": 125},
+        {"path": "scripts/download_file.py", "start_line": 173, "end_line": 183}
+      ]
+    },
+    {
+      "operation": "Derive a filename and persist downloaded bytes.",
+      "source": "Response Content-Disposition/Content-Type, URL path or explicit filename.",
+      "data_scope": "Complete downloaded file; inferred filename and file metadata. Filename inference is metadata processing, not personal-attribute inference.",
+      "recipient_or_storage": "Computed local filepath under --output by ordinary names, default /tmp/downloads; unsanitized names can alter that boundary. Path, original URL, optional redirect URL and metadata return to the caller.",
+      "condition": "Successful download. Existing paths cause numeric suffixes rather than overwriting. Downloaded files have no deletion step.",
+      "evidence": [
+        {"path": "scripts/download_file.py", "start_line": 40, "end_line": 72},
+        {"path": "scripts/download_file.py", "start_line": 127, "end_line": 158},
+        {"path": "scripts/download_file.py", "start_line": 175, "end_line": 184}
+      ]
+    },
+    {
+      "operation": "Read downloaded PDFs locally and return extracted text.",
+      "source": "Saved download filepath.",
+      "data_scope": "Text from every PDF page; full joined text and character count.",
+      "recipient_or_storage": "Local pdfplumber or PyPDF2 processing, then stdout to the caller; original PDF remains saved.",
+      "condition": "Content type contains pdf or filename ends in .pdf, and an available parser succeeds. This automatic extraction is explicitly documented.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 61, "end_line": 63},
+        {"path": "scripts/download_file.py", "start_line": 75, "end_line": 103},
+        {"path": "scripts/download_file.py", "start_line": 160, "end_line": 184}
+      ]
+    },
+    {
+      "operation": "Close browser resources and delete session control files.",
+      "source": "One-shot browser or persistent browser server.",
+      "data_scope": "Live browser resources; persistent-session socket and PID file.",
+      "recipient_or_storage": "Local browser lifecycle and filesystem deletion of /tmp/web-pilot-browser.sock and /tmp/web-pilot-browser.pid.",
+      "condition": "One-shot completion closes its browser. Persistent close exits the command loop and performs cleanup; tab-close closes the selected nonfinal tab. This does not establish deletion of website-held data or requested output files.",
+      "evidence": [
+        {"path": "scripts/read_page.py", "start_line": 148, "end_line": 149},
+        {"path": "scripts/browser_session.py", "start_line": 201, "end_line": 204},
+        {"path": "scripts/browser_session.py", "start_line": 406, "end_line": 424},
+        {"path": "scripts/browser_session.py", "start_line": 529, "end_line": 534},
+        {"path": "README.md", "start_line": 214, "end_line": 218}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Permissive consent choices or unrelated actions selected by broad accept/agree/continue heuristics.",
+      "recipient_or_storage": "Current website/frame click handler; any resulting remote collection or consent persistence is unresolved.",
+      "condition": "The first matching visible control accepts optional processing or performs an action beyond dismissing a cookie banner.",
+      "purpose_basis": "Automatic banner dismissal is explicit; accepting all cookies and matching controls outside a consent dialog are implementation choices.",
+      "necessary_behavior": "Remove an obstructing banner sufficiently to read or interact with the requested page.",
+      "proposed_reduction": "Scope matching to consent dialogs and prefer reject, necessary-only or close controls. Reserve broader consent for an explicit user choice.",
+      "preservation_conditions": "Use alternatives that preserve page access. If access requires additional consent, expose that unresolved choice rather than assume acceptance.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 31, "end_line": 31},
+        {"path": "SKILL.md", "start_line": 50, "end_line": 50},
+        {"path": "scripts/browser_session.py", "start_line": 67, "end_line": 112},
+        {"path": "scripts/read_page.py", "start_line": 56, "end_line": 93}
+      ]
+    },
+    {
+      "data_scope": "Full initial page title and extracted content.",
+      "recipient_or_storage": "Fixed local file /tmp/web-pilot-initial.json, outside the live browser and caller return.",
+      "condition": "Every successful browser startup writes the extraction; failure before the parent's removal can leave it behind.",
+      "purpose_basis": "Open-and-extract is documented. Disk persistence is a handoff mechanism rather than a required output artifact.",
+      "necessary_behavior": "Return the initial extraction to the opening caller while retaining the browser session.",
+      "proposed_reduction": "Pass the initial result directly through parent-child IPC and eliminate the page-content handoff file.",
+      "preservation_conditions": "Preserve the full documented open response and reliable startup/error signaling. This removes extra persistence, not the required extraction.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 36, "end_line": 36},
+        {"path": "scripts/browser_session.py", "start_line": 181, "end_line": 183},
+        {"path": "scripts/browser_session.py", "start_line": 622, "end_line": 635},
+        {"path": "scripts/browser_session.py", "start_line": 529, "end_line": 534}
+      ]
+    },
+    {
+      "data_scope": "Page pixels outside the requested screenshot range.",
+      "recipient_or_storage": "Full-page temporary PNG created by tempfile.mktemp before cropping.",
+      "condition": "Range screenshot with valid start/end selectors; temporary deletion can be interrupted.",
+      "purpose_basis": "The requested outcome is a range image. README documents full-page capture plus cropping as the chosen implementation.",
+      "necessary_behavior": "Produce an accurate screenshot of the selected range.",
+      "proposed_reduction": "Keep any required full-page intermediate in memory and persist only the crop; use direct clipped capture where equivalent.",
+      "preservation_conditions": "Preserve range boundaries, scaling and rendering accuracy. The excess is extra pixels persisted during a required screenshot action, not a redundant requested screenshot.",
+      "evidence": [
+        {"path": "README.md", "start_line": 26, "end_line": 26},
+        {"path": "README.md", "start_line": 129, "end_line": 129},
+        {"path": "README.md", "start_line": 172, "end_line": 172},
+        {"path": "scripts/browser_session.py", "start_line": 260, "end_line": 300}
+      ]
+    },
+    {
+      "data_scope": "Downloaded file bytes saved beyond the selected output directory.",
+      "recipient_or_storage": "Local filepath computed by os.path.join(output_dir, filename), potentially outside output_dir.",
+      "condition": "Without an explicit filename, a server-supplied filename or decoded URL basename contains an absolute path or traversal components, and the resulting location is writable.",
+      "purpose_basis": "The documented download destination is --output DIR; automatic filename detection does not require a remote source to choose directories.",
+      "necessary_behavior": "Save the complete requested file with an inferred filename in the selected directory.",
+      "proposed_reduction": "Normalize automatically inferred names to safe basenames and enforce containment within output_dir before writing.",
+      "preservation_conditions": "Retain filename detection, fallback names, complete file contents and collision suffixes. Keep intentional caller-selected paths separate from remote filename metadata.",
+      "evidence": [
+        {"path": "scripts/download_file.py", "start_line": 7, "end_line": 9},
+        {"path": "scripts/download_file.py", "start_line": 40, "end_line": 53},
+        {"path": "scripts/download_file.py", "start_line": 127, "end_line": 144},
+        {"path": "scripts/download_file.py", "start_line": 175, "end_line": 177}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Actual queries, URLs, form values, page contents and downloaded documents are unspecified; their sensitivity cannot be determined.",
+    "Blocking for end-to-end disclosure conclusions: website/frame scripts, consent handlers and caller-supplied JavaScript are not supplied. Their downstream recipients, tracking, inferred attributes, persistence and deletion remain unresolved.",
+    "Search-engine retention and the contents or necessity of DuckDuckGo-provided pagination fields are undocumented.",
+    "Redirect destinations, actual proxy visibility and the identity of a peer reached through the unverified TLS retry depend on runtime inputs and external behavior.",
+    "Socket/file accessibility depends on operating-system permissions and umask. The source does not establish which other local processes can access session commands or temporary content.",
+    "Dependency-managed browser caches, temporary profiles and their cleanup are not documented by the supplied source. Browser closure does not prove erasure of those artifacts.",
+    "No runtime evidence establishes whether failure or interruption leaves the initial handoff file, screenshot intermediate, control files or browser process behind. System cleanup and final-output retention policies are unspecified."
+  ]
+}

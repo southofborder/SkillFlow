@@ -1,0 +1,301 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide an agent and standalone Bluesky/AT Protocol CLI for reading feeds, profiles, notifications and threads; publishing text and images; and managing engagement, follows, blocks and mutes. Entry requirements include checking authentication, using local hidden-prompt login, previewing drafts unless final text was supplied, verifying specified mutation targets, and requiring image alt text. Individual cached fields and repeated API lookups are implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Specify agent authentication, preview and target-verification requirements",
+      "source": "SKILL.md agent and setup guidance",
+      "data_scope": "Account identity, draft text, selected account/post targets, and an app password entered locally rather than in chat",
+      "recipient_or_storage": "Local CLI and its caller; app-password entry is directed to the user's local hidden prompt",
+      "condition": "When following the skill; previews may be skipped when the user already supplied final text",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 20, "end_line": 34},
+        {"path": "SKILL.md", "start_line": 45, "end_line": 59},
+        {"path": "SKILL.md", "start_line": 175, "end_line": 178}
+      ]
+    },
+    {
+      "operation": "Install and persist the runtime dependency",
+      "source": "Shell wrapper and dependency manifest",
+      "data_scope": "The atproto package requirement and installed runtime files; no account data is explicitly passed to pip",
+      "recipient_or_storage": "pip and its unspecified configured package source; scripts/venv",
+      "condition": "Wrapper execution when the virtual-environment directory does not exist",
+      "evidence": [
+        {"path": "scripts/bsky", "start_line": 9, "end_line": 19},
+        {"path": "requirements.txt", "start_line": 1, "end_line": 1}
+      ]
+    },
+    {
+      "operation": "Read and rewrite local authentication configuration",
+      "source": "load_config and save_config",
+      "data_scope": "The entire configuration JSON, including supported session and legacy credential fields",
+      "recipient_or_storage": "CLI process memory and ~/.config/bsky/config.json",
+      "condition": "Authentication, identity checks, login, migration, refresh or logout; directory creation requests mode 0700 and file creation requests 0600, without resetting existing modes",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 20, "end_line": 42},
+        {"path": "scripts/bsky.py", "start_line": 71, "end_line": 102},
+        {"path": "scripts/bsky.py", "start_line": 178, "end_line": 215}
+      ]
+    },
+    {
+      "operation": "Accept login credentials and obtain authentication state",
+      "source": "cmd_login",
+      "data_scope": "Handle and app password; returned handle, DID and exported session string",
+      "recipient_or_storage": "atproto Client.login authentication boundary; returned handle, DID and session are saved locally, and identity is printed to the caller",
+      "condition": "Explicit login; getpass is used unless legacy --password is supplied. The command does not explicitly save the app password",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 162, "end_line": 188}
+      ]
+    },
+    {
+      "operation": "Restore sessions, save changed sessions, and migrate legacy credentials",
+      "source": "get_client",
+      "data_scope": "Stored session string, or legacy handle and app_password; newly exported session",
+      "recipient_or_storage": "atproto Client.login; ~/.config/bsky/config.json",
+      "condition": "Commands requiring a client. Session restoration takes precedence; successful legacy login deletes app_password from the rewritten configuration. Session restoration's network behavior is unresolved",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 71, "end_line": 108}
+      ]
+    },
+    {
+      "operation": "Delete selected local authentication fields on logout",
+      "source": "cmd_logout",
+      "data_scope": "session, handle and did fields",
+      "recipient_or_storage": "~/.config/bsky/config.json; status output to the caller",
+      "condition": "Only when a truthy session exists. This path makes no remote revocation call and does not remove app_password",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 191, "end_line": 200}
+      ]
+    },
+    {
+      "operation": "Return authenticated account identity",
+      "source": "cmd_whoami",
+      "data_scope": "Current handle and DID",
+      "recipient_or_storage": "Standard output to the invoking caller",
+      "condition": "A stored handle triggers get_client; otherwise the command reports that the user is not logged in",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 203, "end_line": 217}
+      ]
+    },
+    {
+      "operation": "Read selected image files and display local draft previews",
+      "source": "cmd_post, cmd_reply, cmd_quote and cmd_create_thread",
+      "data_scope": "Draft text, target references, detected URLs, image path, alt text, full selected image bytes and image size",
+      "recipient_or_storage": "CLI process memory; preview text and metadata go to the caller through standard output",
+      "condition": "Post/thread image bytes are read before the dry-run branch and rejected above 1 MB. Dry-run paths return before get_client or posting calls",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 346, "end_line": 389},
+        {"path": "scripts/bsky.py", "start_line": 435, "end_line": 443},
+        {"path": "scripts/bsky.py", "start_line": 490, "end_line": 498},
+        {"path": "scripts/bsky.py", "start_line": 640, "end_line": 681}
+      ]
+    },
+    {
+      "operation": "Resolve identifiers and construct link, mention and thread references",
+      "source": "resolve_post, get_thread_root and build_post_with_facets",
+      "data_scope": "Target and mentioned handles, returned DIDs, post URIs, CIDs and reply-root references; URLs extracted from draft text",
+      "recipient_or_storage": "atproto get_profile/get_posts for resolution; derived identifiers and facets remain in process until used in a command",
+      "condition": "Post-reference resolution or actual posting with mentions. URLs become link facets; this source does not fetch their contents. These are identifier derivations, not demonstrated sensitive-attribute inference",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 130, "end_line": 159},
+        {"path": "scripts/bsky.py", "start_line": 283, "end_line": 331}
+      ]
+    },
+    {
+      "operation": "Fetch timeline and search results",
+      "source": "cmd_timeline, cmd_search and post_to_dict",
+      "data_scope": "Requested count and search query; returned post text, author identity, timestamps, identifiers and engagement counts",
+      "recipient_or_storage": "Bluesky API through atproto get_timeline/search_posts; selected result fields return to the caller",
+      "condition": "Requested read command; JSON includes more structured identifiers than text output",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 220, "end_line": 280},
+        {"path": "scripts/bsky.py", "start_line": 803, "end_line": 825}
+      ]
+    },
+    {
+      "operation": "Fetch notification activity and read status",
+      "source": "cmd_notifications",
+      "data_scope": "Requested limit; notification reasons, author handles/DIDs, timestamps, URIs and isRead state",
+      "recipient_or_storage": "Bluesky notification API through atproto; selected fields return to the caller",
+      "condition": "Notifications command; URI, DID and read status are included in JSON output",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 828, "end_line": 882}
+      ]
+    },
+    {
+      "operation": "Fetch profiles and account statistics",
+      "source": "cmd_profile and cmd_stats",
+      "data_scope": "Requested handle or authenticated self; identity, biography, counts, and avatar/banner URLs for profile JSON",
+      "recipient_or_storage": "atproto get_profile; selected fields return to the caller",
+      "condition": "Profile or stats command; stats displays only handle and counts",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 773, "end_line": 800},
+        {"path": "scripts/bsky.py", "start_line": 1134, "end_line": 1153}
+      ]
+    },
+    {
+      "operation": "Fetch and display a conversation",
+      "source": "cmd_thread_view",
+      "data_scope": "Target URI and requested reply depth; returned posts, author identities, timestamps, counts and parent/reply relationships",
+      "recipient_or_storage": "atproto get_post_thread, with preliminary resolution for non-at:// inputs; output to the caller",
+      "condition": "Thread-view command; text traversal displays parents and replies, while JSON collects the target and replies",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 531, "end_line": 619}
+      ]
+    },
+    {
+      "operation": "Submit public posts, replies, quotes and multi-post threads",
+      "source": "Posting command implementations",
+      "data_scope": "Approved text and facets, optional selected image bytes and alt text, reply-root/parent or quoted-post URI/CID references",
+      "recipient_or_storage": "Bluesky posting boundary through atproto send_post/send_image; intended remote post records; resulting URLs return to the caller",
+      "condition": "Validation succeeds and dry-run is disabled. Thread posts are submitted sequentially; a later failure leaves earlier successful posts without rollback",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 389, "end_line": 420},
+        {"path": "scripts/bsky.py", "start_line": 443, "end_line": 475},
+        {"path": "scripts/bsky.py", "start_line": 498, "end_line": 528},
+        {"path": "scripts/bsky.py", "start_line": 681, "end_line": 746}
+      ]
+    },
+    {
+      "operation": "Create engagement and account relationships",
+      "source": "Like, repost, follow, block and mute commands",
+      "data_scope": "Authenticated account context; target post URI/CID or account DID; block record includes a creation timestamp",
+      "recipient_or_storage": "Bluesky engagement, graph and mute APIs through atproto; remote relationship or preference state",
+      "condition": "Requested mutation after target resolution; block creation checks existing viewer blocking state. CLI confirmation applies only to configured guarded commands",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 885, "end_line": 901},
+        {"path": "scripts/bsky.py", "start_line": 940, "end_line": 962},
+        {"path": "scripts/bsky.py", "start_line": 1007, "end_line": 1019},
+        {"path": "scripts/bsky.py", "start_line": 1049, "end_line": 1074},
+        {"path": "scripts/bsky.py", "start_line": 1104, "end_line": 1116}
+      ]
+    },
+    {
+      "operation": "Request remote record or preference removal",
+      "source": "Delete, unlike, unrepost, unfollow, unblock and unmute commands",
+      "data_scope": "Post URI; authenticated account DID and relationship record key obtained from viewer state; target DID for unmute",
+      "recipient_or_storage": "Corresponding Bluesky deletion/unmute APIs through atproto",
+      "condition": "Requested removal; relationship deletions check available viewer state. These calls do not establish erasure from server backups, caches or other recipients",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 749, "end_line": 770},
+        {"path": "scripts/bsky.py", "start_line": 904, "end_line": 937},
+        {"path": "scripts/bsky.py", "start_line": 965, "end_line": 1004},
+        {"path": "scripts/bsky.py", "start_line": 1022, "end_line": 1046},
+        {"path": "scripts/bsky.py", "start_line": 1077, "end_line": 1101},
+        {"path": "scripts/bsky.py", "start_line": 1119, "end_line": 1131}
+      ]
+    },
+    {
+      "operation": "Read optional mutation-confirmation settings and user input",
+      "source": "require_confirmation",
+      "data_scope": "BSKY_CONFIRM_MUTATIONS, --yes, target description and typed confirmation",
+      "recipient_or_storage": "Local process and terminal/caller; no persistence is implemented",
+      "condition": "Guarded command calls this helper. Prompts occur only when the environment setting enables them and --yes is absent; noninteractive execution then refuses",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 45, "end_line": 68}
+      ]
+    },
+    {
+      "operation": "Create test fixtures and capture local subprocess output",
+      "source": "Packaged test code",
+      "data_scope": "Temporary configuration directory, synthetic identity/session fixtures, and CLI version or draft-preview output",
+      "recipient_or_storage": "Test temporary directory and test-process memory",
+      "condition": "Tests are run; the cited fixtures are synthetic, and cited subprocess paths invoke version or dry-run behavior rather than authenticated posting",
+      "evidence": [
+        {"path": "tests/conftest.py", "start_line": 13, "end_line": 29},
+        {"path": "tests/test_cli.py", "start_line": 20, "end_line": 40},
+        {"path": "tests/test_thread.py", "start_line": 15, "end_line": 36}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Legacy app_password and associated configuration identity fields",
+      "recipient_or_storage": "~/.config/bsky/config.json",
+      "condition": "Logout with a legacy configuration lacking session leaves the configuration unchanged; a mixed configuration retains app_password even when session is removed",
+      "purpose_basis": "Logout should end locally stored authentication. Legacy migration compatibility explains reading the password before migration, not retaining it after explicit logout",
+      "necessary_behavior": "Clear supported local authentication state and report logout status",
+      "proposed_reduction": "Remove app_password and account/session fields on logout regardless of whether session exists",
+      "preservation_conditions": "Keep legacy migration available until logout; do not claim local deletion revokes remote credentials or securely erases old file contents",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 93, "end_line": 102},
+        {"path": "scripts/bsky.py", "start_line": 191, "end_line": 200}
+      ]
+    },
+    {
+      "data_scope": "Separately persisted top-level did field",
+      "recipient_or_storage": "~/.config/bsky/config.json",
+      "condition": "Successful login writes did beside the required session",
+      "purpose_basis": "Session persistence supports subsequent authenticated commands; a separate stored DID is an implementation choice",
+      "necessary_behavior": "Retain usable authentication and display/use the authenticated account DID",
+      "proposed_reduction": "Omit the top-level did field from new configuration writes and remove it during migration or cleanup",
+      "preservation_conditions": "Continue obtaining the DID from client.me.did, as identity output and record operations already do; this does not establish what identifiers the opaque session contains",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 57, "end_line": 59},
+        {"path": "scripts/bsky.py", "start_line": 178, "end_line": 183},
+        {"path": "scripts/bsky.py", "start_line": 203, "end_line": 215},
+        {"path": "scripts/bsky.py", "start_line": 1064, "end_line": 1070}
+      ]
+    },
+    {
+      "data_scope": "Repeated disclosure of the same post URI and repeated retrieval of its post/viewer data",
+      "recipient_or_storage": "atproto get_posts / Bluesky post-read API",
+      "condition": "Unlike and unrepost first call resolve_post, which fetches the post, then unconditionally fetch the same URI again",
+      "purpose_basis": "Removing a relationship requires its viewer-state record URI; the second full lookup is potentially a redundant action rather than extra fields in the deletion request",
+      "necessary_behavior": "Resolve the target and obtain a valid like/repost record key",
+      "proposed_reduction": "Reuse the resolved post's viewer state when present and sufficiently current; make another lookup conditional on missing state or a deliberate freshness requirement",
+      "preservation_conditions": "Keep missing-relationship checks, target verification, confirmation behavior and any required post-confirmation freshness",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 130, "end_line": 151},
+        {"path": "scripts/bsky.py", "start_line": 904, "end_line": 931},
+        {"path": "scripts/bsky.py", "start_line": 965, "end_line": 998}
+      ]
+    },
+    {
+      "data_scope": "Preliminary full-post retrieval used only to obtain the target URI",
+      "recipient_or_storage": "atproto get_posts / Bluesky post-read API",
+      "condition": "Thread view receives a URL or bare post ID; at:// inputs already skip this preliminary request",
+      "purpose_basis": "Viewing the conversation requires get_post_thread; the preceding CID-oriented post fetch is a potentially redundant action",
+      "necessary_behavior": "Construct the correct URI, resolve a handle when necessary, and fetch the requested thread",
+      "proposed_reduction": "Separate URI construction from full-post resolution and call get_post_thread directly after constructing the URI",
+      "preservation_conditions": "Preserve handle-to-DID resolution, self-account handling for bare IDs, requested depth and equivalent not-found handling",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 111, "end_line": 151},
+        {"path": "scripts/bsky.py", "start_line": 531, "end_line": 550}
+      ]
+    },
+    {
+      "data_scope": "Repeated mention handles, and @-matching fragments inside URLs that become link facets",
+      "recipient_or_storage": "atproto get_profile / Bluesky profile-read API",
+      "condition": "Actual posting text repeats a mention or contains an @ fragment inside a URL; mention extraction runs separately from the URL-prioritized facet parser",
+      "purpose_basis": "Correct mention facets require resolving genuine mentions; duplicate or unused resolutions are extra API actions",
+      "necessary_behavior": "Resolve each genuine mention to a DID and retain correct URL facets",
+      "proposed_reduction": "Use the combined token parser to identify standalone mentions and resolve each distinct handle once per build",
+      "preservation_conditions": "Preserve every displayed mention, existing unresolved-mention fallback, URL contents and facet offsets",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 283, "end_line": 331}
+      ]
+    },
+    {
+      "data_scope": "Entire selected image contents during preview or rejection of oversized files",
+      "recipient_or_storage": "Local CLI process memory; no remote image disclosure occurs on these dry-run paths",
+      "condition": "Post or create-thread uses --image; read_bytes occurs before size rejection and dry-run return",
+      "purpose_basis": "Preview and size validation need path, alt text and file size. Full bytes are extra local data in that validation step, although they are necessary for actual image upload",
+      "necessary_behavior": "Verify the selected file and size, show the same preview, and read image contents for a real upload",
+      "proposed_reduction": "Check file metadata and reject oversized files before reading contents; defer read_bytes until an actual upload is requested",
+      "preservation_conditions": "Retain alt-text requirements, size/error reporting and upload-time size checks against file changes",
+      "evidence": [
+        {"path": "scripts/bsky.py", "start_line": 346, "end_line": 387},
+        {"path": "scripts/bsky.py", "start_line": 640, "end_line": 679}
+      ]
+    }
+  ],
+  "unknowns": [
+    "All supplied package files were reviewed. The atproto implementation and transitive dependencies are absent; exact network hosts, routing, authentication transport, session contents and session-restoration network activity cannot be established.",
+    "Image bytes are passed to send_image without package-level sanitization. SDK transformations, metadata retention and the exact uploaded representation remain unresolved; embedded metadata is not demonstrated.",
+    "Remote retention, logging, federation, visibility of individual relationship/preference types, and deletion or credential-revocation guarantees are not established by the supplied source.",
+    "pip's configured package sources, dependency behavior and external installation logging are unspecified.",
+    "Existing filesystem permissions, historical configuration copies and secure erasure are not established. Creation modes do not reset existing permissions.",
+    "SDK exception contents and any caller-side logging or retention of normal CLI output are unknown; returning output to the caller does not itself establish onward disclosure."
+  ]
+}

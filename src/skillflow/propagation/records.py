@@ -28,6 +28,7 @@ from skillflow.propagation.models import IRFlowRecord
 from skillflow.propagation.models import EffectEvent
 from skillflow.propagation.models import ForEachRecord
 from skillflow.propagation.models import validate_placeholder_record
+from skillflow.propagation.models import validate_public_outputs
 from skillflow.propagation.contracts.specs import AtomicOp
 from skillflow.propagation.contracts.specs import validate_specs
 from skillflow.propagation.contracts.specs import value_refs
@@ -250,6 +251,16 @@ class PropagationRecords:
                 self._check_location(binding.location)
                 check_data(binding.data_ids)
         transfer = self._annotation["ir_semantics"][ir_id]
+        from .outcome_validation import validate_route_evidence
+        try:
+            validate_route_evidence(self._instructions[ir_id], record, self._annotation["ir_semantics"])
+        except ValueError as exc:
+            raise PropagationRecordError(str(exc)) from exc
+        if record.outcomes or transfer.get("outcome_bindings"):
+            try:
+                validate_public_outputs(self._instructions[ir_id], transfer, record, self._data_registry)
+            except (ValueError, KeyError) as exc:
+                raise PropagationRecordError(str(exc)) from exc
         if record.order != transfer["order"] or [item.model_dump(mode="json") for item in record.precedence] != transfer["precedence"]:
             raise PropagationRecordError("record order/precedence differs from compiled transfer specification")
         specifications = transfer["events"]
@@ -399,6 +410,7 @@ class PropagationRecords:
         """
         if type(require_complete) is not bool:
             raise PropagationRecordError("require_complete must be a bool")
+        self._check_outcome_routes()
         ids = set(self._data_registry.data_ids())
 
         def data_refs(values):
@@ -421,9 +433,11 @@ class PropagationRecords:
             self._require_ir(ir_id)
             state_refs(record.entry_state)
             state_refs(record.exit_state)
-            for operand in self._instructions[ir_id].get("outputs", []):
-                if record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"])) is None:
-                    raise PropagationRecordError("processed IR is missing a public output binding in its exit state")
+            try:
+                validate_public_outputs(self._instructions[ir_id], self._annotation["ir_semantics"][ir_id],
+                                        record, self._data_registry)
+            except (ValueError, KeyError) as exc:
+                raise PropagationRecordError(str(exc)) from exc
             events = []
             for event in record.events:
                 if isinstance(event, ForEachRecord):
@@ -452,6 +466,14 @@ class PropagationRecords:
         if require_complete and not self.is_complete:
             raise PropagationRecordError(f"incomplete IR coverage: {sorted(set(self._instructions) - set(self._records))}")
 
+    def _check_outcome_routes(self):
+        from .outcome_validation import validate_route_evidence
+        try:
+            for ir, record in self._records.items():
+                validate_route_evidence(self._instructions[ir], record, self._annotation["ir_semantics"], self._records)
+        except ValueError as exc:
+            raise PropagationRecordError(str(exc)) from exc
+
     def get(self, ir_id: str) -> IRFlowRecord:
         """Return a detached record; an unsubmitted record raises KeyError."""
         return self._records[ir_id].model_copy(deep=True)
@@ -463,6 +485,7 @@ class PropagationRecords:
         data_ids = {entry["data"]["id"] for entry in data["records"]}
         if {entry["data"]["id"] for entry in self._initial_data["records"]} - data_ids:
             raise PropagationRecordError("final registry lost seed Data identities")
+        self._check_outcome_routes()
         for ir_id, record in self._records.items():
             checked = IRFlowRecord.model_validate(record.model_dump(mode="python"))
             self._validate_record(ir_id, checked, data_ids)
@@ -503,4 +526,5 @@ class PropagationRecords:
             candidate = IRFlowRecord.model_validate(record)
             store._validate_record(ir_id, candidate, data_ids)
             store._records[ir_id] = candidate
+        store._check_outcome_routes()
         return store

@@ -1,0 +1,21 @@
+# Accepted revised Task: initial source audit
+
+The Task step accepted its a001 replacement. This report does not claim final controller selection.
+
+Declared revised Task SHA-256: `60bd1fdc566c3e8a955763644c2b1f7f86f0212ed74c35cb74c419f5c3f63227`; unchanged source SHA-256: `3b6eef9f43262d96949e30fe0c39797fe680c578ac5e90bf367da15592445bbd`.
+
+58 requirements, 13 issues ({'resolved': 9, 'unresolved': 4}); all 144 evidence occurrences locate valid source spans.
+All 16 complete source files are byte-identical in the actual accepted-call prompt. The repair payload exactly matches the previous Task plus two bounded objections.
+
+- **standalone-realtime-obligations-added**: The revised Task independently scopes active-user, event and page reports and retains the combined snapshot. The original ga4-live-sources obligation is renamed ga4-realtime-sources with its source/medium grouping and active-user measure preserved. The three original review source spans establish the added standalone invocation scopes.
+- **full-property-metadata-obligation-added**: The revised Task expressly preserves the full metadata response, including the same full value in saved data. It separates dimension-only, metric-only and high-level available-fields requests. This avoids shrinking the full-response contract to a named subset of entry fields. Source: api-reference.md:185-193 and metadata.ts:82-95.
+- **empty-bulk-save-conflict-preserved**: The revised Task states that an empty path list returns zero rows without a GA4 request, while separately preserving the conflict between default-enabled saving and the early return before saveResult. The explicit missing semantic choice is whether this early return is an intended exception to the documented save duty. It does not silently deem saving unnecessary or claim that the source has been fixed.
+- **filters-order-and-limit-duties-retained**: The revised Task still requires supplied filters, sort order and row limit. Filters/orderBy remain explicitly unfulfilled by the actual request builder. A resolved Task conflict chooses the documented obligation; it does not repair the Skill. The Task still makes no claim about SDK semantics for zero, which the truthy request spread omits.
+- **original-requirements-reorganized-not-three-silent-deletions**: The revision has 15 added and three removed requirement IDs. configure-google-access is split into setup-google-access, setup-environment and configured-request-targets. ga4-field-metadata is replaced by four more precise metadata obligations. ga4-live-sources is renamed. Other added duties split existing pagination, per-URL outcomes and grouped-saving statements, alongside the review-requested empty-bulk case. ID changes need fresh mapping; old realization indices cannot be reused.
+- **month-comparison-ambiguity-reclassified**: The full replacement reclassifies the preexisting calendar-month versus rolling-window example from resolved to unresolved. Its reason is now explicitly confined to a natural-language-only month request; two supplied ranges remain authoritative and paired. The cited sources provide the concrete ambiguity, but this adds a downstream Task limitation beyond the two requested review objections and must remain visible in final accounting.
+- **summary-wrapper-and-grouped-saves-retained**: The Markdown summary remains required after completed analysis, consuming saved JSON. Full storage wrappers/path obligations and grouped writes remain; component saves are suppressed only at the documented comparison/batch call sites. This is a Task obligation audit, not evidence that the revised CFG or processing fulfills them.
+
+This Task extraction accepted a001, but the revision remains a candidate until controller selection and whole-chain review. No final selection is inferred.
+The sole data input is complete source; the repair section contains the prior Task plus two bounded source objections. No CFG, annotation, payload or backend result supplies Task requirements.
+Source range validity is not a semantic completeness proof; revised IDs and finer output scopes require fresh task-correspondence.
+Initial snapshots are preserved. This helper reads saved artifacts only and invokes no model, Skill, test, validator, compiler, backend or replay.

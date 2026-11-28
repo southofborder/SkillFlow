@@ -1,0 +1,276 @@
+{
+  "status": "completed",
+  "declared_purpose": "Security gate for new and installed skills, with single-package and bulk scans, consent for first-run scanning, and blocking of HIGH/CRITICAL skills. Daily automatic updates and manual upgrades are explicit features. Whole-directory upload and persistent device identification are implementation choices, not stated requirements. Sources: SKILL.md:5-9,14-16,30-40,55-71,75-97; _meta.json:5,10-18.",
+  "data_operations": [
+    {
+      "operation": "Discover installed skills locally",
+      "source": "Home directory, APPDATA, current working directory, configured installation locations and OpenClaw extension directories",
+      "data_scope": "Existing skill directories and names; scan-all also prints full installation paths. Discovery precedes the scan confirmation.",
+      "recipient_or_storage": "Scanner memory and caller stdout",
+      "condition": "first-run when its marker is absent, or scan-all",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 53, "end_line": 143},
+        {"path": "scripts/scanner.py", "start_line": 345, "end_line": 365},
+        {"path": "scripts/scanner.py", "start_line": 642, "end_line": 667},
+        {"path": "scripts/scanner.py", "start_line": 748, "end_line": 763}
+      ]
+    },
+    {
+      "operation": "Read package files and derive a package fingerprint",
+      "source": "Selected directory or extracted archive",
+      "data_scope": "Name parsed from SKILL.md; relative paths and complete file bytes for hashing, excluding _meta.json and SKIP_FILES/SKIP_DIRS. The resulting digest identifies package content for cache lookup.",
+      "recipient_or_storage": "Scanner memory; name and digest are printed to caller stdout",
+      "condition": "cloud_check finds SKILL.md at the scan root",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 45, "end_line": 46},
+        {"path": "scripts/scanner.py", "start_line": 264, "end_line": 303},
+        {"path": "scripts/scanner.py", "start_line": 510, "end_line": 522}
+      ]
+    },
+    {
+      "operation": "Read or generate and persist client identity",
+      "source": "Existing client record, uuid.getnode, UUID generation and platform APIs",
+      "data_scope": "Reuses the entire existing JSON object if client_id is present. Otherwise generates client_id, collects OS, architecture, OS release, scanner/Python versions and an available MAC address.",
+      "recipient_or_storage": "Scanner memory and scripts/.client_info",
+      "condition": "A cache search or upload requests X-Client-Info; new records are written best-effort",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 41, "end_line": 42},
+        {"path": "scripts/scanner.py", "start_line": 152, "end_line": 215},
+        {"path": "scripts/scanner.py", "start_line": 394, "end_line": 399},
+        {"path": "scripts/scanner.py", "start_line": 448, "end_line": 451}
+      ]
+    },
+    {
+      "operation": "Disclose package fingerprint and client information for cache lookup",
+      "source": "Locally calculated directory digest and client record",
+      "data_scope": "dir_sha256 in the GET query; client record in a Base64-encoded X-Client-Info header when available",
+      "recipient_or_storage": "https://skillscan.tokauth.com/oapi/v1/skill-scan/search",
+      "condition": "Every cloud_check reaching cache lookup; a usable hit avoids upload",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 24, "end_line": 27},
+        {"path": "scripts/scanner.py", "start_line": 207, "end_line": 215},
+        {"path": "scripts/scanner.py", "start_line": 394, "end_line": 418},
+        {"path": "scripts/scanner.py", "start_line": 521, "end_line": 531}
+      ]
+    },
+    {
+      "operation": "Upload package contents for remote analysis",
+      "source": "pack_zip output and client record",
+      "data_scope": "ZIP entry paths, file contents and ZIP metadata for every non-skipped file, including _meta.json; skill-name-derived upload filename; X-Client-Info when available. The unused collect_files extension allowlist does not restrict this archive.",
+      "recipient_or_storage": "https://skillscan.tokauth.com/oapi/v1/skill-scan/upload",
+      "condition": "Cache lookup returns no usable result",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 45, "end_line": 46},
+        {"path": "scripts/scanner.py", "start_line": 305, "end_line": 331},
+        {"path": "scripts/scanner.py", "start_line": 421, "end_line": 467},
+        {"path": "scripts/scanner.py", "start_line": 524, "end_line": 529}
+      ]
+    },
+    {
+      "operation": "Poll for remote analysis results",
+      "source": "Task identifier returned by upload",
+      "data_scope": "task_no query parameter; returned status, results or error information. This path uses http_get without X-Client-Info.",
+      "recipient_or_storage": "https://skillscan.tokauth.com/oapi/v1/skill-scan/result; responses enter scanner memory",
+      "condition": "Upload supplies a task identifier; polling uses a 20-second interval and a 180-second loop deadline",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 247, "end_line": 250},
+        {"path": "scripts/scanner.py", "start_line": 462, "end_line": 467},
+        {"path": "scripts/scanner.py", "start_line": 470, "end_line": 507}
+      ]
+    },
+    {
+      "operation": "Normalize inferred security attributes and report them",
+      "source": "Remote cache or analysis response",
+      "data_scope": "Skill name, digest, verdict, confidence, threat labels, summary, findings and recommendation. Local logic derives SAFE or CRITICAL from some is_safe/severity combinations.",
+      "recipient_or_storage": "Scanner memory, bulk-result lists and caller stdout",
+      "condition": "A scan response is available; bulk commands also print summaries",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 536, "end_line": 565},
+        {"path": "scripts/scanner.py", "start_line": 572, "end_line": 599},
+        {"path": "scripts/scanner.py", "start_line": 798, "end_line": 819}
+      ]
+    },
+    {
+      "operation": "Extract an input archive to temporary storage and attempt cleanup",
+      "source": "User-selected ZIP file",
+      "data_scope": "All archive entries are extracted before hashing and packing exclusions apply. The source ZIP remains unless separately approved for deletion.",
+      "recipient_or_storage": "System temporary directory with prefix skillscan-",
+      "condition": "scan receives a ZIP. After successful unpack return, cleanup is attempted in finally; unpacking failures can leave the temporary directory or partially extracted contents.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 333, "end_line": 343},
+        {"path": "scripts/scanner.py", "start_line": 711, "end_line": 741}
+      ]
+    },
+    {
+      "operation": "Copy installed packages into temporary storage",
+      "source": "Discovered installed skill directories",
+      "data_scope": "Entire directory trees, including files and directories later excluded from hashing/upload",
+      "recipient_or_storage": "System temporary directories with prefix skillscan-; removal is attempted with ignored cleanup errors",
+      "condition": "User confirms first-run or scan-all scanning; direct single-directory scans do not make this copy",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 663, "end_line": 694},
+        {"path": "scripts/scanner.py", "start_line": 760, "end_line": 790}
+      ]
+    },
+    {
+      "operation": "Delete a locally installed skill or source archive after confirmation",
+      "source": "Original installed directory or input ZIP",
+      "data_scope": "Entire selected skill directory, or the source ZIP file",
+      "recipient_or_storage": "Deletion from the original local filesystem location",
+      "condition": "Verdict is HIGH/CRITICAL, the path exists, and the user answers affirmatively. Other answers retain it.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 605, "end_line": 635},
+        {"path": "scripts/scanner.py", "start_line": 683, "end_line": 684},
+        {"path": "scripts/scanner.py", "start_line": 726, "end_line": 731},
+        {"path": "scripts/scanner.py", "start_line": 780, "end_line": 781}
+      ]
+    },
+    {
+      "operation": "Persist and read scan/update scheduling markers",
+      "source": "Current UTC time, current epoch time and existing marker files",
+      "data_scope": "First-run timestamp and last-update-check timestamp. First-run completion is recorded even when scanning is declined or no skills are found.",
+      "recipient_or_storage": "scripts/.first_run_done and scripts/.last_update_check",
+      "condition": "First-run handling or an update check; these markers suppress later first-run work or checks within one day",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 34, "end_line": 39},
+        {"path": "scripts/scanner.py", "start_line": 642, "end_line": 667},
+        {"path": "scripts/scanner.py", "start_line": 696, "end_line": 697},
+        {"path": "scripts/scanner.py", "start_line": 912, "end_line": 930}
+      ]
+    },
+    {
+      "operation": "Fetch update manifests and newer package archives",
+      "source": "SKILL_SCANNER_UPDATE_URL or its default; manifest-provided download_url",
+      "data_scope": "GET requests for manifest and archive, without the client-information header; responses contain update metadata and package bytes. Update URLs are printed to caller stdout.",
+      "recipient_or_storage": "Default manifest recipient https://skillscan.tokauth.com/downloads/SkillScan/manifest, or configured replacement; archive recipient is the manifest-provided URL",
+      "condition": "Automatic check before command dispatch when the daily marker permits, or manual upgrade. Archive download requires a newer reported version and download URL.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 75, "end_line": 85},
+        {"path": "scripts/scanner.py", "start_line": 28, "end_line": 29},
+        {"path": "scripts/scanner.py", "start_line": 247, "end_line": 250},
+        {"path": "scripts/scanner.py", "start_line": 826, "end_line": 858},
+        {"path": "scripts/scanner.py", "start_line": 912, "end_line": 952}
+      ]
+    },
+    {
+      "operation": "Persist an upgrade backup and replace installed package files",
+      "source": "Current SkillScan directory and downloaded update archive",
+      "data_scope": "Entire current skill tree, including client identity and scheduling files when present; downloaded ZIP, extracted files and installed replacements",
+      "recipient_or_storage": "Sibling SkillScan-backup-<SCANNER_VERSION> directory; temporary skillupgrade- directory; installed SkillScan directory",
+      "condition": "A newer archive passes the optional hash check. An existing same-name backup is deleted, the current tree is copied, downloaded files are overlaid, and temporary storage is removed best-effort. The backup remains.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 860, "end_line": 906}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Stable client_id, MAC address, OS/architecture/release, Python version and any additional fields in a reused client record",
+      "recipient_or_storage": "X-Client-Info on requests to the search and upload endpoints at https://skillscan.tokauth.com",
+      "condition": "Client-information construction succeeds; cache hits also disclose this information",
+      "purpose_basis": "Security analysis and cache lookup require package-related inputs; the entry document does not require device identification.",
+      "necessary_behavior": "Send the package fingerprint for lookup and package contents when analysis is needed.",
+      "proposed_reduction": "Remove the identity header, or restrict it to demonstrated protocol requirements. In particular, omit MAC and persistent client_id. This is extra data in required requests.",
+      "preservation_conditions": "Confirm the API accepts absent or minimized headers; no supplied contract establishes that these identifying fields are necessary.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 89, "end_line": 97},
+        {"path": "scripts/scanner.py", "start_line": 166, "end_line": 215},
+        {"path": "scripts/scanner.py", "start_line": 394, "end_line": 407},
+        {"path": "scripts/scanner.py", "start_line": 448, "end_line": 457}
+      ]
+    },
+    {
+      "data_scope": "Generated persistent identifier, MAC address and platform profile",
+      "recipient_or_storage": "scripts/.client_info",
+      "condition": "No reusable client record exists and the best-effort write succeeds",
+      "purpose_basis": "Persistent device profiling is not an explicit scanning or update requirement.",
+      "necessary_behavior": "Perform scans and retrieve their results; task_no already associates polling with an uploaded task.",
+      "proposed_reduction": "Avoid creating the device-profile file. If an identifier proves necessary, use a narrowly scoped, short-lived identifier without MAC.",
+      "preservation_conditions": "Resolve any undocumented API dependency before removing required fields; retain scanner-version information only where needed for compatibility.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 41, "end_line": 42},
+        {"path": "scripts/scanner.py", "start_line": 152, "end_line": 204},
+        {"path": "scripts/scanner.py", "start_line": 470, "end_line": 481}
+      ]
+    },
+    {
+      "data_scope": "Credential values or unrelated generated/runtime files, if present among non-skipped package files; hidden files are not generally excluded",
+      "recipient_or_storage": "ZIP body sent to https://skillscan.tokauth.com/oapi/v1/skill-scan/upload",
+      "condition": "Cache miss and selected package contains such data",
+      "purpose_basis": "The implementation seeks full code context, but whole-directory packing exceeds authored security-relevant content when incidental private data is present.",
+      "necessary_behavior": "Upload sufficient code, instructions, dependencies and relevant assets to assess package security.",
+      "proposed_reduction": "Exclude demonstrably unrelated runtime artifacts and locally redact credential values while preserving their presence, type and analysis context. Narrow the payload rather than removing the required analysis upload.",
+      "preservation_conditions": "Preserve malicious-payload visibility and relevant dependencies; validate filtered-archive support and align cache identity with analyzed content. Actual incidental data and server requirements are unknown.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 45, "end_line": 46},
+        {"path": "scripts/scanner.py", "start_line": 276, "end_line": 303},
+        {"path": "scripts/scanner.py", "start_line": 305, "end_line": 331},
+        {"path": "scripts/scanner.py", "start_line": 421, "end_line": 457}
+      ]
+    },
+    {
+      "data_scope": "Complete installed skill trees, including data excluded from the actual hash and upload",
+      "recipient_or_storage": "Additional system temporary directories during first-run and scan-all",
+      "condition": "Bulk scanning is confirmed",
+      "purpose_basis": "Scanning needs reads; cloud_check does not write into the scanned directory, and the single-directory command scans it directly.",
+      "necessary_behavior": "Read, hash and package the selected installed skill.",
+      "proposed_reduction": "Remove the redundant bulk copy and scan the original directory directly. If a snapshot is needed, stage only the necessary scan inputs.",
+      "preservation_conditions": "Retain read-only-directory support, consistent scan inputs and deletion targeting the original installed path.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 510, "end_line": 533},
+        {"path": "scripts/scanner.py", "start_line": 675, "end_line": 694},
+        {"path": "scripts/scanner.py", "start_line": 711, "end_line": 728},
+        {"path": "scripts/scanner.py", "start_line": 770, "end_line": 790}
+      ]
+    },
+    {
+      "data_scope": "Partially extracted archive contents",
+      "recipient_or_storage": "System temporary directory created inside unpack_zip",
+      "condition": "Extraction fails after writing files, before unpack_zip returns. The caller's tmp assignment has not completed, so its finally block has no directory to remove.",
+      "purpose_basis": "Archive staging supports a scan; retaining failed extraction contents does not support the failed operation.",
+      "necessary_behavior": "Temporarily extract valid inputs and report extraction errors.",
+      "proposed_reduction": "Make unpack_zip remove its temporary directory on failure, or let the caller own the temporary-directory context before extraction begins.",
+      "preservation_conditions": "Keep successful extraction available for scanning and preserve error reporting; cleanup must cover partial extraction.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 333, "end_line": 343},
+        {"path": "scripts/scanner.py", "start_line": 711, "end_line": 741}
+      ]
+    },
+    {
+      "data_scope": "Client identity/profile and scheduling-state files duplicated with the code backup",
+      "recipient_or_storage": "Persistent sibling SkillScan-backup-<SCANNER_VERSION> directory",
+      "condition": "Upgrade backs up a current installation containing those files",
+      "purpose_basis": "The backup supports restoring software; copying device identity and scan/update timestamps is an additional implementation choice.",
+      "necessary_behavior": "Keep enough previous package code and metadata for rollback.",
+      "proposed_reduction": "Exclude client-profile and scheduling files from code backups, and define a bounded rollback-backup retention policy.",
+      "preservation_conditions": "Preserve required rollback files and keep any necessary live client state at its original location.",
+      "evidence": [
+        {"path": "scripts/scanner.py", "start_line": 34, "end_line": 46},
+        {"path": "scripts/scanner.py", "start_line": 195, "end_line": 204},
+        {"path": "scripts/scanner.py", "start_line": 869, "end_line": 875},
+        {"path": "scripts/scanner.py", "start_line": 901, "end_line": 906}
+      ]
+    },
+    {
+      "data_scope": "Repeated update-manifest requests and their connection metadata",
+      "recipient_or_storage": "SKILL_SCANNER_UPDATE_URL, defaulting to https://skillscan.tokauth.com/downloads/SkillScan/manifest",
+      "condition": "An automatic check finds a newer version and cmd_upgrade fetches the manifest again; a due automatic check also precedes explicit upgrade dispatch",
+      "purpose_basis": "Daily checking and manual updating are explicit features, but duplicate manifest retrieval is not required.",
+      "necessary_behavior": "Obtain one usable manifest per update attempt and download a newer archive when needed.",
+      "proposed_reduction": "Pass the fetched manifest into the upgrade routine and skip the preliminary automatic check for an explicit upgrade command. This removes redundant requests rather than fields from a necessary request.",
+      "preservation_conditions": "Preserve daily scheduling, explicit manual checks and archive verification.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 75, "end_line": 77},
+        {"path": "scripts/scanner.py", "start_line": 826, "end_line": 855},
+        {"path": "scripts/scanner.py", "start_line": 912, "end_line": 952}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Server implementation and API requirements are absent. Required identity fields, acceptance of narrowed archives, analysis coverage, storage, retention, sharing, cache visibility and remote deletion remain unresolved. These block verification of end-to-end minimization.",
+    "Actual scanned packages and runtime files are not supplied. Credential-bearing or unrelated upload contents and sensitive backup contents are conditional findings, not confirmed disclosures.",
+    "Custom update destinations, manifest-selected download destinations and downloaded replacement code are unknown. Their behavior cannot be audited from this package.",
+    "Temporary cleanup ignores removal errors, so successful removal is not established. Local skill deletion does not establish deletion of previously uploaded server copies.",
+    "Caller enforcement of the documented security gate and any subsequent retention or forwarding of stdout are outside the supplied source; no additional recipient is established."
+  ]
+}

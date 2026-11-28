@@ -12,7 +12,15 @@ CALL_RULES = (
     "Reading a member of that response (including array destructuring) is a local value projection. "
     "If a wrapper enters the callee body, bind its arguments at the call site and use the body return "
     "at the actual consumer. A local call summary instead owns its response. Do not execute both "
-    "representations on the same path. Distinct physical calls, branches and iterations keep their identities."
+    "representations on the same path. Give an independently invoked function and each inlined caller with "
+    "a different continuation their own callee blocks and result references. The source lines may coincide. "
+    "For the inlined copy, connect its normal value to that caller's next use and a thrown value to that "
+    "call site's handler or exceptional exit. At the public function boundary return the value or propagate "
+    "the exception to the external caller. Use predecessor-free roots for independently invoked entry points, "
+    "each with its real input acquisition. No activation-mode context key or selector is needed. "
+    "Express this with ordinary jumps, branches, and returns; "
+    "caller identity is not a parameter, result, context key, or branch predicate. "
+    "Distinct physical calls, branches and iterations keep their identities."
 )
 PROJECTION = "call_result_projection"
 ARGUMENTS = "inlined_call_arguments"
@@ -146,6 +154,8 @@ def _actions(op):
 
 def _edges(block):
     exit = block["exit"]
+    if exit["kind"] == "outcome_dispatch":
+        return [exit["on_return"], exit["on_throw"]]
     return [exit["target"]] if exit["kind"] == "jump" else [arm["target"] for arm in exit.get("arms", [])]
 
 

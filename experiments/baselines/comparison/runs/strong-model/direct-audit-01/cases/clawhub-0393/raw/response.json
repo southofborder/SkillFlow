@@ -1,0 +1,474 @@
+{
+  "status": "completed",
+  "declared_purpose": "Generate configurable tech-news digests from six source layers, score and deduplicate articles, and produce formatted reports for configured delivery and archival. Email and full-text enrichment are conditional. The digest workflow explicitly requires source links, KOL metrics, all qualifying releases, and 90-day archive retention; authentication, caching, subprocess environment sharing, and diagnostics are implementation choices. Basis: SKILL.md:2-3; references/digest-prompt.md:67-118,127-148.",
+  "data_operations": [
+    {
+      "operation": "Read and merge local configuration",
+      "source": "Default sources/topics and optional workspace overlays",
+      "data_scope": "Feed URLs, monitored handles, repositories, subreddits, topic queries, priorities, filters, and display preferences",
+      "recipient_or_storage": "Local configuration loader and calling components",
+      "condition": "Configuration is loaded for the selected component; matching user entries override defaults.",
+      "evidence": [
+        {"path": "scripts/config_loader.py", "start_line": 17, "end_line": 77},
+        {"path": "scripts/config_loader.py", "start_line": 89, "end_line": 107},
+        {"path": "scripts/config_loader.py", "start_line": 128, "end_line": 176}
+      ]
+    },
+    {
+      "operation": "Fetch RSS content and select article metadata",
+      "source": "Enabled configured RSS/Atom feeds",
+      "data_scope": "Requests disclose the configured URL, User-Agent, and applicable cache validators. Responses are read in full; output articles retain titles, links, dates, and configured topics, generally capped at 20 per feed.",
+      "recipient_or_storage": "Configured feed servers; local fetch results",
+      "condition": "RSS fetching runs unless skipped or reusable output is accepted; retry and time-window filters apply.",
+      "evidence": [
+        {"path": "scripts/fetch-rss.py", "start_line": 137, "end_line": 219},
+        {"path": "scripts/fetch-rss.py", "start_line": 274, "end_line": 357},
+        {"path": "scripts/fetch-rss.py", "start_line": 382, "end_line": 402}
+      ]
+    },
+    {
+      "operation": "Resolve accounts and fetch posts through official X API",
+      "source": "Configured Twitter handles and X_BEARER_TOKEN",
+      "data_scope": "Discloses handles or resolved user IDs and bearer authentication. Requests tweet dates, metrics, context annotations, references, author expansion, and user verification/metrics; locally retains filtered post text, URLs, dates, metrics, IDs, and topics.",
+      "recipient_or_storage": "api.x.com/2; local official-backend results",
+      "condition": "Official backend is explicitly selected or selected by auto detection when higher-priority credentials are absent. Account lookup uses valid cached IDs where available.",
+      "evidence": [
+        {"path": "scripts/fetch-twitter.py", "start_line": 164, "end_line": 223},
+        {"path": "scripts/fetch-twitter.py", "start_line": 235, "end_line": 298},
+        {"path": "scripts/fetch-twitter.py", "start_line": 669, "end_line": 713}
+      ]
+    },
+    {
+      "operation": "Fetch posts through twitterapi.io",
+      "source": "Configured handles and TWITTERAPI_IO_KEY",
+      "data_scope": "Discloses handle, reply-exclusion flag, pagination cursor when used, and API-key authentication; receives posts and retains text, links, timestamps, post IDs, and engagement metrics.",
+      "recipient_or_storage": "api.twitterapi.io/twitter/user/last_tweets; local backend results",
+      "condition": "twitterapiio backend is selected; a second page is conditionally fetched and errors may cause retries.",
+      "evidence": [
+        {"path": "scripts/fetch-twitter.py", "start_line": 363, "end_line": 454},
+        {"path": "scripts/fetch-twitter.py", "start_line": 682, "end_line": 713}
+      ]
+    },
+    {
+      "operation": "Fetch posts through GetXAPI",
+      "source": "Configured handles and GETX_API_KEY",
+      "data_scope": "Discloses handle, conditional pagination cursor, and bearer API-key authentication; retains filtered post text, links, dates, IDs, and engagement metrics.",
+      "recipient_or_storage": "api.getxapi.com/twitter/user/tweets; local backend results",
+      "condition": "getxapi is selected explicitly, or first in auto mode when GETX_API_KEY is present. Page-two fetching and retries are conditional.",
+      "evidence": [
+        {"path": "scripts/fetch-twitter.py", "start_line": 532, "end_line": 623},
+        {"path": "scripts/fetch-twitter.py", "start_line": 669, "end_line": 713}
+      ]
+    },
+    {
+      "operation": "Resolve GitHub authentication locally",
+      "source": "GITHUB_TOKEN; GH_APP_ID, GH_APP_INSTALL_ID, GH_APP_KEY_FILE; gh auth token",
+      "data_scope": "Environment credentials and settings, key-file existence, or a token returned by gh. Logs include credential presence/type rather than token values.",
+      "recipient_or_storage": "Calling GitHub component; gh subprocess on the fallback path",
+      "condition": "Each GitHub command resolves authentication: environment token, then configured App credentials, then gh, then unauthenticated access. Resolution also occurs when the release source list is empty.",
+      "evidence": [
+        {"path": "scripts/fetch-github.py", "start_line": 147, "end_line": 204},
+        {"path": "scripts/fetch-github.py", "start_line": 507, "end_line": 516},
+        {"path": "scripts/fetch-github.py", "start_line": 651, "end_line": 664}
+      ]
+    },
+    {
+      "operation": "Read, temporarily duplicate, use, and delete a private key",
+      "source": "Private-key PEM file identified by GH_APP_KEY_FILE",
+      "data_scope": "Entire private key is read into Python memory and copied to a temporary PEM file; openssl signs a constructed JWT. The temporary copy is unlinked in finally.",
+      "recipient_or_storage": "Python process memory, temporary filesystem file, and local openssl subprocess",
+      "condition": "GitHub App authentication is attempted after GITHUB_TOKEN is absent and all required App settings and key file exist.",
+      "evidence": [
+        {"path": "scripts/fetch-github.py", "start_line": 43, "end_line": 76},
+        {"path": "scripts/fetch-github.py", "start_line": 167, "end_line": 183}
+      ]
+    },
+    {
+      "operation": "Exchange a signed JWT for an installation token",
+      "source": "Locally constructed and signed GitHub App JWT",
+      "data_scope": "App identifier in JWT, installation identifier in request path, signed bearer JWT; receives an installation token. The private key itself is not included in this request.",
+      "recipient_or_storage": "api.github.com/app/installations/{install_id}/access_tokens; returned token stays with the calling component",
+      "condition": "GitHub App token generation reaches the exchange step.",
+      "evidence": [
+        {"path": "scripts/fetch-github.py", "start_line": 54, "end_line": 90}
+      ]
+    },
+    {
+      "operation": "Fetch GitHub releases",
+      "source": "Enabled repository configuration and resolved optional GitHub token",
+      "data_scope": "Discloses repository identity, optional bearer authentication, and conditional cache validators. Reads release responses; retains recent non-draft release titles, URLs, dates, and shortened release summaries.",
+      "recipient_or_storage": "api.github.com/repos/{repo}/releases; local release-result JSON",
+      "condition": "Release fetching runs for enabled repositories; retries, time filtering, and a 20-release processing cap apply.",
+      "evidence": [
+        {"path": "scripts/fetch-github.py", "start_line": 256, "end_line": 360},
+        {"path": "scripts/fetch-github.py", "start_line": 541, "end_line": 557}
+      ]
+    },
+    {
+      "operation": "Search repositories and infer a growth estimate",
+      "source": "Four built-in GitHub queries, repository metadata, and optional authentication",
+      "data_scope": "Discloses topic queries, push-date cutoff, star threshold, result count, and optional token. Retains repository identity, description, stars, forks, language, dates, and topics. daily_stars_est is inferred from total stars divided by repository age, rather than measured daily growth.",
+      "recipient_or_storage": "api.github.com/search/repositories; local trending JSON",
+      "condition": "Trending command runs; it uses built-in queries independently of workspace source overlays.",
+      "evidence": [
+        {"path": "scripts/fetch-github.py", "start_line": 571, "end_line": 635},
+        {"path": "scripts/fetch-github.py", "start_line": 651, "end_line": 677}
+      ]
+    },
+    {
+      "operation": "Fetch and filter Reddit listings",
+      "source": "Enabled subreddit configuration",
+      "data_scope": "Discloses subreddit, sort, listing limit, and request headers without API authentication. Reads listing responses; retains selected titles, URLs, dates, flair, post type, scores, comment counts, upvote ratios, and topics.",
+      "recipient_or_storage": "www.reddit.com/r/{subreddit}/{sort}.json; local Reddit results",
+      "condition": "Reddit fetching runs; local time, score, and pinned-post filters apply.",
+      "evidence": [
+        {"path": "scripts/fetch-reddit.py", "start_line": 51, "end_line": 68},
+        {"path": "scripts/fetch-reddit.py", "start_line": 71, "end_line": 170}
+      ]
+    },
+    {
+      "operation": "Search with Brave",
+      "source": "Configured topic queries and BRAVE_API_KEYS or BRAVE_API_KEY",
+      "data_scope": "Discloses query, freshness, language/country/safety settings, result count, User-Agent, and subscription token. Receives titles, URLs, and snippets; errors may repeat the query using another configured key.",
+      "recipient_or_storage": "api.search.brave.com/res/v1/web/search; local filtered search results",
+      "condition": "Brave is explicitly selected with keys, or auto mode selects it after Tavily is unavailable.",
+      "evidence": [
+        {"path": "scripts/fetch-web.py", "start_line": 53, "end_line": 64},
+        {"path": "scripts/fetch-web.py", "start_line": 191, "end_line": 271},
+        {"path": "scripts/fetch-web.py", "start_line": 293, "end_line": 349},
+        {"path": "scripts/fetch-web.py", "start_line": 589, "end_line": 610}
+      ]
+    },
+    {
+      "operation": "Search with Tavily",
+      "source": "Configured topic queries and TAVILY_API_KEY",
+      "data_scope": "POST body contains API key, query, search depth, news topic, result count, answer-disable flag, and optional day limit. Results retain titles, URLs, dates, and snippets truncated to 300 characters.",
+      "recipient_or_storage": "api.tavily.com/search; local filtered search results",
+      "condition": "Tavily is explicitly selected with a key or preferred by auto mode.",
+      "evidence": [
+        {"path": "scripts/fetch-web.py", "start_line": 353, "end_line": 408},
+        {"path": "scripts/fetch-web.py", "start_line": 411, "end_line": 444},
+        {"path": "scripts/fetch-web.py", "start_line": 589, "end_line": 610}
+      ]
+    },
+    {
+      "operation": "Probe Brave account limits",
+      "source": "Configured Brave keys",
+      "data_scope": "Sends a synthetic test query and authentication; reads rate-limit and remaining-quota headers to derive concurrency and exhaustion state.",
+      "recipient_or_storage": "Brave search endpoint; local rate-limit cache keyed by positional key labels, without storing key values",
+      "condition": "A candidate key lacks usable fresh cache state and BRAVE_PLAN does not bypass probing; exhausted/error keys may cause further probes.",
+      "evidence": [
+        {"path": "scripts/fetch-web.py", "start_line": 73, "end_line": 182}
+      ]
+    },
+    {
+      "operation": "Persist and reuse local fetch caches",
+      "source": "RSS/GitHub response validators, official X account lookup results, and Brave probe results",
+      "data_scope": "Feed/API URLs with ETag, Last-Modified and timestamps; handle-to-user-ID mappings with timestamps; Brave quota/concurrency state. Valid RSS/GitHub validators are subsequently returned to their corresponding request endpoints.",
+      "recipient_or_storage": "/tmp/tech-news-digest-rss-cache.json; /tmp/tech-news-digest-github-cache.json; /tmp/tech-news-digest-twitter-id-cache.json; /tmp/tech-news-digest-brave-rate-limit.json",
+      "condition": "Cache loading and reuse depend on component flags and freshness. RSS/GitHub validators use 24-hour freshness; official X IDs use seven days; Brave state uses 24 hours. Freshness checks do not globally delete expired records.",
+      "evidence": [
+        {"path": "scripts/fetch-rss.py", "start_line": 42, "end_line": 43},
+        {"path": "scripts/fetch-rss.py", "start_line": 233, "end_line": 315},
+        {"path": "scripts/fetch-github.py", "start_line": 220, "end_line": 253},
+        {"path": "scripts/fetch-github.py", "start_line": 275, "end_line": 298},
+        {"path": "scripts/fetch-twitter.py", "start_line": 43, "end_line": 44},
+        {"path": "scripts/fetch-twitter.py", "start_line": 148, "end_line": 219},
+        {"path": "scripts/fetch-web.py", "start_line": 103, "end_line": 182}
+      ]
+    },
+    {
+      "operation": "Run local subprocesses and stage pipeline data",
+      "source": "Parent environment, fetch outputs, and subprocess stdout/stderr",
+      "data_scope": "Every step inherits the entire environment. Fetch results are staged as JSON; the parent reads output statistics, captures process output, and persists timing/count/status metadata plus error tails on failures.",
+      "recipient_or_storage": "Local fetch, merge, and enrichment subprocesses; td-pipeline-* run directory; final output and adjacent .meta.json; optional output-stem-debug directory",
+      "condition": "Default pipeline runs six fetch steps; skip/only/reuse options alter execution. Successful runs remove generated run directories unless reused. Merge failure returns before cleanup; --debug copies intermediates for retention.",
+      "evidence": [
+        {"path": "scripts/run-pipeline.py", "start_line": 46, "end_line": 115},
+        {"path": "scripts/run-pipeline.py", "start_line": 144, "end_line": 201},
+        {"path": "scripts/run-pipeline.py", "start_line": 227, "end_line": 248},
+        {"path": "scripts/run-pipeline.py", "start_line": 260, "end_line": 298}
+      ]
+    },
+    {
+      "operation": "Read prior reports and derive ranked, deduplicated article records",
+      "source": "Fetch-result JSON and Markdown archive files",
+      "data_scope": "Reads full source JSON and eligible archive files; extracts prior titles, derives quality scores, repeat flags, multi-source indicators, and primary topics. Duplicate/domain-limited records are omitted from merged output.",
+      "recipient_or_storage": "Local merge component and merged JSON, normally /tmp/td-merged.json",
+      "condition": "Merge runs after collection. Archive-title lookup defaults to 14 days using dates in filenames; undated filenames are not excluded by that date test. The agent separately reads the latest full report for repeats and developing stories.",
+      "evidence": [
+        {"path": "references/digest-prompt.md", "start_line": 38, "end_line": 40},
+        {"path": "scripts/merge-sources.py", "start_line": 53, "end_line": 64},
+        {"path": "scripts/merge-sources.py", "start_line": 110, "end_line": 146},
+        {"path": "scripts/merge-sources.py", "start_line": 198, "end_line": 285},
+        {"path": "scripts/merge-sources.py", "start_line": 288, "end_line": 448},
+        {"path": "scripts/merge-sources.py", "start_line": 587, "end_line": 695}
+      ]
+    },
+    {
+      "operation": "Conditionally fetch and persist article text",
+      "source": "Article links selected from merged JSON",
+      "data_scope": "Sends the original article URL with Markdown/HTML Accept and User-Agent headers. Reads the full response, extracts text, and retains up to 2,000 characters by default with method/token metadata.",
+      "recipient_or_storage": "Selected article URL's server, possibly served through Cloudflare; enriched local JSON, overwriting input by default",
+      "condition": "Pipeline --enrich is enabled, or the script is invoked directly. Defaults select up to 15 eligible URLs, normally score at least 10 or whitelisted blogs at least 3; skip-listed domains are not requested. The Cloudflare path is content negotiation at the article URL, not a separate upload API.",
+      "evidence": [
+        {"path": "scripts/enrich-articles.py", "start_line": 29, "end_line": 43},
+        {"path": "scripts/enrich-articles.py", "start_line": 99, "end_line": 133},
+        {"path": "scripts/enrich-articles.py", "start_line": 136, "end_line": 200},
+        {"path": "scripts/enrich-articles.py", "start_line": 203, "end_line": 245},
+        {"path": "scripts/run-pipeline.py", "start_line": 241, "end_line": 248}
+      ]
+    },
+    {
+      "operation": "Return a selected article overview to the caller",
+      "source": "Merged JSON",
+      "data_scope": "Prints counts, topics, top-ranked titles, source names, links, shortened snippets, engagement metrics, and Reddit scores/comments.",
+      "recipient_or_storage": "Local stdout and the invoking agent/tool caller; no additional remote recipient is specified",
+      "condition": "Digest workflow invokes summarize-merged.py with a per-topic limit; optional topic filtering is available.",
+      "evidence": [
+        {"path": "references/digest-prompt.md", "start_line": 58, "end_line": 67},
+        {"path": "scripts/summarize-merged.py", "start_line": 14, "end_line": 99}
+      ]
+    },
+    {
+      "operation": "Archive reports and delete old archives",
+      "source": "Generated digest Markdown",
+      "data_scope": "Selected news, summaries, attribution, links, scores, engagement statistics, report date, and source-count footer",
+      "recipient_or_storage": "<WORKSPACE>/archive/tech-news-digest/<MODE>-YYYY-MM-DD.md",
+      "condition": "The prompt explicitly directs saving each report and deleting files older than 90 days. This is an agent instruction; packaged Python does not implement the archive-deletion step.",
+      "evidence": [
+        {"path": "references/digest-prompt.md", "start_line": 67, "end_line": 128}
+      ]
+    },
+    {
+      "operation": "Convert reports into local HTML and PDF artifacts",
+      "source": "Digest Markdown or agent-generated email HTML",
+      "data_scope": "Report content is converted to escaped HTML or passed as generated HTML to weasyprint; verbose PDF generation also saves an HTML copy.",
+      "recipient_or_storage": "Specified HTML/PDF output files, normally /tmp/td-email.html and /tmp/td-digest.pdf; verbose PDF sidecar .html",
+      "condition": "Formatting scripts are invoked; scheduled email workflow requires a PDF attempt and permits omission if generation fails.",
+      "evidence": [
+        {"path": "scripts/sanitize-html.py", "start_line": 191, "end_line": 219},
+        {"path": "scripts/generate-pdf.py", "start_line": 355, "end_line": 376},
+        {"path": "references/digest-prompt.md", "start_line": 133, "end_line": 148}
+      ]
+    },
+    {
+      "operation": "Disclose the finished report through chat delivery",
+      "source": "Generated digest",
+      "data_scope": "Selected news summaries, source links, public-author attribution, required KOL metrics, scores, and footer statistics",
+      "recipient_or_storage": "message tool targeting DISCORD_CHANNEL_ID; alternatively a configured user ID for DM delivery",
+      "condition": "The configured Discord delivery path is followed; the PDF template separately describes optional attachment delivery.",
+      "evidence": [
+        {"path": "references/digest-prompt.md", "start_line": 83, "end_line": 118},
+        {"path": "references/digest-prompt.md", "start_line": 130, "end_line": 132},
+        {"path": "references/templates/discord.md", "start_line": 27, "end_line": 31},
+        {"path": "references/templates/pdf.md", "start_line": 65, "end_line": 70}
+      ]
+    },
+    {
+      "operation": "Build and hand off email for delivery",
+      "source": "Recipient/sender placeholders, static subject, local HTML, and optional PDF",
+      "data_scope": "Reads full HTML and attachment bytes; constructs MIME containing subject, From, To, local-time Date, body, and attachment filename/content. Recipient addresses, subject, attachment path, and transport errors can appear in local logs.",
+      "recipient_or_storage": "Local msmtp subprocess, then sendmail fallback; configured EMAIL recipients through externally configured mail transport",
+      "condition": "EMAIL is set. Main workflow requires the same items as Discord and attempts a PDF attachment. Transport failure triggers fallback; no artifact deletion is shown.",
+      "evidence": [
+        {"path": "references/digest-prompt.md", "start_line": 133, "end_line": 148},
+        {"path": "scripts/send-email.py", "start_line": 25, "end_line": 92},
+        {"path": "scripts/send-email.py", "start_line": 123, "end_line": 146}
+      ]
+    },
+    {
+      "operation": "Describe alternative email handoffs",
+      "source": "Email and PDF template examples",
+      "data_scope": "Email template passes recipient, subject, and HTML to gog gmail send; PDF template passes an attachment and recipient to mail.",
+      "recipient_or_storage": "Local gog or mail CLI and configured email recipient; underlying transport is unspecified",
+      "condition": "An agent follows these template-specific examples. These differ from the main workflow's send-email.py route and are not subprocess calls made by that Python script.",
+      "evidence": [
+        {"path": "references/templates/email.md", "start_line": 5, "end_line": 13},
+        {"path": "references/templates/pdf.md", "start_line": 65, "end_line": 74}
+      ]
+    },
+    {
+      "operation": "Persist source-health history and infer failure rates",
+      "source": "Explicitly supplied fetch-result JSON and prior health state",
+      "data_scope": "Retains source IDs/names and timestamped success flags; derives failure fractions and logs unhealthy source names.",
+      "recipient_or_storage": "/tmp/tech-news-digest-source-health.json and local logging",
+      "condition": "source-health.py is invoked separately; the unified pipeline does not invoke it. Checks are pruned to seven days only for sources present in the current update.",
+      "evidence": [
+        {"path": "scripts/source-health.py", "start_line": 20, "end_line": 41},
+        {"path": "scripts/source-health.py", "start_line": 83, "end_line": 109},
+        {"path": "scripts/source-health.py", "start_line": 122, "end_line": 142}
+      ]
+    },
+    {
+      "operation": "Package historical test data and read it in local unit tests",
+      "source": "Captured RSS, Twitter, GitHub, Reddit, web, and merged fixtures",
+      "data_scope": "Public article/post content and URLs, public account identities, engagement metrics, timestamps, query records, and processing metadata. Fixture configuration paths are redacted; GitHub authentication is represented by a boolean.",
+      "recipient_or_storage": "Packaged tests/fixtures/*.json and local test processes; configuration tests also create temporary synthetic overlays",
+      "condition": "Fixture persistence exists in the package; unit tests read fixtures or temporary overlays without invoking fetchers.",
+      "evidence": [
+        {"path": "tests/fixtures/github.json", "start_line": 1, "end_line": 10},
+        {"path": "tests/fixtures/rss.json", "start_line": 1, "end_line": 40},
+        {"path": "tests/fixtures/twitter.json", "start_line": 13, "end_line": 44},
+        {"path": "tests/fixtures/reddit.json", "start_line": 24, "end_line": 49},
+        {"path": "tests/fixtures/web.json", "start_line": 13, "end_line": 49},
+        {"path": "tests/fixtures/merged.json", "start_line": 27, "end_line": 63},
+        {"path": "tests/test_merge.py", "start_line": 32, "end_line": 34},
+        {"path": "tests/test_config.py", "start_line": 38, "end_line": 72}
+      ]
+    },
+    {
+      "operation": "Run a separate smoke-test collection path",
+      "source": "Default/optional overlay configuration, environment credentials, and optional source filters",
+      "data_scope": "Invokes real fetch scripts and merges their outputs; may write filtered configuration and fetched JSON to a test directory.",
+      "recipient_or_storage": "Same remote recipients as invoked fetchers; /tmp/tech-digest-test-*",
+      "condition": "test-pipeline.sh is explicitly invoked. Step and credential gates apply. Output directory is removed on success unless --keep is set; failures retain it.",
+      "evidence": [
+        {"path": "scripts/test-pipeline.sh", "start_line": 14, "end_line": 28},
+        {"path": "scripts/test-pipeline.sh", "start_line": 162, "end_line": 186},
+        {"path": "scripts/test-pipeline.sh", "start_line": 203, "end_line": 275},
+        {"path": "scripts/test-pipeline.sh", "start_line": 297, "end_line": 306}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Official X context_annotations, author expansion, and expanded-user verified/public_metrics",
+      "recipient_or_storage": "Official X tweet request/response boundary at api.x.com",
+      "condition": "OfficialBackend fetches a monitored user's posts.",
+      "purpose_basis": "The report requires post text, dates, links, and tweet engagement metrics; the parser does not consume context annotations or expanded user records.",
+      "necessary_behavior": "Fetch enough tweet data for time filtering, reply exclusion, scoring, attribution, and the four displayed engagement metrics.",
+      "proposed_reduction": "Remove context_annotations, expansions=author_id, and user.fields from this request. This narrows extra data in a required request rather than eliminating the request.",
+      "preservation_conditions": "Keep created_at, public_metrics, referenced_tweets, post identifiers/text, and existing filtering and display behavior.",
+      "evidence": [
+        {"path": "scripts/fetch-twitter.py", "start_line": 235, "end_line": 298},
+        {"path": "references/digest-prompt.md", "start_line": 83, "end_line": 88}
+      ]
+    },
+    {
+      "data_scope": "Full GitHub App private-key contents",
+      "recipient_or_storage": "Python memory and an additional temporary PEM file before local openssl signing",
+      "condition": "GitHub App authentication is used.",
+      "purpose_basis": "JWT signing requires access to the configured key; copying its contents into another file is an implementation choice.",
+      "necessary_behavior": "Sign the constructed JWT with the configured private key.",
+      "proposed_reduction": "Pass the original GH_APP_KEY_FILE path to openssl -sign, avoiding the Python key read and duplicate PEM persistence.",
+      "preservation_conditions": "Preserve key-path validation, signing semantics, error handling, and the JWT exchange. The existing temporary copy is ordinarily deleted in finally.",
+      "evidence": [
+        {"path": "scripts/fetch-github.py", "start_line": 43, "end_line": 90}
+      ]
+    },
+    {
+      "data_scope": "Repeated App credential access, signing, JWT disclosure, and installation-token creation",
+      "recipient_or_storage": "Two GitHub subprocesses and api.github.com/app/installations/{install_id}/access_tokens",
+      "condition": "Both release and trending steps run, GITHUB_TOKEN is absent, and App authentication succeeds in each process.",
+      "purpose_basis": "Both GitHub fetch paths need authentication, but they independently create installation tokens for the same configured installation.",
+      "necessary_behavior": "Authenticate both required GitHub collection paths.",
+      "proposed_reduction": "Resolve one short-lived installation token and share it only with the two GitHub steps. This removes a redundant token exchange, not either news-fetch operation.",
+      "preservation_conditions": "Preserve authentication fallback, token validity, rate-limit behavior, independent command support, and release/trending coverage.",
+      "evidence": [
+        {"path": "scripts/run-pipeline.py", "start_line": 177, "end_line": 189},
+        {"path": "scripts/fetch-github.py", "start_line": 167, "end_line": 183},
+        {"path": "scripts/fetch-github.py", "start_line": 512, "end_line": 513},
+        {"path": "scripts/fetch-github.py", "start_line": 662, "end_line": 664}
+      ]
+    },
+    {
+      "data_scope": "All parent environment variables, including credentials unrelated to a particular step",
+      "recipient_or_storage": "Every local fetch, merge, and enrichment subprocess launched by run_step",
+      "condition": "Any pipeline step is launched with env=os.environ.",
+      "purpose_basis": "Fetchers need their own backend settings and credentials; merge and enrichment do not use the other services' API credentials.",
+      "necessary_behavior": "Provide each child the environment needed for execution and its selected authentication path.",
+      "proposed_reduction": "Construct per-step environment allowlists and omit unrelated API credentials, especially from merge and enrichment.",
+      "preservation_conditions": "Retain required executable, filesystem, locale, TLS/proxy settings and component-specific backend/authentication variables. This finding concerns a local process boundary, not demonstrated remote transmission of the whole environment.",
+      "evidence": [
+        {"path": "scripts/run-pipeline.py", "start_line": 46, "end_line": 69},
+        {"path": "scripts/run-pipeline.py", "start_line": 177, "end_line": 189},
+        {"path": "scripts/run-pipeline.py", "start_line": 227, "end_line": 248}
+      ]
+    },
+    {
+      "data_scope": "Fetched/intermediate news records, enriched text, metadata/error tails, email HTML, PDF, and verbose PDF HTML",
+      "recipient_or_storage": "Failed td-pipeline-* directories; final temporary JSON/.meta.json; /tmp/td-email.html; /tmp/td-digest.pdf; PDF HTML sidecars",
+      "condition": "Merge failure bypasses run-directory cleanup; otherwise final handoff/delivery artifacts have no shown post-consumption deletion. Debug/reuse retention is explicitly selectable.",
+      "purpose_basis": "Temporary files support processing, delivery, and troubleshooting. The explicit 90-day archive requirement does not require these extra temporary copies to remain indefinitely.",
+      "necessary_behavior": "Keep artifacts until their consumers, delivery attempts, and intended retries complete.",
+      "proposed_reduction": "Clean generated run directories in finally and delete temporary delivery/handoff artifacts after consumption; apply bounded retention where troubleshooting is requested.",
+      "preservation_conditions": "Preserve the required Markdown archive and its 90-day policy, caller-selected output retention, and explicit debug/reuse requirements.",
+      "evidence": [
+        {"path": "scripts/run-pipeline.py", "start_line": 260, "end_line": 298},
+        {"path": "references/digest-prompt.md", "start_line": 127, "end_line": 150},
+        {"path": "scripts/generate-pdf.py", "start_line": 367, "end_line": 376},
+        {"path": "scripts/send-email.py", "start_line": 134, "end_line": 146}
+      ]
+    },
+    {
+      "data_scope": "Expired or removed-source URL validators, handle/ID mappings, timestamps, and Brave quota records",
+      "recipient_or_storage": "The four persistent /tmp/tech-news-digest-*-cache/rate-limit JSON files",
+      "condition": "Cache files are reused over time; expired records are rejected for reuse but are not globally pruned from persisted dictionaries.",
+      "purpose_basis": "Cache freshness windows support efficient fetching; keeping records beyond those windows or after sources are removed is not needed for valid cache hits.",
+      "necessary_behavior": "Reuse valid validators, account IDs, and quota state.",
+      "proposed_reduction": "Evict expired records before saving and remove source-specific entries no longer configured.",
+      "preservation_conditions": "Retain fresh entries for active sources and existing cache-bypass behavior; do not mistake freshness expiry for implemented file deletion.",
+      "evidence": [
+        {"path": "scripts/fetch-rss.py", "start_line": 233, "end_line": 315},
+        {"path": "scripts/fetch-github.py", "start_line": 220, "end_line": 253},
+        {"path": "scripts/fetch-github.py", "start_line": 275, "end_line": 298},
+        {"path": "scripts/fetch-twitter.py", "start_line": 148, "end_line": 219},
+        {"path": "scripts/fetch-web.py", "start_line": 120, "end_line": 182}
+      ]
+    },
+    {
+      "data_scope": "Old source names and timestamped success/failure history for sources absent from later updates",
+      "recipient_or_storage": "/tmp/tech-news-digest-source-health.json",
+      "condition": "A previously tracked source is omitted or disabled; pruning occurs only inside the loop over currently supplied sources.",
+      "purpose_basis": "The health feature declares a seven-day history window, but inactive-source checks can remain beyond it.",
+      "necessary_behavior": "Compute recent source failure rates and identify unhealthy sources.",
+      "proposed_reduction": "Prune every stored source on each invocation and remove entries with no checks remaining in the window.",
+      "preservation_conditions": "Keep active sources' seven-day checks and the existing minimum-check/failure-rate thresholds.",
+      "evidence": [
+        {"path": "scripts/source-health.py", "start_line": 20, "end_line": 22},
+        {"path": "scripts/source-health.py", "start_line": 83, "end_line": 109},
+        {"path": "scripts/source-health.py", "start_line": 122, "end_line": 138}
+      ]
+    },
+    {
+      "data_scope": "Known nonfunctional campaign parameters such as utm_source and utm_medium in article URLs",
+      "recipient_or_storage": "Article-origin requests during enrichment, digest recipients, and archived report links",
+      "condition": "An original article link contains such parameters, as demonstrated by the RSS fixture. URL normalization strips queries only for duplicate comparison; original links remain available for fetching/display.",
+      "purpose_basis": "Reports require working source links and enrichment needs the article location; campaign attribution parameters need not accompany those required actions.",
+      "necessary_behavior": "Preserve a working link to the same article.",
+      "proposed_reduction": "Strip a narrow allowlist of known tracking parameters before fetch, display, and archival.",
+      "preservation_conditions": "Keep functional query parameters, identifiers, and access requirements; do not remove all queries indiscriminately.",
+      "evidence": [
+        {"path": "tests/fixtures/rss.json", "start_line": 25, "end_line": 35},
+        {"path": "scripts/merge-sources.py", "start_line": 99, "end_line": 107},
+        {"path": "scripts/merge-sources.py", "start_line": 211, "end_line": 224},
+        {"path": "scripts/enrich-articles.py", "start_line": 99, "end_line": 110},
+        {"path": "references/digest-prompt.md", "start_line": 113, "end_line": 128}
+      ]
+    },
+    {
+      "data_scope": "Synthetic search request and associated Brave authentication",
+      "recipient_or_storage": "api.search.brave.com/res/v1/web/search",
+      "condition": "A key needs uncached rate-limit probing and BRAVE_PLAN does not override detection.",
+      "purpose_basis": "Detecting rate limits supports collection, but the separate synthetic search returns no digest article.",
+      "necessary_behavior": "Discover usable key/quota state and safe concurrency while performing configured searches.",
+      "proposed_reduction": "Use the first required topic query as the probe and inspect its response headers before scheduling remaining requests.",
+      "preservation_conditions": "Retain exhausted-key handling, rotation, cache behavior, conservative initial concurrency, and every required topic result. This removes a separate request rather than narrowing fields in a required search.",
+      "evidence": [
+        {"path": "scripts/fetch-web.py", "start_line": 73, "end_line": 94},
+        {"path": "scripts/fetch-web.py", "start_line": 103, "end_line": 182},
+        {"path": "scripts/fetch-web.py", "start_line": 191, "end_line": 236}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Runtime workspace overrides, selected backends/credentials, delivery IDs/addresses, archive contents, and actual invocations are unavailable. Operations are therefore conditional; concrete user-specific destinations cannot be determined.",
+    "Provider-side logging, retention, secondary use, onward disclosure, and deletion are undocumented. The source does not establish those behaviors for news APIs, feed/article servers, or delivery providers.",
+    "gh credential-store internals, mail transport configuration, gog behavior, message-tool handling, weasyprint internals, and host log retention are outside the supplied implementation. Local handoffs do not establish additional remote recipients.",
+    "Without usable search credentials, fetch-web.py generates local web_search instructions; whether the agent executes them, and which provider receives the queries, is unresolved (scripts/fetch-web.py:447-471).",
+    "The agent interprets prompt instructions for report generation, delivery, archival, and 90-day deletion; execution or successful deletion cannot be verified from source.",
+    "summarize-merged.py does not print full_text or trending-specific fields and limits items per topic. How the agent obtains those fields and all required releases beyond that overview is unresolved; enrichment is explicitly intended for richer summaries, so its use cannot simply be classified as unnecessary (references/digest-prompt.md:60-67,92-111; scripts/summarize-merged.py:35-81).",
+    "Email routing instructions conflict: the main prompt uses send-email.py, while email/PDF templates describe gog or mail. The actual route chosen by an interpreting agent is unresolved (references/digest-prompt.md:133-148; references/templates/email.md:5-13; references/templates/pdf.md:65-74)."
+  ]
+}

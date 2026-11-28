@@ -33,6 +33,36 @@ def _body(blocks, entry, sig):
     return seen
 
 
+def _actual_values(blocks, invoke, call, site, body, files):
+    """Separate a proven declaration operand from positional argument values.
+
+    The callable is still a real CFG input. Only this formal-binding check omits
+    it, and only when its unique producer is the complete declaration already
+    resolved by inline_calls. Names or caller-authored metadata are not proof.
+    """
+    if invoke["outputs"]:
+        return invoke["outputs"]
+    values = [v["result"] for v in invoke["inputs"] if "result" in v]
+    if len(values) != len(call.args) + 1 or len(values) != len(invoke["inputs"]):
+        return values
+    producers = [
+        (block, op)
+        for block in blocks.values()
+        for op in block["operations"]
+        if values[0] in op["outputs"]
+    ]
+    if len(producers) != 1:
+        return values
+    block, producer = producers[0]
+    declaration = source_span(producer)
+    if (block["ref"] not in body and (producer.get("role") or producer["opcode"]) == "value"
+            and producer["outputs"] == [values[0]]
+            and declaration == {"file": site.file, "start_line": site.first, "end_line": site.body_end}
+            and _text(declaration, files)):
+        return values[1:]
+    return values
+
+
 def call_sites(facts, files):
     blocks = {b["ref"]: b for b in facts["blocks"]}
     predecessors = defaultdict(list)
@@ -76,21 +106,43 @@ def call_sites(facts, files):
                         f"the callee body; remove or reconnect its duplicate at {block['ref']}/{operation['ref']}."
                     )
         # One formal record may merge the same parameter from several distinct callers.
-        actual_values = invoke["outputs"] or [v["result"] for v in invoke["inputs"] if "result" in v]
+        actual_values = _actual_values(blocks, invoke, call, site, body, files)
         formal_values = [_result(v) for v in formal["inputs"]]
+        by_predecessor = formal.get("metadata", {}).get("predecessor_bindings", {})
+        selected = by_predecessor.get(caller["ref"]) if isinstance(by_predecessor, dict) else None
+        parameters = formal["outputs"][:len(site.parameters)]
+        formal_error = None
+        if isinstance(selected, dict):
+            # Source parameters occupy the ordered parameter outputs; later
+            # outputs can carry ambient bindings. A predecessor row cannot
+            # invent a value absent from the formal's actual input inventory.
+            if (len(parameters) != len(site.parameters) or any(name not in selected for name in parameters)
+                    or any(not isinstance(value, str) or value not in formal_values for value in selected.values())
+                    or not set(selected) <= set(formal["outputs"])):
+                diagnostics.append(f"The callee's predecessor binding for {caller['ref']!r} must map the declared "
+                                   f"parameter outputs {parameters!r} to actual result inputs. An entry or return "
+                                   "destination belongs on a control edge.")
+                formal_error = "row"
+            else:
+                formal_values = [selected[name] for name in parameters]
+        elif by_predecessor:
+            diagnostics.append(f"The callee's predecessor binding requires a parameter row for {caller['ref']!r}.")
+            formal_error = "row"
         if call.args and actual_values and not set(actual_values) <= set(formal_values):
             diagnostics.append(
                 "The callee's formal binding must consume this caller's actual argument versions."
             )
+            formal_error = "row" if by_predecessor else "inputs"
         elif (
             len(actual_values) == len(call.args) == len(site.parameters) == len(formal_values)
-            and len(formal["outputs"]) == len(formal_values)
+            and (selected is not None or len(formal["outputs"]) == len(formal_values))
             and len(formal_values) > 1
             and formal_values != actual_values
         ):
             diagnostics.append(
                 "The callee's ordered formal parameters must receive the actual arguments in source order."
             )
+            formal_error = "row" if by_predecessor else "inputs"
         returns, returned_versions = [], set()
         # Locate the next actual source use even when the submitted CFG has lost its return edge.
         uses = []
@@ -172,6 +224,8 @@ def call_sites(facts, files):
             "callee": site.owner,
             "site": span,
             "formals": entry["ref"],
+            "parameter_outputs": parameters,
+            "formal_error": formal_error,
             "returns": returns,
             "returned_versions": sorted(returned_versions),
             "edits": edits,
@@ -236,7 +290,7 @@ def register_slots(assembly, slots, gaps, regions, findings, files):
             "block_indices": indices,
             "old_value": deepcopy(old),
             "editable_actions": dict(permissions),
-            "calls": [{k: s[k] for k in ("caller", "site", "callee", "formals", "returns")} for s in sites],
+            "calls": [{k: s[k] for k in ("caller", "site", "callee", "formals", "returns", "parameter_outputs")} for s in sites],
             "boundary": {
                 "inbound_results": sorted(set().union(*map(_uses, old)) - defined),
                 "returned_versions": sorted({v for s in sites for v in s["returned_versions"]}),
@@ -257,6 +311,25 @@ def register_slots(assembly, slots, gaps, regions, findings, files):
                 s["slot_id"] = slot_id
         slots[slot_id] = slot
         regions.update((i, slot) for i in indices)
+
+
+def _same_ungranted_bindings(before, after, block_ref, calls):
+    """A formal-row repair owns only this caller's source-parameter entries."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    parameters = {call["caller"]: set(call.get("parameter_outputs", ())) for call in calls
+                  if call["formals"] == block_ref}
+    for predecessor in before.keys() | after.keys():
+        left, right = before.get(predecessor, {}), after.get(predecessor)
+        if left == right:
+            continue
+        owned = parameters.get(predecessor)
+        if not owned or not isinstance(left, dict) or not isinstance(right, dict) or not owned <= right.keys():
+            return False
+        if ({name: val for name, val in left.items() if name not in owned}
+                != {name: val for name, val in right.items() if name not in owned}):
+            return False
+    return True
 
 
 def validate_call_region(facts, slot, proposed, files):
@@ -315,25 +388,25 @@ def validate_call_region(facts, slot, proposed, files):
             if role == "consumer" and a.get("kind") != b.get("kind"):
                 raise ValueError("Keep the consumer at its original operation or terminator.")
             if key != "$exit" and role != "consumer":
-                if source_span(a) != source_span(b) or any(
-                    source_span(act) != source_span(a) for act in b.get("source_actions", [])
-                ):
+                actions = b.get("source_actions", [])
+                original_actions = a.get("source_actions", [])
+                retained_actions = actions == original_actions
+                if not retained_actions and (role == "formal" and original_actions or
+                        any(source_span(act) != source_span(a) for act in [*original_actions, *actions])):
+                    raise ValueError("Keep the recorded source actions and their physical evidence spans.")
+                if source_span(a) != source_span(b):
                     raise ValueError(
                         "The edited binding must keep its physical invocation or parameter evidence."
                     )
                 new_roles = {action.get("role") or action["kind"] for action in b.get("source_actions", [])}
-                if b["opcode"] not in {"value", "call", a["opcode"]} or new_roles - {"value", "call"}:
+                if b["opcode"] not in {"value", "call", a["opcode"]} or (not retained_actions and new_roles - {"value", "call"}):
                     raise ValueError("This grant covers only argument/return binding and invocation.")
-                metadata = {
-                    k: v
-                    for k, v in a.get("metadata", {}).items()
-                    if k not in {"source_actions", "script_content", "source_span"}
-                }
-                edited = {
-                    k: v
-                    for k, v in b.get("metadata", {}).items()
-                    if k not in {"source_actions", "script_content", "source_span"}
-                }
+                metadata = dict(a.get("metadata", {}))
+                edited = dict(b.get("metadata", {}))
+                if role == "formal" and metadata.get("predecessor_bindings") != edited.get("predecessor_bindings"):
+                    if not _same_ungranted_bindings(metadata.pop("predecessor_bindings", {}),
+                            edited.pop("predecessor_bindings", {}), ref, slot["calls"]):
+                        raise ValueError("Keep predecessor bindings outside this caller's declared parameter outputs.")
                 if edited != metadata:
                     raise ValueError("Keep the call's unrelated source metadata.")
         updates[ref] = row

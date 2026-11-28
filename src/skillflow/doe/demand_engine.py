@@ -19,6 +19,7 @@ from skillflow.propagation.contracts.paths import split_semantics_path, processi
 from skillflow.propagation.contracts.uses import value_uses
 from skillflow.propagation.conditions import payload_inputs, guard_truths, validate_record_consumption
 from skillflow.propagation.contracts.limitations import processing_impacts, diagnostic_applies
+from skillflow.propagation.expressions import expression_path_steps, expression_slots
 from .material import _Index, _id, payload_alternatives
 from . import selector_demands
 
@@ -27,6 +28,7 @@ EXACT_INFORMATION_BOUND_RULES = frozenset({
     "public_return_boundary", "processing_boundary", "selected_path", "remaining_content",
     "unchanged_content", "updated_value", "constructed_member", "expression_reference",
     "reviewed_input_contract", "reviewed_optional_input_presence", "same_element",
+    "protected_outcome_value",
 })
 
 
@@ -125,6 +127,8 @@ class DemandEngine:
                             for i, out in enumerate(ir["outputs"])}
         self.path_budget = 1 + max((len(g.get("path", [])) for g in candidate["goals"]), default=0)
         self._setup()
+        from .outcome_demands import OutcomeDemands
+        self.outcomes = OutcomeDemands(self)
         self.selector_sources = selector_demands.sources(self)
         self.path_budget += sum(len(entry["guard"]["path"]) for entry in self.selector_sources.values())
         from .unavailable_actions import UnavailableDependencies
@@ -265,6 +269,7 @@ class DemandEngine:
         for supplement in self.candidate["expressions"]:
             target = self.targets[target_key(supplement["target"])]
             self.expressions[(target.get("instruction_id"), tuple(target["raw_path"]))] = supplement["expression"]
+            self.path_budget += expression_path_steps(supplement["expression"])
 
     def _contract_transfer(self, operation, n, requirement, parent, conservative=False):
         """Apply accepted semantic rules; gaps retain only named input ranges."""
@@ -531,7 +536,7 @@ class DemandEngine:
             self.derivations[key]["information_bound"] = True
         self.queue.append((key, node, n, req, conservative, seed))
 
-    def emit_ref(self, ref, ir, scope, n, req, rule, parent=None, conservative=False):
+    def emit_ref(self, ref, ir, scope, n, req, rule, parent=None, conservative=False, *, data_ids=None):
         def protect_choices(value):
             if value["kind"] == "alternatives":
                 guard = value.get("guard")
@@ -539,20 +544,60 @@ class DemandEngine:
                     self._case_control(ir, guard, req, parent, conservative)
                 for item in value["items"]:
                     protect_choices(item)
-        protect_choices(ref)
+        if data_ids is None:
+            protect_choices(ref)
         nodes = self.resolve(ref, ir, scope)
+        if data_ids is not None:
+            selected = set(data_ids)
+            nodes = [node for node in nodes if self.static_literal(self.nodes[node])
+                     or selected.intersection(self.nodes[node]["data_ids"])]
+            if nodes:
+                protect_choices(ref)
         for node in nodes:
-            self.emit(node, n, req, rule, parent, conservative or len(nodes) > 1)
+            wanted = n
+            if self.nodes[node]["kind"] == "literal" and n.get("selector_ref"):
+                # A constant has no selector-dependent producer to preserve.
+                wanted = {field: value for field, value in n.items() if field != "selector_ref"}
+            if data_ids is not None and self.nodes[node]["kind"] == "ir_input" and not self.static_literal(self.nodes[node]):
+                wanted = {**n, "outcome_data_ids": sorted(set(data_ids).intersection(self.nodes[node]["data_ids"]))}
+            self.emit(node, wanted, req, rule, parent, conservative or len(nodes) > 1)
+        return bool(nodes)
+
+    def static_literal(self, node):
+        return node["kind"] == "literal" or (node["kind"] == "ir_input" and
+            self.index.instructions[node["instruction_id"]]["inputs"][node["slot"]]["type"] == "literal")
+
+    def _public_return_observers(self, ir, ref, information, requirement, parent, conservative, *,
+                                 case_id=None, data_ids=None):
+        # A local segment can return an unchanged input without any local producer.
+        sources = set(self.resolve(ref, ir))
+        selected = None if data_ids is None else set(data_ids)
+        for observer in self.index.ir_operations[ir]:
+            info = self.ops[observer]
+            if not info["return_observation"] or info["scope"] is not None:
+                continue
+            if case_id is not None and (info.get("case") or {}).get("id") != case_id:
+                continue
+            for slot, (candidate, role) in self.slots(observer).items():
+                if (role == "value" and sources.intersection(self.resolve(candidate, ir))
+                        and (selected is None or selected.intersection(info["record"]["inputs"][slot]))):
+                    self.input(observer, slot, information, requirement, "public_return_boundary", parent, conservative)
 
     def _selector_need(self, ir, operand, guard):
         return {**need(selector_demands.control_property(guard), guard["path"]),
                 "selector_ref": selector_demands.reference(ir, operand, guard)}
 
-    def _case_control(self, ir, guard, requirement, parent, conservative, rule="typed_case_selector"):
+    def _case_control(self, ir, guard, requirement, parent, conservative, rule="typed_case_selector", *, data_ids=None):
         slot = guard["input_index"]
-        self.emit(self.node_at("ir_input", ir, slot=slot),
-                  self._selector_need(ir, {"kind": "input", "index": slot}, guard),
-                  requirement, rule, parent, conservative)
+        node = self.node_at("ir_input", ir, slot=slot)
+        wanted = self._selector_need(ir, {"kind": "input", "index": slot}, guard)
+        if data_ids is not None and not self.static_literal(self.nodes[node]):
+            bound = sorted(set(data_ids).intersection(self.nodes[node]["data_ids"]))
+            if not bound:
+                return False
+            wanted["outcome_data_ids"] = bound
+        self.emit(node, wanted, requirement, rule, parent, conservative)
+        return True
 
     def input(self, key, slot, n, req, rule, parent, conservative=False, *, information_bound=None):
         self.emit(self.node_at("op_input", self.ops[key]["position"]["instruction_id"], key, slot),
@@ -583,6 +628,10 @@ class DemandEngine:
             if not instructions:
                 continue
             control = instructions[-1]
+            dispatch = control.get("metadata", {}).get("outcome_dispatch")
+            if dispatch is not None:
+                self.outcomes.dispatch_controls(dispatch["producer"], target_block, req, parent, unestablished)
+                continue
             expressions = [expr for (owner, path), expr in self.expressions.items()
                            if owner == control["id"] and path and path[0] != "events"]
             if expressions:
@@ -623,19 +672,15 @@ class DemandEngine:
 
     def expression(self, expr, info, n, req, parent, conservative=False, *, each=False):
         op = expr["op"]
-        ir, scope = info["position"]["instruction_id"], info["scope"]
         if op == "ref":
+            ref = expr["value"]
+            if ref["kind"] == "literal":
+                return
             demand = {**n, "each": n["each"] or each}
-            sources = self.resolve(expr["value"], ir, scope)
-            # Route through actual operand slots when available so boundary
-            # obligations are not lost by jumping straight to producers.
-            matched = False
-            for slot, (ref, _) in self.slots(info["key"]).items():
-                if set(sources) == set(self.resolve(ref, ir, scope)):
-                    self.input(info["key"], slot, demand, req, "expression_reference", parent, conservative)
-                    matched = True
-            if not matched:
-                raise ValueError("Expression refers to a value not consumed by its operation")
+            operands = {slot: actual for slot, (actual, _) in self.slots(info["key"]).items()}
+            exact = expression_slots(ref, operands)
+            for slot in exact or expression_slots(ref, operands, include_alternatives=True):
+                self.input(info["key"], slot, demand, req, "expression_reference", parent, conservative or not exact)
         elif op == "literal":
             return
         elif op == "field":
@@ -936,7 +981,21 @@ class DemandEngine:
             operand = self.index.instructions[ir]["inputs"][meta["slot"]]
             if operand["type"] == "result":
                 definition, index = self.definitions[operand["identifier"]]
-                self.emit(self.node_at("ir_output", definition, slot=index), n, req, "cfg_result_use", key, conservative)
+                output = self.node_at("ir_output", definition, slot=index)
+                wanted = {k: v for k, v in n.items() if k != "outcome_data_ids"}
+                if (definition, index) in self.outcomes.slots:
+                    consumed = set(n.get("outcome_data_ids", meta["data_ids"]))
+                    bound, untraceable = self.outcomes.partition_versions(consumed, self.nodes[output]["data_ids"])
+                    if untraceable:
+                        self.outcomes.unavailable(definition, req, key,
+                            f"Some result versions consumed at {ir} do not identify a recorded protected outcome.")
+                    if bound:
+                        wanted["outcome_data_ids"] = bound
+                    elif consumed:
+                        return
+                    else:
+                        conservative = True
+                self.emit(output, wanted, req, "cfg_result_use", key, conservative)
             elif operand["type"] not in {"literal", "external_resource"}:
                 if seed in self.unavailable_actions and conservative:
                     self.unavailable_dependencies.context_operand(ir, meta["slot"], n, req, key)
@@ -960,6 +1019,9 @@ class DemandEngine:
                                 self.diagnostic("append_prior_content", "A required context append includes prior content; only its added payload is attached to the save sink.", ir, req, write)
             return
         if kind == "ir_output":
+            if (ir, meta["slot"]) in self.outcomes.slots:
+                self.outcomes.transfer(ir, meta["slot"], n, req, key, conservative)
+                return
             binding = next((b for b in self.compiled["ir_semantics"].get(ir, {}).get("output_bindings", []) if b["output_index"] == meta["slot"]), None)
             if (seed in self.unavailable_actions and conservative
                     and self.unavailable_dependencies.has_incomplete_execution(ir)):
@@ -970,16 +1032,7 @@ class DemandEngine:
                 self.diagnostic("missing_output_binding", "A required public result has no transfer binding.", ir, req)
             else:
                 self.emit_ref(binding["value"], ir, None, n, req, "public_result", key, conservative)
-                # A local segment can return an unchanged IR input, with no
-                # local producer node. Its declared return boundary must not
-                # disappear merely because the public binding is a copy.
-                sources = set(self.resolve(binding["value"], ir))
-                for observer, info in self.ops.items():
-                    if info["position"]["instruction_id"] != ir or not info["return_observation"] or info["scope"] is not None:
-                        continue
-                    for slot, (ref, role) in self.slots(observer).items():
-                        if role == "value" and sources.intersection(self.resolve(ref, ir)):
-                            self.input(observer, slot, n, req, "public_return_boundary", key, conservative)
+                self._public_return_observers(ir, binding["value"], n, req, key, conservative)
             return
         if kind == "action":
             if not op_key and conservative and seed in self.unavailable_actions:

@@ -1,0 +1,13 @@
+# Initial processing material audit
+
+Run: `document-guided-ga4-runtime-locality-high-20261117-205158`. This is a passive saved-byte snapshot while initial processing is running; no response, validation result or accepted processing fragment was present at the snapshot.
+
+The actual stage prompt is 430,938 characters (431,343 UTF-8 bytes). Its complete shared input expands to exactly the bound logical payload: only `documents`, `cfg` and `runtime_contract`; `documents` contains only the inherited flow. No Task object or `SEALED_TASK` section is delivered to processing. Generic instructions about Task separation do not introduce a Task baseline.
+
+All 16 source files are present in full, totaling 154,973 decoded characters and 180,825 characters in the line-numbered source display. Each complete file segment occurs once, and the entire source section matches its reconstruction from the current run's frozen source bytes. The CFG contains 215 blocks and 489 IR. The displayed CFG equals the original after the existing source-display normalization removes 293 `script_content` copies already present verbatim in the full source; this is not equality to the raw CFG artifact.
+
+The delivered runtime contract exactly matches the frozen v12 constants by static AST comparison: all EM01–EM18 rules, 18 operation rows (14 atomic operations, `call` and three structures), 14 expression operators and common evidence, failure and schema obligations. EM08 explicitly separates unknown content from unidentified addresses, requires a specific address reason and physical evidence for the latter, preserves same-kind may-aliasing and weak updates, and rejects implicit alias meaning from `symbolic:` names. The output schema also contains `address_kind` and `address_reason`.
+
+Replacing only the actual shared envelope with the exact expanded logical payload would make this same prompt 494,346 characters. The presentation therefore saves 63,408 characters (12.8266%) under that limited comparison. This is not a historical timing, generation-speed or output-compression result; transport wrappers are separate from the stage prompt.
+
+Evidence and per-file hashes: `processing-input-v12-audit.json`. The standalone audit helper uses only saved JSON/text, exact input-display decoding and AST literal inspection. It imports no project modules and invokes no stage validation, compiler, propagation, DOE, model, Skill or replay. Material completeness does not establish model comprehension, source-faithful contracts, reviewed necessity or downstream source-boundary coverage. Those results await new saved artifacts.

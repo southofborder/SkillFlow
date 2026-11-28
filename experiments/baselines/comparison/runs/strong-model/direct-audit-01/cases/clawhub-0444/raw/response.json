@@ -1,0 +1,296 @@
+{
+  "status": "completed",
+  "declared_purpose": "Create, read, edit, format and analyze Excel workbooks, including formulas and charts. Explicit requirements include preserving existing templates, documenting financial hardcodes, delivering no formula errors, and using LibreOffice recalculation when formulas are used. Supporting Office utilities also implement optional DOCX/PPTX workflows; these are not shown as automatic steps in Excel processing.",
+  "data_operations": [
+    {
+      "operation": "Read, analyze, modify and save workbooks locally",
+      "source": "User-selected Excel files and supplied data",
+      "data_scope": "Examples read the first sheet or all sheets, derive previews and statistics, edit cells and persist output workbooks. These are workflow examples, not unconditional reads of every workbook.",
+      "recipient_or_storage": "Local pandas/openpyxl process and selected output workbook",
+      "condition": "When the agent follows the applicable creation, editing or analysis workflow",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 69, "end_line": 98},
+        {"path": "SKILL.md", "start_line": 135, "end_line": 152},
+        {"path": "SKILL.md", "start_line": 183, "end_line": 208}
+      ]
+    },
+    {
+      "operation": "Persist source provenance in financial workbooks",
+      "source": "Sources used for hardcoded financial inputs",
+      "data_scope": "System/document, date, specific reference and URL when applicable",
+      "recipient_or_storage": "Workbook comments or adjacent cells",
+      "condition": "Explicit documentation requirement for financial hardcodes; the source does not instruct fetching the cited URLs",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 61, "end_line": 67}
+      ]
+    },
+    {
+      "operation": "Read and persist LibreOffice macro configuration",
+      "source": "Existing Module1.xba and packaged RECALCULATE_MACRO",
+      "data_scope": "Macro source and presence of RecalculateAndSave; no workbook contents are written into the macro",
+      "recipient_or_storage": "User LibreOffice profile under MACRO_DIR_MACOS or MACRO_DIR_LINUX",
+      "condition": "Every recalc invocation checks configuration; absent or unsuitable configuration causes profile initialization and macro writing. No removal is implemented.",
+      "evidence": [
+        {"path": "scripts/recalc.py", "start_line": 17, "end_line": 29},
+        {"path": "scripts/recalc.py", "start_line": 42, "end_line": 77}
+      ]
+    },
+    {
+      "operation": "Open, recalculate and save the selected workbook through LibreOffice",
+      "source": "filename supplied to recalc",
+      "data_scope": "The workbook and its absolute local path; the macro calculates all formulas and stores the document in place",
+      "recipient_or_storage": "Local soffice subprocess and original workbook file",
+      "condition": "Explicitly mandatory when using formulas; implementation launches soffice after macro setup succeeds. External LibreOffice behavior is unresolved.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 135, "end_line": 152},
+        {"path": "scripts/recalc.py", "start_line": 21, "end_line": 29},
+        {"path": "scripts/recalc.py", "start_line": 70, "end_line": 98}
+      ]
+    },
+    {
+      "operation": "Inspect cached cell values and formulas, then return diagnostics",
+      "source": "Recalculated workbook",
+      "data_scope": "All sheets and iterated cells are read twice: cached values for error detection and formulas for counting. Results contain counts and up to 20 sheet-name/cell locations per error type; exceptions can become error strings.",
+      "recipient_or_storage": "Local Python memory, function caller, and JSON on stdout in CLI execution",
+      "condition": "After soffice returns successfully or with timeout code 124. All-cell verification is explicitly documented; no remote recipient is specified.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 223, "end_line": 228},
+        {"path": "scripts/recalc.py", "start_line": 94, "end_line": 161},
+        {"path": "scripts/recalc.py", "start_line": 176, "end_line": 180}
+      ]
+    },
+    {
+      "operation": "Copy and pass the process environment to LibreOffice",
+      "source": "os.environ",
+      "data_scope": "All environment variables, potentially including credential-bearing variables if present; SAL_USE_VCLPLUGIN is set and LD_PRELOAD may be replaced",
+      "recipient_or_storage": "Returned environment dictionary and local soffice subprocess, including its timeout wrapper where used",
+      "condition": "get_soffice_env calls during initialization, recalculation or run_soffice. This is local process disclosure, not demonstrated network transmission.",
+      "evidence": [
+        {"path": "scripts/office/soffice.py", "start_line": 24, "end_line": 37},
+        {"path": "scripts/recalc.py", "start_line": 54, "end_line": 60},
+        {"path": "scripts/recalc.py", "start_line": 79, "end_line": 92}
+      ]
+    },
+    {
+      "operation": "Probe local socket support and persist a compatibility shim",
+      "source": "Local AF_UNIX socket availability and packaged _SHIM_SOURCE",
+      "data_scope": "Socket success/failure and static shim code; no document payload is passed by these setup operations",
+      "recipient_or_storage": "Local process, gcc subprocess, and temporary-directory files lo_socket_shim.c and lo_socket_shim.so",
+      "condition": "If AF_UNIX socket creation fails, compile or reuse the shared object. Successful compilation deletes the C source; the shared object remains.",
+      "evidence": [
+        {"path": "scripts/office/soffice.py", "start_line": 41, "end_line": 65}
+      ]
+    },
+    {
+      "operation": "Extract and rewrite Office package contents",
+      "source": "Selected DOCX, PPTX or XLSX archive",
+      "data_scope": "Every archive member, including document content, metadata, embedded objects and media when present; XML and relationship files are locally rewritten",
+      "recipient_or_storage": "Caller-selected output directory, retained without automatic cleanup",
+      "condition": "Explicit invocation of unpack; DOCX-specific processing is separately conditional",
+      "evidence": [
+        {"path": "scripts/office/unpack.py", "start_line": 34, "end_line": 79},
+        {"path": "scripts/office/unpack.py", "start_line": 82, "end_line": 98}
+      ]
+    },
+    {
+      "operation": "Merge DOCX runs and tracked changes, deleting selected metadata",
+      "source": "Unpacked word/document.xml",
+      "data_scope": "Run formatting and text, revision identifiers, proofing markers, tracked-change authors and wrappers. Run merging removes rsid attributes and proofErr elements; tracked-change merging compares authors and discards later wrappers despite timestamp differences.",
+      "recipient_or_storage": "Rewritten local word/document.xml; counts/messages return to the caller",
+      "condition": "DOCX unpack defaults enable both helpers, but flags can disable them; helpers can also be called directly. These operations do not establish deletion of document text.",
+      "evidence": [
+        {"path": "scripts/office/unpack.py", "start_line": 62, "end_line": 69},
+        {"path": "scripts/office/helpers/merge_runs.py", "start_line": 1, "end_line": 39},
+        {"path": "scripts/office/helpers/simplify_redlines.py", "start_line": 1, "end_line": 44},
+        {"path": "scripts/office/helpers/simplify_redlines.py", "start_line": 47, "end_line": 108}
+      ]
+    },
+    {
+      "operation": "Count tracked-change authors and infer an author",
+      "source": "Modified document.xml and original DOCX document.xml",
+      "data_scope": "Author identifiers, insertion/deletion counts and positive count differences; a unique newly contributing author is inferred, otherwise a default or ambiguity error is produced",
+      "recipient_or_storage": "Local memory and caller; ambiguity errors include author/count mappings, and pack can print them to stderr",
+      "condition": "Direct helper invocation or an explicitly supplied infer_author_func in DOCX pack validation. The pack CLI does not supply this hook.",
+      "evidence": [
+        {"path": "scripts/office/helpers/simplify_redlines.py", "start_line": 126, "end_line": 197},
+        {"path": "scripts/office/pack.py", "start_line": 78, "end_line": 89}
+      ]
+    },
+    {
+      "operation": "Copy, normalize and persist an Office archive",
+      "source": "Every file under input_directory",
+      "data_scope": "Full directory contents; XML normalization removes XML comments and whitespace-only nodes outside excluded text elements",
+      "recipient_or_storage": "Temporary content directory and output DOCX/PPTX/XLSX archive; temporary copy is context-managed",
+      "condition": "pack invocation. Validation runs only when enabled and an existing original is provided; its validator selection covers DOCX/PPTX, not XLSX.",
+      "evidence": [
+        {"path": "scripts/office/pack.py", "start_line": 24, "end_line": 66},
+        {"path": "scripts/office/pack.py", "start_line": 78, "end_line": 105},
+        {"path": "scripts/office/pack.py", "start_line": 108, "end_line": 128}
+      ]
+    },
+    {
+      "operation": "Extract packed validation input to an unmanaged temporary directory",
+      "source": "CLI path naming a packed DOCX, PPTX or XLSX file",
+      "data_scope": "All archive members",
+      "recipient_or_storage": "Directory created by tempfile.mkdtemp; no cleanup is implemented",
+      "condition": "Packed input is extracted before validator selection. DOCX/PPTX proceed to validation; XLSX is rejected only after extraction.",
+      "evidence": [
+        {"path": "scripts/office/validate.py", "start_line": 66, "end_line": 107}
+      ]
+    },
+    {
+      "operation": "Read Office XML, compare original schema errors and emit diagnostics",
+      "source": "Unpacked XML/relationship files, optional original archive and local schema paths",
+      "data_scope": "Document XML, metadata, identifiers and relationships. When comparison is needed, the whole original archive is extracted for one corresponding XML member, potentially repeatedly. Diagnostics include paths, identifiers and parser/schema error text.",
+      "recipient_or_storage": "Local validator memory, context-managed original-package temporary directories, and stdout",
+      "condition": "DOCX/PPTX validation paths. Original-error comparison occurs after current-file XSD validation fails. Pack skips XLSX validators and validate CLI rejects XLSX.",
+      "evidence": [
+        {"path": "scripts/office/validators/base.py", "start_line": 94, "end_line": 107},
+        {"path": "scripts/office/validators/base.py", "start_line": 143, "end_line": 168},
+        {"path": "scripts/office/validators/base.py", "start_line": 598, "end_line": 634},
+        {"path": "scripts/office/validators/base.py", "start_line": 750, "end_line": 812},
+        {"path": "scripts/office/validators/docx.py", "start_line": 24, "end_line": 64},
+        {"path": "scripts/office/validators/pptx.py", "start_line": 25, "end_line": 60}
+      ]
+    },
+    {
+      "operation": "Repair local XML and print document-derived previews",
+      "source": "Unpacked XML files",
+      "data_scope": "Whitespace-bearing text and invalid durableId attributes. Repairs persist xml:space attributes or replacement identifiers; output can include text previews and old/new identifiers. DOCX validation failures can also print text previews.",
+      "recipient_or_storage": "Local XML files and stdout",
+      "condition": "Repair is automatic in qualifying pack validation, or enabled with --auto-repair in validate CLI. Failure previews arise in DOCX validation.",
+      "evidence": [
+        {"path": "scripts/office/pack.py", "start_line": 96, "end_line": 100},
+        {"path": "scripts/office/validate.py", "start_line": 97, "end_line": 102},
+        {"path": "scripts/office/validators/base.py", "start_line": 115, "end_line": 141},
+        {"path": "scripts/office/validators/docx.py", "start_line": 66, "end_line": 161},
+        {"path": "scripts/office/validators/docx.py", "start_line": 386, "end_line": 442}
+      ]
+    },
+    {
+      "operation": "Compare DOCX paragraph counts",
+      "source": "Modified document.xml and optional original DOCX",
+      "data_scope": "Paragraph structure; the entire original archive is temporarily extracted although only word/document.xml is parsed",
+      "recipient_or_storage": "Local memory, context-managed temporary directory and paragraph counts/difference on stdout",
+      "condition": "DOCX schema validation reaches compare_paragraph_counts; original extraction requires an original file",
+      "evidence": [
+        {"path": "scripts/office/validators/docx.py", "start_line": 163, "end_line": 200},
+        {"path": "scripts/office/validators/docx.py", "start_line": 243, "end_line": 249}
+      ]
+    },
+    {
+      "operation": "Compare tracked changes and produce a local text diff",
+      "source": "Modified document.xml, original DOCX and selected author",
+      "data_scope": "Author attributes and document text after reversing that author's changes in memory. A mismatch writes both extracted texts to temporary files and passes them to git diff; output can include unchanged text within differing paragraph lines.",
+      "recipient_or_storage": "Local validator memory, context-managed original/text temporary directories, local git subprocess and stdout",
+      "condition": "DOCX redlining validation with an original. It returns early if parsing finds no selected-author changes; otherwise comparison proceeds. Diff generation occurs only on mismatch, with a second git invocation if the first yields no usable content.",
+      "evidence": [
+        {"path": "scripts/office/validators/redlining.py", "start_line": 25, "end_line": 102},
+        {"path": "scripts/office/validators/redlining.py", "start_line": 104, "end_line": 196},
+        {"path": "scripts/office/validators/redlining.py", "start_line": 198, "end_line": 243}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Environment variables unrelated to spreadsheet processing, including credentials if present",
+      "recipient_or_storage": "Environment passed to the local LibreOffice subprocess",
+      "condition": "get_soffice_env copies the full parent environment",
+      "purpose_basis": "Local formula recalculation requires a functioning LibreOffice runtime; full environment forwarding is an implementation choice.",
+      "necessary_behavior": "Supply runtime, profile, locale and compatibility settings needed by LibreOffice.",
+      "proposed_reduction": "Use a verified environment allowlist and exclude unrelated credential-bearing variables.",
+      "preservation_conditions": "Retain variables needed for executable/library discovery, profile access, temporary files, locale and the socket shim.",
+      "evidence": [
+        {"path": "scripts/office/soffice.py", "start_line": 24, "end_line": 37},
+        {"path": "scripts/recalc.py", "start_line": 79, "end_line": 92}
+      ]
+    },
+    {
+      "data_scope": "Complete packed validation input remaining after validation or rejection",
+      "recipient_or_storage": "Unmanaged tempfile.mkdtemp directory",
+      "condition": "validate CLI receives a packed Office file",
+      "purpose_basis": "Validation may need temporary access to package members; indefinite extracted-copy retention is not required.",
+      "necessary_behavior": "Keep extracted inputs available only for the validation lifecycle.",
+      "proposed_reduction": "Use a context-managed temporary directory or guaranteed cleanup on success, error and exit.",
+      "preservation_conditions": "Preserve explicitly requested unpacked working directories; apply cleanup to internally created temporary copies.",
+      "evidence": [
+        {"path": "scripts/office/validate.py", "start_line": 71, "end_line": 107}
+      ]
+    },
+    {
+      "data_scope": "Every member of a packed XLSX submitted to validate CLI",
+      "recipient_or_storage": "Temporary extraction directory",
+      "condition": "An XLSX passes extension checks but is rejected by validator selection",
+      "purpose_basis": "This CLI does not implement XLSX validation.",
+      "necessary_behavior": "Report unsupported validation without reading package payloads.",
+      "proposed_reduction": "Reject XLSX before archive extraction. The entire extraction is redundant, rather than extra data within a necessary extraction.",
+      "preservation_conditions": "Continue allowing XLSX in the separate pack/unpack utilities.",
+      "evidence": [
+        {"path": "scripts/office/validate.py", "start_line": 66, "end_line": 95}
+      ]
+    },
+    {
+      "data_scope": "Unrelated original-package members, such as media, embedded files and metadata",
+      "recipient_or_storage": "Temporary directories used for original XSD comparisons, DOCX paragraph counts and redlining comparison",
+      "condition": "These routines extract the full original archive to read one corresponding XML member; XSD comparison can repeat this per failing file.",
+      "purpose_basis": "The required outcomes are comparing one XML member's schema errors, counting paragraphs or comparing document text.",
+      "necessary_behavior": "Read the corresponding XML member, or word/document.xml for paragraph/redlining checks.",
+      "proposed_reduction": "Read the necessary ZIP member directly. For XSD comparisons, reuse one archive handle or cached baseline; full-archive breadth is extra data, and repeated full extraction is a redundant action.",
+      "preservation_conditions": "Provide any genuinely required relative XML dependencies through a restricted resolver and retain original-error comparison semantics.",
+      "evidence": [
+        {"path": "scripts/office/validators/base.py", "start_line": 598, "end_line": 619},
+        {"path": "scripts/office/validators/base.py", "start_line": 787, "end_line": 812},
+        {"path": "scripts/office/validators/docx.py", "start_line": 179, "end_line": 200},
+        {"path": "scripts/office/validators/redlining.py", "start_line": 59, "end_line": 91}
+      ]
+    },
+    {
+      "data_scope": "Document text previews and potentially long unchanged portions of differing paragraphs",
+      "recipient_or_storage": "Validator stdout returned to its caller; no further recipient or durable log is established",
+      "condition": "Whitespace repairs, DOCX text-structure errors or redlining mismatches",
+      "purpose_basis": "Validation needs actionable error locations; unconditional content excerpts and unbounded paragraph diff context are implementation choices.",
+      "necessary_behavior": "Identify the affected file, element/location, error category and relevant change.",
+      "proposed_reduction": "Default to structural diagnostics; make content previews optional and bound diff context and output length.",
+      "preservation_conditions": "Keep enough coordinates and change information to locate and repair errors, with explicit detailed output available when needed.",
+      "evidence": [
+        {"path": "scripts/office/validators/base.py", "start_line": 124, "end_line": 136},
+        {"path": "scripts/office/validators/docx.py", "start_line": 76, "end_line": 105},
+        {"path": "scripts/office/validators/redlining.py", "start_line": 93, "end_line": 125},
+        {"path": "scripts/office/validators/redlining.py", "start_line": 127, "end_line": 191}
+      ]
+    },
+    {
+      "data_scope": "Complete original and modified comparison texts",
+      "recipient_or_storage": "Temporary original.txt and modified.txt files and the local git subprocess",
+      "condition": "A redlining text comparison fails",
+      "purpose_basis": "Producing an actionable difference requires comparison, but does not inherently require persisting both complete texts.",
+      "necessary_behavior": "Compute the mismatch details from text already held in memory.",
+      "proposed_reduction": "Generate a bounded diff in memory, eliminating these additional text-file copies and subprocess handoff.",
+      "preservation_conditions": "Preserve useful character/word differences and author-specific comparison behavior.",
+      "evidence": [
+        {"path": "scripts/office/validators/redlining.py", "start_line": 87, "end_line": 97},
+        {"path": "scripts/office/validators/redlining.py", "start_line": 127, "end_line": 179}
+      ]
+    },
+    {
+      "data_scope": "Unrelated files placed beneath the package input directory",
+      "recipient_or_storage": "Temporary content copy and final Office archive",
+      "condition": "pack input_directory contains files beyond intended Office package parts",
+      "purpose_basis": "Packing requires intended package content; recursive inclusion of every file is broader when stray files are present.",
+      "necessary_behavior": "Include all intended document parts, relationships, media and embedded resources.",
+      "proposed_reduction": "Use a reviewed package-member inventory and exclude unrelated scratch files before copying and archiving.",
+      "preservation_conditions": "Preserve valid custom parts, embedded objects, metadata and template content; do not equate unfamiliar parts with unnecessary data.",
+      "evidence": [
+        {"path": "scripts/office/pack.py", "start_line": 52, "end_line": 64}
+      ]
+    }
+  ],
+  "unknowns": [
+    "LibreOffice and its active user profile are external to the supplied source. Network activity, external-link refresh, additional macro execution, recovery files and profile retention cannot be determined; the shown subprocess launch alone establishes no remote disclosure.",
+    "Referenced XSD schema files are absent from the complete inventory. Their contents and dependency resolution cannot be audited, and successful intended schema validation cannot be established.",
+    "pandas, openpyxl, XML libraries, git, gcc and operating-system implementations are not supplied. Their additional reads, parser resolution behavior and internal persistence remain unresolved.",
+    "No actual workbook, Office package, parent environment or user task is supplied. Sensitive contents, credential-bearing environment variables and which optional paths execute are unknown.",
+    "Caller/platform storage and onward handling of normal returns, stdout, stderr and generated files are unspecified. No remote recipient or durable logging destination is established by the packaged source.",
+    "Context-managed temporary directories and unlink calls show cleanup intent, not secure erasure or guaranteed cleanup after abrupt termination."
+  ]
+}

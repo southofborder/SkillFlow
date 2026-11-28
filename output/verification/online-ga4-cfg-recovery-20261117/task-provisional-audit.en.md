@@ -1,0 +1,18 @@
+# Provisional audit of the current accepted Task
+
+This note concerns only `document-guided-ga4-cfg-recovery-high-20261117-135205`. Its Task was accepted on `calls/task/a001` with 49 requirements and 10 issues: seven resolved, three unresolved. This is structural/source-reference acceptance, not completed semantic source review. The Task result itself says that whole-chain review remains necessary. Graph generation was pending and normal source review had not started at assignment; this passive audit does not change or feed the running experiment.
+
+The complete package contains 16 files and 155,170 bytes. All 145 Task evidence entries name existing source files and valid line intervals; they cover 114 distinct spans in 14 files. The uncited lockfile and TypeScript configuration are present in the package. Eleven cited intervals exceed 30 lines, with a maximum of 43; these locate relevant functions but are not pinpoint proofs of every sentence. Valid coordinates do not establish semantic sufficiency. Exact hashes and the evidence inventory are in [the JSON audit](task-provisional-audit.json).
+
+Several boundaries relevant to field necessity are already explicit. Custom report filters and ordering remain required even though the actual request omits them (`reports.ts:77–100`, reference `31–43`); those missing behaviors must not disappear merely because current input reads have no effect. Dimensions-only, metrics-only and full-property metadata are distinct (`metadata.ts:35–95`), so only the explicitly full response duty supports a whole-value output requirement. Date-period, row and URL pairing, sequential batch behavior, save opt-outs, empty bulk lookup and combined saves are also stated. These are useful requirements for later demand selection, not evidence that such demands have already been generated.
+
+The three unresolved issues are localized: conflicting search-page ranking, per-query versus separate device views, and per-page versus separate country views. Their cited text identifies real alternative interpretations. They do not supply a reason to block unrelated requirements or all input contracts.
+
+Four points need the normal source review and later task-correspondence check:
+
+- `saved_result_wrapper` makes property ID and other wrapper metadata explicit output obligations. The declared source wrapper supports this, including shared storage used by Search Console/indexing, but this makes those fields necessary at save sinks. Review must distinguish that storage obligation from necessity for the analytic output itself; current use alone is insufficient.
+- `saved_result_filename` requires a returned path for the direct utility. Callers such as `runReport` discard that return (`reports.ts:104–114`), so correspondence must not invent a caller return-value demand. The file write and its path remain required effects.
+- The filename requirement does not spell out the lowercase/replacement normalization in `storage.ts:42–46,70–77`. This is a localized underspecification worth checking, not an established invalid requirement; executable contracts must retain the source transformation.
+- A Markdown summary with tables, trends and recommendations does not by itself require every field of every saved response. Its specific output-to-input relation still needs semantic checking.
+
+This limited pass found no out-of-range citation or clearly unsupported additional requirement. It does not certify Task completeness, assess final selection, establish field-level necessity, or produce a deletion/DOE result. No validator, compiler, backend, replay, Skill or model was executed; only new audit files were written.

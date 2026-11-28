@@ -1,0 +1,225 @@
+{
+  "status": "completed",
+  "declared_purpose": "Manage OpenClaw session context through usage monitoring, continuation summaries, and optional backup/reset/reinjection preserving the session key. Legacy transcript extraction and grep summaries are also supported (SKILL.md:9–9,34–40,48–56).",
+  "data_operations": [
+    {
+      "operation": "Read and persist configuration and activity metadata",
+      "source": "Packaged config.json, runtime settings and local clock",
+      "data_scope": "Threshold, depth, quiet hours, last-compression timestamp and compression count. Every save increments the count, including configuration setters; it is not a reliable count of completed compressions.",
+      "recipient_or_storage": "$SCRIPT_DIR/config.json; $SCRIPT_DIR/memory/compressed is created on every invocation",
+      "condition": "Configuration is loaded by session commands and before saving. Legacy compression and configuration setters save it. Reloading existing configuration before saving can discard requested setting changes.",
+      "evidence": [
+        {"path": "config.json", "start_line": 1, "end_line": 7},
+        {"path": "compress.sh", "start_line": 12, "end_line": 14},
+        {"path": "compress.sh", "start_line": 73, "end_line": 103},
+        {"path": "compress.sh", "start_line": 498, "end_line": 499},
+        {"path": "compress.sh", "start_line": 593, "end_line": 639}
+      ]
+    },
+    {
+      "operation": "Retrieve session metadata and select a session locally",
+      "source": "openclaw sessions --json",
+      "data_scope": "Entire returned sessions JSON; selected session key, ID, kind, model and token counts. Agent ID is derived from the key, and the corresponding JSONL path is checked for existence.",
+      "recipient_or_storage": "Shell variables and jq; the CLI's underlying storage or network boundary is unspecified",
+      "condition": "List/check-all retrieve all sessions. Targeted commands also retrieve all sessions before filtering; an omitted target selects the most recently updated session.",
+      "evidence": [
+        {"path": "compress.sh", "start_line": 105, "end_line": 177},
+        {"path": "compress.sh", "start_line": 512, "end_line": 513},
+        {"path": "compress.sh", "start_line": 858, "end_line": 859}
+      ]
+    },
+    {
+      "operation": "Derive usage indicators and return monitoring results",
+      "source": "Session metadata, configured threshold and local summary filenames",
+      "data_scope": "Session identifiers, kind/model where displayed, token counts, calculated usage percentages, threshold classifications and a count of legacy summary files.",
+      "recipient_or_storage": "Standard output to the caller; no further recipient is specified",
+      "condition": "List, status, check and check-all. Check-all reports status without compressing; check can invoke legacy compression above threshold outside quiet hours.",
+      "evidence": [
+        {"path": "compress.sh", "start_line": 520, "end_line": 545},
+        {"path": "compress.sh", "start_line": 550, "end_line": 591},
+        {"path": "compress.sh", "start_line": 665, "end_line": 695},
+        {"path": "compress.sh", "start_line": 853, "end_line": 890}
+      ]
+    },
+    {
+      "operation": "Read session message text and persist a legacy transcript",
+      "source": "$OPENCLAW_STATE_DIR/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl, defaulting under $HOME/.openclaw",
+      "data_scope": "All text content after the first JSONL line, with message roles and flattened newlines; session key, agent, timestamp, token statistics, threshold and depth. Depth is recorded without narrowing this extraction.",
+      "recipient_or_storage": "$SCRIPT_DIR/memory/compressed/{timestamp}.transcript.md",
+      "condition": "Compress outside quiet hours, or check above threshold outside quiet hours. compress_session independently selects the latest session again, potentially replacing the requested target. This legacy path does not delete the source JSONL.",
+      "evidence": [
+        {"path": "compress.sh", "start_line": 166, "end_line": 168},
+        {"path": "compress.sh", "start_line": 428, "end_line": 479},
+        {"path": "compress.sh", "start_line": 643, "end_line": 695}
+      ]
+    },
+    {
+      "operation": "Extract heuristic summaries and continuation excerpts",
+      "source": "Persisted legacy transcript",
+      "data_scope": "Verbatim matching lines labelled as decisions, file modifications, code and pending tasks, limited respectively to 20, 15, 100 and 10 lines. Decision/pending excerpts are copied again into continuation instructions.",
+      "recipient_or_storage": "Timestamped .summary.md and .continuation.txt files in memory/compressed; output paths are returned to the caller",
+      "condition": "Legacy compression after transcript extraction. These are pattern-based selections, not verified semantic conclusions.",
+      "evidence": [
+        {"path": "compress.sh", "start_line": 247, "end_line": 334},
+        {"path": "compress.sh", "start_line": 344, "end_line": 372},
+        {"path": "compress.sh", "start_line": 375, "end_line": 421},
+        {"path": "compress.sh", "start_line": 488, "end_line": 502}
+      ]
+    },
+    {
+      "operation": "Read working-directory and Git context",
+      "source": "Invoking process's current directory and its Git repository",
+      "data_scope": "Working-directory path, up to 10 Git status lines, and 10 recent commit hashes/subjects.",
+      "recipient_or_storage": "Legacy .summary.md file in memory/compressed",
+      "condition": "Every legacy summary generation, without checking whether the repository belongs to the selected session.",
+      "evidence": [
+        {"path": "compress.sh", "start_line": 354, "end_line": 367}
+      ]
+    },
+    {
+      "operation": "Request an AI-generated continuation summary",
+      "source": "Selected session's existing agent context, as described by the entry document",
+      "data_scope": "The script passes a session ID and fixed prompt requesting accomplishments, decisions/rationale, current state, pending tasks and important context. The resulting summary contains model-selected or inferred conclusions.",
+      "recipient_or_storage": "OpenClaw agent selected through --session-id; any downstream model/provider recipient is unknown",
+      "condition": "Summarize, with or without --replace. The prompt requests no tool use. The script does not itself attach the local JSONL contents to this command.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 36, "end_line": 42},
+        {"path": "SKILL.md", "start_line": 174, "end_line": 181},
+        {"path": "compress.sh", "start_line": 699, "end_line": 744}
+      ]
+    },
+    {
+      "operation": "Persist and return AI summary output",
+      "source": "openclaw agent JSON response",
+      "data_scope": "Extracted summary text plus session key, session ID, generation timestamp and model. If extraction yields no summary, the complete raw response is printed.",
+      "recipient_or_storage": "memory/compressed/{timestamp}.ai-summary.md and standard output to the caller",
+      "condition": "Every successfully extracted AI summary, including summarize without --replace. The documented read-only mode therefore still writes a local summary artifact.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 97, "end_line": 105},
+        {"path": "compress.sh", "start_line": 753, "end_line": 786}
+      ]
+    },
+    {
+      "operation": "Back up and delete the selected original session; code a recovery copy",
+      "source": "Selected session's complete JSONL file",
+      "data_scope": "The whole file, including any records not included in text-only legacy extraction. Deletion removes the original path while retaining the backup.",
+      "recipient_or_storage": "memory/compressed/{timestamp}.session-backup.jsonl; original file under the selected agent's sessions directory",
+      "condition": "--replace after summary generation, if the JSONL exists. Backup-before-deletion is explicitly required. The injection-error branch attempts restoration if reached; successful rollback is not guaranteed.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 36, "end_line": 40},
+        {"path": "SKILL.md", "start_line": 200, "end_line": 206},
+        {"path": "compress.sh", "start_line": 789, "end_line": 809},
+        {"path": "compress.sh", "start_line": 841, "end_line": 846}
+      ]
+    },
+    {
+      "operation": "Submit compressed context to a fixed recipient selector",
+      "source": "AI summary_text and local clock",
+      "data_scope": "Summary text, compression timestamp and continuation/acknowledgement instructions. The successful response remains in inject_response.",
+      "recipient_or_storage": "openclaw agent --to main; actual session/channel and any external recipient are unresolved",
+      "condition": "--replace after the reset stage. The selector is independent of the selected SESSION_KEY and AGENT_ID. The script subsequently looks up the original key but does not establish that injection used it.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 165, "end_line": 168},
+        {"path": "compress.sh", "start_line": 814, "end_line": 845}
+      ]
+    },
+    {
+      "operation": "Temporarily store and delete extracted text",
+      "source": "Legacy transcript pattern matches",
+      "data_scope": "Decision, file, code and task excerpts",
+      "recipient_or_storage": "mktemp files in the runtime's temporary directory",
+      "condition": "Legacy extraction functions create temporary files, remove them after use and register them for exit cleanup. The code provides ordinary file deletion, without an erasure guarantee.",
+      "evidence": [
+        {"path": "compress.sh", "start_line": 38, "end_line": 49},
+        {"path": "compress.sh", "start_line": 247, "end_line": 334}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "A different, most recently updated session's message text and identifiers; an additional complete session-metadata response",
+      "recipient_or_storage": "Shell variables and memory/compressed legacy transcript, summary and continuation files",
+      "condition": "Compress KEY, or threshold-triggered check KEY, when the latest session at the second lookup differs from the selected target.",
+      "purpose_basis": "Targeted commands should export the requested session. The second lookup is redundant; extracting another session adds unrelated data to the required export.",
+      "necessary_behavior": "Resolve the requested session, evaluate its usage where applicable, and produce its declared legacy outputs.",
+      "proposed_reduction": "Reuse the validated session metadata or pass the target into compress_session; verify the same key before reading and writing.",
+      "preservation_conditions": "Keep latest-session selection when no target is supplied. Apply the threshold and extraction to the same resolved session.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 54, "end_line": 55},
+        {"path": "compress.sh", "start_line": 130, "end_line": 144},
+        {"path": "compress.sh", "start_line": 438, "end_line": 477},
+        {"path": "compress.sh", "start_line": 654, "end_line": 660},
+        {"path": "compress.sh", "start_line": 669, "end_line": 691}
+      ]
+    },
+    {
+      "data_scope": "Selected session's AI summary, including decisions and important context",
+      "recipient_or_storage": "The routing destination resolved by openclaw agent --to main",
+      "condition": "--replace when that selector resolves to a destination different from the selected session. Whether this occurs cannot be established from the supplied source.",
+      "purpose_basis": "The entry promises continuation with the same session key, while its technical recipe and implementation explicitly use --to main.",
+      "necessary_behavior": "Inject the compressed summary into the intended replacement session.",
+      "proposed_reduction": "Use a verified target-preserving route; reject unsupported targets before deleting their JSONL rather than sending their summaries to a different destination.",
+      "preservation_conditions": "Preserve same-key continuation and backup recovery. OpenClaw routing semantics must be established before choosing the replacement selector.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 36, "end_line": 40},
+        {"path": "SKILL.md", "start_line": 165, "end_line": 168},
+        {"path": "compress.sh", "start_line": 720, "end_line": 744},
+        {"path": "compress.sh", "start_line": 793, "end_line": 806},
+        {"path": "compress.sh", "start_line": 814, "end_line": 834}
+      ]
+    },
+    {
+      "data_scope": "Working-directory path and repository changes/history unrelated to the selected conversation",
+      "recipient_or_storage": "Persistent legacy .summary.md files",
+      "condition": "Legacy compression invoked from a directory or repository whose contents are not needed for the session handoff.",
+      "purpose_basis": "Session continuation requires relevant context. Automatic enrichment from the invoking directory is an implementation choice without a relevance check.",
+      "necessary_behavior": "Preserve conversation-derived decisions, state and pending work.",
+      "proposed_reduction": "Omit automatic Git enrichment or include only explicitly relevant repository details; narrow paths, changed files and commit subjects to what continuation needs.",
+      "preservation_conditions": "Retain repository context when it is actually necessary for the selected session's work.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 174, "end_line": 181},
+        {"path": "compress.sh", "start_line": 354, "end_line": 367}
+      ]
+    },
+    {
+      "data_scope": "Duplicate full-session backups, text transcripts, summaries and continuation excerpts retained beyond their recovery/reference need",
+      "recipient_or_storage": "$SCRIPT_DIR/memory/compressed",
+      "condition": "Artifacts remain after successful handoff or completed reference use. The package supplies no expiry/pruning path; external cleanup is unknown.",
+      "purpose_basis": "Backup creation and reference exports are declared features. Their creation is necessary for those features; unrestricted subsequent retention is a separate minimization question.",
+      "necessary_behavior": "Keep the required recovery backup and requested reference outputs for their useful period.",
+      "proposed_reduction": "Provide retention limits and explicit pruning, allowing shorter-lived transcript/continuation copies after successful use.",
+      "preservation_conditions": "Preserve the promised recovery/reference window and explicitly requested archives; never remove the only recovery copy before successful replacement is confirmed.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 142, "end_line": 151},
+        {"path": "SKILL.md", "start_line": 200, "end_line": 206},
+        {"path": "compress.sh", "start_line": 42, "end_line": 49},
+        {"path": "compress.sh", "start_line": 431, "end_line": 433},
+        {"path": "compress.sh", "start_line": 375, "end_line": 408},
+        {"path": "compress.sh", "start_line": 764, "end_line": 806},
+        {"path": "compress.sh", "start_line": 892, "end_line": 958}
+      ]
+    },
+    {
+      "data_scope": "Preexisting last_compression timestamp, including timezone offset, and nonzero total_compressions",
+      "recipient_or_storage": "Recipients of the public package's config.json",
+      "condition": "Distribution of the supplied configuration. Whether these are real activity records or example values is unknown.",
+      "purpose_basis": "Runtime preferences and locally generated activity counters support management; distributing prior activity metadata is not required by the declared workflow.",
+      "necessary_behavior": "Ship usable threshold, depth and quiet-hours defaults and initialize per-installation state.",
+      "proposed_reduction": "Omit or null the shipped activity timestamp and initialize the distributed counter to zero.",
+      "preservation_conditions": "Change the distribution template without erasing existing installations' intentionally retained history.",
+      "evidence": [
+        {"path": "config.json", "start_line": 2, "end_line": 6},
+        {"path": "SKILL.md", "start_line": 58, "end_line": 65},
+        {"path": "compress.sh", "start_line": 77, "end_line": 103}
+      ]
+    }
+  ],
+  "unknowns": [
+    "OpenClaw source and configuration are absent. Actual agent context, model/provider transfers, gateway placement, external logging and retention cannot be determined; no specific remote recipient is established.",
+    "The semantics of --to main are absent. This blocks confirming destination mismatch, same-key recreation and the conditional disclosure finding.",
+    "The entry calls summarize read-only, but OpenClaw may record the request/response or otherwise mutate session state. The package establishes local summary persistence but cannot resolve external session mutations.",
+    "Rollback is not assured: set -e at compress.sh:10–10 can terminate on the failed injection assignment at compress.sh:829–829 before reaching the restoration branch at compress.sh:841–846.",
+    "Filesystem permissions, encryption, other-reader access, external cleanup and deletion recoverability are unspecified. The source does not establish actual artifact lifetimes.",
+    "Actual session contents and whether packaged activity metadata represents real usage are unknown. No particular credential, sensitive conversation item or real person's activity can be established."
+  ]
+}

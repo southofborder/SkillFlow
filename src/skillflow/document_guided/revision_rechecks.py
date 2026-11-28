@@ -26,6 +26,7 @@ def retained_source_rechecks(review, before, after):
         return []
     old_cfg, cfg = before["graph"]["value"], after["graph"]["value"]
     previous, selected = (p["processing"]["value"] for p in (before, after))
+    old_annotation, annotation = (p["annotation"]["value"]["wire_annotation"] for p in (before, after))
     old_rows, rows = previous["ir_semantics"], selected["ir_semantics"]
     changed = _changed_instructions(old_cfg, cfg)
     changed.update(ir for ir in old_rows.keys() | rows.keys() if old_rows.get(ir) != rows.get(ir))
@@ -39,13 +40,21 @@ def retained_source_rechecks(review, before, after):
                 or finding.get("sensitivity_entry_gap_id")):
             continue
         targets = finding["target_ids"]
+        # An assembled review indexes the wire annotation, including demand
+        # and sensitivity overlays. Processing fragments only identify owners.
+        if any(not target.startswith("annotation:") for target in targets):
+            continue
         owners = {_record_owner(target) for target in targets}
         if None in owners or not owners or not owners <= rows.keys() or changed.intersection(owners):
             continue
         try:
-            bound = {target: canonical_sha256(resolve_pointer(selected, _pointer(target)))
+            bound = {target: canonical_sha256(resolve_pointer(annotation, _pointer(target)))
                      for target in targets}
+            old_bound = {target: canonical_sha256(resolve_pointer(old_annotation, _pointer(target)))
+                         for target in targets}
         except ValueError:
+            continue
+        if old_bound != bound:
             continue
         row = {"targets": bound, "source_refs": deepcopy(finding["source_refs"])}
         if finding.get("affected_ranges"):

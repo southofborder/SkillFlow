@@ -1,0 +1,989 @@
+{
+  "request_sha256": "d59d548e5f0abb1d1ed0c690d36836e736ad910d0575a3b7b153cecf57f96720",
+  "answer_sha256": "23bdd355e99da8300302b6e3052b23c6b210e9b71732877cc52faccc9882016c",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from all three supplied files without execution or external reads. Destinations depend on runtime configuration and server-returned URLs. Server-side storage, expiry enforcement, and deletion outcomes are not supplied.",
+    "claim": "Provide terminal workflows to send and fetch files through an Xdrop server using encrypted share links, including uploading local files or directories and downloading, decrypting, and saving files locally.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "description: Use this skill when the user wants to send or fetch files through an Xdrop server from the terminal, asks to automate encrypted Xdrop share-link workflows, provides an Xdrop `/t/:transferId#k=...` link to download and decrypt locally, or needs Xdrop CLI flags such as `--quiet`, `--json`, `--expires-in`, `--output`, or `--api-url`, even if they do not explicitly mention the skill name."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 12,
+        "end_line": 13,
+        "quote": "- `scripts/upload.mjs` — Upload local files or directories to an Xdrop server and print the share link\n- `scripts/download.mjs` — Download an Xdrop share link, decrypt it locally, and save the files"
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "u01",
+        "operation": "Read",
+        "data": "Upload command-line arguments, including selected input paths, server/API overrides, expiry, name, concurrency, and output flags; XDROP_SERVER and XDROP_API_URL environment values.",
+        "source": "process.argv and process.env",
+        "recipient": "Upload options in local process memory",
+        "condition": "When upload main parses arguments; command-line values can replace environment-derived endpoint defaults.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 34,
+            "end_line": 36,
+            "quote": "export async function main(argv = process.argv.slice(2)) {\n  const options = parseArgs(argv)\n  quietMode = options.quiet"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 189,
+            "end_line": 255,
+            "quote": "export function parseArgs(argv) {\n  const options = {\n    server: process.env.XDROP_SERVER?.trim() || '',\n    apiUrl: process.env.XDROP_API_URL?.trim() || '',\n    expiresInSeconds: DEFAULT_EXPIRY_SECONDS,\n    name: '',\n    concurrency: 1,\n    quiet: false,\n    json: false,\n    help: false,\n    inputs: [],\n  }\n\n  for (let index = 0; index < argv.length; index += 1) {\n    const value = argv[index]\n    if (!value) {\n      continue\n    }\n\n    if (value === '--help' || value === '-h') {\n      options.help = true\n      continue\n    }\n    if (value === '--json') {\n      options.json = true\n      continue\n    }\n    if (value === '--quiet') {\n      options.quiet = true\n      continue\n    }\n    if (value === '--server') {\n      options.server = requireValue(argv, ++index, '--server')\n      continue\n    }\n    if (value === '--api-url') {\n      options.apiUrl = requireValue(argv, ++index, '--api-url')\n      continue\n    }\n    if (value === '--expires-in') {\n      const parsed = Number.parseInt(requireValue(argv, ++index, '--expires-in'), 10)\n      if (!Number.isInteger(parsed) || parsed <= 0) {\n        throw new Error('--expires-in must be a positive integer number of seconds.')\n      }\n      options.expiresInSeconds = parsed\n      continue\n    }\n    if (value === '--name') {\n      options.name = requireValue(argv, ++index, '--name')\n      continue\n    }\n    if (value === '--concurrency') {\n      const parsed = Number.parseInt(requireValue(argv, ++index, '--concurrency'), 10)\n      if (!Number.isInteger(parsed) || parsed <= 0) {\n        throw new Error('--concurrency must be a positive integer.')\n      }\n      options.concurrency = Math.min(parsed, MAX_UPLOAD_CONCURRENCY)\n      continue\n    }\n    if (value.startsWith('--')) {\n      throw new Error(`Unknown option: ${value}`)\n    }\n    options.inputs.push(value)\n  }\n\n  return options\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u02",
+        "operation": "Read",
+        "data": "Selected filesystem entries and recursively enumerated directory contents: absolute and relative paths, filenames, file sizes, modification times, and entry types.",
+        "source": "Input files/directories resolved against process.cwd(), including files found recursively under selected directories",
+        "recipient": "Collected transfer file records in local process memory",
+        "condition": "Directories are traversed recursively; nested entries that are neither files nor directories are skipped. Unsupported top-level entries cause an error.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 51,
+            "end_line": 53,
+            "quote": "  const serverUrl = normalizeSiteUrl(options.server)\n  const apiUrl = resolveApiUrl(serverUrl, options.apiUrl)\n  const files = await collectTransferInputs(options.inputs)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 289,
+            "end_line": 315,
+            "quote": "export async function collectTransferInputs(inputPaths) {\n  const files = []\n  const seenPaths = new Set()\n\n  for (const inputPath of inputPaths) {\n    const absolutePath = resolve(process.cwd(), inputPath)\n    const inputStat = await stat(absolutePath)\n    if (inputStat.isDirectory()) {\n      const rootName = basename(absolutePath)\n      const nestedFiles = await collectDirectoryFiles(absolutePath, rootName)\n      files.push(...nestedFiles)\n      continue\n    }\n\n    if (!inputStat.isFile()) {\n      throw new Error(`Only files and directories are supported: ${inputPath}`)\n    }\n\n    files.push({\n      absolutePath,\n      relativePath: basename(absolutePath),\n      size: inputStat.size,\n      modifiedAt: Math.round(inputStat.mtimeMs),\n      name: basename(absolutePath),\n      mimeType: mimeTypeFromName(absolutePath),\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 327,
+            "end_line": 356,
+            "quote": "async function collectDirectoryFiles(directoryPath, relativePrefix) {\n  const entries = (await readdir(directoryPath, { withFileTypes: true })).sort((left, right) =>\n    left.name.localeCompare(right.name),\n  )\n  const files = []\n\n  for (const entry of entries) {\n    const absolutePath = resolve(directoryPath, entry.name)\n    const relativePath = `${relativePrefix}/${entry.name}`.replace(/\\\\/gu, '/')\n    if (entry.isDirectory()) {\n      files.push(...(await collectDirectoryFiles(absolutePath, relativePath)))\n      continue\n    }\n    if (!entry.isFile()) {\n      continue\n    }\n\n    const entryStat = await stat(absolutePath)\n    files.push({\n      absolutePath,\n      relativePath,\n      size: entryStat.size,\n      modifiedAt: Math.round(entryStat.mtimeMs),\n      name: entry.name,\n      mimeType: mimeTypeFromName(entry.name),\n    })\n  }\n\n  return files\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u03",
+        "operation": "Infer",
+        "data": "Extension-derived MIME types, random file identifiers and nonce prefixes, plaintext sizes, chunk counts, and expected ciphertext sizes including 16 bytes of overhead per chunk.",
+        "source": "Collected file names/sizes, server-provided chunk size, and crypto.getRandomValues",
+        "recipient": "Prepared file records in local process memory",
+        "condition": "Each file receives at least one chunk, including an empty file; unknown filename extensions use application/octet-stream.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 374,
+            "end_line": 397,
+            "quote": "export function prepareFiles(files, chunkSize) {\n  return files.map((file) => {\n    const fileId = toBase64Url(randomBytes(18))\n    const noncePrefix = randomBytes(8)\n    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize))\n    const ciphertextSizes = Array.from({ length: totalChunks }, (_, chunkIndex) => {\n      const plaintextChunkSize = Math.min(\n        chunkSize,\n        Math.max(file.size - chunkIndex * chunkSize, 0),\n      )\n      return plaintextChunkSize + 16\n    })\n\n    return {\n      ...file,\n      fileId,\n      noncePrefix,\n      chunkSize,\n      totalChunks,\n      plaintextSize: file.size,\n      ciphertextSizes,\n    }\n  })\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 577,
+            "end_line": 581,
+            "quote": "function randomBytes(length) {\n  const value = new Uint8Array(length)\n  crypto.getRandomValues(value)\n  return value\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 608,
+            "end_line": 611,
+            "quote": "function mimeTypeFromName(filePath) {\n  const extension = extname(filePath).toLowerCase()\n  return MIME_TYPES[extension] ?? 'application/octet-stream'\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 710,
+            "end_line": 731,
+            "quote": "const MIME_TYPES = {\n  '.7z': 'application/x-7z-compressed',\n  '.bin': 'application/octet-stream',\n  '.csv': 'text/csv',\n  '.gif': 'image/gif',\n  '.gz': 'application/gzip',\n  '.jpg': 'image/jpeg',\n  '.jpeg': 'image/jpeg',\n  '.json': 'application/json',\n  '.md': 'text/markdown',\n  '.mp3': 'audio/mpeg',\n  '.mp4': 'video/mp4',\n  '.pdf': 'application/pdf',\n  '.png': 'image/png',\n  '.svg': 'image/svg+xml',\n  '.tar': 'application/x-tar',\n  '.txt': 'text/plain',\n  '.wav': 'audio/wav',\n  '.webm': 'video/webm',\n  '.webp': 'image/webp',\n  '.zip': 'application/zip',\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u04",
+        "operation": "Send",
+        "data": "Transfer creation request containing expiresInSeconds as JSON.",
+        "source": "Upload expiry option",
+        "recipient": "POST {resolved API root}/transfers; root comes from the API override or the configured server's /api/v1",
+        "condition": "After collecting a nonempty file selection. Requested expiry defaults to 3600 seconds or uses --expires-in; server enforcement is unspecified.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 7,
+            "end_line": 7,
+            "quote": "const DEFAULT_EXPIRY_SECONDS = 60 * 60"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 51,
+            "end_line": 62,
+            "quote": "  const serverUrl = normalizeSiteUrl(options.server)\n  const apiUrl = resolveApiUrl(serverUrl, options.apiUrl)\n  const files = await collectTransferInputs(options.inputs)\n  if (files.length === 0) {\n    throw new Error('No files were found in the selected paths.')\n  }\n\n  const displayName = options.name ?? defaultDisplayName(files)\n  const api = new XdropApiClient(apiUrl)\n\n  logStatus(`Creating transfer on ${serverUrl.toString()}`)\n  const created = await api.createTransfer(options.expiresInSeconds)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 189,
+            "end_line": 194,
+            "quote": "export function parseArgs(argv) {\n  const options = {\n    server: process.env.XDROP_SERVER?.trim() || '',\n    apiUrl: process.env.XDROP_API_URL?.trim() || '',\n    expiresInSeconds: DEFAULT_EXPIRY_SECONDS,\n    name: '',"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 228,
+            "end_line": 235,
+            "quote": "    if (value === '--expires-in') {\n      const parsed = Number.parseInt(requireValue(argv, ++index, '--expires-in'), 10)\n      if (!Number.isInteger(parsed) || parsed <= 0) {\n        throw new Error('--expires-in must be a positive integer number of seconds.')\n      }\n      options.expiresInSeconds = parsed\n      continue\n    }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 285,
+            "end_line": 287,
+            "quote": "export function resolveApiUrl(serverUrl, apiUrl) {\n  return normalizeApiUrl(apiUrl || new URL('/api/v1', serverUrl).toString())\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 625,
+            "end_line": 630,
+            "quote": "  async createTransfer(expiresInSeconds) {\n    return this.request('/transfers', {\n      method: 'POST',\n      body: { expiresInSeconds },\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 694,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "u05",
+        "operation": "Read",
+        "data": "Transfer creation response: transfer identifier, management token, expiry timestamp, chunk size, maximum file count, and maximum transfer bytes.",
+        "source": "Configured API's POST /transfers response",
+        "recipient": "created and upload configuration in local process memory",
+        "condition": "A successful JSON response; maximum transfer bytes falls back to the script constant when the returned value is falsy.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 62,
+            "end_line": 65,
+            "quote": "  const created = await api.createTransfer(options.expiresInSeconds)\n  const chunkSize = created.uploadConfig.chunkSize\n  const maxFileCount = created.uploadConfig.maxFileCount\n  const maxTransferBytes = created.uploadConfig.maxTransferBytes || MAX_TRANSFER_BYTES"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 92,
+            "end_line": 95,
+            "quote": "    await api.registerFiles(\n      created.transferId,\n      created.manageToken,\n      preparedFiles.map((file) => ({"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 170,
+            "end_line": 172,
+            "quote": "            transferId: created.transferId,\n            shareUrl: shareUrl.toString(),\n            expiresAt: created.expiresAt,"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 625,
+            "end_line": 630,
+            "quote": "  async createTransfer(expiresInSeconds) {\n    return this.request('/transfers', {\n      method: 'POST',\n      body: { expiresInSeconds },\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 706,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })\n\n    if (!response.ok) {\n      const payload = await response.json().catch(() => ({}))\n      const detail = payload.message ?? payload.error ?? `Request failed with ${response.status}`\n      throw new Error(detail)\n    }\n\n    if (response.status === 204) {\n      return undefined\n    }\n\n    return response.json()"
+          }
+        ]
+      },
+      {
+        "move_id": "u06",
+        "operation": "Send",
+        "data": "Per-file identifiers, total chunk counts, ciphertext byte totals, plaintext byte sizes, and chunk sizes as JSON; management token as a Bearer authorization header.",
+        "source": "Prepared local file records and server-returned management token",
+        "recipient": "POST {resolved API root}/transfers/{transferId}/files",
+        "condition": "After file-count and encrypted-size validation.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 92,
+            "end_line": 102,
+            "quote": "    await api.registerFiles(\n      created.transferId,\n      created.manageToken,\n      preparedFiles.map((file) => ({\n        fileId: file.fileId,\n        totalChunks: file.totalChunks,\n        ciphertextBytes: file.ciphertextSizes.reduce((sum, size) => sum + size, 0),\n        plaintextBytes: file.plaintextSize,\n        chunkSize: file.chunkSize,\n      })),\n    )"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 632,
+            "end_line": 638,
+            "quote": "  async registerFiles(transferId, manageToken, files) {\n    await this.request(`/transfers/${transferId}/files`, {\n      method: 'POST',\n      token: manageToken,\n      body: files,\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 694,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "u07",
+        "operation": "Send",
+        "data": "File identifier and chunk-index pairs requesting upload URLs, transfer identifier in the path, and management token in a Bearer header.",
+        "source": "Prepared file chunk layout and created transfer credentials",
+        "recipient": "POST {resolved API root}/transfers/{transferId}/upload-urls",
+        "condition": "Once per prepared file before uploading its chunks.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 107,
+            "end_line": 114,
+            "quote": "      const uploadUrls = await api.createUploadUrls(\n        created.transferId,\n        created.manageToken,\n        Array.from({ length: file.totalChunks }, (_, chunkIndex) => ({\n          fileId: file.fileId,\n          chunkIndex,\n        })),\n      )"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 640,
+            "end_line": 647,
+            "quote": "  async createUploadUrls(transferId, manageToken, chunks) {\n    const response = await this.request(`/transfers/${transferId}/upload-urls`, {\n      method: 'POST',\n      token: manageToken,\n      body: { chunks },\n    })\n    return response.items\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 694,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "u08",
+        "operation": "Read",
+        "data": "Server-returned per-chunk upload URLs and chunk-index associations.",
+        "source": "Configured API's /transfers/{transferId}/upload-urls JSON response",
+        "recipient": "uploadUrls and uploadUrlMap in local process memory",
+        "condition": "After a successful upload-URL request; the eventual upload host is determined by the returned URL.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 107,
+            "end_line": 115,
+            "quote": "      const uploadUrls = await api.createUploadUrls(\n        created.transferId,\n        created.manageToken,\n        Array.from({ length: file.totalChunks }, (_, chunkIndex) => ({\n          fileId: file.fileId,\n          chunkIndex,\n        })),\n      )\n      const uploadUrlMap = new Map(uploadUrls.map((item) => [item.chunkIndex, item.url]))"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 640,
+            "end_line": 647,
+            "quote": "  async createUploadUrls(transferId, manageToken, chunks) {\n    const response = await this.request(`/transfers/${transferId}/upload-urls`, {\n      method: 'POST',\n      token: manageToken,\n      body: { chunks },\n    })\n    return response.items\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 687,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 706,
+            "end_line": 707,
+            "quote": "    return response.json()\n  }"
+          }
+        ]
+      },
+      {
+        "move_id": "u09",
+        "operation": "Read",
+        "data": "Plaintext bytes of selected files, read in chunks at offsets based on chunkIndex and chunkSize.",
+        "source": "Each collected file.absolutePath on the local filesystem",
+        "recipient": "Plaintext chunk buffers in local process memory",
+        "condition": "During chunk upload processing; each read opens the file in read mode and closes its handle in finally.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 410,
+            "end_line": 414,
+            "quote": "      const plaintext = await readFileChunk(\n        file.absolutePath,\n        chunkIndex * file.chunkSize,\n        file.chunkSize,\n      )"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 448,
+            "end_line": 457,
+            "quote": "async function readFileChunk(filePath, start, chunkSize) {\n  const fileHandle = await open(filePath, 'r')\n  try {\n    const buffer = Buffer.alloc(Math.max(0, chunkSize))\n    const { bytesRead } = await fileHandle.read(buffer, 0, chunkSize, start)\n    return new Uint8Array(buffer.subarray(0, bytesRead))\n  } finally {\n    await fileHandle.close()\n  }\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u10",
+        "operation": "Infer",
+        "data": "Random 32-byte root and link keys; encrypted file chunks and SHA-256 ciphertext checksums. File-scoped AES-256-GCM keys are HKDF-derived; chunk IVs and authenticated data incorporate nonce prefixes, identifiers, chunk indices, plaintext chunk sizes, and manifest version.",
+        "source": "Local plaintext chunks, prepared file metadata, transfer identifier, and crypto.getRandomValues",
+        "recipient": "Local keys, ciphertext buffers, and checksum values",
+        "condition": "Keys are generated for an upload; each chunk is encrypted before its PUT request.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 73,
+            "end_line": 75,
+            "quote": "  const rootKey = randomBytes(32)\n  const linkKey = randomBytes(32)\n  const preparedFiles = prepareFiles(files, chunkSize)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 415,
+            "end_line": 423,
+            "quote": "      const encrypted = await encryptChunk({\n        rootKey,\n        transferId,\n        fileId: file.fileId,\n        chunkIndex,\n        noncePrefix: file.noncePrefix,\n        plaintextChunkSize: plaintext.byteLength,\n        plaintext,\n      })"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 477,
+            "end_line": 505,
+            "quote": "async function encryptChunk(options) {\n  const fileKey = await deriveHkdfKey(options.rootKey, `file:${options.fileId}`)\n  const iv = buildChunkIv(options.noncePrefix, options.chunkIndex)\n  const additionalData = encoder.encode(\n    [\n      options.transferId,\n      options.fileId,\n      options.chunkIndex,\n      options.plaintextChunkSize,\n      MANIFEST_VERSION,\n    ].join('|'),\n  )\n  const ciphertext = new Uint8Array(\n    await crypto.subtle.encrypt(\n      {\n        name: 'AES-GCM',\n        iv,\n        additionalData,\n      },\n      fileKey,\n      options.plaintext,\n    ),\n  )\n\n  return {\n    ciphertext,\n    checksumHex: createHash('sha256').update(ciphertext).digest('hex'),\n  }\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 551,
+            "end_line": 581,
+            "quote": "async function deriveHkdfKey(source, info) {\n  const sourceKey = await crypto.subtle.importKey('raw', source, 'HKDF', false, ['deriveKey'])\n  return crypto.subtle.deriveKey(\n    {\n      name: 'HKDF',\n      hash: 'SHA-256',\n      salt: new Uint8Array(),\n      info: encoder.encode(info),\n    },\n    sourceKey,\n    {\n      name: 'AES-GCM',\n      length: 256,\n    },\n    false,\n    ['encrypt', 'decrypt'],\n  )\n}\n\nfunction buildChunkIv(noncePrefix, chunkIndex) {\n  const iv = new Uint8Array(12)\n  iv.set(noncePrefix.slice(0, 8), 0)\n  new DataView(iv.buffer).setUint32(8, chunkIndex, false)\n  return iv\n}\n\nfunction randomBytes(length) {\n  const value = new Uint8Array(length)\n  crypto.getRandomValues(value)\n  return value\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u11",
+        "operation": "Send",
+        "data": "Encrypted file-chunk bytes with application/octet-stream content type.",
+        "source": "Ciphertext derived locally from selected file bytes",
+        "recipient": "Each uploadUrl returned by the API; actual storage host is unspecified",
+        "condition": "For every file chunk; parallelism uses the configured concurrency. The skill also prescribes uploading a small temporary file when the user requests verification.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 116,
+            "end_line": 122,
+            "quote": "      const completedChunks = await uploadFileChunks({\n        transferId: created.transferId,\n        file,\n        uploadUrlMap,\n        rootKey,\n        concurrency: options.concurrency,\n      })"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 399,
+            "end_line": 429,
+            "quote": "async function uploadFileChunks({ transferId, file, uploadUrlMap, rootKey, concurrency }) {\n  const completedChunks = new Array(file.totalChunks)\n  await parallelLimit(\n    Array.from({ length: file.totalChunks }, (_, chunkIndex) => chunkIndex),\n    concurrency,\n    async (chunkIndex) => {\n      const uploadUrl = uploadUrlMap.get(chunkIndex)\n      if (!uploadUrl) {\n        throw new Error(`Missing upload URL for ${file.relativePath} chunk ${chunkIndex}.`)\n      }\n\n      const plaintext = await readFileChunk(\n        file.absolutePath,\n        chunkIndex * file.chunkSize,\n        file.chunkSize,\n      )\n      const encrypted = await encryptChunk({\n        rootKey,\n        transferId,\n        fileId: file.fileId,\n        chunkIndex,\n        noncePrefix: file.noncePrefix,\n        plaintextChunkSize: plaintext.byteLength,\n        plaintext,\n      })\n\n      const response = await fetch(uploadUrl, {\n        method: 'PUT',\n        headers: { 'Content-Type': 'application/octet-stream' },\n        body: encrypted.ciphertext,\n      })"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 44,
+            "end_line": 44,
+            "quote": "If the user wants verification, upload a small temporary file and then confirm the public transfer API or browser can open the returned link."
+          }
+        ]
+      },
+      {
+        "move_id": "u12",
+        "operation": "Send",
+        "data": "Completed-chunk records containing file identifiers, chunk indices, ciphertext sizes, and SHA-256 ciphertext checksums; management Bearer token.",
+        "source": "Results of successful encrypted chunk uploads and created transfer credentials",
+        "recipient": "POST {resolved API root}/transfers/{transferId}/chunks/complete",
+        "condition": "After all chunks for a file finish uploading successfully.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 127,
+            "end_line": 127,
+            "quote": "      await api.completeChunks(created.transferId, created.manageToken, completedChunks)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 436,
+            "end_line": 445,
+            "quote": "      completedChunks[chunkIndex] = {\n        fileId: file.fileId,\n        chunkIndex,\n        ciphertextSize: encrypted.ciphertext.byteLength,\n        checksumSha256: encrypted.checksumHex,\n      }\n    },\n  )\n\n  return completedChunks"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 649,
+            "end_line": 655,
+            "quote": "  async completeChunks(transferId, manageToken, chunks) {\n    await this.request(`/transfers/${transferId}/chunks/complete`, {\n      method: 'POST',\n      token: manageToken,\n      body: chunks,\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 694,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "u13",
+        "operation": "Infer",
+        "data": "A manifest containing display name, creation time, filenames, relative paths, MIME types, sizes, modification times, chunk layout, nonce prefixes, and metadataStripped:false; an AES-GCM encrypted manifest envelope and a link-key-wrapped root key. With the parser's normal defaults, displayName remains the empty name string because the fallback uses ??.",
+        "source": "Collected/prepared file metadata, name option, current time, root key, and link key",
+        "recipient": "Local manifest, manifestBytes, and wrappedRootKey values",
+        "condition": "After uploading and completing all files.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 58,
+            "end_line": 58,
+            "quote": "  const displayName = options.name ?? defaultDisplayName(files)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 73,
+            "end_line": 74,
+            "quote": "  const rootKey = randomBytes(32)\n  const linkKey = randomBytes(32)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 133,
+            "end_line": 154,
+            "quote": "    const manifest = {\n      version: 1,\n      displayName,\n      createdAt: new Date().toISOString(),\n      chunkSize,\n      files: preparedFiles.map((file) => ({\n        fileId: file.fileId,\n        name: file.name,\n        relativePath: file.relativePath,\n        mimeType: file.mimeType,\n        plaintextSize: file.plaintextSize,\n        modifiedAt: file.modifiedAt,\n        chunkSize: file.chunkSize,\n        totalChunks: file.totalChunks,\n        ciphertextSizes: file.ciphertextSizes,\n        noncePrefix: toBase64Url(file.noncePrefix),\n        metadataStripped: false,\n      })),\n    }\n\n    const manifestBytes = await encryptManifest(rootKey, manifest)\n    const wrappedRootKey = await wrapRootKey(rootKey, linkKey)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 189,
+            "end_line": 195,
+            "quote": "export function parseArgs(argv) {\n  const options = {\n    server: process.env.XDROP_SERVER?.trim() || '',\n    apiUrl: process.env.XDROP_API_URL?.trim() || '',\n    expiresInSeconds: DEFAULT_EXPIRY_SECONDS,\n    name: '',\n    concurrency: 1,"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 507,
+            "end_line": 549,
+            "quote": "async function encryptManifest(rootKey, manifest) {\n  const manifestKey = await deriveHkdfKey(rootKey, 'manifest')\n  const iv = randomBytes(12)\n  const ciphertext = new Uint8Array(\n    await crypto.subtle.encrypt(\n      {\n        name: 'AES-GCM',\n        iv,\n      },\n      manifestKey,\n      encoder.encode(JSON.stringify(manifest)),\n    ),\n  )\n\n  return encoder.encode(\n    JSON.stringify({\n      version: MANIFEST_VERSION,\n      iv: toBase64Url(iv),\n      ciphertext: toBase64(ciphertext),\n    }),\n  )\n}\n\nasync function wrapRootKey(rootKey, linkKey) {\n  const wrappingKey = await deriveHkdfKey(linkKey, 'wrap-root')\n  const iv = randomBytes(12)\n  const ciphertext = new Uint8Array(\n    await crypto.subtle.encrypt(\n      {\n        name: 'AES-GCM',\n        iv,\n      },\n      wrappingKey,\n      rootKey,\n    ),\n  )\n\n  return JSON.stringify({\n    version: WRAP_VERSION,\n    iv: toBase64Url(iv),\n    ciphertext: toBase64(ciphertext),\n  })\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 551,
+            "end_line": 568,
+            "quote": "async function deriveHkdfKey(source, info) {\n  const sourceKey = await crypto.subtle.importKey('raw', source, 'HKDF', false, ['deriveKey'])\n  return crypto.subtle.deriveKey(\n    {\n      name: 'HKDF',\n      hash: 'SHA-256',\n      salt: new Uint8Array(),\n      info: encoder.encode(info),\n    },\n    sourceKey,\n    {\n      name: 'AES-GCM',\n      length: 256,\n    },\n    false,\n    ['encrypt', 'decrypt'],\n  )\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u14",
+        "operation": "Send",
+        "data": "Base64-encoded encrypted manifest envelope in a ciphertextBase64 JSON field, with management Bearer token.",
+        "source": "Locally encrypted manifestBytes and created transfer credentials",
+        "recipient": "POST {resolved API root}/transfers/{transferId}/manifest",
+        "condition": "After constructing and encrypting the manifest.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 153,
+            "end_line": 155,
+            "quote": "    const manifestBytes = await encryptManifest(rootKey, manifest)\n    const wrappedRootKey = await wrapRootKey(rootKey, linkKey)\n    await api.uploadManifest(created.transferId, created.manageToken, toBase64(manifestBytes))"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 591,
+            "end_line": 593,
+            "quote": "function toBase64(input) {\n  return Buffer.from(input).toString('base64')\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 657,
+            "end_line": 663,
+            "quote": "  async uploadManifest(transferId, manageToken, ciphertextBase64) {\n    await this.request(`/transfers/${transferId}/manifest`, {\n      method: 'POST',\n      token: manageToken,\n      body: { ciphertextBase64 },\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 694,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "u15",
+        "operation": "Send",
+        "data": "Wrapped root key, total file count, and total ciphertext bytes as JSON; management Bearer token.",
+        "source": "Locally wrapped root key, prepared file records, ciphertext size totals, and created transfer credentials",
+        "recipient": "POST {resolved API root}/transfers/{transferId}/finalize",
+        "condition": "After uploading the encrypted manifest; successful completion sets finalized=true.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 153,
+            "end_line": 164,
+            "quote": "    const manifestBytes = await encryptManifest(rootKey, manifest)\n    const wrappedRootKey = await wrapRootKey(rootKey, linkKey)\n    await api.uploadManifest(created.transferId, created.manageToken, toBase64(manifestBytes))\n    await api.finalizeTransfer(\n      created.transferId,\n      created.manageToken,\n      wrappedRootKey,\n      preparedFiles.length,\n      totalCiphertextBytes,\n    )\n\n    finalized = true"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 665,
+            "end_line": 677,
+            "quote": "  async finalizeTransfer(\n    transferId,\n    manageToken,\n    wrappedRootKey,\n    totalFiles,\n    totalCiphertextBytes,\n  ) {\n    await this.request(`/transfers/${transferId}/finalize`, {\n      method: 'POST',\n      token: manageToken,\n      body: { wrappedRootKey, totalFiles, totalCiphertextBytes },\n    })\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 686,
+            "end_line": 694,
+            "quote": "  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "u16",
+        "operation": "Send",
+        "data": "Full share URL containing transferId and the base64url link key in #k=...; JSON mode additionally emits transferId and server-returned expiresAt.",
+        "source": "Configured public server URL, created transfer response, and locally generated link key",
+        "recipient": "process.stdout; downstream consumer is unspecified",
+        "condition": "After successful finalization; --json selects structured output. Quiet mode does not suppress this final result.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 74,
+            "end_line": 74,
+            "quote": "  const linkKey = randomBytes(32)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 87,
+            "end_line": 88,
+            "quote": "  const shareUrl = new URL(`/t/${created.transferId}`, serverUrl)\n  shareUrl.hash = `k=${toBase64Url(linkKey)}`"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 164,
+            "end_line": 181,
+            "quote": "    finalized = true\n\n    if (options.json) {\n      process.stdout.write(\n        `${JSON.stringify(\n          {\n            transferId: created.transferId,\n            shareUrl: shareUrl.toString(),\n            expiresAt: created.expiresAt,\n          },\n          null,\n          2,\n        )}\\n`,\n      )\n      return\n    }\n\n    process.stdout.write(`${shareUrl.toString()}\\n`)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 583,
+            "end_line": 589,
+            "quote": "function toBase64Url(input) {\n  return Buffer.from(input)\n    .toString('base64')\n    .replace(/\\+/gu, '-')\n    .replace(/\\//gu, '_')\n    .replace(/=+$/u, '')\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "u17",
+        "operation": "Delete",
+        "data": "Remote transfer identified by created.transferId, via an authenticated DELETE request; actual server-side deletion scope and outcome are unspecified.",
+        "source": "Previously created transfer at the configured API",
+        "recipient": "DELETE {resolved API root}/transfers/{transferId}, with management Bearer token",
+        "condition": "Attempted when execution leaves the upload try block while finalized is false; cleanup errors are ignored. Failures before entering that try block do not pass through this cleanup.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 90,
+            "end_line": 92,
+            "quote": "  let finalized = false\n  try {\n    await api.registerFiles("
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 182,
+            "end_line": 186,
+            "quote": "  } finally {\n    if (!finalized) {\n      await api.deleteTransfer(created.transferId, created.manageToken).catch(() => {})\n    }\n  }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 679,
+            "end_line": 694,
+            "quote": "  async deleteTransfer(transferId, manageToken) {\n    await this.request(`/transfers/${transferId}`, {\n      method: 'DELETE',\n      token: manageToken,\n    })\n  }\n\n  async request(path, options) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method,\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "d01",
+        "operation": "Read",
+        "data": "Download command-line arguments, including the full share URL and key fragment, output directory, API override, and output flags; XDROP_API_URL environment value.",
+        "source": "process.argv and process.env",
+        "recipient": "Download options in local process memory",
+        "condition": "When download main parses arguments; accepts one share URL and lets --api-url replace the environment-derived API default.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 28,
+            "end_line": 30,
+            "quote": "export async function main(argv = process.argv.slice(2)) {\n  const options = parseArgs(argv)\n  quietMode = options.quiet"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 99,
+            "end_line": 145,
+            "quote": "export function parseArgs(argv) {\n  const options = {\n    output: '',\n    apiUrl: process.env.XDROP_API_URL?.trim() || '',\n    quiet: false,\n    json: false,\n    help: false,\n    shareUrl: '',\n  }\n\n  for (let index = 0; index < argv.length; index += 1) {\n    const value = argv[index]\n    if (!value) {\n      continue\n    }\n\n    if (value === '--help' || value === '-h') {\n      options.help = true\n      continue\n    }\n    if (value === '--quiet') {\n      options.quiet = true\n      continue\n    }\n    if (value === '--json') {\n      options.json = true\n      continue\n    }\n    if (value === '--output') {\n      options.output = requireValue(argv, ++index, '--output')\n      continue\n    }\n    if (value === '--api-url') {\n      options.apiUrl = requireValue(argv, ++index, '--api-url')\n      continue\n    }\n    if (value.startsWith('--')) {\n      throw new Error(`Unknown option: ${value}`)\n    }\n    if (options.shareUrl) {\n      throw new Error('Only one share link can be downloaded at a time.')\n    }\n    options.shareUrl = value\n  }\n\n  return options\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "d02",
+        "operation": "Infer",
+        "data": "Transfer identifier, decoded link-key bytes, and server URL derived from the supplied share URL, with fragment/query removed and pathname reset to /.",
+        "source": "Supplied /t/:transferId share URL and its k fragment parameter",
+        "recipient": "share object in local process memory",
+        "condition": "Rejects URLs without the expected transfer path or a nonempty k fragment.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 41,
+            "end_line": 42,
+            "quote": "  const share = parseShareUrl(options.shareUrl)\n  const api = new XdropDownloadApiClient(resolveApiUrl(share.serverUrl, options.apiUrl))"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 155,
+            "end_line": 177,
+            "quote": "export function parseShareUrl(input) {\n  const url = new URL(input)\n  const match = url.pathname.match(/\\/t\\/([^/]+)\\/?$/u)\n  if (!match?.[1]) {\n    throw new Error('Share link must point to /t/:transferId.')\n  }\n\n  const params = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash)\n  const key = params.get('k')\n  if (!key) {\n    throw new Error('Share link is missing the decryption key fragment.')\n  }\n\n  url.hash = ''\n  url.search = ''\n  url.pathname = '/'\n\n  return {\n    transferId: match[1],\n    linkKey: fromBase64Url(key),\n    serverUrl: url,\n  }\n}"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 314,
+            "end_line": 318,
+            "quote": "function fromBase64Url(value) {\n  const normalized = value.replace(/-/gu, '+').replace(/_/gu, '/')\n  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')\n  return new Uint8Array(Buffer.from(padded, 'base64'))\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "d03",
+        "operation": "Send",
+        "data": "Transfer identifier in a public-transfer GET request path.",
+        "source": "Identifier parsed from the supplied share URL",
+        "recipient": "GET {resolved download API root}/public/transfers/{transferId}; root uses the API override or share origin's /api/v1",
+        "condition": "After parsing the full share URL.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 41,
+            "end_line": 45,
+            "quote": "  const share = parseShareUrl(options.shareUrl)\n  const api = new XdropDownloadApiClient(resolveApiUrl(share.serverUrl, options.apiUrl))\n\n  logStatus(`Fetching transfer ${share.transferId}`)\n  const descriptor = await api.getPublicTransfer(share.transferId)"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 349,
+            "end_line": 351,
+            "quote": "  async getPublicTransfer(transferId) {\n    return this.request(`/public/transfers/${transferId}`)\n  }"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 361,
+            "end_line": 368,
+            "quote": "  async request(path, options = { method: 'GET' }) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method ?? 'GET',\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 285,
+            "end_line": 287,
+            "quote": "export function resolveApiUrl(serverUrl, apiUrl) {\n  return normalizeApiUrl(apiUrl || new URL('/api/v1', serverUrl).toString())\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "d04",
+        "operation": "Read",
+        "data": "Public transfer descriptor, including status, manifest URL, and serialized wrapped root key; API error payloads on failed requests.",
+        "source": "Configured download API's /public/transfers/{transferId} response",
+        "recipient": "descriptor or locally thrown error",
+        "condition": "Download proceeds only if status is ready and manifestUrl and wrappedRootKey are present.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 45,
+            "end_line": 48,
+            "quote": "  const descriptor = await api.getPublicTransfer(share.transferId)\n  if (descriptor.status !== 'ready' || !descriptor.manifestUrl || !descriptor.wrappedRootKey) {\n    throw new Error(getTransferStatusError(descriptor.status))\n  }"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 349,
+            "end_line": 351,
+            "quote": "  async getPublicTransfer(transferId) {\n    return this.request(`/public/transfers/${transferId}`)\n  }"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 361,
+            "end_line": 377,
+            "quote": "  async request(path, options = { method: 'GET' }) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method ?? 'GET',\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })\n\n    if (!response.ok) {\n      const payload = await response.json().catch(() => ({}))\n      const detail = payload.message ?? payload.error ?? `Request failed with ${response.status}`\n      throw new Error(detail)\n    }\n\n    return response.json()\n  }"
+          }
+        ]
+      },
+      {
+        "move_id": "d05",
+        "operation": "Read",
+        "data": "Encrypted manifest envelope bytes.",
+        "source": "descriptor.manifestUrl returned by the public transfer API; actual host is unspecified",
+        "recipient": "envelopeBytes in local process memory",
+        "condition": "Descriptor must be ready and contain manifestUrl and wrappedRootKey; a failed HTTP response aborts the download.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 45,
+            "end_line": 55,
+            "quote": "  const descriptor = await api.getPublicTransfer(share.transferId)\n  if (descriptor.status !== 'ready' || !descriptor.manifestUrl || !descriptor.wrappedRootKey) {\n    throw new Error(getTransferStatusError(descriptor.status))\n  }\n\n  const manifestResponse = await fetch(descriptor.manifestUrl)\n  if (!manifestResponse.ok) {\n    throw new Error(`Couldn't load the encrypted manifest (${manifestResponse.status}).`)\n  }\n\n  const envelopeBytes = new Uint8Array(await manifestResponse.arrayBuffer())"
+          }
+        ]
+      },
+      {
+        "move_id": "d06",
+        "operation": "Infer",
+        "data": "Unwrapped root-key bytes and decrypted, JSON-parsed manifest, using the share fragment's link key and HKDF-derived AES-GCM keys.",
+        "source": "Descriptor's wrapped root key, share link-key bytes, and downloaded encrypted manifest envelope",
+        "recipient": "rootKey and manifest in local process memory",
+        "condition": "During download after fetching the encrypted manifest; cryptographic or JSON errors abort processing.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 55,
+            "end_line": 57,
+            "quote": "  const envelopeBytes = new Uint8Array(await manifestResponse.arrayBuffer())\n  const rootKey = await unwrapRootKey(descriptor.wrappedRootKey, share.linkKey)\n  const manifest = await decryptManifest(rootKey, envelopeBytes)"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 233,
+            "end_line": 261,
+            "quote": "async function unwrapRootKey(serializedEnvelope, linkKey) {\n  const envelope = JSON.parse(serializedEnvelope)\n  const wrappingKey = await deriveHkdfKey(linkKey, 'wrap-root')\n  const plaintext = await crypto.subtle.decrypt(\n    {\n      name: 'AES-GCM',\n      iv: fromBase64Url(envelope.iv),\n    },\n    wrappingKey,\n    fromBase64(envelope.ciphertext),\n  )\n\n  return new Uint8Array(plaintext)\n}\n\nasync function decryptManifest(rootKey, envelopeBytes) {\n  const envelope = JSON.parse(decoder.decode(envelopeBytes))\n  const manifestKey = await deriveHkdfKey(rootKey, 'manifest')\n  const plaintext = await crypto.subtle.decrypt(\n    {\n      name: 'AES-GCM',\n      iv: fromBase64Url(envelope.iv),\n    },\n    manifestKey,\n    fromBase64(envelope.ciphertext),\n  )\n\n  return JSON.parse(decoder.decode(plaintext))\n}"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 288,
+            "end_line": 305,
+            "quote": "async function deriveHkdfKey(source, info) {\n  const sourceKey = await crypto.subtle.importKey('raw', source, 'HKDF', false, ['deriveKey'])\n  return crypto.subtle.deriveKey(\n    {\n      name: 'HKDF',\n      hash: 'SHA-256',\n      salt: new Uint8Array(),\n      info: encoder.encode(info),\n    },\n    sourceKey,\n    {\n      name: 'AES-GCM',\n      length: 256,\n    },\n    false,\n    ['encrypt', 'decrypt'],\n  )\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "d07",
+        "operation": "Send",
+        "data": "File identifier and chunk-index pairs as JSON, with transfer identifier in the request path.",
+        "source": "Decrypted manifest's fileId and totalChunks, and share transferId",
+        "recipient": "POST {resolved download API root}/public/transfers/{transferId}/download-urls",
+        "condition": "Once per manifest file before fetching its chunks.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 71,
+            "end_line": 77,
+            "quote": "    await downloadFile({\n      api,\n      transferId: share.transferId,\n      file,\n      rootKey,\n      destination,\n    })"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 191,
+            "end_line": 196,
+            "quote": "async function downloadFile({ api, transferId, file, rootKey, destination }) {\n  const chunks = Array.from({ length: file.totalChunks }, (_, chunkIndex) => ({\n    fileId: file.fileId,\n    chunkIndex,\n  }))\n  const urls = await api.createDownloadUrls(transferId, chunks)"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 353,
+            "end_line": 368,
+            "quote": "  async createDownloadUrls(transferId, chunks) {\n    const response = await this.request(`/public/transfers/${transferId}/download-urls`, {\n      method: 'POST',\n      body: { chunks },\n    })\n    return response.items\n  }\n\n  async request(path, options = { method: 'GET' }) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method ?? 'GET',\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "d08",
+        "operation": "Read",
+        "data": "Per-chunk download URLs and chunk-index associations.",
+        "source": "Configured public download-urls API response",
+        "recipient": "urls and urlMap in local process memory",
+        "condition": "After a successful download-URL request; actual chunk storage hosts depend on the returned URLs.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 196,
+            "end_line": 197,
+            "quote": "  const urls = await api.createDownloadUrls(transferId, chunks)\n  const urlMap = new Map(urls.map((item) => [item.chunkIndex, item.url]))"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 353,
+            "end_line": 359,
+            "quote": "  async createDownloadUrls(transferId, chunks) {\n    const response = await this.request(`/public/transfers/${transferId}/download-urls`, {\n      method: 'POST',\n      body: { chunks },\n    })\n    return response.items\n  }"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 361,
+            "end_line": 368,
+            "quote": "  async request(path, options = { method: 'GET' }) {\n    const response = await fetch(`${this.baseUrl}${path}`, {\n      method: options.method ?? 'GET',\n      headers: {\n        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),\n      },\n      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),\n    })"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 376,
+            "end_line": 377,
+            "quote": "    return response.json()\n  }"
+          }
+        ]
+      },
+      {
+        "move_id": "d09",
+        "operation": "Read",
+        "data": "Encrypted file-chunk bytes.",
+        "source": "Per-chunk URLs returned by the download-urls API",
+        "recipient": "ciphertext buffers in local process memory",
+        "condition": "Chunks are fetched sequentially within each file; missing URLs or failed HTTP responses cause an error.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 196,
+            "end_line": 197,
+            "quote": "  const urls = await api.createDownloadUrls(transferId, chunks)\n  const urlMap = new Map(urls.map((item) => [item.chunkIndex, item.url]))"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 202,
+            "end_line": 213,
+            "quote": "    for (let chunkIndex = 0; chunkIndex < file.totalChunks; chunkIndex += 1) {\n      const url = urlMap.get(chunkIndex)\n      if (!url) {\n        throw new Error(`Missing download URL for ${file.relativePath} chunk ${chunkIndex}.`)\n      }\n\n      const response = await fetch(url)\n      if (!response.ok) {\n        throw new Error(`Chunk download failed with ${response.status}.`)\n      }\n\n      const ciphertext = new Uint8Array(await response.arrayBuffer())"
+          }
+        ]
+      },
+      {
+        "move_id": "d10",
+        "operation": "Infer",
+        "data": "Decrypted plaintext file chunks, using file-scoped HKDF-derived AES-GCM keys, manifest nonce prefixes and size information, and transfer/file/chunk identifiers as authenticated data.",
+        "source": "Downloaded ciphertext, unwrapped root key, decrypted manifest metadata, and transfer identifier",
+        "recipient": "Plaintext chunk buffers in local process memory",
+        "condition": "For each successfully fetched chunk before writing it to disk.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 198,
+            "end_line": 198,
+            "quote": "  const noncePrefix = fromBase64Url(file.noncePrefix)"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 213,
+            "end_line": 224,
+            "quote": "      const ciphertext = new Uint8Array(await response.arrayBuffer())\n      const remainingBytes = Math.max(file.plaintextSize - chunkIndex * file.chunkSize, 0)\n      const plaintextChunkSize = Math.min(file.chunkSize, remainingBytes)\n      const plaintext = await decryptChunk({\n        rootKey,\n        transferId,\n        fileId: file.fileId,\n        chunkIndex,\n        noncePrefix,\n        plaintextChunkSize,\n        ciphertext,\n      })"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 263,
+            "end_line": 286,
+            "quote": "async function decryptChunk(options) {\n  const fileKey = await deriveHkdfKey(options.rootKey, `file:${options.fileId}`)\n  const iv = buildChunkIv(options.noncePrefix, options.chunkIndex)\n  const additionalData = encoder.encode(\n    [\n      options.transferId,\n      options.fileId,\n      options.chunkIndex,\n      options.plaintextChunkSize,\n      MANIFEST_VERSION,\n    ].join('|'),\n  )\n  const plaintext = await crypto.subtle.decrypt(\n    {\n      name: 'AES-GCM',\n      iv,\n      additionalData,\n    },\n    fileKey,\n    options.ciphertext,\n  )\n\n  return new Uint8Array(plaintext)\n}"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 288,
+            "end_line": 312,
+            "quote": "async function deriveHkdfKey(source, info) {\n  const sourceKey = await crypto.subtle.importKey('raw', source, 'HKDF', false, ['deriveKey'])\n  return crypto.subtle.deriveKey(\n    {\n      name: 'HKDF',\n      hash: 'SHA-256',\n      salt: new Uint8Array(),\n      info: encoder.encode(info),\n    },\n    sourceKey,\n    {\n      name: 'AES-GCM',\n      length: 256,\n    },\n    false,\n    ['encrypt', 'decrypt'],\n  )\n}\n\nfunction buildChunkIv(noncePrefix, chunkIndex) {\n  const iv = new Uint8Array(12)\n  iv.set(noncePrefix.slice(0, 8), 0)\n  new DataView(iv.buffer).setUint32(8, chunkIndex, false)\n  return iv\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "d11",
+        "operation": "Save",
+        "data": "Decrypted file contents and recursively created destination directories, using sanitized manifest relative paths or filenames.",
+        "source": "Decrypted manifest paths and plaintext chunk buffers",
+        "recipient": "Local --output directory resolved against process.cwd(), or ./xdrop-{transferId} by default, with per-file sanitized paths",
+        "condition": "Empty sanitized paths are rejected. Files are opened with 'w', creating or truncating them, and chunks are written sequentially. Handles close in finally; this function does not remove partial files on failure. Retention duration is unspecified.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 57,
+            "end_line": 79,
+            "quote": "  const manifest = await decryptManifest(rootKey, envelopeBytes)\n  const outputRoot = resolve(process.cwd(), options.output || `xdrop-${share.transferId}`)\n  await mkdir(outputRoot, { recursive: true })\n\n  const savedFiles = []\n  for (const [index, file] of manifest.files.entries()) {\n    const sanitizedPath = sanitizePath(file.relativePath || file.name)\n    if (!sanitizedPath) {\n      throw new Error(`Refusing to write an empty file path for ${file.fileId}.`)\n    }\n\n    const destination = resolve(outputRoot, ...sanitizedPath.split('/'))\n    await mkdir(dirname(destination), { recursive: true })\n    logStatus(`Downloading ${sanitizedPath} (${index + 1}/${manifest.files.length})`)\n    await downloadFile({\n      api,\n      transferId: share.transferId,\n      file,\n      rootKey,\n      destination,\n    })\n    savedFiles.push(destination)\n  }"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 179,
+            "end_line": 189,
+            "quote": "export function sanitizePath(input) {\n  return input\n    .split(/[\\\\/]+/u)\n    .filter((segment) => segment && segment !== '.' && segment !== '..')\n    .map((segment) =>\n      Array.from(segment.replace(/[<>:\"|?*]/gu, '_'))\n        .map((char) => ((char.codePointAt(0) ?? 0) < 32 ? '_' : char))\n        .join(''),\n    )\n    .join('/')\n}"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 191,
+            "end_line": 231,
+            "quote": "async function downloadFile({ api, transferId, file, rootKey, destination }) {\n  const chunks = Array.from({ length: file.totalChunks }, (_, chunkIndex) => ({\n    fileId: file.fileId,\n    chunkIndex,\n  }))\n  const urls = await api.createDownloadUrls(transferId, chunks)\n  const urlMap = new Map(urls.map((item) => [item.chunkIndex, item.url]))\n  const noncePrefix = fromBase64Url(file.noncePrefix)\n  const fileHandle = await open(destination, 'w')\n\n  try {\n    for (let chunkIndex = 0; chunkIndex < file.totalChunks; chunkIndex += 1) {\n      const url = urlMap.get(chunkIndex)\n      if (!url) {\n        throw new Error(`Missing download URL for ${file.relativePath} chunk ${chunkIndex}.`)\n      }\n\n      const response = await fetch(url)\n      if (!response.ok) {\n        throw new Error(`Chunk download failed with ${response.status}.`)\n      }\n\n      const ciphertext = new Uint8Array(await response.arrayBuffer())\n      const remainingBytes = Math.max(file.plaintextSize - chunkIndex * file.chunkSize, 0)\n      const plaintextChunkSize = Math.min(file.chunkSize, remainingBytes)\n      const plaintext = await decryptChunk({\n        rootKey,\n        transferId,\n        fileId: file.fileId,\n        chunkIndex,\n        noncePrefix,\n        plaintextChunkSize,\n        ciphertext,\n      })\n\n      await fileHandle.write(plaintext)\n    }\n  } finally {\n    await fileHandle.close()\n  }\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "d12",
+        "operation": "Send",
+        "data": "Saved file path for a single-file download or output root otherwise; JSON mode emits transferId, outputRoot, and all saved file paths.",
+        "source": "Share transfer identifier and successfully saved local destination paths",
+        "recipient": "process.stdout; downstream consumer is unspecified",
+        "condition": "After all manifest files finish downloading; --json selects structured output. Quiet mode does not suppress this final result.",
+        "evidence": [
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 78,
+            "end_line": 97,
+            "quote": "    savedFiles.push(destination)\n  }\n\n  if (options.json) {\n    process.stdout.write(\n      `${JSON.stringify(\n        {\n          transferId: share.transferId,\n          outputRoot,\n          files: savedFiles,\n        },\n        null,\n        2,\n      )}\\n`,\n    )\n    return\n  }\n\n  process.stdout.write(`${savedFiles.length === 1 ? savedFiles[0] : outputRoot}\\n`)\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "x01",
+        "operation": "Send",
+        "data": "Progress/status text containing server URL, transfer identifier, relative file paths, file counts, and uploaded byte totals; caught error messages, including API-provided error details.",
+        "source": "Upload/download runtime state and caught errors",
+        "recipient": "process.stderr; downstream consumer is unspecified",
+        "condition": "Progress output is suppressed by quietMode. Direct script entry-point handlers print caught errors even in quiet mode.",
+        "evidence": [
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 61,
+            "end_line": 61,
+            "quote": "  logStatus(`Creating transfer on ${serverUrl.toString()}`)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 105,
+            "end_line": 106,
+            "quote": "    for (const [index, file] of preparedFiles.entries()) {\n      logStatus(`Uploading ${file.relativePath} (${index + 1}/${preparedFiles.length})`)"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 127,
+            "end_line": 130,
+            "quote": "      await api.completeChunks(created.transferId, created.manageToken, completedChunks)\n      logStatus(\n        `Uploaded ${file.relativePath} (${formatBytes(uploadedCiphertextBytes)} / ${formatBytes(totalCiphertextBytes)})`,\n      )"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 613,
+            "end_line": 618,
+            "quote": "function logStatus(message) {\n  if (quietMode) {\n    return\n  }\n  process.stderr.write(`${message}\\n`)\n}"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 696,
+            "end_line": 700,
+            "quote": "    if (!response.ok) {\n      const payload = await response.json().catch(() => ({}))\n      const detail = payload.message ?? payload.error ?? `Request failed with ${response.status}`\n      throw new Error(detail)\n    }"
+          },
+          {
+            "path": "scripts/upload.mjs",
+            "start_line": 733,
+            "end_line": 738,
+            "quote": "if (import.meta.main) {\n  main().catch((error) => {\n    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`)\n    process.exit(1)\n  })\n}"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 44,
+            "end_line": 44,
+            "quote": "  logStatus(`Fetching transfer ${share.transferId}`)"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 70,
+            "end_line": 70,
+            "quote": "    logStatus(`Downloading ${sanitizedPath} (${index + 1}/${manifest.files.length})`)"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 337,
+            "end_line": 342,
+            "quote": "function logStatus(message) {\n  if (quietMode) {\n    return\n  }\n  process.stderr.write(`${message}\\n`)\n}"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 370,
+            "end_line": 374,
+            "quote": "    if (!response.ok) {\n      const payload = await response.json().catch(() => ({}))\n      const detail = payload.message ?? payload.error ?? `Request failed with ${response.status}`\n      throw new Error(detail)\n    }"
+          },
+          {
+            "path": "scripts/download.mjs",
+            "start_line": 380,
+            "end_line": 389,
+            "quote": "if (import.meta.main) {\n  main().catch(async (error) => {\n    if (quietMode) {\n      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`)\n      process.exit(1)\n    }\n    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`)\n    process.exit(1)\n  })\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "v01",
+        "operation": "Read",
+        "data": "Verification result indicating whether the public transfer API or browser can open the returned share link.",
+        "source": "Public transfer API response or browser view associated with the returned link",
+        "recipient": null,
+        "condition": "Instruction-level behavior only, when the user wants verification; the supplied scripts do not implement this additional verification step.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 44,
+            "end_line": 44,
+            "quote": "If the user wants verification, upload a small temporary file and then confirm the public transfer API or browser can open the returned link."
+          }
+        ]
+      }
+    ]
+  }
+}

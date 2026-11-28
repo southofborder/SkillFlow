@@ -1,0 +1,630 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide multi-account IMAP email checking, reading, searching, attachment downloading, mailbox listing, and read/unread management, plus SMTP sending with optional attachments. The documented SMTP test explicitly sends mail to the account itself. Shared configuration is documented; full-body search scans and pre-send verification are implementation choices (SKILL.md:18-36, 155-290).",
+  "data_operations": [
+    {
+      "operation": "Read local account configuration",
+      "source": "scripts/config.js initialization",
+      "data_scope": "The selected configuration file, including account identifiers, credentials, server settings, and directory allowlists; builds configuration for the selected account.",
+      "recipient_or_storage": "Local process through dotenv; legacy ~/.config/imap-smtp-email/.env takes precedence over shared ~/.config/mail-skills/.env, then packaged .env.",
+      "condition": "Loading either email CLI. Reading configuration does not itself establish remote disclosure.",
+      "evidence": [
+        {
+          "path": "scripts/config.js",
+          "start_line": 9,
+          "end_line": 19
+        },
+        {
+          "path": "scripts/config.js",
+          "start_line": 33,
+          "end_line": 128
+        },
+        {
+          "path": "scripts/config.js",
+          "start_line": 262,
+          "end_line": 290
+        }
+      ]
+    },
+    {
+      "operation": "Collect and persist account configuration",
+      "source": "setup.sh normal setup",
+      "data_scope": "Provider, email address, PASSWORD credential, optional custom server settings, certificate preferences, and file directory allowlists.",
+      "recipient_or_storage": "~/.config/mail-skills/.env; reconfiguration also stages existing named-account credentials in temporary files. The script requests directory mode 700 and ultimately file mode 600.",
+      "condition": "Initial setup, reconfiguration, account addition, or confirmed account overwrite. Password input is hidden; configuration values remain stored as readable text.",
+      "evidence": [
+        {
+          "path": "setup.sh",
+          "start_line": 197,
+          "end_line": 256
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 258,
+          "end_line": 321
+        }
+      ]
+    },
+    {
+      "operation": "Replace configuration entries and remove temporary files",
+      "source": "setup.sh",
+      "data_scope": "Staged configuration and credentials; previous configuration entries selected for replacement.",
+      "recipient_or_storage": "Local temporary files and shared configuration file.",
+      "condition": "Migration failure removes its temporary file; successful reconfiguration removes the .named staging file. Other staging files become the configuration through mv. No secure erasure is established.",
+      "evidence": [
+        {
+          "path": "setup.sh",
+          "start_line": 55,
+          "end_line": 62
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 275,
+          "end_line": 317
+        }
+      ]
+    },
+    {
+      "operation": "Convert credentials and infer provider locally",
+      "source": "scripts/migrate-legacy-config.js, invoked by setup.sh",
+      "data_scope": "All discovered legacy accounts, IMAP usernames and credentials, server settings, certificate exceptions, and allowlists. Provider is inferred by matching the IMAP host against presets.",
+      "recipient_or_storage": "Standalone migration writes credential-bearing configuration to its caller through stdout; setup redirects it into a temporary file and then ~/.config/mail-skills/.env.",
+      "condition": "Direct migration invocation or choosing migration during setup. The converter derives shared USERNAME/PASSWORD from IMAP credentials rather than preserving independent SMTP credentials.",
+      "evidence": [
+        {
+          "path": "scripts/migrate-legacy-config.js",
+          "start_line": 20,
+          "end_line": 39
+        },
+        {
+          "path": "scripts/migrate-legacy-config.js",
+          "start_line": 60,
+          "end_line": 131
+        },
+        {
+          "path": "scripts/providers.js",
+          "start_line": 76,
+          "end_line": 85
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 49,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "operation": "Retain duplicate legacy credentials",
+      "source": "setup.sh migration",
+      "data_scope": "The complete original legacy configuration, including credentials for its accounts.",
+      "recipient_or_storage": "~/.config/imap-smtp-email/.env and an additional .env.bak, alongside the new shared configuration.",
+      "condition": "Successful migration. The original remains preferred by runtime configuration selection, so migration's connection tests still use it.",
+      "evidence": [
+        {
+          "path": "setup.sh",
+          "start_line": 61,
+          "end_line": 90
+        },
+        {
+          "path": "scripts/config.js",
+          "start_line": 14,
+          "end_line": 18
+        }
+      ]
+    },
+    {
+      "operation": "Discover accounts and derive configuration completeness",
+      "source": "scripts/config.js listAccounts and CLI display functions",
+      "data_scope": "Reads legacy and shared configuration, or fallback when neither is primary; derives account names and completeness from configured fields. Returns email addresses, server addresses, status, and configuration path without returning passwords.",
+      "recipient_or_storage": "Local process and stdout to the invoking caller.",
+      "condition": "list-accounts. Completeness is a local presence check, not verified account validity.",
+      "evidence": [
+        {
+          "path": "scripts/config.js",
+          "start_line": 130,
+          "end_line": 260
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 830,
+          "end_line": 872
+        },
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 169,
+          "end_line": 211
+        }
+      ]
+    },
+    {
+      "operation": "Connect and supply IMAP authentication",
+      "source": "scripts/imap.js connect",
+      "data_scope": "Selected account username and IMAP credential, configured host, port, and TLS settings.",
+      "recipient_or_storage": "The imap dependency and configured config.imap.host endpoint.",
+      "condition": "IMAP commands requiring a connection, including setup tests; list-accounts does not call connect. Exact wire authentication is dependency-controlled.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 113,
+          "end_line": 162
+        },
+        {
+          "path": "scripts/providers.js",
+          "start_line": 1,
+          "end_line": 74
+        }
+      ]
+    },
+    {
+      "operation": "Disclose static client identification",
+      "source": "scripts/imap.js connect ready handler",
+      "data_scope": "IMAP_ID name, version, vendor, and support-email fields.",
+      "recipient_or_storage": "The connected account's IMAP server. The support-email value is an identification field, not an email recipient.",
+      "condition": "Every successful IMAP connection when the dependency exposes id(), without a provider-specific gate.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 81,
+          "end_line": 87
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 141,
+          "end_line": 154
+        }
+      ]
+    },
+    {
+      "operation": "Read messages and return parsed content",
+      "source": "scripts/imap.js checkEmails, fetchEmail, parseEmail, and CLI output",
+      "data_scope": "check obtains matching UIDs and retrieves the last limit messages, default 10; fetch retrieves the requested UID. Complete raw messages enter local memory. Output includes addresses, subject, text, HTML, snippet, dates, flags, and attachment metadata, excluding attachment content bytes.",
+      "recipient_or_storage": "Configured IMAP server receives mailbox/search requests; retrieved content stays in the local process and normal stdout return to its caller.",
+      "condition": "check or fetch. Both request markSeen:false; check supports unread and date scope. No email-file persistence is requested on these paths.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 287,
+          "end_line": 309
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 318,
+          "end_line": 426
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 946,
+          "end_line": 950
+        }
+      ]
+    },
+    {
+      "operation": "Search on the IMAP server and retrieve results",
+      "source": "scripts/imap.js searchEmails ordinary path",
+      "data_scope": "Mailbox, supplied sender/subject terms, date and read-state criteria go to the account's server. Default sorting retrieves full messages for the last limit UIDs, default 20. --sort date retrieves full messages for every match before sorting and limiting.",
+      "recipient_or_storage": "Configured IMAP server for search criteria; local memory for retrieved messages; caller stdout for selected parsed results and scope/provider metadata.",
+      "condition": "search outside the provider-specific text fallback. Fetches request markSeen:false.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 525,
+          "end_line": 647
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 946,
+          "end_line": 950
+        }
+      ]
+    },
+    {
+      "operation": "Search candidate messages locally",
+      "source": "scripts/imap.js searchEmailsLocal and scripts/search-filter.js",
+      "data_scope": "Server receives date/read-state criteria, excluding sender/subject terms. Full candidate messages are retrieved and parsed locally; sender/subject strings are matched case-insensitively with AND semantics. Results include selected full parsed content and scan/match counts.",
+      "recipient_or_storage": "Account IMAP server for scoped requests; local process for candidates, including nonmatches; invoking caller for selected results.",
+      "condition": "Sender or subject search on listed NetEase personal providers, including matching custom hosts. Bare text searches cap candidates at 200; any date or read-state scope removes that cap. All candidates are scanned before applying result limit.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 17,
+          "end_line": 31
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 533,
+          "end_line": 537
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 649,
+          "end_line": 758
+        },
+        {
+          "path": "scripts/search-filter.js",
+          "start_line": 7,
+          "end_line": 19
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve and persist attachments",
+      "source": "scripts/imap.js downloadAttachments",
+      "data_scope": "The complete requested message and all attachment contents are retrieved and parsed. Only attachments matching --file, or all attachments without that option, are written. Returns filenames, sizes, local paths, and available filenames when a requested name is absent.",
+      "recipient_or_storage": "Local process, then files under the validated output directory; metadata returns to the caller. Directory checking is lexical; actual filesystem resolution depends on runtime links.",
+      "condition": "download with attachments present and an allowed output directory. Filenames are sanitized; markSeen:false is requested. Files remain after completion; no attachment deletion is implemented.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 55,
+          "end_line": 79
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 428,
+          "end_line": 500
+        }
+      ]
+    },
+    {
+      "operation": "Persist read-state changes",
+      "source": "scripts/imap.js markAsRead and markAsUnread",
+      "data_scope": "Requested message UIDs and addition or removal of the \\Seen flag.",
+      "recipient_or_storage": "Configured IMAP server's mailbox state; success details return to the caller.",
+      "condition": "mark-read or mark-unread. Removing \\Seen changes a flag; it does not delete message content.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 760,
+          "end_line": 794
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve mailbox hierarchy",
+      "source": "scripts/imap.js listMailboxes and setup.sh connection tests",
+      "data_scope": "Mailbox names, hierarchy, delimiters, and attributes.",
+      "recipient_or_storage": "Retrieved from the configured IMAP server into local memory; direct CLI output returns to the caller. Setup redirects output and errors to /dev/null.",
+      "condition": "Explicit list-mailboxes, or automatic IMAP tests after normal setup or migration.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 796,
+          "end_line": 828
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 928,
+          "end_line": 946
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 69,
+          "end_line": 78
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 332,
+          "end_line": 338
+        }
+      ]
+    },
+    {
+      "operation": "Read selected local email inputs",
+      "source": "scripts/smtp.js send command",
+      "data_scope": "Optional subject, body, or HTML file contents; selected attachment filenames and paths. Subject is trimmed. Attachment paths are handed to nodemailer for content handling.",
+      "recipient_or_storage": "Local process and nodemailer attachment descriptors; subsequent disclosure is through the send path.",
+      "condition": "Corresponding file options are supplied and pass the read-directory check. This is selected-file access, not directory enumeration.",
+      "evidence": [
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 15,
+          "end_line": 40
+        },
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 122,
+          "end_line": 143
+        },
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 226,
+          "end_line": 257
+        }
+      ]
+    },
+    {
+      "operation": "Verify SMTP and submit outgoing email",
+      "source": "scripts/smtp.js createTransporter and sendEmail",
+      "data_scope": "SMTP account credentials and connection settings; chosen sender, To/CC/BCC recipients, subject, text/HTML, and optional attachments. verify() precedes sendMail() without receiving message content.",
+      "recipient_or_storage": "Configured config.smtp.host through nodemailer; delivery requested to selected To/CC/BCC addresses. Message ID, server response, and To value return to the caller.",
+      "condition": "send with required recipient and subject options. Exact authentication, attachment reads, transport negotiation, delivery, and remote retention depend on external components.",
+      "evidence": [
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 64,
+          "end_line": 120
+        },
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 226,
+          "end_line": 257
+        },
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 281,
+          "end_line": 285
+        }
+      ]
+    },
+    {
+      "operation": "Send a test message to the account itself",
+      "source": "scripts/smtp.js testConnection; setup.sh",
+      "data_scope": "SMTP authentication, configured sender and account address, and fixed test subject/text/HTML.",
+      "recipient_or_storage": "Configured SMTP server, with delivery requested to config.smtp.user; delivery would create a remote mailbox message. Provider retention is unknown.",
+      "condition": "Explicit test or automatic setup/migration SMTP test. Sending to self is explicitly documented, not an unnecessary message inferred solely from the command name.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 286,
+          "end_line": 291
+        },
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 145,
+          "end_line": 167
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 80,
+          "end_line": 86
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 340,
+          "end_line": 348
+        }
+      ]
+    },
+    {
+      "operation": "Invoke dependency installation",
+      "source": "setup.sh and package manifests",
+      "data_scope": "Dependency names and versions are used for installation; installed packages persist in node_modules. Exact npm requests and installation-time behavior are not supplied.",
+      "recipient_or_storage": "npm-selected package endpoints; the lockfile names registry.npmjs.org and registry.npmmirror.com. Local node_modules stores installed code.",
+      "condition": "Setup finds no node_modules, or the documented manual installation is used. No supplied installation command explicitly passes email credentials to a registry.",
+      "evidence": [
+        {
+          "path": "setup.sh",
+          "start_line": 16,
+          "end_line": 22
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 34
+        },
+        {
+          "path": "package.json",
+          "start_line": 12,
+          "end_line": 18
+        },
+        {
+          "path": "package-lock.json",
+          "start_line": 19,
+          "end_line": 22
+        },
+        {
+          "path": "package-lock.json",
+          "start_line": 384,
+          "end_line": 391
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Full message bodies, HTML, and encoded attachments retrieved during check; full text and HTML also returned.",
+      "recipient_or_storage": "Account IMAP server to local process memory, then parsed content to the invoking caller through stdout.",
+      "condition": "check when identifying new/unread messages requires only message summaries.",
+      "purpose_basis": "Checking new/unread mail is explicit; full-content retrieval is separately documented for fetch. Returning full content for check is an implementation choice.",
+      "necessary_behavior": "Identify relevant messages and provide sufficient identifiers and summary fields.",
+      "proposed_reduction": "Retrieve headers, flags, dates, and optionally a bounded preview by default; make complete content explicit or obtain it through fetch. This narrows data in the required check action.",
+      "preservation_conditions": "Retain mailbox/date/unread filters, limits, ordering, and metadata. Preserve an explicit full-content option for callers needing the current rich result.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 157,
+          "end_line": 178
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 287,
+          "end_line": 309
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 333,
+          "end_line": 375
+        }
+      ]
+    },
+    {
+      "data_scope": "Complete bodies and attachments of every server-search match, including messages excluded by the final limit.",
+      "recipient_or_storage": "Configured IMAP server to local process memory.",
+      "condition": "Ordinary search with --sort date.",
+      "purpose_basis": "Strict INTERNALDATE ordering is required by this option; fetching every matching body is its documented implementation.",
+      "necessary_behavior": "Determine matching messages' INTERNALDATE values, select the newest limit, and return those messages.",
+      "proposed_reduction": "Fetch UID/date attributes for all matches, sort and limit locally, then fetch complete content only for selected UIDs. This removes extra data from required retrievals.",
+      "preservation_conditions": "Preserve server criteria, INTERNALDATE ordering including ties, result limit, full selected-message output, and markSeen:false.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 198,
+          "end_line": 210
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 562,
+          "end_line": 563
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 613,
+          "end_line": 643
+        }
+      ]
+    },
+    {
+      "data_scope": "Bodies and attachment content for every fallback candidate, including nonmatches and matches beyond the result limit.",
+      "recipient_or_storage": "Configured IMAP server to local process memory; nonmatches are not returned to the caller.",
+      "condition": "NetEase personal-provider sender/subject fallback search.",
+      "purpose_basis": "Local sender/subject filtering is needed for the documented server limitation. Filtering uses only sender and subject; ordering uses INTERNALDATE.",
+      "necessary_behavior": "Scan the applicable candidate set, match sender/subject, count matches, and return the newest limited results.",
+      "proposed_reduction": "Retrieve required headers and UID/date/flag attributes for candidates, filter and select locally, then retrieve complete content only for final results.",
+      "preservation_conditions": "Keep full displayed sender-string matching, case-insensitive AND semantics, scan counts, date sorting, scope rules, the bare-search 200 cap, and selected-result content.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 216,
+          "end_line": 221
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 660,
+          "end_line": 741
+        },
+        {
+          "path": "scripts/search-filter.js",
+          "start_line": 7,
+          "end_line": 19
+        }
+      ]
+    },
+    {
+      "data_scope": "Message body and every attachment's content, although only one filename is requested.",
+      "recipient_or_storage": "Configured IMAP server to local process memory; only matching attachment content crosses the file-persistence boundary.",
+      "condition": "download with --file.",
+      "purpose_basis": "Downloading a specific attachment is explicit. Retrieving and parsing unrelated content before filename selection is an implementation choice.",
+      "necessary_behavior": "Identify the requested attachment and save its decoded content.",
+      "proposed_reduction": "Retrieve attachment structure and names, then fetch only matching MIME parts rather than the entire message.",
+      "preservation_conditions": "Preserve decoding, filename matching, handling of duplicate matching names, available-filename reporting, path checks, and output metadata.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 180,
+          "end_line": 190
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 435,
+          "end_line": 488
+        }
+      ]
+    },
+    {
+      "data_scope": "Static client name, version, vendor, and support-email metadata.",
+      "recipient_or_storage": "Every connected account IMAP server accepting the ID invocation.",
+      "condition": "connect succeeds and id() exists, including providers without a demonstrated compatibility need.",
+      "purpose_basis": "The source justifies IMAP ID for 163.com compatibility, while the implementation applies it to all connections.",
+      "necessary_behavior": "Authenticate and perform the requested IMAP operation, retaining compatibility identification where required.",
+      "proposed_reduction": "Gate ID by demonstrated server requirements or explicit configuration, and send only fields required for compatibility.",
+      "preservation_conditions": "Verify that affected NetEase accounts still accept access. No source establishes the minimum accepted ID fields for each server.",
+      "evidence": [
+        {
+          "path": "scripts/imap.js",
+          "start_line": 81,
+          "end_line": 87
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 141,
+          "end_line": 154
+        }
+      ]
+    },
+    {
+      "data_scope": "An additional complete legacy credential backup and the retained original beside the migrated shared copy.",
+      "recipient_or_storage": "~/.config/imap-smtp-email/.env.bak and ~/.config/imap-smtp-email/.env.",
+      "condition": "Successful migration.",
+      "purpose_basis": "Migration enables shared configuration. Indefinite duplicate credential retention is not required by the entry document; runtime precedence also prevents the new shared copy from becoming active.",
+      "necessary_behavior": "Preserve functioning account configuration and provide a safe migration outcome.",
+      "proposed_reduction": "Make rollback retention explicit and bounded; after validation, retire obsolete legacy copies and use the shared file.",
+      "preservation_conditions": "First preserve and validate all accounts, independent SMTP credentials/settings, sender overrides, and allowlists. The converter currently derives shared credentials from IMAP, so immediate legacy deletion could break functionality.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 61,
+          "end_line": 88
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 61,
+          "end_line": 90
+        },
+        {
+          "path": "scripts/config.js",
+          "start_line": 14,
+          "end_line": 18
+        },
+        {
+          "path": "scripts/migrate-legacy-config.js",
+          "start_line": 62,
+          "end_line": 87
+        }
+      ]
+    },
+    {
+      "data_scope": "All mailbox names, hierarchy, delimiters, and attributes.",
+      "recipient_or_storage": "Configured IMAP server to the setup subprocess's memory; output is subsequently discarded through /dev/null.",
+      "condition": "Automatic IMAP connection tests after normal setup or migration.",
+      "purpose_basis": "These paths test connectivity. Full mailbox listing is necessary for the explicit list-mailboxes command, but not inherently for a connection test.",
+      "necessary_behavior": "Verify connection and authentication and report success or failure.",
+      "proposed_reduction": "Use a dedicated authentication/connection check without requesting the mailbox tree. This narrows data in the test action.",
+      "preservation_conditions": "Retain provider compatibility handling, useful failure reporting, and explicit list-mailboxes functionality. Migration tests must target the configuration intended for validation.",
+      "evidence": [
+        {
+          "path": "setup.sh",
+          "start_line": 69,
+          "end_line": 78
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 332,
+          "end_line": 338
+        },
+        {
+          "path": "scripts/imap.js",
+          "start_line": 796,
+          "end_line": 828
+        }
+      ]
+    },
+    {
+      "data_scope": "A standalone SMTP verification operation in addition to the required message submission; possible additional authentication/session traffic.",
+      "recipient_or_storage": "The configured SMTP endpoint through the same nodemailer transporter.",
+      "condition": "Every normal send. Exact connection reuse and repeated authentication are unresolved without dependency source.",
+      "purpose_basis": "Sending the requested email is explicit; a separate verify() before sendMail() is an implementation choice.",
+      "necessary_behavior": "Submit the message with required authentication and return meaningful delivery errors.",
+      "proposed_reduction": "Consider removing the standalone preflight from normal send and relying on sendMail error handling. This removes a potentially redundant action, rather than reducing fields in the email.",
+      "preservation_conditions": "Confirm equivalent error handling and dependency behavior. Keep the documented self-test's message-sending behavior; verify receives no message body here.",
+      "evidence": [
+        {
+          "path": "scripts/smtp.js",
+          "start_line": 85,
+          "end_line": 112
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 250,
+          "end_line": 290
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Dependency implementations are absent. This blocks verification of exact authentication exchanges, SMTP connection reuse/STARTTLS, attachment-path handling, parser behavior, and additional dependency I/O. Lockfile metadata alone does not establish those behaviors.",
+    "Actual configuration, selected options, filesystem links, permissions/umask, and server responses are unavailable. Exact runtime recipients and whether requested operations succeed remain unresolved.",
+    "IMAP/SMTP providers' delivery, mailbox copies, logging, retention, onward processing, and deletion policies are undocumented. Normal caller returns do not establish onward disclosure or caller persistence.",
+    "The shared configuration is documented for caldav-sync, but that skill's implementation is absent. Its credential access and external behavior cannot be audited; CalDAV preset URLs alone establish no CalDAV transmission.",
+    "Interrupted or failed setup cleanup and effective temporary-file permissions are not fully established. No supplied path implements secure erasure or lifecycle deletion of downloaded attachments and retained legacy backups."
+  ]
+}

@@ -1,0 +1,953 @@
+{
+  "request_sha256": "4624da837cb0fd8da1bff0935539881c5c88bfc435eeccc9ddea1f82aefb01b9",
+  "answer_sha256": "cb0cc62023524442d3b915ed0afbca2ddda6413849d1f3366ce11dbc25e9729d",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from the supplied static files only. Session extraction and timing are protocol instructions; the code implements caller-invoked SQLite persistence, FTS5 search, metadata updates, deletion, and console output. Actual invocation, database location, and runtime FTS5 availability remain unknown. No external data transmission is shown.",
+    "claim": "Persistent memory for AI agents across sessions: remember facts, learn lessons, track entities, search memories semantically, and automatically forget stale information.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "Persistent memory system for AI agents. Remember facts, learn from experience, and track entities across sessions."
+      },
+      {
+        "path": "src/memory.py",
+        "start_line": 4,
+        "end_line": 9,
+        "quote": "A lightweight memory layer that helps AI agents:\n- Remember facts across sessions\n- Track entities (people, projects, preferences)\n- Learn from successes and failures\n- Search memories semantically\n- Forget stale information automatically"
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Infer",
+        "data": "Durable facts extracted from conversation by the agent following the suggested memory protocol. The Python implementation receives fact content from callers; it does not implement conversation extraction.",
+        "source": "Conversation",
+        "recipient": "Agent preparing memory updates",
+        "condition": "Suggested integration into AGENTS.md or HEARTBEAT.md; extraction occurs on session end.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 44,
+            "end_line": 46,
+            "quote": "## Integration with Clawdbot\n\nAdd to your AGENTS.md or HEARTBEAT.md:"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 56,
+            "end_line": 59,
+            "quote": "On session end:\n1. Extract durable facts from conversation\n2. Record any lessons learned\n3. Update entity information"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 179,
+            "end_line": 181,
+            "quote": "    def remember(self, content: str, tags: List[str] = None, \n                 source: str = \"conversation\", confidence: float = 1.0,\n                 expires_in_days: int = None) -> str:"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Infer",
+        "data": "Twelve-character hexadecimal identifiers derived by hashing an input string concatenated with a UTC timestamp. Fact inputs use content; lesson inputs concatenate action and context; entity inputs combine type and name.",
+        "source": "Caller-supplied fact content, lesson action/context, or entity type/name, and runtime UTC time",
+        "recipient": "In-process identifiers subsequently used in memory records",
+        "condition": "Called during remember, learn, and track_entity. For an existing entity, track_entity ultimately reuses its stored ID.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 167,
+            "end_line": 171,
+            "quote": "    def _generate_id(self, content: str) -> str:\n        \"\"\"Generate a unique ID for content.\"\"\"\n        timestamp = datetime.utcnow().isoformat()\n        hash_input = f\"{content}{timestamp}\"\n        return hashlib.sha256(hash_input.encode()).hexdigest()[:12]"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 195,
+            "end_line": 195,
+            "quote": "        fact_id = self._generate_id(content)"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 396,
+            "end_line": 396,
+            "quote": "        lesson_id = self._generate_id(f\"{action}{context}\")"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 477,
+            "end_line": 477,
+            "quote": "        entity_id = self._generate_id(f\"{entity_type}:{name}\")"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 493,
+            "end_line": 498,
+            "quote": "            cursor.execute(\"\"\"\n                UPDATE entities \n                SET attributes = ?, last_updated = ?\n                WHERE id = ?\n            \"\"\", (json.dumps(attributes), now, existing[0]))\n            entity_id = existing[0]"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Save",
+        "data": "Fact content, JSON tags, caller-provided source label, confidence, generated ID, creation/access timestamps, initial access count of 1, and optional expiration. Content and tags are also copied into the FTS index. A source label such as conversation or inference does not itself cause a read from that source.",
+        "source": "remember arguments and generated metadata; the inserted facts row supplies the FTS copy",
+        "recipient": "SQLite database at self.db_path, facts and facts_fts tables; default ~/.agent-memory/memory.db or a caller-specified database",
+        "condition": "On remember invocation. Expiration is NULL unless expires_in_days is truthy, in which case it is UTC time plus that number of days. The skill recommends storing important facts after conversations.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 40,
+            "end_line": 40,
+            "quote": "- **After conversations**: Store important facts"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 102,
+            "end_line": 108,
+            "quote": "        if db_path is None:\n            db_dir = Path.home() / \".agent-memory\"\n            db_dir.mkdir(exist_ok=True)\n            db_path = str(db_dir / \"memory.db\")\n        \n        self.db_path = db_path\n        self._init_db()"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 179,
+            "end_line": 181,
+            "quote": "    def remember(self, content: str, tags: List[str] = None, \n                 source: str = \"conversation\", confidence: float = 1.0,\n                 expires_in_days: int = None) -> str:"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 195,
+            "end_line": 220,
+            "quote": "        fact_id = self._generate_id(content)\n        now = self._now()\n        tags = tags or []\n        \n        expires_at = None\n        if expires_in_days:\n            expires_at = (datetime.utcnow() + timedelta(days=expires_in_days)).isoformat()\n        \n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"\"\"\n            INSERT INTO facts (id, content, tags, source, confidence, \n                             created_at, last_accessed, access_count, expires_at)\n            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)\n        \"\"\", (fact_id, content, json.dumps(tags), source, confidence, \n              now, now, expires_at))\n        \n        # Add to FTS index\n        cursor.execute(\"\"\"\n            INSERT INTO facts_fts (rowid, content, tags)\n            SELECT rowid, content, tags FROM facts WHERE id = ?\n        \"\"\", (fact_id,))\n        \n        conn.commit()\n        conn.close()"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 49,
+            "end_line": 56,
+            "quote": "    if args.command == \"add\":\n        fact_id = mem.remember(\n            args.content,\n            tags=args.tags,\n            source=args.source,\n            confidence=args.confidence,\n            expires_in_days=args.expires\n        )"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Read",
+        "data": "Matching fact records, including content, tags, provenance label, confidence, timestamps, access count, expiration, and supersession marker, returned as Fact objects.",
+        "source": "SQLite self.db_path, facts joined with facts_fts",
+        "recipient": "Calling agent or program",
+        "condition": "On recall invocation; FTS query, confidence threshold, unexpired status, and absence of supersession are checked in SQL. Results are ranked and limited before an optional all-tags filter. The skill recommends relevant recall at session start.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 51,
+            "end_line": 54,
+            "quote": "On session start:\n1. Load recent lessons: `mem.get_lessons(limit=5)`\n2. Check entity context for current task\n3. Recall relevant facts"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 224,
+            "end_line": 225,
+            "quote": "    def recall(self, query: str, limit: int = 10, \n               tags: List[str] = None, min_confidence: float = 0) -> List[Fact]:"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 238,
+            "end_line": 253,
+            "quote": "        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        # Full-text search\n        cursor.execute(\"\"\"\n            SELECT f.* FROM facts f\n            JOIN facts_fts fts ON f.rowid = fts.rowid\n            WHERE facts_fts MATCH ?\n            AND f.confidence >= ?\n            AND (f.expires_at IS NULL OR f.expires_at > ?)\n            AND f.superseded_by IS NULL\n            ORDER BY fts.rank\n            LIMIT ?\n        \"\"\", (query, min_confidence, self._now(), limit))\n        \n        rows = cursor.fetchall()"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 256,
+            "end_line": 268,
+            "quote": "        for row in rows:\n            fact = Fact(\n                id=row[0], content=row[1], tags=json.loads(row[2] or \"[]\"),\n                source=row[3], confidence=row[4], created_at=row[5],\n                last_accessed=row[6], access_count=row[7],\n                expires_at=row[8], superseded_by=row[9]\n            )\n            \n            # Filter by tags if specified\n            if tags and not all(t in fact.tags for t in tags):\n                continue\n            \n            facts.append(fact)"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 279,
+            "end_line": 279,
+            "quote": "        return facts"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 59,
+            "end_line": 60,
+            "quote": "    elif args.command == \"recall\":\n        facts = mem.recall(args.query, limit=args.limit, tags=args.tags)"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Save",
+        "data": "Updated last_accessed timestamp and incremented access_count for recalled facts.",
+        "source": "Accepted recall results and current UTC time",
+        "recipient": "SQLite self.db_path, corresponding facts rows",
+        "condition": "Only for recalled facts that pass the optional tag filter; committed before recall returns.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 256,
+            "end_line": 276,
+            "quote": "        for row in rows:\n            fact = Fact(\n                id=row[0], content=row[1], tags=json.loads(row[2] or \"[]\"),\n                source=row[3], confidence=row[4], created_at=row[5],\n                last_accessed=row[6], access_count=row[7],\n                expires_at=row[8], superseded_by=row[9]\n            )\n            \n            # Filter by tags if specified\n            if tags and not all(t in fact.tags for t in tags):\n                continue\n            \n            facts.append(fact)\n            \n            # Update access stats\n            cursor.execute(\"\"\"\n                UPDATE facts SET last_accessed = ?, access_count = access_count + 1\n                WHERE id = ?\n            \"\"\", (self._now(), fact.id))\n        \n        conn.commit()"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 173,
+            "end_line": 175,
+            "quote": "    def _now(self) -> str:\n        \"\"\"Current UTC timestamp.\"\"\"\n        return datetime.utcnow().isoformat()"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "A fact selected by ID, mapped into a Fact object.",
+        "source": "SQLite self.db_path, facts table",
+        "recipient": "Calling agent or program",
+        "condition": "On get_fact invocation; returns None if absent. No expiration or supersession exclusion and no access-stat update are shown.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 281,
+            "end_line": 298,
+            "quote": "    def get_fact(self, fact_id: str) -> Optional[Fact]:\n        \"\"\"Get a specific fact by ID.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"SELECT * FROM facts WHERE id = ?\", (fact_id,))\n        row = cursor.fetchone()\n        conn.close()\n        \n        if not row:\n            return None\n        \n        return Fact(\n            id=row[0], content=row[1], tags=json.loads(row[2] or \"[]\"),\n            source=row[3], confidence=row[4], created_at=row[5],\n            last_accessed=row[6], access_count=row[7],\n            expires_at=row[8], superseded_by=row[9]\n        )"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Read",
+        "data": "Fact records listed as Fact objects, including stored content and metadata.",
+        "source": "SQLite self.db_path, facts table",
+        "recipient": "Calling agent or program",
+        "condition": "On list_facts invocation; superseded facts are excluded by default. SQL sorts newest first and limits results before optional any-tag filtering. Expiration is not filtered.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 300,
+            "end_line": 331,
+            "quote": "    def list_facts(self, tags: List[str] = None, limit: int = 50, \n                   include_superseded: bool = False) -> List[Fact]:\n        \"\"\"List all facts, optionally filtered by tags.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        query = \"SELECT * FROM facts WHERE 1=1\"\n        params = []\n        \n        if not include_superseded:\n            query += \" AND superseded_by IS NULL\"\n        \n        query += \" ORDER BY created_at DESC LIMIT ?\"\n        params.append(limit)\n        \n        cursor.execute(query, params)\n        rows = cursor.fetchall()\n        conn.close()\n        \n        facts = []\n        for row in rows:\n            fact = Fact(\n                id=row[0], content=row[1], tags=json.loads(row[2] or \"[]\"),\n                source=row[3], confidence=row[4], created_at=row[5],\n                last_accessed=row[6], access_count=row[7],\n                expires_at=row[8], superseded_by=row[9]\n            )\n            if tags and not any(t in fact.tags for t in tags):\n                continue\n            facts.append(fact)\n        \n        return facts"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 67,
+            "end_line": 68,
+            "quote": "    elif args.command == \"list\":\n        facts = mem.list_facts(tags=args.tags, limit=args.limit)"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Save",
+        "data": "Replacement fact and a superseded_by reference from the old fact to the new fact ID; the old fact is retained.",
+        "source": "Caller-supplied old_fact_id, new_content, and keyword arguments; new ID returned by remember",
+        "recipient": "SQLite self.db_path, facts table and replacement fact's FTS entry",
+        "condition": "On supersede invocation. The replacement is inserted before updating the old row, without first checking whether the old ID exists.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 333,
+            "end_line": 349,
+            "quote": "    def supersede(self, old_fact_id: str, new_content: str, **kwargs) -> str:\n        \"\"\"\n        Replace a fact with updated information.\n        Keeps the old fact for history but marks it superseded.\n        \"\"\"\n        new_id = self.remember(new_content, **kwargs)\n        \n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        cursor.execute(\n            \"UPDATE facts SET superseded_by = ? WHERE id = ?\",\n            (new_id, old_fact_id)\n        )\n        conn.commit()\n        conn.close()\n        \n        return new_id"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 206,
+            "end_line": 219,
+            "quote": "        cursor.execute(\"\"\"\n            INSERT INTO facts (id, content, tags, source, confidence, \n                             created_at, last_accessed, access_count, expires_at)\n            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)\n        \"\"\", (fact_id, content, json.dumps(tags), source, confidence, \n              now, now, expires_at))\n        \n        # Add to FTS index\n        cursor.execute(\"\"\"\n            INSERT INTO facts_fts (rowid, content, tags)\n            SELECT rowid, content, tags FROM facts WHERE id = ?\n        \"\"\", (fact_id,))\n        \n        conn.commit()"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 73,
+            "end_line": 74,
+            "quote": "    elif args.command == \"supersede\":\n        new_fact = mem.supersede(args.fact_id, args.new_content)"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Delete",
+        "data": "Fact row matching the supplied ID. This method shows no deletion of its FTS copy or entity references.",
+        "source": "SQLite self.db_path, facts table",
+        "recipient": null,
+        "condition": "On explicit forget(fact_id) invocation.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 351,
+            "end_line": 357,
+            "quote": "    def forget(self, fact_id: str):\n        \"\"\"Permanently delete a fact.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        cursor.execute(\"DELETE FROM facts WHERE id = ?\", (fact_id,))\n        conn.commit()\n        conn.close()"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Delete",
+        "data": "Stale, low-access, unsuperseded fact rows. This method shows no deletion of FTS copies or entity references.",
+        "source": "SQLite self.db_path, facts table",
+        "recipient": null,
+        "condition": "On forget_stale invocation, including the fact CLI forget command. Defaults: last_accessed earlier than UTC now minus 30 days, access_count at most 1, and superseded_by NULL. No automatic scheduler or expiration-based deletion is implemented here.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 359,
+            "end_line": 379,
+            "quote": "    def forget_stale(self, days: int = 30, min_access_count: int = 1):\n        \"\"\"\n        Remove facts that haven't been accessed in N days\n        and have low access counts.\n        \"\"\"\n        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()\n        \n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        cursor.execute(\"\"\"\n            DELETE FROM facts \n            WHERE last_accessed < ? \n            AND access_count <= ?\n            AND superseded_by IS NULL\n        \"\"\", (cutoff, min_access_count))\n        \n        deleted = cursor.rowcount\n        conn.commit()\n        conn.close()\n        \n        return deleted"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 80,
+            "end_line": 81,
+            "quote": "    elif args.command == \"forget\":\n        count = mem.forget_stale(days=args.days)"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Save",
+        "data": "Lesson action, context, outcome, supplied insight, generated ID, and creation timestamp. The method stores an insight supplied by its caller rather than deriving one.",
+        "source": "learn arguments and generated metadata; CLI values when the lesson add command is used",
+        "recipient": "SQLite self.db_path, lessons table",
+        "condition": "On learn invocation. The skill recommends recording lessons after failures and on session end. No lesson retention deadline is implemented in this operation.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 41,
+            "end_line": 41,
+            "quote": "- **After failures**: Record lessons learned"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 56,
+            "end_line": 59,
+            "quote": "On session end:\n1. Extract durable facts from conversation\n2. Record any lessons learned\n3. Update entity information"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 383,
+            "end_line": 383,
+            "quote": "    def learn(self, action: str, context: str, outcome: str, insight: str) -> str:"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 396,
+            "end_line": 409,
+            "quote": "        lesson_id = self._generate_id(f\"{action}{context}\")\n        \n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"\"\"\n            INSERT INTO lessons (id, action, context, outcome, insight, created_at)\n            VALUES (?, ?, ?, ?, ?, ?)\n        \"\"\", (lesson_id, action, context, outcome, insight, self._now()))\n        \n        conn.commit()\n        conn.close()\n        \n        return lesson_id"
+          },
+          {
+            "path": "cli/learn.py",
+            "start_line": 37,
+            "end_line": 43,
+            "quote": "    if args.command == \"add\":\n        lesson_id = mem.learn(\n            action=args.action,\n            context=args.context,\n            outcome=args.outcome,\n            insight=args.insight\n        )"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Read",
+        "data": "Lesson ID, action, context, outcome, insight, creation timestamp, and applied count returned as Lesson objects.",
+        "source": "SQLite self.db_path, lessons table",
+        "recipient": "Calling agent or program",
+        "condition": "On get_lessons invocation; optional context LIKE filter and exact outcome filter, newest first, default limit 10. The suggested session-start protocol requests limit 5.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 51,
+            "end_line": 52,
+            "quote": "On session start:\n1. Load recent lessons: `mem.get_lessons(limit=5)`"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 411,
+            "end_line": 412,
+            "quote": "    def get_lessons(self, context: str = None, outcome: str = None, \n                    limit: int = 10) -> List[Lesson]:"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 421,
+            "end_line": 449,
+            "quote": "        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        query = \"SELECT * FROM lessons WHERE 1=1\"\n        params = []\n        \n        if context:\n            query += \" AND context LIKE ?\"\n            params.append(f\"%{context}%\")\n        \n        if outcome:\n            query += \" AND outcome = ?\"\n            params.append(outcome)\n        \n        query += \" ORDER BY created_at DESC LIMIT ?\"\n        params.append(limit)\n        \n        cursor.execute(query, params)\n        rows = cursor.fetchall()\n        conn.close()\n        \n        return [\n            Lesson(\n                id=row[0], action=row[1], context=row[2],\n                outcome=row[3], insight=row[4], created_at=row[5],\n                applied_count=row[6]\n            )\n            for row in rows\n        ]"
+          },
+          {
+            "path": "cli/learn.py",
+            "start_line": 47,
+            "end_line": 48,
+            "quote": "    elif args.command == \"list\":\n        lessons = mem.get_lessons(context=args.context, outcome=args.outcome, limit=args.limit)"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Save",
+        "data": "Incremented applied_count for the selected lesson.",
+        "source": "Existing lesson counter and caller-supplied lesson ID",
+        "recipient": "SQLite self.db_path, lessons table",
+        "condition": "On apply_lesson invocation, including the lesson CLI apply command.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 451,
+            "end_line": 460,
+            "quote": "    def apply_lesson(self, lesson_id: str):\n        \"\"\"Mark a lesson as applied (increment counter).\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        cursor.execute(\n            \"UPDATE lessons SET applied_count = applied_count + 1 WHERE id = ?\",\n            (lesson_id,)\n        )\n        conn.commit()\n        conn.close()"
+          },
+          {
+            "path": "cli/learn.py",
+            "start_line": 56,
+            "end_line": 57,
+            "quote": "    elif args.command == \"apply\":\n        mem.apply_lesson(args.lesson_id)"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Read",
+        "data": "Existing entity ID used to decide between updating and creating an entity.",
+        "source": "SQLite self.db_path, entities table",
+        "recipient": "track_entity control flow",
+        "condition": "On track_entity invocation; lookup matches both caller-supplied name and entity_type.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 464,
+            "end_line": 465,
+            "quote": "    def track_entity(self, name: str, entity_type: str, \n                     attributes: Dict[str, Any] = None) -> str:"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 481,
+            "end_line": 491,
+            "quote": "        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        # Check if entity exists\n        cursor.execute(\n            \"SELECT id FROM entities WHERE name = ? AND entity_type = ?\",\n            (name, entity_type)\n        )\n        existing = cursor.fetchone()\n        \n        if existing:"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Save",
+        "data": "Entity name, type, JSON attributes, ID, first_seen and last_updated timestamps, and an initially empty fact_ids list for new entities. Existing entities have their entire attributes object replaced and last_updated changed.",
+        "source": "track_entity arguments and generated metadata; CLI track values when used",
+        "recipient": "SQLite self.db_path, entities table",
+        "condition": "On track_entity invocation; matching name/type updates the existing row, otherwise a row is inserted. Missing or falsey attributes become an empty object. The skill recommends tracking new people/projects.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 42,
+            "end_line": 42,
+            "quote": "- **Meeting new people/projects**: Track as entities"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 464,
+            "end_line": 465,
+            "quote": "    def track_entity(self, name: str, entity_type: str, \n                     attributes: Dict[str, Any] = None) -> str:"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 477,
+            "end_line": 510,
+            "quote": "        entity_id = self._generate_id(f\"{entity_type}:{name}\")\n        now = self._now()\n        attributes = attributes or {}\n        \n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        # Check if entity exists\n        cursor.execute(\n            \"SELECT id FROM entities WHERE name = ? AND entity_type = ?\",\n            (name, entity_type)\n        )\n        existing = cursor.fetchone()\n        \n        if existing:\n            # Update existing\n            cursor.execute(\"\"\"\n                UPDATE entities \n                SET attributes = ?, last_updated = ?\n                WHERE id = ?\n            \"\"\", (json.dumps(attributes), now, existing[0]))\n            entity_id = existing[0]\n        else:\n            # Create new\n            cursor.execute(\"\"\"\n                INSERT INTO entities (id, name, entity_type, attributes, \n                                     first_seen, last_updated, fact_ids)\n                VALUES (?, ?, ?, ?, ?, ?, '[]')\n            \"\"\", (entity_id, name, entity_type, json.dumps(attributes), now, now))\n        \n        conn.commit()\n        conn.close()\n        \n        return entity_id"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 49,
+            "end_line": 51,
+            "quote": "    if args.command == \"track\":\n        attrs = dict(args.attr) if args.attr else {}\n        entity_id = mem.track_entity(args.name, args.type, attrs)"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Read",
+        "data": "Entity ID, name, type, attributes, first_seen, last_updated, and linked fact IDs returned as an Entity object.",
+        "source": "SQLite self.db_path, entities table",
+        "recipient": "Calling agent or program",
+        "condition": "On get_entity invocation, including after update_entity; name is required, type filtering is optional, and the first matching row is used. Returns None if absent.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 512,
+            "end_line": 536,
+            "quote": "    def get_entity(self, name: str, entity_type: str = None) -> Optional[Entity]:\n        \"\"\"Get an entity by name.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        if entity_type:\n            cursor.execute(\n                \"SELECT * FROM entities WHERE name = ? AND entity_type = ?\",\n                (name, entity_type)\n            )\n        else:\n            cursor.execute(\"SELECT * FROM entities WHERE name = ?\", (name,))\n        \n        row = cursor.fetchone()\n        conn.close()\n        \n        if not row:\n            return None\n        \n        return Entity(\n            id=row[0], name=row[1], entity_type=row[2],\n            attributes=json.loads(row[3] or \"{}\"),\n            first_seen=row[4], last_updated=row[5],\n            fact_ids=json.loads(row[6] or \"[]\")\n        )"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 610,
+            "end_line": 610,
+            "quote": "        return self.get_entity(name, entity_type)"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 56,
+            "end_line": 57,
+            "quote": "    elif args.command == \"get\":\n        entity = mem.get_entity(args.name, entity_type=args.type)"
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Read",
+        "data": "An entity ID and its existing linked fact IDs.",
+        "source": "SQLite self.db_path, entities table",
+        "recipient": "link_fact_to_entity",
+        "condition": "On link_fact_to_entity invocation; lookup uses entity name without a type filter and takes the first row.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 538,
+            "end_line": 547,
+            "quote": "    def link_fact_to_entity(self, entity_name: str, fact_id: str):\n        \"\"\"Link a fact to an entity.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"SELECT id, fact_ids FROM entities WHERE name = ?\", (entity_name,))\n        row = cursor.fetchone()\n        \n        if row:\n            fact_ids = json.loads(row[1] or \"[]\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Save",
+        "data": "Updated JSON list linking an entity to a caller-supplied fact ID.",
+        "source": "Existing entity fact_ids list and supplied fact_id",
+        "recipient": "SQLite self.db_path, selected entities row",
+        "condition": "Only if an entity row exists and the fact ID is not already listed. The operation does not query the facts table to verify the ID.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 538,
+            "end_line": 556,
+            "quote": "    def link_fact_to_entity(self, entity_name: str, fact_id: str):\n        \"\"\"Link a fact to an entity.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"SELECT id, fact_ids FROM entities WHERE name = ?\", (entity_name,))\n        row = cursor.fetchone()\n        \n        if row:\n            fact_ids = json.loads(row[1] or \"[]\")\n            if fact_id not in fact_ids:\n                fact_ids.append(fact_id)\n                cursor.execute(\n                    \"UPDATE entities SET fact_ids = ? WHERE id = ?\",\n                    (json.dumps(fact_ids), row[0])\n                )\n        \n        conn.commit()\n        conn.close()"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 85,
+            "end_line": 86,
+            "quote": "    elif args.command == \"link\":\n        mem.link_fact_to_entity(args.name, args.fact_id)"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Read",
+        "data": "Entity records with attributes, timestamps, and linked fact IDs, returned as Entity objects.",
+        "source": "SQLite self.db_path, entities table",
+        "recipient": "Calling agent or program",
+        "condition": "On list_entities invocation; optional exact entity_type filter, ordered by last_updated descending, with no result limit shown.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 558,
+            "end_line": 582,
+            "quote": "    def list_entities(self, entity_type: str = None) -> List[Entity]:\n        \"\"\"List all entities, optionally filtered by type.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        if entity_type:\n            cursor.execute(\n                \"SELECT * FROM entities WHERE entity_type = ? ORDER BY last_updated DESC\",\n                (entity_type,)\n            )\n        else:\n            cursor.execute(\"SELECT * FROM entities ORDER BY last_updated DESC\")\n        \n        rows = cursor.fetchall()\n        conn.close()\n        \n        return [\n            Entity(\n                id=row[0], name=row[1], entity_type=row[2],\n                attributes=json.loads(row[3] or \"{}\"),\n                first_seen=row[4], last_updated=row[5],\n                fact_ids=json.loads(row[6] or \"[]\")\n            )\n            for row in rows\n        ]"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 77,
+            "end_line": 78,
+            "quote": "    elif args.command == \"list\":\n        entities = mem.list_entities(entity_type=args.type)"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Read",
+        "data": "Existing entity ID and attributes used to prepare a merged update.",
+        "source": "SQLite self.db_path, entities table",
+        "recipient": "update_entity",
+        "condition": "On update_entity invocation; exact name/type match. Returns None without updating if no row exists.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 584,
+            "end_line": 601,
+            "quote": "    def update_entity(self, name: str, entity_type: str, \n                      attributes: Dict[str, Any]) -> Optional[Entity]:\n        \"\"\"Update entity attributes (merges with existing).\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\n            \"SELECT id, attributes FROM entities WHERE name = ? AND entity_type = ?\",\n            (name, entity_type)\n        )\n        row = cursor.fetchone()\n        \n        if not row:\n            conn.close()\n            return None\n        \n        existing_attrs = json.loads(row[1] or \"{}\")\n        existing_attrs.update(attributes)"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Save",
+        "data": "Merged entity attributes and a fresh last_updated timestamp; supplied keys overwrite matching existing keys.",
+        "source": "Existing entity attributes and update_entity arguments",
+        "recipient": "SQLite self.db_path, matching entities row",
+        "condition": "On update_entity invocation when a matching entity exists. The skill recommends updating entity information at session end.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 56,
+            "end_line": 59,
+            "quote": "On session end:\n1. Extract durable facts from conversation\n2. Record any lessons learned\n3. Update entity information"
+          },
+          {
+            "path": "src/memory.py",
+            "start_line": 584,
+            "end_line": 610,
+            "quote": "    def update_entity(self, name: str, entity_type: str, \n                      attributes: Dict[str, Any]) -> Optional[Entity]:\n        \"\"\"Update entity attributes (merges with existing).\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\n            \"SELECT id, attributes FROM entities WHERE name = ? AND entity_type = ?\",\n            (name, entity_type)\n        )\n        row = cursor.fetchone()\n        \n        if not row:\n            conn.close()\n            return None\n        \n        existing_attrs = json.loads(row[1] or \"{}\")\n        existing_attrs.update(attributes)\n        \n        cursor.execute(\n            \"UPDATE entities SET attributes = ?, last_updated = ? WHERE id = ?\",\n            (json.dumps(existing_attrs), self._now(), row[0])\n        )\n        conn.commit()\n        conn.close()\n        \n        return self.get_entity(name, entity_type)"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 69,
+            "end_line": 71,
+            "quote": "    elif args.command == \"update\":\n        attrs = dict(args.attr)\n        entity = mem.update_entity(args.name, args.type, attrs)"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Infer",
+        "data": "Aggregate counts of unsuperseded facts, superseded facts, total facts, lessons, and entities. The active_facts count uses only superseded_by status and does not exclude expired facts.",
+        "source": "SQLite self.db_path, facts, lessons, and entities tables",
+        "recipient": "Calling agent or program as a statistics dictionary",
+        "condition": "On stats invocation.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 614,
+            "end_line": 639,
+            "quote": "    def stats(self) -> Dict[str, int]:\n        \"\"\"Get memory statistics.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"SELECT COUNT(*) FROM facts WHERE superseded_by IS NULL\")\n        active_facts = cursor.fetchone()[0]\n        \n        cursor.execute(\"SELECT COUNT(*) FROM facts WHERE superseded_by IS NOT NULL\")\n        superseded_facts = cursor.fetchone()[0]\n        \n        cursor.execute(\"SELECT COUNT(*) FROM lessons\")\n        lessons = cursor.fetchone()[0]\n        \n        cursor.execute(\"SELECT COUNT(*) FROM entities\")\n        entities = cursor.fetchone()[0]\n        \n        conn.close()\n        \n        return {\n            \"active_facts\": active_facts,\n            \"superseded_facts\": superseded_facts,\n            \"total_facts\": active_facts + superseded_facts,\n            \"lessons\": lessons,\n            \"entities\": entities\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Read",
+        "data": "All fact, lesson, and entity rows, mapped to dictionaries, with an exported_at timestamp. Fact mapping includes content, tags, source, confidence, timestamps, access count, expiry, and supersession; entity mapping includes attributes and fact links.",
+        "source": "SQLite self.db_path, facts, lessons, and entities tables",
+        "recipient": "Calling agent or program as an in-process dictionary",
+        "condition": "On export_json invocation, without filtering expired or superseded facts. Despite its name, this method shows no file write or network transmission.",
+        "evidence": [
+          {
+            "path": "src/memory.py",
+            "start_line": 641,
+            "end_line": 681,
+            "quote": "    def export_json(self) -> Dict:\n        \"\"\"Export all memories as JSON.\"\"\"\n        conn = sqlite3.connect(self.db_path)\n        cursor = conn.cursor()\n        \n        cursor.execute(\"SELECT * FROM facts\")\n        facts = [\n            Fact(\n                id=r[0], content=r[1], tags=json.loads(r[2] or \"[]\"),\n                source=r[3], confidence=r[4], created_at=r[5],\n                last_accessed=r[6], access_count=r[7],\n                expires_at=r[8], superseded_by=r[9]\n            ).to_dict()\n            for r in cursor.fetchall()\n        ]\n        \n        cursor.execute(\"SELECT * FROM lessons\")\n        lessons = [\n            {\"id\": r[0], \"action\": r[1], \"context\": r[2], \n             \"outcome\": r[3], \"insight\": r[4], \"created_at\": r[5],\n             \"applied_count\": r[6]}\n            for r in cursor.fetchall()\n        ]\n        \n        cursor.execute(\"SELECT * FROM entities\")\n        entities = [\n            {\"id\": r[0], \"name\": r[1], \"entity_type\": r[2],\n             \"attributes\": json.loads(r[3] or \"{}\"),\n             \"first_seen\": r[4], \"last_updated\": r[5],\n             \"fact_ids\": json.loads(r[6] or \"[]\")}\n            for r in cursor.fetchall()\n        ]\n        \n        conn.close()\n        \n        return {\n            \"exported_at\": self._now(),\n            \"facts\": facts,\n            \"lessons\": lessons,\n            \"entities\": entities\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Read",
+        "data": "Command-line command and operation arguments, including an optional database path, parsed by the fact, lesson, and entity wrappers.",
+        "source": "Process command-line arguments",
+        "recipient": "CLI argument objects and AgentMemory instances initialized with args.db",
+        "condition": "When a corresponding CLI main function runs.",
+        "evidence": [
+          {
+            "path": "cli/fact.py",
+            "start_line": 14,
+            "end_line": 16,
+            "quote": "    parser = argparse.ArgumentParser(description=\"Manage agent memory facts\")\n    parser.add_argument(\"--db\", help=\"Database path\", default=None)\n    subparsers = parser.add_subparsers(dest=\"command\", required=True)"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 46,
+            "end_line": 47,
+            "quote": "    args = parser.parse_args()\n    mem = AgentMemory(db_path=args.db)"
+          },
+          {
+            "path": "cli/learn.py",
+            "start_line": 13,
+            "end_line": 15,
+            "quote": "    parser = argparse.ArgumentParser(description=\"Manage agent lessons learned\")\n    parser.add_argument(\"--db\", help=\"Database path\", default=None)\n    subparsers = parser.add_subparsers(dest=\"command\", required=True)"
+          },
+          {
+            "path": "cli/learn.py",
+            "start_line": 34,
+            "end_line": 35,
+            "quote": "    args = parser.parse_args()\n    mem = AgentMemory(db_path=args.db)"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 14,
+            "end_line": 16,
+            "quote": "    parser = argparse.ArgumentParser(description=\"Manage tracked entities\")\n    parser.add_argument(\"--db\", help=\"Database path\", default=None)\n    subparsers = parser.add_subparsers(dest=\"command\", required=True)"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 46,
+            "end_line": 47,
+            "quote": "    args = parser.parse_args()\n    mem = AgentMemory(db_path=args.db)"
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Send",
+        "data": "Fact CLI output: added fact ID and first 60 content characters; recalled fact IDs, full contents and tags; listed IDs, first 70 content characters and tags; stale deletion count and requested age threshold.",
+        "source": "CLI arguments and AgentMemory operation results",
+        "recipient": "Process standard output; any downstream capture is unknown",
+        "condition": "When the add, recall, list, or forget branch runs and reaches its print statements.",
+        "evidence": [
+          {
+            "path": "cli/fact.py",
+            "start_line": 49,
+            "end_line": 57,
+            "quote": "    if args.command == \"add\":\n        fact_id = mem.remember(\n            args.content,\n            tags=args.tags,\n            source=args.source,\n            confidence=args.confidence,\n            expires_in_days=args.expires\n        )\n        print(f\"✅ Remembered [{fact_id}]: {args.content[:60]}...\")"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 59,
+            "end_line": 71,
+            "quote": "    elif args.command == \"recall\":\n        facts = mem.recall(args.query, limit=args.limit, tags=args.tags)\n        if not facts:\n            print(\"No matching facts found.\")\n        for f in facts:\n            tags = \" \".join(f\"#{t}\" for t in f.tags) if f.tags else \"\"\n            print(f\"[{f.id}] {f.content} {tags}\")\n            \n    elif args.command == \"list\":\n        facts = mem.list_facts(tags=args.tags, limit=args.limit)\n        for f in facts:\n            tags = \" \".join(f\"#{t}\" for t in f.tags) if f.tags else \"\"\n            print(f\"[{f.id}] {f.content[:70]}... {tags}\")"
+          },
+          {
+            "path": "cli/fact.py",
+            "start_line": 80,
+            "end_line": 82,
+            "quote": "    elif args.command == \"forget\":\n        count = mem.forget_stale(days=args.days)\n        print(f\"🗑️ Forgot {count} stale facts (>{args.days} days old)\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Send",
+        "data": "Lesson CLI output: added lesson ID and first 60 insight characters; listed lesson IDs, contexts, insights, actions and applied counts; confirmation containing the supplied lesson ID.",
+        "source": "CLI lesson arguments and AgentMemory lesson results",
+        "recipient": "Process standard output; any downstream capture is unknown",
+        "condition": "When the lesson add, list, or apply branch reaches its print statements. Outcome selects the displayed emoji.",
+        "evidence": [
+          {
+            "path": "cli/learn.py",
+            "start_line": 37,
+            "end_line": 45,
+            "quote": "    if args.command == \"add\":\n        lesson_id = mem.learn(\n            action=args.action,\n            context=args.context,\n            outcome=args.outcome,\n            insight=args.insight\n        )\n        emoji = {\"positive\": \"✅\", \"negative\": \"❌\", \"neutral\": \"➖\"}[args.outcome]\n        print(f\"{emoji} Lesson [{lesson_id}]: {args.insight[:60]}...\")"
+          },
+          {
+            "path": "cli/learn.py",
+            "start_line": 47,
+            "end_line": 58,
+            "quote": "    elif args.command == \"list\":\n        lessons = mem.get_lessons(context=args.context, outcome=args.outcome, limit=args.limit)\n        if not lessons:\n            print(\"No lessons found.\")\n        for l in lessons:\n            emoji = {\"positive\": \"✅\", \"negative\": \"❌\", \"neutral\": \"➖\"}[l.outcome]\n            print(f\"{emoji} [{l.id}] {l.context}: {l.insight}\")\n            print(f\"   Action: {l.action} | Applied: {l.applied_count}x\")\n            \n    elif args.command == \"apply\":\n        mem.apply_lesson(args.lesson_id)\n        print(f\"📝 Marked lesson {args.lesson_id} as applied\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Send",
+        "data": "Entity CLI output: tracked type/name/ID and supplied attributes; retrieved name/type/ID/timestamps/full attributes and linked-fact count; update attributes; list previews of the first three attributes; linked fact ID and entity name.",
+        "source": "CLI entity arguments and AgentMemory entity results",
+        "recipient": "Process standard output; any downstream capture is unknown",
+        "condition": "When the corresponding entity command reaches its print statements; missing entities produce status messages.",
+        "evidence": [
+          {
+            "path": "cli/entity.py",
+            "start_line": 49,
+            "end_line": 54,
+            "quote": "    if args.command == \"track\":\n        attrs = dict(args.attr) if args.attr else {}\n        entity_id = mem.track_entity(args.name, args.type, attrs)\n        print(f\"✅ Tracking [{args.type}] {args.name} (id: {entity_id})\")\n        if attrs:\n            print(f\"   Attributes: {json.dumps(attrs)}\")"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 56,
+            "end_line": 67,
+            "quote": "    elif args.command == \"get\":\n        entity = mem.get_entity(args.name, entity_type=args.type)\n        if not entity:\n            print(f\"❌ Entity '{args.name}' not found\")\n            sys.exit(1)\n        print(f\"[{entity.entity_type}] {entity.name}\")\n        print(f\"  ID: {entity.id}\")\n        print(f\"  First seen: {entity.first_seen}\")\n        print(f\"  Last updated: {entity.last_updated}\")\n        print(f\"  Attributes: {json.dumps(entity.attributes, indent=2)}\")\n        if entity.fact_ids:\n            print(f\"  Linked facts: {len(entity.fact_ids)}\")"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 69,
+            "end_line": 75,
+            "quote": "    elif args.command == \"update\":\n        attrs = dict(args.attr)\n        entity = mem.update_entity(args.name, args.type, attrs)\n        if entity:\n            print(f\"✅ Updated {entity.name}: {json.dumps(attrs)}\")\n        else:\n            print(f\"❌ Entity not found\")"
+          },
+          {
+            "path": "cli/entity.py",
+            "start_line": 77,
+            "end_line": 87,
+            "quote": "    elif args.command == \"list\":\n        entities = mem.list_entities(entity_type=args.type)\n        if not entities:\n            print(\"No entities found.\")\n        for e in entities:\n            attr_preview = \", \".join(f\"{k}={v}\" for k, v in list(e.attributes.items())[:3])\n            print(f\"[{e.entity_type}] {e.name} ({attr_preview})\")\n            \n    elif args.command == \"link\":\n        mem.link_fact_to_entity(args.name, args.fact_id)\n        print(f\"🔗 Linked fact {args.fact_id} to {args.name}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Save",
+        "data": "Hard-coded example facts about communication preferences, an API limit and a meeting schedule; deployment/trading lessons; Alex's role, timezone, communication style and interests; DataDeck project attributes including a URL string.",
+        "source": "Literal values in examples/basic_usage.py",
+        "recipient": "SQLite database /tmp/agent-memory-example.db through AgentMemory",
+        "condition": "If the example module executes successfully. No deletion of this database is shown; the comment calling the path temporary does not implement cleanup. The project URL is stored as an attribute, with no request to it shown.",
+        "evidence": [
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 11,
+            "end_line": 13,
+            "quote": "# Initialize memory (creates ~/.agent-memory/memory.db by default)\n# Use a temporary path for this example\nmem = AgentMemory(db_path=\"/tmp/agent-memory-example.db\")"
+          },
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 20,
+            "end_line": 33,
+            "quote": "mem.remember(\n    \"Boss prefers brief status updates over long explanations\",\n    tags=[\"preference\", \"communication\", \"boss\"]\n)\n\nmem.remember(\n    \"API rate limit for the trading service is 100 requests per minute\",\n    tags=[\"technical\", \"api\", \"trading\"]\n)\n\nmem.remember(\n    \"Weekly standup is every Monday at 9am EST\",\n    tags=[\"schedule\", \"meeting\"]\n)"
+          },
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 38,
+            "end_line": 50,
+            "quote": "mem.learn(\n    action=\"Deployed code directly to production without testing\",\n    context=\"deployment\",\n    outcome=\"negative\",\n    insight=\"Always run the full test suite before deploying, no matter how small the change\"\n)\n\nmem.learn(\n    action=\"Used quarter-Kelly position sizing for trades\",\n    context=\"trading\",\n    outcome=\"positive\",\n    insight=\"Conservative position sizing prevents large drawdowns and allows recovery from bad streaks\"\n)"
+          },
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 55,
+            "end_line": 67,
+            "quote": "mem.track_entity(\"Alex\", \"person\", {\n    \"role\": \"boss\",\n    \"timezone\": \"America/New_York\",\n    \"communication_style\": \"direct\",\n    \"interests\": [\"AI\", \"trading\", \"automation\"]\n})\n\nmem.track_entity(\"DataDeck\", \"project\", {\n    \"type\": \"SaaS\",\n    \"status\": \"completed\",\n    \"features\": 59,\n    \"url\": \"https://datadeck-preview.vercel.app\"\n})"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Send",
+        "data": "Example output containing up to three recalled fact contents, deployment lesson actions and insights, Alex's name/type/attributes, and counts of active facts, lessons, and entities.",
+        "source": "AgentMemory reads and statistics from /tmp/agent-memory-example.db",
+        "recipient": "Process standard output; any downstream capture is unknown",
+        "condition": "If examples/basic_usage.py executes and reaches these operations; entity details print only if Alex is found.",
+        "evidence": [
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "mem = AgentMemory(db_path=\"/tmp/agent-memory-example.db\")"
+          },
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 74,
+            "end_line": 76,
+            "quote": "facts = mem.recall(\"boss communication updates\")\nfor f in facts[:3]:\n    print(f\"  → {f.content}\")"
+          },
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 82,
+            "end_line": 85,
+            "quote": "lessons = mem.get_lessons(context=\"deployment\", outcome=\"negative\")\nfor l in lessons:\n    print(f\"  → Action: {l.action}\")\n    print(f\"    Lesson: {l.insight}\")"
+          },
+          {
+            "path": "examples/basic_usage.py",
+            "start_line": 91,
+            "end_line": 102,
+            "quote": "alex = mem.get_entity(\"Alex\", \"person\")\nif alex:\n    print(f\"  → Name: {alex.name}\")\n    print(f\"  → Type: {alex.entity_type}\")\n    print(f\"  → Attributes: {alex.attributes}\")\n\n# ==================== STATS ====================\nprint(\"\\n📊 Memory stats:\")\nstats = mem.stats()\nprint(f\"  Active facts: {stats['active_facts']}\")\nprint(f\"  Lessons: {stats['lessons']}\")\nprint(f\"  Entities: {stats['entities']}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Save",
+        "data": "Synthetic test facts, lessons, entities, and replacement-fact metadata, with normal generated memory metadata, stored in per-test databases.",
+        "source": "Literal test inputs in tests/test_memory.py",
+        "recipient": "NamedTemporaryFile-generated .db paths passed to AgentMemory; exact paths are runtime-dependent",
+        "condition": "When the respective tests run. Temporary files use delete=False and are explicitly unlinked in finally blocks.",
+        "evidence": [
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 14,
+            "end_line": 24,
+            "quote": "def test_basic_facts():\n    \"\"\"Test basic fact operations.\"\"\"\n    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)\n        \n        # Remember\n        fact_id = mem.remember(\"Test fact\", tags=[\"test\"])\n        assert fact_id is not None"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 47,
+            "end_line": 61,
+            "quote": "def test_lessons():\n    \"\"\"Test lesson learning.\"\"\"\n    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)\n        \n        # Learn\n        lesson_id = mem.learn(\n            action=\"Test action\",\n            context=\"testing\",\n            outcome=\"positive\",\n            insight=\"Tests are good\"\n        )"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 82,
+            "end_line": 95,
+            "quote": "def test_entities():\n    \"\"\"Test entity tracking.\"\"\"\n    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)\n        \n        # Track\n        entity_id = mem.track_entity(\n            \"TestPerson\",\n            \"person\",\n            {\"role\": \"tester\"}\n        )"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 105,
+            "end_line": 105,
+            "quote": "        mem.track_entity(\"TestPerson\", \"person\", {\"role\": \"senior tester\"})"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 114,
+            "end_line": 126,
+            "quote": "def test_supersede():\n    \"\"\"Test fact superseding.\"\"\"\n    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)\n        \n        # Create original\n        old_id = mem.remember(\"Old fact\")\n        \n        # Supersede\n        new_id = mem.supersede(old_id, \"New fact\")"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 143,
+            "end_line": 154,
+            "quote": "def test_stats():\n    \"\"\"Test statistics.\"\"\"\n    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)\n        \n        mem.remember(\"Fact 1\")\n        mem.remember(\"Fact 2\")\n        mem.learn(\"Action\", \"context\", \"positive\", \"insight\")\n        mem.track_entity(\"Entity\", \"type\", {})"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 166,
+            "end_line": 176,
+            "quote": "def test_export():\n    \"\"\"Test JSON export.\"\"\"\n    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)\n        \n        mem.remember(\"Export test fact\", tags=[\"export\"])\n        mem.learn(\"Export action\", \"export\", \"neutral\", \"Export insight\")\n        mem.track_entity(\"ExportEntity\", \"test\", {\"key\": \"value\"})"
+          }
+        ]
+      },
+      {
+        "move_id": "m31",
+        "operation": "Delete",
+        "data": "Per-test temporary SQLite database files, including their stored test memories.",
+        "source": "Runtime-generated db_path files from tempfile.NamedTemporaryFile",
+        "recipient": null,
+        "condition": "Each test executes os.unlink(db_path) in its finally block after entering the try block, including when assertions fail. Actual deletion success is runtime-dependent.",
+        "evidence": [
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 16,
+            "end_line": 20,
+            "quote": "    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 43,
+            "end_line": 44,
+            "quote": "    finally:\n        os.unlink(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 49,
+            "end_line": 53,
+            "quote": "    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 78,
+            "end_line": 79,
+            "quote": "    finally:\n        os.unlink(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 84,
+            "end_line": 88,
+            "quote": "    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 110,
+            "end_line": 111,
+            "quote": "    finally:\n        os.unlink(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 116,
+            "end_line": 120,
+            "quote": "    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 139,
+            "end_line": 140,
+            "quote": "    finally:\n        os.unlink(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 145,
+            "end_line": 149,
+            "quote": "    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 162,
+            "end_line": 163,
+            "quote": "    finally:\n        os.unlink(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 168,
+            "end_line": 172,
+            "quote": "    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:\n        db_path = f.name\n    \n    try:\n        mem = AgentMemory(db_path)"
+          },
+          {
+            "path": "tests/test_memory.py",
+            "start_line": 186,
+            "end_line": 187,
+            "quote": "    finally:\n        os.unlink(db_path)"
+          }
+        ]
+      }
+    ]
+  }
+}

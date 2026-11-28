@@ -1,0 +1,360 @@
+{
+  "status": "completed",
+  "declared_purpose": "Publish websites and files to live URLs, with personal or workspace ownership and access controls; also provide private Drive storage and scoped sharing. Supporting workflows include authentication, updates, version recovery, and account management (SKILL.md:4–16,23–29,114–188). Documentation checks, platform attribution, and saving received API keys are explicit instructions; recursive file selection, cache retention, and sharing defaults are helper implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Retrieve service documentation",
+      "source": "Agent following the entry document",
+      "data_scope": "Current documentation and, when needed, API schemas; no instruction to attach user files or conversation content.",
+      "recipient_or_storage": "https://here.now/docs and https://here.now/openapi.json",
+      "condition": "First related interaction, capability or workflow questions, and specified management tasks. Failed retrieval permits using local source and API output.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 35, "end_line": 72}
+      ]
+    },
+    {
+      "operation": "Collect sign-in information and request an API key",
+      "source": "User-provided email address and one-time sign-in code",
+      "data_scope": "Email sent to request-code; email and code sent to verify-code; returned apiKey received by the caller.",
+      "recipient_or_storage": "Agent conversation; https://here.now/api/auth/agent/request-code and /api/auth/agent/verify-code",
+      "condition": "Documented upgrade from anonymous to permanent publishing; not required for anonymous publishing.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 228, "end_line": 248}
+      ]
+    },
+    {
+      "operation": "Persist a received account credential",
+      "source": "Agent following the explicit credential-saving instruction",
+      "data_scope": "Account API key",
+      "recipient_or_storage": "~/.herenow/credentials, with chmod 600 in the documented command",
+      "condition": "Immediately after receiving an API key. This is an entry-document requirement; neither helper implements this write.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 216, "end_line": 224},
+        {"path": "SKILL.md", "start_line": 248, "end_line": 252}
+      ]
+    },
+    {
+      "operation": "Read credentials locally and construct authorization",
+      "source": "Both helpers: flags, HERENOW_API_KEY, HERENOW_DRIVE_TOKEN, and the credentials file",
+      "data_scope": "Account API key or scoped Drive token; credential-file whitespace is removed. Drive tokens take authorization precedence over account keys.",
+      "recipient_or_storage": "Helper process memory; bearer headers on subsequent API requests",
+      "condition": "Publishing permits anonymous operation. Drive commands require credentials. Non-default API bases require an explicit override before credentials are sent.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 94, "end_line": 104},
+        {"path": "scripts/publish.sh", "start_line": 123, "end_line": 149},
+        {"path": "scripts/publish.sh", "start_line": 352, "end_line": 361},
+        {"path": "scripts/drive.sh", "start_line": 59, "end_line": 91}
+      ]
+    },
+    {
+      "operation": "Read local files and derive upload metadata",
+      "source": "publish.sh local-file path; drive.sh put/import paths",
+      "data_scope": "File names, relative paths, sizes, MIME types, SHA-256 hashes, and file bytes read for hashing. Publishing recursively includes regular files except named exclusions; Drive import has a different exclusion set.",
+      "recipient_or_storage": "Local helper processes and in-memory manifests",
+      "condition": "Selected local file or directory. Publishing excludes root .herenow/state.json and fork-meta.json; Drive import excludes root .git and node_modules trees and .DS_Store files.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 233, "end_line": 301},
+        {"path": "scripts/drive.sh", "start_line": 93, "end_line": 118},
+        {"path": "scripts/drive.sh", "start_line": 202, "end_line": 217},
+        {"path": "scripts/drive.sh", "start_line": 279, "end_line": 301}
+      ]
+    },
+    {
+      "operation": "Create or update a publication",
+      "source": "publish.sh local-file publishing path",
+      "data_scope": "Relative file paths, sizes, MIME types and hashes; optional viewer text, TTL, claimToken, folder, routing settings and baseVersionId. Headers carry an available API key, normalized client attribution, and optional workspace selector.",
+      "recipient_or_storage": "Configured BASE_URL/api/v1/publish or /api/v1/publish/{slug}; default https://here.now",
+      "condition": "Every local publication. Existing slugs use PUT; new Sites use POST. Platform attribution is explicitly requested by SKILL.md; optional instance names are also supported.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 309, "end_line": 388},
+        {"path": "SKILL.md", "start_line": 190, "end_line": 206}
+      ]
+    },
+    {
+      "operation": "Upload file bytes directly to returned storage targets",
+      "source": "publish.sh upload loop and drive.sh put_file",
+      "data_scope": "Selected file bytes and Content-Type; these PUT requests do not attach the account bearer header.",
+      "recipient_or_storage": "API-returned upload URLs, documented as *.r2.cloudflarestorage.com",
+      "condition": "Publishing uploads only response-listed files and skips files the service identifies as unchanged. Drive put uploads the selected file after creating an upload session.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 76, "end_line": 77},
+        {"path": "scripts/publish.sh", "start_line": 400, "end_line": 447},
+        {"path": "scripts/drive.sh", "start_line": 218, "end_line": 225}
+      ]
+    },
+    {
+      "operation": "Finalize a local publication",
+      "source": "publish.sh",
+      "data_scope": "versionId, available account bearer credential, client attribution, and optional workspace selector",
+      "recipient_or_storage": "The response-provided upload.finalizeUrl",
+      "condition": "After all requested uploads succeed, including when unchanged files require no upload. This required action makes the Site live; the returned URL's origin is not validated in the helper.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 93, "end_line": 103},
+        {"path": "scripts/publish.sh", "start_line": 400, "end_line": 405},
+        {"path": "scripts/publish.sh", "start_line": 456, "end_line": 473}
+      ]
+    },
+    {
+      "operation": "Request publication of a Drive snapshot",
+      "source": "publish.sh --from-drive path",
+      "data_scope": "Drive ID, optional snapshot version, target slug, viewer text, folder and routing settings; account bearer credential and client attribution",
+      "recipient_or_storage": "Configured BASE_URL/api/v1/publish/from-drive; resulting Site managed by here.now",
+      "condition": "Explicit --from-drive selection; requires an account key and rejects a local target or workspace. The documented version default is current head. Exact server-side file selection is unavailable.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 46, "end_line": 47},
+        {"path": "scripts/publish.sh", "start_line": 116, "end_line": 138},
+        {"path": "scripts/publish.sh", "start_line": 157, "end_line": 209}
+      ]
+    },
+    {
+      "operation": "Retain and serve published content and versions",
+      "source": "Documented Site service behavior",
+      "data_scope": "Published files and immutable publication versions",
+      "recipient_or_storage": "here.now-managed Sites and visitors permitted by the Site's access mode; workspace Sites belong to the team",
+      "condition": "Finalized publication. Personal default access is anyone_with_link; workspace default is member-only. Anonymous Sites expire after 24 hours; authenticated Sites are described as permanent, with optional TTL support. Byte-identical republishes do not create a new version.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 103, "end_line": 110},
+        {"path": "SKILL.md", "start_line": 126, "end_line": 138},
+        {"path": "SKILL.md", "start_line": 144, "end_line": 154},
+        {"path": "scripts/publish.sh", "start_line": 312, "end_line": 314}
+      ]
+    },
+    {
+      "operation": "Read and persist local publication state",
+      "source": "publish.sh local-file path",
+      "data_scope": "Slug, Site URL, live version ID, absolute source path, and returned claimToken, token-bearing claimUrl and expiresAt. Existing fields survive merges.",
+      "recipient_or_storage": ".herenow/state.json in the working directory",
+      "condition": "Claim tokens may be loaded for updates; base versions are reused only for the same slug and absolute source path. Successful local publications save state, including authenticated republishes. The Drive-publication branch exits before this write.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 129, "end_line": 155},
+        {"path": "scripts/publish.sh", "start_line": 196, "end_line": 231},
+        {"path": "scripts/publish.sh", "start_line": 490, "end_line": 519}
+      ]
+    },
+    {
+      "operation": "Return publication results to the caller and direct user-facing reporting",
+      "source": "publish.sh stdout/stderr and SKILL.md",
+      "data_scope": "Site and workspace URLs, claim URL when returned, slug, version IDs, folder, authentication mode, credential source category, expiry and warnings",
+      "recipient_or_storage": "Helper caller; entry document directs sharing relevant URLs and status with the user",
+      "condition": "Successful publication. A claim URL must start with https:// before the helper reports it. These returns do not independently establish disclosure to another service or log retention.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 196, "end_line": 208},
+        {"path": "scripts/publish.sh", "start_line": 538, "end_line": 585},
+        {"path": "SKILL.md", "start_line": 275, "end_line": 294}
+      ]
+    },
+    {
+      "operation": "Create Drives and read Drive metadata",
+      "source": "drive.sh create/default/ls and resolution helpers",
+      "data_scope": "Drive name and default flag on creation; Drive IDs, names, head versions, file paths and metadata on reads",
+      "recipient_or_storage": "Configured BASE_URL/api/v1/drives endpoints; results remain with the caller or helper",
+      "condition": "Requested commands or prerequisite name resolution. An explicit drv_ ID avoids name lookup; a custom name requires fetching the Drive list. Scoped tokens cannot resolve names.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 159, "end_line": 190},
+        {"path": "scripts/drive.sh", "start_line": 228, "end_line": 253}
+      ]
+    },
+    {
+      "operation": "Write files into private Drive storage",
+      "source": "drive.sh put/import",
+      "data_scope": "Destination path, size, MIME type, SHA-256 and existing ETag or ifNoneMatch; file bytes through the upload target; uploadId on finalize",
+      "recipient_or_storage": "Configured Drive uploads/finalize API and returned storage URL; selected Drive",
+      "condition": "Files at most 500 MiB. Writes preserve concurrency conditions. Import applies this per selected file; import --dry-run reads local paths and sizes and reports plans without invoking put_file.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 192, "end_line": 225},
+        {"path": "scripts/drive.sh", "start_line": 263, "end_line": 303},
+        {"path": "SKILL.md", "start_line": 174, "end_line": 188}
+      ]
+    },
+    {
+      "operation": "Read Drive file content and optionally persist it locally",
+      "source": "drive.sh cat/export",
+      "data_scope": "Requested file bytes, or paginated file paths and bytes matching an export prefix",
+      "recipient_or_storage": "Authenticated reads from configured Drive API; cat returns bytes to caller, export writes under the specified local destination",
+      "condition": "Requested cat/export. Export --dry-run still performs remote metadata listing but skips content downloads and local file writes.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 254, "end_line": 258},
+        {"path": "scripts/drive.sh", "start_line": 305, "end_line": 339}
+      ]
+    },
+    {
+      "operation": "Create and return a Drive-sharing capability",
+      "source": "drive.sh share; documented agent handoff",
+      "data_scope": "Permissions, optional pathPrefix, TTL, label and manageTokens; returned token-bearing shareBlock",
+      "recipient_or_storage": "Configured /api/v1/drives/{id}/tokens endpoint; shareBlock returns to the caller. A subsequent intended handoff gives it to another agent.",
+      "condition": "Explicit share command. Helper defaults are write permission, no prefix and no TTL field; the document says a null prefix means full-Drive access and recommends a narrow prefix and short TTL. Handoff instructions use the block's api_base.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 362, "end_line": 378},
+        {"path": "SKILL.md", "start_line": 188, "end_line": 188},
+        {"path": "SKILL.md", "start_line": 290, "end_line": 294}
+      ]
+    },
+    {
+      "operation": "Request deletion or capability revocation",
+      "source": "drive.sh rm/revoke/delete",
+      "data_scope": "File path and ETag for single-file deletion; prefix and head version for recursive deletion; token ID for revocation; Drive ID for Drive deletion",
+      "recipient_or_storage": "Configured Drive API",
+      "condition": "Requested command. Recursive file deletion requires matching path confirmation; Drive deletion requires matching Drive-name confirmation. Responses establish API requests, not physical erasure or historical-version purging.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 341, "end_line": 360},
+        {"path": "scripts/drive.sh", "start_line": 380, "end_line": 403}
+      ]
+    },
+    {
+      "operation": "Temporarily persist API response bodies and delete temporary copies",
+      "source": "drive.sh api_json",
+      "data_scope": "Complete API response bodies, potentially including Drive metadata and generated sharing credentials; errors are returned to the caller",
+      "recipient_or_storage": "Local mktemp file, then caller/process memory",
+      "condition": "Calls routed through api_json. The helper removes the temporary file after success and handled HTTP errors; no interruption cleanup trap is shown.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 120, "end_line": 141},
+        {"path": "scripts/drive.sh", "start_line": 376, "end_line": 378}
+      ]
+    },
+    {
+      "operation": "Read owned Site content and manage version recovery",
+      "source": "Agent following update and drift instructions",
+      "data_scope": "Current version ID, source and creation time; live file lists and file bytes; publication history and selected restore version",
+      "recipient_or_storage": "Authenticated here.now owner endpoints; caller and local files when reconciling",
+      "condition": "Drift checks before editing an authenticated Site not touched recently, conflict reconciliation, or requested history/rollback. Owner reads require an API key rather than a visitor password.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 124, "end_line": 126}
+      ]
+    },
+    {
+      "operation": "Manage access and account-facing metadata",
+      "source": "Agent following documented management workflows",
+      "data_scope": "Site allowlisted emails/domains, access mode and password; requested folder names, profile visibility or vanity subdomain. Vanity Site addresses are described as derived from titles.",
+      "recipient_or_storage": "here.now access, metadata, folder, profile and vanity services; permitted visitors or public-profile viewers as configured",
+      "condition": "Relevant requested workflow. Access allowlists are read, merged and replaced; folders must be user-requested. Several complete schemas are deferred to unavailable current documentation.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 29, "end_line": 29},
+        {"path": "SKILL.md", "start_line": 128, "end_line": 128},
+        {"path": "SKILL.md", "start_line": 144, "end_line": 172}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Incidental non-site files inside a publication directory, potentially including credential files, repository history or nested .herenow/state.json files",
+      "recipient_or_storage": "Publication API receives their manifest metadata; returned storage targets receive requested bytes; Site visitors may receive published content under the configured access mode.",
+      "condition": "A selected directory contains artifacts outside the intended website or shared-file set. Recursion filters only the named exclusions, including state exclusion at the root-relative path.",
+      "purpose_basis": "Publishing intended website assets and selected files; the document's directory-root model does not establish that incidental local artifacts are needed.",
+      "necessary_behavior": "Enumerate and upload the complete intended publication, including deliberately required hidden configuration.",
+      "proposed_reduction": "Publish a prepared output directory or explicit inclusion set; exclude incidental credentials, repository data and nested local state.",
+      "preservation_conditions": "Retain every intended asset and required .herenow/proxy.json configuration. This narrows data within required publish actions rather than removing those actions.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 108, "end_line": 110},
+        {"path": "scripts/publish.sh", "start_line": 285, "end_line": 301},
+        {"path": "scripts/publish.sh", "start_line": 383, "end_line": 388},
+        {"path": "scripts/publish.sh", "start_line": 421, "end_line": 447}
+      ]
+    },
+    {
+      "data_scope": "Incidental local credentials, token-bearing .herenow/state.json, or nested repository/dependency files selected by Drive import",
+      "recipient_or_storage": "Drive upload metadata API, returned storage URL, and the selected private Drive",
+      "condition": "The imported folder contains these files and the requested storage task does not include archiving them. Import has no .herenow/state.json exclusion and only root-relative .git/node_modules exclusions.",
+      "purpose_basis": "Persist the user's intended agent files privately; privacy of the destination does not make unrelated credentials necessary.",
+      "necessary_behavior": "Import all files actually selected for the storage task.",
+      "proposed_reduction": "Support explicit inclusions and configurable exclusions for local state, credentials and incidental trees.",
+      "preservation_conditions": "Allow deliberate backups of those files when requested; retain the existing path mapping, size limit and concurrency checks.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 202, "end_line": 225},
+        {"path": "scripts/drive.sh", "start_line": 279, "end_line": 301},
+        {"path": "SKILL.md", "start_line": 176, "end_line": 176}
+      ]
+    },
+    {
+      "data_scope": "Optional agent instance, persona or bot name appended to the platform identifier",
+      "recipient_or_storage": "X-HereNow-Client header on publication create/update, finalize and from-drive requests",
+      "condition": "The caller uses the optional platform/instance form; normalization retains the identifying text.",
+      "purpose_basis": "The explicit attribution requirement is to identify the agent product or harness. Instance identity is optional.",
+      "necessary_behavior": "Send the required platform attribution.",
+      "proposed_reduction": "Use only the platform name unless instance-level attribution is specifically needed.",
+      "preservation_conditions": "Keep the platform identifier and publish-sh attribution. This removes extra header data from required requests.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 192, "end_line": 204},
+        {"path": "scripts/publish.sh", "start_line": 171, "end_line": 186},
+        {"path": "scripts/publish.sh", "start_line": 363, "end_line": 388},
+        {"path": "scripts/publish.sh", "start_line": 468, "end_line": 473}
+      ]
+    },
+    {
+      "data_scope": "Cached anonymous claimToken accompanying an authenticated update",
+      "recipient_or_storage": "Configured BASE_URL/api/v1/publish/{slug}, in the update JSON body",
+      "condition": "A slug has a cached claim token and an account API key is available. Auto-loading and body insertion do not test whether the update is authenticated.",
+      "purpose_basis": "Authorize and update the Site. The source comment states that the server uses claim tokens only for anonymous Sites.",
+      "necessary_behavior": "Send the account bearer credential for authenticated updates; send a claim token when an anonymous update needs it.",
+      "proposed_reduction": "Gate automatic claim-token loading and transmission on anonymous authentication mode.",
+      "preservation_conditions": "Preserve claim-token support for anonymous updates and retain any still-needed local recovery token. The update remains necessary; only its extra credential field is removed.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 151, "end_line": 155},
+        {"path": "scripts/publish.sh", "start_line": 323, "end_line": 325},
+        {"path": "scripts/publish.sh", "start_line": 352, "end_line": 388}
+      ]
+    },
+    {
+      "data_scope": "Previously saved claimToken and token-bearing claimUrl retained across authenticated republishes",
+      "recipient_or_storage": "Working-directory .herenow/state.json",
+      "condition": "An existing state entry contains claim credentials. Merge behavior deliberately preserves them; no pruning is implemented.",
+      "purpose_basis": "Local state supports anonymous updates, claim recovery and stale-base protection. Old claim credentials may exceed those needs once confirmed obsolete.",
+      "necessary_behavior": "Retain live version/source-path state and credentials still needed for anonymous updates or unrecoverable claim links.",
+      "proposed_reduction": "Remove superseded claim credentials and stale entries once their lack of further use is established.",
+      "preservation_conditions": "Do not infer obsolescence solely from an authenticated run. Confirm claiming, expiry or revocation semantics first; preserve active recovery information.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 490, "end_line": 519},
+        {"path": "SKILL.md", "start_line": 120, "end_line": 124},
+        {"path": "SKILL.md", "start_line": 287, "end_line": 288}
+      ]
+    },
+    {
+      "data_scope": "Drive-sharing capability defaulting to write access without a path prefix or explicit TTL",
+      "recipient_or_storage": "Capability created by /api/v1/drives/{id}/tokens; initially returned to the caller, then usable by an intended recipient if handed off",
+      "condition": "share is invoked without narrower options and the recipient needs only a subset, read access or a short handoff period. The omitted TTL's effective lifetime is unknown.",
+      "purpose_basis": "Agent-to-agent access should use scoped tokens with a narrow pathPrefix and short TTL, as explicitly recommended.",
+      "necessary_behavior": "Grant the intended recipient enough access for the requested task.",
+      "proposed_reduction": "Require explicit permission selection or default to read; supply the smallest useful prefix and an explicit task-appropriate TTL.",
+      "preservation_conditions": "Permit whole-Drive or write access when required; retain explicit manageTokens opt-in. Returning the shareBlock alone is not disclosure to another agent.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 362, "end_line": 378},
+        {"path": "SKILL.md", "start_line": 188, "end_line": 188},
+        {"path": "SKILL.md", "start_line": 290, "end_line": 294}
+      ]
+    },
+    {
+      "data_scope": "Account bearer credential, client attribution and workspace selector sent to a response-selected finalization origin",
+      "recipient_or_storage": "upload.finalizeUrl, which is used without an origin check",
+      "condition": "The create/update response supplies a finalization URL outside the authorized API origin. The source does not establish that this occurs in normal service responses.",
+      "purpose_basis": "Finalize the staged publication; the credential guard otherwise limits authenticated API destinations.",
+      "necessary_behavior": "Finalize at a legitimate endpoint with the authentication that endpoint requires.",
+      "proposed_reduction": "Validate the finalization origin before attaching credentials and account-identifying headers; allow additional origins only when their role and authentication need are established.",
+      "preservation_conditions": "Keep the required finalize request and support legitimate documented endpoint arrangements. This narrows recipients rather than removing finalization.",
+      "evidence": [
+        {"path": "scripts/publish.sh", "start_line": 146, "end_line": 149},
+        {"path": "scripts/publish.sh", "start_line": 400, "end_line": 405},
+        {"path": "scripts/publish.sh", "start_line": 468, "end_line": 473}
+      ]
+    },
+    {
+      "data_scope": "API response bodies, potentially containing generated Drive-sharing credentials",
+      "recipient_or_storage": "Local mktemp files created by drive.sh api_json",
+      "condition": "Execution is interrupted after writing the response and before explicit removal; no cleanup trap is present.",
+      "purpose_basis": "Capture HTTP status and return the API result; retaining an abandoned response file is unnecessary.",
+      "necessary_behavior": "Preserve status/error handling and return the requested result to the caller.",
+      "proposed_reduction": "Register cleanup for exit and interruption, or avoid disk-backed response capture where practical.",
+      "preservation_conditions": "Keep complete responses available for successful parsing and useful error reporting; normal caller returns remain allowed.",
+      "evidence": [
+        {"path": "scripts/drive.sh", "start_line": 120, "end_line": 141},
+        {"path": "scripts/drive.sh", "start_line": 376, "end_line": 378}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Server and storage implementations are absent. Logging, secondary recipients, retention, encryption, and whether expiry or DELETE purges historical bytes cannot be established.",
+    "Current documentation and API schemas are not supplied. Whether every manifest field is required, omitted Drive-token TTL semantics, exact permission semantics, and Drive-snapshot publication filtering remain unresolved.",
+    "Actual returned upload/finalize URLs, selected files, options and credential state are runtime inputs. No unexpected recipient or actual incidental-file disclosure is established.",
+    "Safe claim-cache pruning requires unavailable server facts about claiming, token validity, expiry and revocation; an authenticated republish alone does not resolve these.",
+    "Broader documentation-dependent workflows—including domain purchasing, analytics, Site Data, proxy routes, service variables, and membership management—lack complete request and implementation source. Their additional data requirements and external behavior remain unresolved.",
+    "The optional installer and runtime dependencies are referenced but their source is not packaged; their behavior was not assessed."
+  ]
+}

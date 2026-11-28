@@ -25,6 +25,7 @@ from skillflow.propagation.contracts.sensitivity import (
 )
 from skillflow.propagation.contracts.constraints import validate_constraints
 from skillflow.propagation.contracts.input_requirements import normalize_input_contracts, validate_compiled_input_contracts
+from skillflow.propagation.expressions import operation_expressions
 
 
 def joint_source_files(material):
@@ -205,6 +206,7 @@ def validate_compiled_joint_semantics(compiled, material):
     task = _task(material)
     if compiled["task_ref"] != task_reference(task):
         raise ValueError("compiled task reference differs from the frozen Task revision")
+    operation_expressions(compiled)
     demand = CandidateDemand.model_validate({"goals": compiled["demands"], "expressions": compiled["expressions"]})
     known = {item.id for item in task.requirements}
     if any(goal.requirement_id not in known for goal in demand.goals):

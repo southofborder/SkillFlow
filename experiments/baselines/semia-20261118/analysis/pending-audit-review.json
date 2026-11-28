@@ -1,0 +1,130 @@
+{
+  "schema": "semia-pending-audit-independent-review-v1",
+  "reviewed_at_utc": "2026-11-18T10:54:32.283636+00:00",
+  "reviewer": "semia_batch_runner",
+  "status": "review_complete_terminal_additions_required",
+  "scope": "Static read-only review of two audit scripts and existing derived reports; no additional run polling, model, Skill, scan, checker, replay or test; only this new JSON written. Frozen001/010 and runtime/source/runner/helper untouched.",
+  "current_result_correctness": "No observed fabrication, wrong total or runtime drift established. Findings identify missing independent terminal evidence or conditional failure handling. Current reports correctly mark in_progress and avoid no-findings=safety/F1 claims.",
+  "findings": [
+    {
+      "id": "R1",
+      "priority": "required_before_terminal_seal",
+      "topic": "Independent public-usage reconciliation",
+      "locations": [
+        "analysis/audit_013.py:66-86",
+        "analysis/audit_ga4.py:234-267"
+      ],
+      "observation": "013 collects error/item events but never reads turn.completed usage, then trusts request.usage. GA4 reads completed usage only as fallback when request.usage is absent, without retaining event count or comparing request/public_turn_usages to the raw event stream. Neither explicitly reconciles terminal native/visible-usage counters with observed started records.",
+      "effect": "A stale/incomplete/wrong request summary could pass as independent accounting; failed requests with public partial/completion usage or missing token fields need field-level unknown preservation. This is an audit omission, not evidence that current token totals are wrong.",
+      "required_resolution": "At terminal, independently read all public completion events per native call, retain counts/known sums/missing-field counts, compare against request/public_turn_usages, reconcile finished counters and separate CGRS/recommendation usage. Keep internal unreported usage unknown. No fresh model call is needed."
+    },
+    {
+      "id": "R2",
+      "priority": "required_before_terminal_seal",
+      "topic": "Validation identity and candidate versus final recheck",
+      "locations": [
+        "analysis/audit_013.py:31-62,89-98",
+        "analysis/audit_ga4.py:266-290"
+      ],
+      "observation": "GA4 usable validation requires only returned=true and check dict; reported submitted SHA is copied from invocation, without hashing submitted-facts or comparing return-payload.synthesized_facts_sha256. 013 hashes submitted facts but does not gate program_valid/counts on its comparison result and does not compare payload SHA. GA4 lacks synthesis_attempt file inventory and hash-based mapping to validation; its valid_checks count is explicitly checks, but must not be promoted to candidate count later.",
+      "effect": "Final rechecks can be confused with new candidates; mismatched/unbound validation may count as usable. 013 check_exception/pending results render missing error/warning lists as zero in the markdown table.",
+      "required_resolution": "Require actual submitted SHA = invocation SHA = payload SHA, successful returned status, and consistent check/payload validity before using validation. Enumerate original candidate attempt files separately, map by SHA, retain attempt count versus unique hashes versus validation count, and identify selected-facts final recheck. Unknown or failed check counts remain null/unknown."
+    },
+    {
+      "id": "R3",
+      "priority": "required_before_terminal_seal",
+      "topic": "Manifest, inventory, payload and requested configuration pins",
+      "locations": [
+        "analysis/audit_ga4.py:212,298,325-328",
+        "analysis/audit_013.py:79,112-120"
+      ],
+      "observation": "GA4 current source/input verification compares files against currently-read manifests without checking those manifests SHA against runtime. Both scripts lack exact inventory/size checks, though runner itself checks these. 013 only copies source_payload_verified rather than independently checking actual prompt body; GA4 verifies body but does not bind every request complete_source_receipt_sha256 to the actual receipt. Both report model settings from runtime without independently comparing actual argv.",
+      "effect": "These derived flags alone are not a complete independent no-drift certificate. The running transport remains pinned; this does not establish current drift.",
+      "required_resolution": "At terminal compare manifest SHA to runtime/first-pilot pins, all360 source inventory/hashes and case input inventory/hash/size, CLI/runner/helper SHA, actual request argv model/effort/provider/CLI, every actual source payload and prepare-receipt SHA. Reconcile runner integrity_error/source_and_input_unchanged rather than infer full success from exit0."
+    },
+    {
+      "id": "R4",
+      "priority": "required_before_terminal_seal",
+      "topic": "Fresh terminal process and cleanup observation",
+      "locations": [
+        "analysis/audit_013.py:121",
+        "analysis/audit_ga4.py:80-94,229,329"
+      ],
+      "observation": "013 merely imports analysis/013-process-observation.json, currently absent in the inspected inventory, and neither checks that its timestamp follows terminal nor that its PID set includes all native requests plus controller. GA4 queries current recorded PIDs with start time, which is useful, but does not record observation time in that subreceipt or direct children. Neither forwards tree_cleanup_returncode/tree_cleanup_unresolved from timeout requests.",
+      "effect": "A stale observation cannot certify terminal process exit; parent/native cleanup failure must not disappear when summarizing a timeout.",
+      "required_resolution": "Make one fresh terminal process observation bound to final controller/native PID set and finished SHA/time; distinguish PID reuse and inspection failure, check surviving owned descendants where observable, and preserve timeout cleanup flags. Root can supply wrapper-session exit separately, explicitly sourced."
+    },
+    {
+      "id": "R5",
+      "priority": "required_before_terminal_seal_if_reached",
+      "topic": "Report filename and independent recommendation outcome",
+      "locations": [
+        "analysis/audit_013.py:110-111",
+        "analysis/audit_ga4.py:302,324"
+      ],
+      "observation": "013 reads artifacts/report.json although the upstream actual report is report.md. Both scripts currently preserve only recommendation file existence; GA4 state=completed follows exit_code0 even though upstream recommendation errors are nonfatal. Current report prose does not claim recommendation success, but a terminal summary needs separate outcome states.",
+      "effect": "A real generated report would remain null in 013 machine output; normal pipeline exit may coexist with failed recommendation. Recommendation text is a separate model opinion, not deterministic findings or gold.",
+      "required_resolution": "Inspect actual report.md and recommendation.md/raw response, classify pipeline, detector and recommendation separately as completed/failed/not_run/unknown based on receipts and errors. If recommendation is produced, review claims against source and label conditional advice separately from detector findings. Do not silently treat missing downstream artifacts as zero findings."
+    },
+    {
+      "id": "R6",
+      "priority": "required_if_native_or_prestart_failure_occurs",
+      "topic": "Provider retries and reportability of incomplete attempts",
+      "locations": [
+        "analysis/audit_013.py:21-24,65-83,106",
+        "analysis/audit_ga4.py:257-267",
+        "source/packages/semia-cli/src/semia_cli/llm_providers.py:143-157"
+      ],
+      "observation": "Internal sampling retry log counts are correctly kept distinct from native starts, but neither script presently maps native failure/retry attempts to structural attempts or classifies prestart failures. 013 unconditionally reads stderr/stdout and parses JSON, so a prestart failure before those files exist can abort the audit instead of producing an unknown record.",
+      "effect": "Native starts minus candidate files is not generally provider retry count: empty responses and structural attempts without candidate files also exist. Failure paths need to remain auditable without manufacturing zero usage/validation.",
+      "required_resolution": "Preserve phase/native_start/error/timeout/prestart classification. Infer outer retry groups only with explicit failed request + same phase/prompt and ordering evidence; otherwise mark grouping unknown. Treat absent/partial files as read issues rather than a new model/pipeline request. Do not count internal sampling retry messages as extra native/provider calls."
+    }
+  ],
+  "positive_observations": [
+    "013 separately records candidate files, validation counts and unique valid submitted hashes; final rechecks are conceptually distinguished.",
+    "GA4 independently checks actual complete-source prompt bodies and preserves coverage denominator adaptation caveats.",
+    "Both preserve native errors separately from checker errors and avoid treating sampling retry log entries as native starts.",
+    "Both state public usage excludes unknown internal cost, and neither counts cached/reasoning subsets again.",
+    "Both report structural validity and evidence alignment separately from semantic correctness/gold accuracy.",
+    "GA4 resource-as-data discussion is bounded to a rejected candidate and explicitly avoids claiming observed leakage."
+  ],
+  "source_snapshot_sha256": {
+    "analysis/audit_013.py": {
+      "sha256": "77f28acfec5225e33c4d6d1d7344d55329271b5d8bdfd2d87a763307ef5edc8a",
+      "bytes": 12505
+    },
+    "analysis/audit_ga4.py": {
+      "sha256": "99b4b04d45c21272e4e4454a529bee2a333137fa8ce5b3625a08e1aeba5733ca",
+      "bytes": 33010
+    },
+    "analysis/013-analysis.json": {
+      "sha256": "7219ee430e96c5e9c5a3b165cb8801ca4b521cf11f42f8831fd302468549a1f5",
+      "bytes": 111934
+    },
+    "analysis/013-analysis.zh.md": {
+      "sha256": "9d30b83ca010ae4f356daed26f6db65de9d4c235e3665f724e677e0d16a0720c",
+      "bytes": 6203
+    },
+    "analysis/013-semantic-notes.json": {
+      "sha256": "2711c22b24eed9dd5e3dc68d5965bf39c0d1014f51cccec47cc69ad53b2618f5",
+      "bytes": 2280
+    },
+    "analysis/ga4-analysis.json": {
+      "sha256": "03a8061881b8c04176caa9fd518d665ab1b9e1bb5bfb0954718510eb1c109c16",
+      "bytes": 119471
+    },
+    "analysis/ga4-analysis.zh.md": {
+      "sha256": "0bd253995b8e6bc16f92096ccd8ed6863314d0d81a590070a993ec187e5f6f47",
+      "bytes": 6689
+    },
+    "run_comparison.py": {
+      "sha256": "a2cfa8343d37749029c833fd088e9f1d5feddc6dc108dfabb1bc57351551fc3e",
+      "bytes": 21114
+    },
+    "source/packages/semia-cli/src/semia_cli/llm_providers.py": {
+      "sha256": "e44db56507ac52ba690278dc4f26c7c0314a6fdec92bd7ab9889eba1964f5110",
+      "bytes": 19124
+    }
+  },
+  "requested_next_step": "Root may assign minimal derived-audit corrections or supply a separate final independent receipt. No runtime change or repeated model execution is needed."
+}

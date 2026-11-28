@@ -1,0 +1,395 @@
+{
+  "status": "completed",
+  "declared_purpose": "Agent-first web/news search, docs/code lookup, company research, extraction, crawling, mapping, and structured evidence packs with explainable routing. Node is required; premium credentials are optional and a no-key baseline is promised. Federation, caching, health persistence, provider ranking, and automatic research expansion are implementation choices supporting that purpose, not requirements for every retrieval (SKILL.md:1-23; scripts/lib/config.mjs:441-483).",
+  "data_operations": [
+    {
+      "operation": "Read local configuration and runtime inputs",
+      "source": "CLI arguments, working directory, optional config.json or WEB_SEARCH_PRO_CONFIG, and environment variables",
+      "data_scope": "Queries, URLs, filters, budgets, provider configuration, credential availability, and selected adapters' API credentials.",
+      "recipient_or_storage": "Local Node process; configuration reads alone do not disclose these remotely.",
+      "condition": "On command execution. Defaults are merged with file configuration, environment settings, and command overrides.",
+      "evidence": [
+        {"path": "scripts/lib/config.mjs", "start_line": 116, "end_line": 123},
+        {"path": "scripts/lib/config.mjs", "start_line": 485, "end_line": 521},
+        {"path": "scripts/search.mjs", "start_line": 275, "end_line": 291}
+      ]
+    },
+    {
+      "operation": "Send baseline search requests",
+      "source": "DuckDuckGo adapter",
+      "data_scope": "Query augmented with requested domain operators; fixed browser and language headers. Receives HTML and parses bounded result snippets.",
+      "recipient_or_storage": "https://html.duckduckgo.com/html/",
+      "condition": "When ddg executes on a cache miss. Tries a curl POST; a thrown error triggers a fetch GET containing the query in the URL.",
+      "evidence": [
+        {"path": "scripts/engines/ddg.mjs", "start_line": 1, "end_line": 73}
+      ]
+    },
+    {
+      "operation": "Send Tavily search or extraction requests",
+      "source": "Tavily adapter",
+      "data_scope": "Search: query, count, depth, news/date/domain filters, and TAVILY_API_KEY; requests an answer without raw search content. Extract: supplied URLs and the API credential; receives extracted content and failures.",
+      "recipient_or_storage": "Search: https://api.tavily.com/search; extraction: https://api.tavily.com/extract",
+      "condition": "When the credentialed adapter executes as the selected provider, search fanout, or eligible extraction fallback.",
+      "evidence": [
+        {"path": "scripts/engines/tavily.mjs", "start_line": 4, "end_line": 57},
+        {"path": "scripts/engines/tavily.mjs", "start_line": 60, "end_line": 83}
+      ]
+    },
+    {
+      "operation": "Send Exa search or extraction requests",
+      "source": "Exa adapter",
+      "data_scope": "Search: query, count, search mode, domain/date filters, automatic prompting, and highlights request. Extraction: supplied URL IDs, full-text request, and livecrawl fallback. EXA_API_KEY authenticates both.",
+      "recipient_or_storage": "Search: https://api.exa.ai/search; extraction: https://api.exa.ai/contents",
+      "condition": "When the credentialed adapter executes as selected search, fanout, or extraction provider/fallback.",
+      "evidence": [
+        {"path": "scripts/engines/exa.mjs", "start_line": 4, "end_line": 68},
+        {"path": "scripts/engines/exa.mjs", "start_line": 71, "end_line": 101}
+      ]
+    },
+    {
+      "operation": "Send Querit search requests",
+      "source": "Querit adapter",
+      "data_scope": "Query, count, supplied language/country/domain/time filters, and QUERIT_API_KEY as bearer authentication.",
+      "recipient_or_storage": "Endpoint resolved from QUERIT_BASE_URL and QUERIT_BASE_PATH; defaults to https://api.querit.ai/v1/search.",
+      "condition": "When Querit executes. The base URL is safety-checked before endpoint construction; an override determines the actual resolved recipient.",
+      "evidence": [
+        {"path": "scripts/engines/querit.mjs", "start_line": 1, "end_line": 59},
+        {"path": "scripts/engines/querit.mjs", "start_line": 80, "end_line": 109}
+      ]
+    },
+    {
+      "operation": "Send Serper search requests",
+      "source": "Serper adapter",
+      "data_scope": "Query with domain operators, result count, date/time filters, supplied country/language, and SERPER_API_KEY in a header.",
+      "recipient_or_storage": "https://google.serper.dev/search or https://google.serper.dev/news",
+      "condition": "When Serper executes; the news option selects the endpoint.",
+      "evidence": [
+        {"path": "scripts/engines/serper.mjs", "start_line": 4, "end_line": 65}
+      ]
+    },
+    {
+      "operation": "Send Brave search requests",
+      "source": "Brave adapter",
+      "data_scope": "Query, result count, extra-snippet request, supplied country/language and freshness filters in the URL; BRAVE_API_KEY in the subscription header.",
+      "recipient_or_storage": "https://api.search.brave.com/res/v1/web/search",
+      "condition": "When Brave executes.",
+      "evidence": [
+        {"path": "scripts/engines/brave.mjs", "start_line": 3, "end_line": 23},
+        {"path": "scripts/engines/brave.mjs", "start_line": 78, "end_line": 121}
+      ]
+    },
+    {
+      "operation": "Send SerpAPI search requests",
+      "source": "SerpAPI adapter",
+      "data_scope": "SERPAPI_API_KEY, query, selected sub-engine, count, and applicable date/news/locale filters in URL parameters.",
+      "recipient_or_storage": "https://serpapi.com/search.json",
+      "condition": "When SerpAPI executes. Google-specific date and news parameters depend on the selected sub-engine.",
+      "evidence": [
+        {"path": "scripts/engines/serpapi.mjs", "start_line": 4, "end_line": 70}
+      ]
+    },
+    {
+      "operation": "Send You.com search requests",
+      "source": "You.com adapter",
+      "data_scope": "Query, count, fixed safesearch setting, supplied country/language and freshness in URL parameters; YOU_API_KEY in a header.",
+      "recipient_or_storage": "https://ydc-index.io/v1/search",
+      "condition": "When You.com executes; returned web/news groups are selected and bounded locally.",
+      "evidence": [
+        {"path": "scripts/engines/you.mjs", "start_line": 1, "end_line": 30},
+        {"path": "scripts/engines/you.mjs", "start_line": 71, "end_line": 119}
+      ]
+    },
+    {
+      "operation": "Send SearXNG search requests",
+      "source": "SearXNG adapter",
+      "data_scope": "Query with domain operators, news/time settings, and configured SEARXNG_LANGUAGE, SEARXNG_ENGINES, and safesearch settings.",
+      "recipient_or_storage": "The configured SEARXNG_INSTANCE_URL followed by /search.",
+      "condition": "When the configured adapter executes, following a safety check of the instance URL. Results are limited locally.",
+      "evidence": [
+        {"path": "scripts/engines/searxng.mjs", "start_line": 25, "end_line": 59},
+        {"path": "scripts/engines/searxng.mjs", "start_line": 90, "end_line": 119}
+      ]
+    },
+    {
+      "operation": "Send answer-first search prompts",
+      "source": "Perplexity adapter",
+      "data_scope": "Query, fixed system prompt, model selection, and bearer credential. Native transport adds supported domain/date/language filters; gateway transport incorporates domain operators and supplied constraints into the user prompt. Retrieved research evidence is not included in this request body.",
+      "recipient_or_storage": "Custom PERPLEXITY_BASE_URL gateway first; otherwise https://api.perplexity.ai/v1/sonar, OpenRouter's default or OPENROUTER_BASE_URL endpoint, or https://api.kilo.ai/api/gateway/chat/completions.",
+      "condition": "First complete credential path wins: custom gateway, native, OpenRouter, then Kilo. Executes only when this adapter is called.",
+      "evidence": [
+        {"path": "scripts/engines/perplexity.mjs", "start_line": 1, "end_line": 7},
+        {"path": "scripts/engines/perplexity.mjs", "start_line": 242, "end_line": 371},
+        {"path": "scripts/engines/perplexity.mjs", "start_line": 420, "end_line": 469}
+      ]
+    },
+    {
+      "operation": "Pass HTTP request material to a local transport",
+      "source": "Shared HTTP client",
+      "data_scope": "Request URL, headers, and optional body; these can contain search data and adapter credentials. Responses are buffered as text.",
+      "recipient_or_storage": "Local curl subprocess arguments when curl is used; otherwise built-in fetch. This is a local process boundary in addition to the remote request.",
+      "condition": "Shared-client adapters and Safe Fetch use curl when available unless a transport is explicitly selected.",
+      "evidence": [
+        {"path": "scripts/lib/http-client.mjs", "start_line": 7, "end_line": 49},
+        {"path": "scripts/lib/http-client.mjs", "start_line": 73, "end_line": 106}
+      ]
+    },
+    {
+      "operation": "Resolve and fetch target pages",
+      "source": "Safe Fetch and URL-safety components",
+      "data_scope": "Hostname resolution, target URL path/query, fixed user-agent and accept headers; response body, title, readable text, and links. maxChars truncates extracted content after retrieval.",
+      "recipient_or_storage": "Configured system DNS resolution for non-IP hostnames; requested page hosts and redirect destinations; response data enters local memory.",
+      "condition": "Direct-fetch extraction and crawl/map visits. Rejects unsupported schemes, URL userinfo, specified local/private targets, and rechecks each redirect. No page JavaScript is executed by this path.",
+      "evidence": [
+        {"path": "scripts/lib/url-safety.mjs", "start_line": 70, "end_line": 120},
+        {"path": "scripts/lib/web-fetch.mjs", "start_line": 27, "end_line": 103}
+      ]
+    },
+    {
+      "operation": "Discover and retrieve linked pages",
+      "source": "Crawl and map runners",
+      "data_scope": "Entry URLs, discovered links, page titles/content, traversal depth, parent URLs, failures, and optional robots.txt rules. Mapping returns nodes and edges rather than page content.",
+      "recipient_or_storage": "Visited page hosts; optional /robots.txt hosts; local traversal memory and the command caller.",
+      "condition": "On crawl/map cache misses, within depth/page limits. Discovery defaults to entry origins; cross-origin discovery requires an override. Path filters apply to discovered pages. Robots retrieval is optional and disabled by default.",
+      "evidence": [
+        {"path": "scripts/lib/crawl-runner.mjs", "start_line": 63, "end_line": 94},
+        {"path": "scripts/lib/crawl-runner.mjs", "start_line": 96, "end_line": 210},
+        {"path": "scripts/lib/map-runner.mjs", "start_line": 3, "end_line": 32},
+        {"path": "scripts/lib/config.mjs", "start_line": 470, "end_line": 483}
+      ]
+    },
+    {
+      "operation": "Infer routing signals and optionally disclose a query to multiple providers",
+      "source": "Search signal analysis, routing confidence, and federated search",
+      "data_scope": "Locally inferred query intent, freshness/privacy/multilingual signals, provider scores and confidence. Execution sends the query and applicable filters to each planned provider; results are reranked and deduplicated locally.",
+      "recipient_or_storage": "Local planner and caller; selected provider plus configured fanout providers only when federation triggers.",
+      "condition": "Federation is disabled by default. When enabled, matching triggers can add providers; explicit --engine or primary-only merging disables fanout. A successful primary response does not cancel planned fanout.",
+      "evidence": [
+        {"path": "scripts/lib/search-signals.mjs", "start_line": 1, "end_line": 140},
+        {"path": "scripts/lib/federated-search.mjs", "start_line": 159, "end_line": 262},
+        {"path": "scripts/lib/federated-search.mjs", "start_line": 292, "end_line": 377},
+        {"path": "scripts/lib/config.mjs", "start_line": 441, "end_line": 452}
+      ]
+    },
+    {
+      "operation": "Retry unresolved extraction URLs with eligible fallback providers",
+      "source": "Extraction flow",
+      "data_scope": "Initially all supplied URLs; subsequently only URLs lacking nonempty extracted content. Successful results and failures are merged locally.",
+      "recipient_or_storage": "Selected extraction adapter and remaining eligible extraction adapters, with their respective remote or direct-fetch recipients.",
+      "condition": "Automatic extraction continues while URLs remain unresolved. An explicit engine restricts the candidate set; successful URLs are removed from subsequent attempts.",
+      "evidence": [
+        {"path": "scripts/lib/extract-flow.mjs", "start_line": 20, "end_line": 55},
+        {"path": "scripts/lib/extract-flow.mjs", "start_line": 171, "end_line": 252}
+      ]
+    },
+    {
+      "operation": "Expand a research request into retrieval tasks",
+      "source": "Research planner and orchestrator",
+      "data_scope": "Topic-derived search queries and domain constraints; first seed URL for extraction and mapping; optional dossier crawl. Local evidence gaps can generate up to two follow-up tasks.",
+      "recipient_or_storage": "Providers and target hosts used by the search/extract/map/crawl primitives; local orchestration state.",
+      "condition": "Research execution outside --plan. Task budgets constrain expansion; a seed URL automatically adds a map task. CLI --no-federation disables fanout, and CLI research disables rendering.",
+      "evidence": [
+        {"path": "scripts/lib/research/plan.mjs", "start_line": 12, "end_line": 78},
+        {"path": "scripts/lib/research/task-builders.mjs", "start_line": 68, "end_line": 202},
+        {"path": "scripts/lib/research/orchestrator.mjs", "start_line": 39, "end_line": 104},
+        {"path": "scripts/lib/research/gap-fill.mjs", "start_line": 150, "end_line": 240},
+        {"path": "scripts/research.mjs", "start_line": 153, "end_line": 184}
+      ]
+    },
+    {
+      "operation": "Derive research attributes and evidence summaries",
+      "source": "Research classification, evidence normalization, and findings components",
+      "data_scope": "Topic type/signals, research axes, cleaned text, claims, source authority/credibility, freshness, coverage, quality, conflicts, and confidence. These are heuristic attributes of requests and sources, not verified personal traits.",
+      "recipient_or_storage": "Local analysis and the returned research pack.",
+      "condition": "Planning derives topic attributes; executed retrievals produce evidence attributes and findings. Noise filtering removes entries from the assembled evidence, not from previously written primitive caches.",
+      "evidence": [
+        {"path": "scripts/lib/research/topic-classifier.mjs", "start_line": 1, "end_line": 25},
+        {"path": "scripts/lib/research/evidence-normalize.mjs", "start_line": 73, "end_line": 200},
+        {"path": "scripts/lib/research/noise-filter.mjs", "start_line": 1, "end_line": 44},
+        {"path": "scripts/lib/research/findings.mjs", "start_line": 107, "end_line": 175},
+        {"path": "scripts/lib/research/output.mjs", "start_line": 82, "end_line": 140}
+      ]
+    },
+    {
+      "operation": "Read and persist retrieval caches",
+      "source": "Cache component and command/research call sites",
+      "data_scope": "SHA-256 keys derived from queries/URLs and options; JSON payloads containing search queries, answers, results, extracted content, crawl pages, map graphs, failures, and routing summaries, plus timestamps.",
+      "recipient_or_storage": "Configured cache directory, default .cache/web-search-pro, in search/extract/crawl/map subdirectories. Hashed filenames do not anonymize plaintext payloads.",
+      "condition": "Caching is enabled by default. Valid hits return stored results without executing retrieval. Misses write payloads; default TTL is 1,800 seconds for search and 21,600 seconds for extraction/crawl/map.",
+      "evidence": [
+        {"path": "scripts/lib/cache.mjs", "start_line": 34, "end_line": 44},
+        {"path": "scripts/lib/cache.mjs", "start_line": 61, "end_line": 208},
+        {"path": "scripts/lib/config.mjs", "start_line": 453, "end_line": 459},
+        {"path": "scripts/search.mjs", "start_line": 316, "end_line": 381},
+        {"path": "scripts/lib/research/retrieval.mjs", "start_line": 32, "end_line": 101}
+      ]
+    },
+    {
+      "operation": "Persist and infer provider health",
+      "source": "Health-state component",
+      "data_scope": "Provider identifier, failure counts, cooldown, success/failure timestamps, raw last error message, and inferred error category/status.",
+      "recipient_or_storage": ".cache/web-search-pro/health-state.json by default, independently of retrieval-cache enablement.",
+      "condition": "Health tracking is enabled by default. Search/extraction outcomes update it; success clears lastError and cooldown but preserves the prior failure timestamp.",
+      "evidence": [
+        {"path": "scripts/lib/health-state.mjs", "start_line": 15, "end_line": 37},
+        {"path": "scripts/lib/health-state.mjs", "start_line": 48, "end_line": 107},
+        {"path": "scripts/lib/health-state.mjs", "start_line": 122, "end_line": 196},
+        {"path": "scripts/lib/config.mjs", "start_line": 460, "end_line": 464}
+      ]
+    },
+    {
+      "operation": "Return plans, retrieval results, and diagnostics to the caller",
+      "source": "Command output builders and diagnostics",
+      "data_scope": "Requested results, query/topic, evidence, route explanations, configured-provider names, credential-presence indicators, configuration/path information, cache statistics, and health/errors as applicable.",
+      "recipient_or_storage": "Command stdout/stderr and its caller. These returns alone do not establish an additional remote disclosure.",
+      "condition": "JSON or Markdown output. Search/extract/research --plan skips retrieval. Doctor/bootstrap/review inspect configuration and stored state; bootstrap's sample queries are route plans, not live searches.",
+      "evidence": [
+        {"path": "scripts/search.mjs", "start_line": 293, "end_line": 314},
+        {"path": "scripts/lib/output.mjs", "start_line": 145, "end_line": 160},
+        {"path": "scripts/lib/output.mjs", "start_line": 253, "end_line": 395},
+        {"path": "scripts/lib/doctor.mjs", "start_line": 46, "end_line": 137},
+        {"path": "scripts/lib/bootstrap.mjs", "start_line": 90, "end_line": 145},
+        {"path": "scripts/lib/research/output.mjs", "start_line": 82, "end_line": 140}
+      ]
+    },
+    {
+      "operation": "Delete retrieval-cache entries",
+      "source": "Cache component and cache CLI",
+      "data_scope": "Expired entry being read, or JSON entries in the four retrieval-cache subdirectories.",
+      "recipient_or_storage": "Local cache filesystem; health-state.json is outside the clear operation's enumerated subdirectories.",
+      "condition": "Expired records are removed when that exact key is read. Explicit cache clear removes enumerated entries. Cache stats counts files without pruning them.",
+      "evidence": [
+        {"path": "scripts/lib/cache.mjs", "start_line": 158, "end_line": 182},
+        {"path": "scripts/lib/cache.mjs", "start_line": 246, "end_line": 294},
+        {"path": "scripts/cache.mjs", "start_line": 49, "end_line": 64}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "URL username/password fields, if present in extraction inputs.",
+      "recipient_or_storage": "Tavily https://api.tavily.com/extract or Exa https://api.exa.ai/contents.",
+      "condition": "A premium extraction adapter receives credential-bearing URLs. Both serialize supplied URLs without the direct-fetch userinfo check.",
+      "purpose_basis": "Public URL extraction needs target URLs; the documented Safe Fetch boundary explicitly rejects credential-bearing URLs.",
+      "necessary_behavior": "Submit permitted public URLs to the selected extraction provider.",
+      "proposed_reduction": "Reject credential-bearing URLs before any extraction-provider submission. This removes extra credential data from a required request rather than removing extraction itself.",
+      "preservation_conditions": "Keep accepted public URLs and semantically necessary query parameters intact; preserve existing rejection behavior for unsafe inputs.",
+      "evidence": [
+        {"path": "docs/clawhub-compliance.md", "start_line": 57, "end_line": 66},
+        {"path": "scripts/lib/url-safety.mjs", "start_line": 74, "end_line": 83},
+        {"path": "scripts/engines/tavily.mjs", "start_line": 60, "end_line": 68},
+        {"path": "scripts/engines/exa.mjs", "start_line": 71, "end_line": 86}
+      ]
+    },
+    {
+      "data_scope": "Raw provider failure text, including response bodies and any request data those bodies echo.",
+      "recipient_or_storage": "Configured cache directory's health-state.json.",
+      "condition": "Health tracking records a failed search/extraction. lastError persists until replaced or cleared by a later success; no age-based removal is implemented.",
+      "purpose_basis": "Routing health requires failure classification, counters, timestamps, and cooldown; complete provider response bodies are an implementation choice.",
+      "necessary_behavior": "Retain enough structured information to classify failures and enforce cooldown.",
+      "proposed_reduction": "Persist status/category and a bounded, redacted diagnostic code instead of raw error text.",
+      "preservation_conditions": "Preserve classification before discarding raw text and retain the counters/timestamps used by routing.",
+      "evidence": [
+        {"path": "scripts/engines/tavily.mjs", "start_line": 41, "end_line": 44},
+        {"path": "scripts/engines/exa.mjs", "start_line": 52, "end_line": 55},
+        {"path": "scripts/lib/health-state.mjs", "start_line": 48, "end_line": 72},
+        {"path": "scripts/lib/health-state.mjs", "start_line": 122, "end_line": 178}
+      ]
+    },
+    {
+      "data_scope": "Expired cached queries, URLs, answers, page content, graphs, failures, and routing metadata.",
+      "recipient_or_storage": "search/extract/crawl/map JSON files beneath the configured cache directory.",
+      "condition": "A cached key expires but is never read again and cache clear is not invoked. TTL prevents reuse but does not itself delete the file.",
+      "purpose_basis": "The declared cache contract includes TTL telemetry; expired payloads no longer supply valid cache hits.",
+      "necessary_behavior": "Keep reusable payloads during their configured validity period.",
+      "proposed_reduction": "Prune expired files during bounded maintenance or cache operations, rather than relying solely on rereading the same key.",
+      "preservation_conditions": "Retain unexpired entries and existing cache-hit behavior; avoid extending retention while pruning.",
+      "evidence": [
+        {"path": "scripts/lib/cache.mjs", "start_line": 158, "end_line": 208},
+        {"path": "scripts/lib/cache.mjs", "start_line": 246, "end_line": 294}
+      ]
+    },
+    {
+      "data_scope": "Extracted text beyond the requested maxChars, notably research's 4,000-character extraction budget.",
+      "recipient_or_storage": "Local extraction result, extraction-cache JSON, and caller/research evidence pack.",
+      "condition": "Tavily/Exa extraction ignores the passed options. Research also plans with task.options.maxChars but executes with context.config, whose default fetch limit is 12,000.",
+      "purpose_basis": "The CLI explicitly offers a per-URL text limit, and research tasks explicitly budget 4,000 characters.",
+      "necessary_behavior": "Extract readable content within the requested per-URL limit.",
+      "proposed_reduction": "Apply the task limit during execution and enforce it on all adapter results before output or caching. Narrow provider-side retrieval only where its supported API is established.",
+      "preservation_conditions": "Keep URL/title/type and failure metadata. Server-side extraction limits are unresolved; local trimming alone does not reduce the already received provider response.",
+      "evidence": [
+        {"path": "scripts/extract.mjs", "start_line": 32, "end_line": 42},
+        {"path": "scripts/lib/research/task-builders.mjs", "start_line": 119, "end_line": 144},
+        {"path": "scripts/lib/research/retrieval.mjs", "start_line": 138, "end_line": 196},
+        {"path": "scripts/engines/tavily.mjs", "start_line": 60, "end_line": 83},
+        {"path": "scripts/engines/exa.mjs", "start_line": 71, "end_line": 101},
+        {"path": "scripts/lib/output.mjs", "start_line": 18, "end_line": 25}
+      ]
+    },
+    {
+      "data_scope": "Repeated seed-page URLs and overlapping page-response bodies.",
+      "recipient_or_storage": "The same seed/discovered page hosts, and repeated local response buffers.",
+      "condition": "Research with a seed URL schedules mapping and, for an allowed dossier crawl, crawling independently. On cache misses, overlapping pages are fetched separately; direct-fetch extraction can repeat the seed request again.",
+      "purpose_basis": "Research needs readable evidence and site structure, but separate network fetches of the same current page are not themselves required outcomes.",
+      "necessary_behavior": "Produce extraction, map, and crawl projections with their respective depth, page, and text limits.",
+      "proposed_reduction": "Reuse compatible request-scoped fetched snapshots across these primitives. This removes redundant retrieval actions, not fields from an otherwise necessary request.",
+      "preservation_conditions": "Preserve freshness and safety validation, complete map coverage, crawl content limits, and differing provider semantics; do not substitute a short map text projection for a longer crawl result.",
+      "evidence": [
+        {"path": "scripts/lib/research/plan.mjs", "start_line": 39, "end_line": 78},
+        {"path": "scripts/lib/research/retrieval.mjs", "start_line": 268, "end_line": 283},
+        {"path": "scripts/lib/research/retrieval.mjs", "start_line": 324, "end_line": 338},
+        {"path": "scripts/lib/map-runner.mjs", "start_line": 3, "end_line": 20},
+        {"path": "scripts/lib/crawl-runner.mjs", "start_line": 128, "end_line": 150}
+      ]
+    },
+    {
+      "data_scope": "Unsupported binary response bodies.",
+      "recipient_or_storage": "Local HTTP transport buffers and Node response memory.",
+      "condition": "Safe Fetch requests a URL returning an unsupported content type. The shared transport reads the response body before fetchUrlSnapshot checks the content type.",
+      "purpose_basis": "The declared boundary blocks unsupported binary downloads; these bodies are not usable by the static text retrieval outcome.",
+      "necessary_behavior": "Request the target and identify whether its response is supported.",
+      "proposed_reduction": "Inspect response headers and abort unsupported bodies before buffering them. This narrows data received in the required GET rather than adding a separate probe request.",
+      "preservation_conditions": "Preserve redirect checks and supported HTML/text retrieval; retain an appropriate unsupported-type failure.",
+      "evidence": [
+        {"path": "docs/clawhub-compliance.md", "start_line": 57, "end_line": 66},
+        {"path": "scripts/lib/http-client.mjs", "start_line": 22, "end_line": 69},
+        {"path": "scripts/lib/http-client.mjs", "start_line": 73, "end_line": 92},
+        {"path": "scripts/lib/web-fetch.mjs", "start_line": 64, "end_line": 69}
+      ]
+    },
+    {
+      "data_scope": "Provider results exceeding the caller's requested count.",
+      "recipient_or_storage": "Selected search provider's response and local normalization/reranking memory.",
+      "condition": "Requested count is below routing.maxPerProvider. Even without triggered federation, the primary request uses the larger count, then final results are sliced to the requested count.",
+      "purpose_basis": "Returning the requested count is explicit; maintaining a larger reranking pool is an implementation choice.",
+      "necessary_behavior": "Retrieve enough results to satisfy the requested count.",
+      "proposed_reduction": "Use the requested count for a single-provider path unless a larger ranking pool is explicitly needed; make overfetch a separate bounded policy.",
+      "preservation_conditions": "Retain deliberate overfetch when the required ranking/diversity outcome depends on it. This reduces response data in a required request, not the number of provider calls.",
+      "evidence": [
+        {"path": "scripts/lib/config.mjs", "start_line": 441, "end_line": 452},
+        {"path": "scripts/lib/federated-search.mjs", "start_line": 292, "end_line": 329},
+        {"path": "scripts/lib/federated-search.mjs", "start_line": 363, "end_line": 377}
+      ]
+    },
+    {
+      "data_scope": "A second copy of crawl page content and associated page fields.",
+      "recipient_or_storage": "Crawl-cache JSON payload, where both results and pages contain the page records.",
+      "condition": "A crawl payload is cached, including research crawl tasks.",
+      "purpose_basis": "The caller may require the existing output schema, but two persisted copies are unnecessary to reconstruct it.",
+      "necessary_behavior": "Retain one complete crawl representation and reproduce the required output fields.",
+      "proposed_reduction": "Store one canonical page collection internally and reconstruct results/pages when returning the payload.",
+      "preservation_conditions": "Preserve the caller-visible schema, page content, ordering, and cache semantics.",
+      "evidence": [
+        {"path": "scripts/lib/output.mjs", "start_line": 339, "end_line": 364},
+        {"path": "scripts/lib/research/retrieval.mjs", "start_line": 277, "end_line": 283},
+        {"path": "scripts/lib/cache.mjs", "start_line": 189, "end_line": 208}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Actual invocations, environment values, and optional configuration were not supplied; active providers, concrete overridden recipients, and runtime data contents remain conditional.",
+    "Provider retention, logging, training, downstream forwarding, and remote extraction behavior are undocumented here. SearXNG's privacy label does not establish its configured instance's behavior.",
+    "Whether premium extraction APIs support server-side content limits is unresolved; their remote crawling, target access, and JavaScript behavior cannot be inferred from local Safe Fetch.",
+    "Operating-system logging, curl configuration/proxies, and caller retention or onward transmission of stdout are outside the supplied source.",
+    "No source-coverage blocker remains. The audit establishes packaged behavior and conditional minimization opportunities, not observed execution or external deletion guarantees."
+  ]
+}

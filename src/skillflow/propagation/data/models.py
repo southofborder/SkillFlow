@@ -102,6 +102,8 @@ class DataPart(StrictRecord):
 
 class OpaqueContent(StrictRecord):
     form: Literal["opaque"] = "opaque"
+    # Optional externally established concrete class. The object's contents remain unknown.
+    python_exception_type: Text | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class KnownPartsContent(StrictRecord):

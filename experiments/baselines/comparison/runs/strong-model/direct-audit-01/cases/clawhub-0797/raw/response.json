@@ -1,0 +1,308 @@
+{
+  "status": "completed",
+  "declared_purpose": "Manage TickTick tasks and projects through a CLI with OAuth2 authentication, batch operations and rate-limit handling (SKILL.md:2–8). Agent instructions require JSON output, listing projects first and checking status before completion, and recommend project IDs (SKILL.md:172–179).",
+  "data_operations": [
+    {
+      "operation": "Read command-line inputs and dispatch commands",
+      "source": "Caller-supplied arguments",
+      "data_scope": "OAuth client credentials, task/project identifiers, task text, tags, priorities, dates and project properties",
+      "recipient_or_storage": "Local CLI process; the shell wrapper forwards arguments to Bun",
+      "condition": "When the corresponding command is invoked",
+      "evidence": [
+        {"path": "package.json", "start_line": 6, "end_line": 14},
+        {"path": "scripts/tt.sh", "start_line": 1, "end_line": 3},
+        {"path": "scripts/ticktick.ts", "start_line": 31, "end_line": 63},
+        {"path": "scripts/ticktick.ts", "start_line": 78, "end_line": 104},
+        {"path": "scripts/ticktick.ts", "start_line": 137, "end_line": 150}
+      ]
+    },
+    {
+      "operation": "Read authentication configuration",
+      "source": "~/.clawdbot/credentials/ticktick-cli/config.json",
+      "data_scope": "clientId, clientSecret, accessToken, refreshToken, tokenExpiry and redirectUri",
+      "recipient_or_storage": "Local process memory",
+      "condition": "Authentication setup, authentication flows, token acquisition, status checks and logout. Every API request obtains a token through getValidToken. Status checks may refresh an expiring token.",
+      "evidence": [
+        {"path": "scripts/auth.ts", "start_line": 9, "end_line": 10},
+        {"path": "scripts/auth.ts", "start_line": 22, "end_line": 44},
+        {"path": "scripts/auth.ts", "start_line": 53, "end_line": 75},
+        {"path": "scripts/auth.ts", "start_line": 237, "end_line": 252},
+        {"path": "scripts/api.ts", "start_line": 118, "end_line": 123}
+      ]
+    },
+    {
+      "operation": "Persist credentials and tokens in plaintext JSON",
+      "source": "Supplied OAuth credentials and TickTick token responses",
+      "data_scope": "Client credentials, access/refresh tokens, calculated expiry and redirect URI; credential setup preserves existing configuration fields",
+      "recipient_or_storage": "~/.clawdbot/credentials/ticktick-cli/config.json",
+      "condition": "Credential setup, successful authentication or refresh. Directory/file modes are requested as 700/600; chmod failures are suppressed. Persistence is documented; this file-based implementation is a design choice.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 193, "end_line": 209},
+        {"path": "scripts/auth.ts", "start_line": 31, "end_line": 51},
+        {"path": "scripts/auth.ts", "start_line": 101, "end_line": 121},
+        {"path": "scripts/auth.ts", "start_line": 227, "end_line": 234},
+        {"path": "scripts/auth.ts", "start_line": 346, "end_line": 353}
+      ]
+    },
+    {
+      "operation": "Construct and print an OAuth authorization URL; attempt browser opening",
+      "source": "Saved clientId and redirectUri, plus newly generated random state",
+      "data_scope": "Client ID, state, redirect URI, response type and tasks:read/tasks:write scopes",
+      "recipient_or_storage": "Caller stdout; automatic flow passes the URL to the open dependency. TickTick's https://ticktick.com/oauth/authorize receives it if visited.",
+      "condition": "Both authentication modes print the URL; only automatic mode attempts to open it",
+      "evidence": [
+        {"path": "scripts/auth.ts", "start_line": 12, "end_line": 18},
+        {"path": "scripts/auth.ts", "start_line": 182, "end_line": 193},
+        {"path": "scripts/auth.ts", "start_line": 267, "end_line": 277}
+      ]
+    },
+    {
+      "operation": "Receive and validate an OAuth redirect",
+      "source": "Browser callback or pasted redirect URL",
+      "data_scope": "Authorization code, state and OAuth error; manual mode initially reads the full supplied URL",
+      "recipient_or_storage": "Local process memory. Automatic callback listens on 127.0.0.1 and returns success/failure HTML to the requesting browser; OAuth error text is reflected in failure HTML and an exception.",
+      "condition": "Automatic mode accepts the root callback and validates state; manual mode reads stdin and validates state/code. The automatic listener closes on handled success/failure or timeout.",
+      "evidence": [
+        {"path": "scripts/auth.ts", "start_line": 133, "end_line": 180},
+        {"path": "scripts/auth.ts", "start_line": 182, "end_line": 200},
+        {"path": "scripts/auth.ts", "start_line": 279, "end_line": 317}
+      ]
+    },
+    {
+      "operation": "Exchange authorization codes or refresh tokens",
+      "source": "Saved client credentials and received code or refreshToken",
+      "data_scope": "Basic-auth client credentials; authorization code and redirect URI, or refresh token. Responses supply accessToken, refreshToken and expiry.",
+      "recipient_or_storage": "HTTPS POST to https://ticktick.com/oauth/token; response returns to the authentication component and is saved locally",
+      "condition": "Code exchange follows either authentication mode. Refresh occurs within five minutes of expiry when a refreshToken exists, including through auth --status.",
+      "evidence": [
+        {"path": "scripts/auth.ts", "start_line": 67, "end_line": 110},
+        {"path": "scripts/auth.ts", "start_line": 202, "end_line": 234},
+        {"path": "scripts/auth.ts", "start_line": 237, "end_line": 243},
+        {"path": "scripts/auth.ts", "start_line": 321, "end_line": 353}
+      ]
+    },
+    {
+      "operation": "Remove saved token fields",
+      "source": "Existing local authentication configuration",
+      "data_scope": "accessToken, refreshToken and tokenExpiry are removed; client credentials and other configuration remain",
+      "recipient_or_storage": "Rewritten local config.json",
+      "condition": "auth --logout. Keeping credentials is explicitly documented. The function does not request remote token revocation or unlink the configuration file.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 28, "end_line": 29},
+        {"path": "scripts/auth.ts", "start_line": 246, "end_line": 257},
+        {"path": "scripts/ticktick.ts", "start_line": 48, "end_line": 50}
+      ]
+    },
+    {
+      "operation": "Authenticate API requests, parse responses and retry rate-limited requests",
+      "source": "getValidToken, API method arguments and TickTick responses",
+      "data_scope": "Bearer access token, endpoint identifiers, applicable JSON payloads and response bodies",
+      "recipient_or_storage": "https://api.ticktick.com/open/v1; parsed responses return to the calling component",
+      "condition": "Every API method. Recognized rate-limit failures cause up to four retries with the same endpoint/options, including mutation requests.",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 3, "end_line": 3},
+        {"path": "scripts/api.ts", "start_line": 114, "end_line": 185}
+      ]
+    },
+    {
+      "operation": "Retrieve the project catalog and resolve projects locally",
+      "source": "TickTick GET /project",
+      "data_scope": "Unprojected project response objects, typed to include IDs, names, color, ordering, closed state, grouping, view, permission and kind",
+      "recipient_or_storage": "Local API/command process; names and IDs are compared locally",
+      "condition": "Project listing, project resolution and task searches/listing. Exported getInboxData and getAllTasks also enumerate projects. Listing projects first is an explicit agent instruction; repeated internal enumeration is an implementation choice.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 176, "end_line": 179},
+        {"path": "scripts/api.ts", "start_line": 5, "end_line": 15},
+        {"path": "scripts/api.ts", "start_line": 189, "end_line": 221},
+        {"path": "scripts/api.ts", "start_line": 259, "end_line": 292},
+        {"path": "scripts/api.ts", "start_line": 333, "end_line": 343},
+        {"path": "scripts/commands/tasks.ts", "start_line": 50, "end_line": 60}
+      ]
+    },
+    {
+      "operation": "Retrieve project task datasets and search/filter locally",
+      "source": "TickTick GET /project/{projectId}/data; exported inbox helper can use /project/inbox/data",
+      "data_scope": "Project data and unprojected task records, potentially including text, dates, status, priority, timezone, reminders, tags and checklist items",
+      "recipient_or_storage": "Local API/command memory",
+      "condition": "Task listing and target resolution for update/complete/abandon/batch-abandon. ID lookup stops at the first hit; title lookup collects matches across selected projects. Listing status filters run after retrieval. Inaccessible projects are skipped.",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 17, "end_line": 46},
+        {"path": "scripts/api.ts", "start_line": 207, "end_line": 221},
+        {"path": "scripts/api.ts", "start_line": 267, "end_line": 331},
+        {"path": "scripts/commands/tasks.ts", "start_line": 63, "end_line": 89},
+        {"path": "scripts/commands/task.ts", "start_line": 140, "end_line": 148},
+        {"path": "scripts/commands/complete.ts", "start_line": 20, "end_line": 25},
+        {"path": "scripts/commands/abandon.ts", "start_line": 20, "end_line": 25},
+        {"path": "scripts/commands/batch-abandon.ts", "start_line": 36, "end_line": 47}
+      ]
+    },
+    {
+      "operation": "Derive dates from supplied date expressions",
+      "source": "Caller due-date input and the local clock/calendar",
+      "data_scope": "Computed dueDate; relative dates use local calendar operations and are serialized as UTC timestamps. Display code also derives today/tomorrow labels.",
+      "recipient_or_storage": "Local memory and caller output; computed dueDate enters the requested TickTick task write",
+      "condition": "--due on task creation/update, or displaying a task with a due date",
+      "evidence": [
+        {"path": "scripts/commands/task.ts", "start_line": 27, "end_line": 69},
+        {"path": "scripts/commands/task.ts", "start_line": 107, "end_line": 115},
+        {"path": "scripts/commands/task.ts", "start_line": 179, "end_line": 187},
+        {"path": "scripts/commands/tasks.ts", "start_line": 13, "end_line": 28}
+      ]
+    },
+    {
+      "operation": "Request task creation, changes, completion or abandonment",
+      "source": "Caller inputs and resolved task/project IDs",
+      "data_scope": "Creation sends title/projectId and supplied content, priority, dueDate and tags. CLI updates send IDs and explicitly set fields. Completion sends IDs in the URL. Abandonment sends status -1; batch abandonment sends ID/projectId/status tuples.",
+      "recipient_or_storage": "TickTick /task, /task/{id}, /project/{projectId}/task/{taskId}/complete or /batch/task; requested changes concern remote task records",
+      "condition": "Corresponding CLI command after target resolution. Abandonment is a status update, not a deletion request.",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 225, "end_line": 255},
+        {"path": "scripts/commands/task.ts", "start_line": 87, "end_line": 115},
+        {"path": "scripts/commands/task.ts", "start_line": 158, "end_line": 187},
+        {"path": "scripts/commands/complete.ts", "start_line": 33, "end_line": 35},
+        {"path": "scripts/commands/abandon.ts", "start_line": 33, "end_line": 40},
+        {"path": "scripts/commands/batch-abandon.ts", "start_line": 36, "end_line": 59}
+      ]
+    },
+    {
+      "operation": "Request project creation or changes",
+      "source": "Caller project name/color and resolved project ID",
+      "data_scope": "Creation sends name and optional normalized color; update sends ID and supplied name/color",
+      "recipient_or_storage": "TickTick POST /project or /project/{id}; requested changes concern remote project records",
+      "condition": "list command in create or update mode",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 193, "end_line": 205},
+        {"path": "scripts/commands/list.ts", "start_line": 15, "end_line": 34},
+        {"path": "scripts/commands/list.ts", "start_line": 59, "end_line": 76}
+      ]
+    },
+    {
+      "operation": "Expose programmatic deletion requests",
+      "source": "Arguments supplied to the exported API object",
+      "data_scope": "Task/project IDs",
+      "recipient_or_storage": "TickTick DELETE /project/{projectId}/task/{taskId}, or a delete array in POST /batch/task",
+      "condition": "A programmatic caller invokes deleteTask or supplies batch deletion entries. Actual server deletion and retention are undocumented.",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 72, "end_line": 81},
+        {"path": "scripts/api.ts", "start_line": 245, "end_line": 255},
+        {"path": "scripts/api.ts", "start_line": 357, "end_line": 357},
+        {"path": "SKILL.md", "start_line": 237, "end_line": 247}
+      ]
+    },
+    {
+      "operation": "Return task/project results to the caller",
+      "source": "API responses and local formatting",
+      "data_scope": "JSON mode returns project/task response objects; task listings add projectName. Completion returns a selected success/task object. Batch abandonment returns IDs, notFound and the batch response. Text mode emits summaries.",
+      "recipient_or_storage": "Caller stdout; no additional recipient or durable output storage is specified",
+      "condition": "Successful commands; JSON output is explicitly required for agent use",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 176, "end_line": 179},
+        {"path": "scripts/commands/lists.ts", "start_line": 15, "end_line": 30},
+        {"path": "scripts/commands/list.ts", "start_line": 36, "end_line": 44},
+        {"path": "scripts/commands/list.ts", "start_line": 78, "end_line": 86},
+        {"path": "scripts/commands/tasks.ts", "start_line": 69, "end_line": 100},
+        {"path": "scripts/commands/task.ts", "start_line": 117, "end_line": 126},
+        {"path": "scripts/commands/task.ts", "start_line": 189, "end_line": 195},
+        {"path": "scripts/commands/complete.ts", "start_line": 37, "end_line": 56},
+        {"path": "scripts/commands/abandon.ts", "start_line": 42, "end_line": 47},
+        {"path": "scripts/commands/batch-abandon.ts", "start_line": 61, "end_line": 84}
+      ]
+    },
+    {
+      "operation": "Propagate diagnostic data",
+      "source": "Remote error bodies, local search results and invalid manual-auth input",
+      "data_scope": "Generic API errors include raw response text; token-exchange exceptions include raw error bodies; ambiguous-title errors include task titles, shortened IDs and project names; invalid manual redirects are included in exceptions",
+      "recipient_or_storage": "Exceptions returned to callers; command catch handlers print error messages to stderr. Authentication exception handling beyond the supplied action remains unspecified.",
+      "condition": "Applicable failure or ambiguous-match paths",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 134, "end_line": 175},
+        {"path": "scripts/api.ts", "start_line": 324, "end_line": 330},
+        {"path": "scripts/auth.ts", "start_line": 220, "end_line": 225},
+        {"path": "scripts/auth.ts", "start_line": 302, "end_line": 317},
+        {"path": "scripts/auth.ts", "start_line": 339, "end_line": 344},
+        {"path": "scripts/commands/task.ts", "start_line": 196, "end_line": 200}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "A second retrieval of the complete project catalog",
+      "recipient_or_storage": "TickTick receives another authenticated GET /project; its response enters local CLI memory",
+      "condition": "tasks --list first calls listProjects, then findProjectByName calls listProjects again",
+      "purpose_basis": "Resolve the selected project and list its tasks. The initial project listing satisfies the explicit agent instruction.",
+      "necessary_behavior": "Identify the matching project and preserve project-name mapping",
+      "proposed_reduction": "Remove the redundant catalog request by resolving against the already fetched projects",
+      "preservation_conditions": "Keep the existing case-insensitive name and exact-ID matching behavior and project-not-found handling",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 176, "end_line": 179},
+        {"path": "scripts/commands/tasks.ts", "start_line": 50, "end_line": 60},
+        {"path": "scripts/api.ts", "start_line": 259, "end_line": 265}
+      ]
+    },
+    {
+      "data_scope": "Repeated project catalogs and overlapping full project task datasets",
+      "recipient_or_storage": "Repeated authenticated requests to TickTick; repeated responses enter local CLI memory",
+      "condition": "batch-abandon calls findTaskById separately for every supplied task ID",
+      "purpose_basis": "Resolve project IDs and submit one batch status update",
+      "necessary_behavior": "Resolve each target ID and report unresolved IDs before submitting the batch",
+      "proposed_reduction": "Resolve all target IDs in one invocation-scoped traversal, fetching each needed project once and stopping when all targets are found",
+      "preservation_conditions": "Preserve target/project mappings, notFound reporting and handling of inaccessible projects; keep any necessary retry behavior",
+      "evidence": [
+        {"path": "scripts/commands/batch-abandon.ts", "start_line": 31, "end_line": 59},
+        {"path": "scripts/api.ts", "start_line": 267, "end_line": 283}
+      ]
+    },
+    {
+      "data_scope": "Unrelated task records and fields such as content, descriptions, reminders, tags and checklist items during single-task resolution",
+      "recipient_or_storage": "TickTick project-data responses enter the local API/CLI process",
+      "condition": "Lookup preceding task update, completion, abandonment or batch abandonment",
+      "purpose_basis": "Identify the target and project, detect title ambiguity and make status available for the required completion check",
+      "necessary_behavior": "Obtain identifying fields, relevant status and enough matching information to select the correct task",
+      "proposed_reduction": "Reuse validated project information and limit searches to a supplied project. If supported by TickTick, use direct task retrieval or field projection to reduce extra records/fields in the required read.",
+      "preservation_conditions": "Preserve unscoped title ambiguity detection and status availability. The supplied source establishes only bulk project-data retrieval, so remote payload reduction remains conditional on undocumented API capabilities.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 176, "end_line": 179},
+        {"path": "scripts/api.ts", "start_line": 17, "end_line": 46},
+        {"path": "scripts/api.ts", "start_line": 207, "end_line": 209},
+        {"path": "scripts/api.ts", "start_line": 267, "end_line": 331},
+        {"path": "scripts/commands/task.ts", "start_line": 140, "end_line": 148},
+        {"path": "scripts/commands/complete.ts", "start_line": 20, "end_line": 35},
+        {"path": "scripts/commands/abandon.ts", "start_line": 20, "end_line": 40},
+        {"path": "scripts/commands/batch-abandon.ts", "start_line": 36, "end_line": 47}
+      ]
+    },
+    {
+      "data_scope": "The complete pasted redirect URL, potentially containing an authorization code, state and additional query data",
+      "recipient_or_storage": "Thrown manual-auth exception available to the caller/runtime",
+      "condition": "URL parsing, state validation or code validation fails",
+      "purpose_basis": "Validate the OAuth response and explain authentication failure",
+      "necessary_behavior": "Reject invalid input and report a useful reason",
+      "proposed_reduction": "Remove the redirect URL from the exception; report a sanitized parsing/state/code error",
+      "preservation_conditions": "Keep mandatory state equality and authorization-code checks",
+      "evidence": [
+        {"path": "scripts/auth.ts", "start_line": 294, "end_line": 317}
+      ]
+    },
+    {
+      "data_scope": "Unrestricted remote error-body text; any sensitive content depends on the undocumented response",
+      "recipient_or_storage": "API/auth exceptions; API command handlers can copy the message to caller stderr",
+      "condition": "A generic API failure or token-exchange failure returns details beyond those needed to report failure",
+      "purpose_basis": "Explain unsuccessful task operations or authentication",
+      "necessary_behavior": "Report failure, HTTP status and a useful sanitized explanation",
+      "proposed_reduction": "Limit default error output to status and sanitized diagnostics; make additional redacted detail optional",
+      "preservation_conditions": "Preserve rate-limit/authentication handling and actionable errors. Actual sensitive error-body contents are unresolved.",
+      "evidence": [
+        {"path": "scripts/api.ts", "start_line": 134, "end_line": 175},
+        {"path": "scripts/auth.ts", "start_line": 220, "end_line": 225},
+        {"path": "scripts/auth.ts", "start_line": 339, "end_line": 344},
+        {"path": "scripts/commands/task.ts", "start_line": 196, "end_line": 200}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Blocking remote-read minimization assessment: the supplied source does not establish direct-task endpoints, field projection or server-side status filtering. Whether complete project datasets are unavoidable remains unresolved.",
+    "TickTick's actual response/error fields, effective authorization scope, retention, logging, token invalidation and deletion semantics are undocumented here; requested remote changes do not establish permanent deletion.",
+    "Dependency implementations and browser, shell, runtime or caller capture/persistence behavior are outside the supplied source. Passing URLs, arguments or normal results to these components does not establish further disclosure or retention.",
+    "Actual filesystem permission enforcement, residual recoverability after configuration rewrites and runtime behavior were not verified. All supplied package files were reviewed; these external behaviors remain unresolved."
+  ]
+}

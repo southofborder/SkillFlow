@@ -1,0 +1,603 @@
+{
+  "status": "partial",
+  "declared_purpose": "Research Polymarket markets, whale flow, profitable traders and public wallets; optionally inspect a configured wallet and execute explicitly authorized orders. No-credential research, deterministic trading limits, default dry-run and an audit trail are explicit requirements. Storage formats, SDK integration and scheduling examples are implementation choices (SKILL.md:38–58,66–83,101–109,156–188,214–240).",
+  "data_operations": [
+    {
+      "operation": "Install dependencies and create local storage",
+      "source": "User-invoked install.sh; Python, pip and environment",
+      "data_scope": "Interpreter availability/version, package requirements, installation paths and state-directory override",
+      "recipient_or_storage": "Local .venv and state directory; package services selected by pip, whose exact hosts and requests are unspecified",
+      "condition": "Installation explicitly runs subprocesses, upgrades pip and installs dependencies and the package. This is separate from normal Python command execution.",
+      "evidence": [
+        {
+          "path": "install.sh",
+          "start_line": 20,
+          "end_line": 45
+        }
+      ]
+    },
+    {
+      "operation": "Read and persist configuration",
+      "source": "Known configuration fields and POLYMARKET_AGENT_HOME",
+      "data_scope": "Financial limits, autonomy state/expiry, dry-run, wallet signature type, funder address, risk_profile, interests and liquidity preference",
+      "recipient_or_storage": "Local config.json under ~/.openclaw/polymarket-agent or the override; directory and file permissions are hardened on a best-effort basis",
+      "condition": "Settings load locally; setup and setters serialize every Settings field. These preferences are supplied/default values, not inferred personal attributes.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 40,
+          "end_line": 85
+        },
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 180,
+          "end_line": 226
+        },
+        {
+          "path": "polymarket_agent/paths.py",
+          "start_line": 16,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "operation": "Collect a wallet key and encrypt it locally",
+      "source": "Interactive hidden private-key and passphrase input",
+      "data_scope": "Polygon private key, passphrase and derived public address",
+      "recipient_or_storage": "Local process and eth_account; encrypted key plus clear public address in keystore.json",
+      "condition": "poly setup requires a terminal and refuses replacement unless forced. It prints the public address, saves the encrypted keystore and deletes its named input references; this is not guaranteed memory erasure.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 88,
+          "end_line": 149
+        },
+        {
+          "path": "polymarket_agent/keystore.py",
+          "start_line": 83,
+          "end_line": 104
+        }
+      ]
+    },
+    {
+      "operation": "Resolve and decrypt credentials",
+      "source": "Local keystore, terminal passphrase or POLYMARKET_PASSPHRASE; gated POLYMARKET_KEY fallback",
+      "data_scope": "Private key, passphrase and public address",
+      "recipient_or_storage": "Local process and eth_account; this loader contains no remote request",
+      "condition": "An existing keystore takes precedence and insecure permissions cause refusal. Without a keystore, the legacy key requires POLYMARKET_ALLOW_ENV_KEY and emits a warning without printing the key.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/keystore.py",
+          "start_line": 119,
+          "end_line": 162
+        },
+        {
+          "path": "polymarket_agent/keystore.py",
+          "start_line": 183,
+          "end_line": 222
+        }
+      ]
+    },
+    {
+      "operation": "Expose local diagnostics to the caller",
+      "source": "Dependency discovery, interpreter information, keystore metadata/permissions, environment-variable presence, settings and journal",
+      "data_scope": "Dependency availability, Python executable path/version, public wallet address, credential-mode status, limits and recent spending",
+      "recipient_or_storage": "CLI stdout/stderr and its caller; no separate diagnostic upload is implemented",
+      "condition": "poly doctor; it reads keystore metadata without decrypting the key.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 221,
+          "end_line": 285
+        }
+      ]
+    },
+    {
+      "operation": "Query public market data",
+      "source": "Search text, market ID/slug and listing filters",
+      "data_scope": "Queries and pagination parameters sent outward; market questions, outcomes, prices, token IDs, volume, liquidity and dates read back",
+      "recipient_or_storage": "https://gamma-api.polymarket.com/public-search and /markets; responses stay in process and return to the caller",
+      "condition": "Market listing/search/detail and quote commands require no credential. Failed or empty public search falls back to scanning up to ten pages. Shared HTTP sends a skill/version User-Agent, disables ambient requests credentials/proxies and retries selected failures up to four attempts.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 24,
+          "end_line": 29
+        },
+        {
+          "path": "polymarket_agent/markets.py",
+          "start_line": 100,
+          "end_line": 155
+        },
+        {
+          "path": "polymarket_agent/markets.py",
+          "start_line": 158,
+          "end_line": 260
+        },
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 292,
+          "end_line": 313
+        },
+        {
+          "path": "polymarket_agent/http.py",
+          "start_line": 25,
+          "end_line": 52
+        },
+        {
+          "path": "polymarket_agent/http.py",
+          "start_line": 68,
+          "end_line": 111
+        }
+      ]
+    },
+    {
+      "operation": "Query public trade and wallet research data",
+      "source": "Requested wallet, market, trade threshold/window, side, ranking category/period and limits",
+      "data_scope": "Research selectors sent outward; public wallet addresses, names, transaction hashes, trades, holdings, position values, P&L and rankings read back",
+      "recipient_or_storage": "https://data-api.polymarket.com/trades, /holders, /v1/leaderboard, /positions and /value; process and caller",
+      "condition": "Public research commands use no signing credential. Whale size/window and supported market/side filters are sent server-side. poly trader requests value, positions and recent trades separately.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 24,
+          "end_line": 27
+        },
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 83,
+          "end_line": 161
+        },
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 177,
+          "end_line": 266
+        },
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 520,
+          "end_line": 539
+        }
+      ]
+    },
+    {
+      "operation": "Calculate financial metrics and proposed analytical inferences",
+      "source": "Public prices/trades, wallet balance, local spending history and event research",
+      "data_scope": "Trade notional, implied probability, relative spread, bankroll fraction, spending totals and agent-proposed probability/edge estimates",
+      "recipient_or_storage": "Local process and caller/analyst context",
+      "condition": "Numeric metrics are calculated by code. Event research and probability/edge assessment are instructed analyst behavior. Trader profit and rank are API-provided attributes rather than locally inferred profitability.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 49,
+          "end_line": 56
+        },
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 217,
+          "end_line": 228
+        },
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 286,
+          "end_line": 289
+        },
+        {
+          "path": "polymarket_agent/guardrails.py",
+          "start_line": 128,
+          "end_line": 169
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 245,
+          "end_line": 252
+        }
+      ]
+    },
+    {
+      "operation": "Initialize authenticated exchange access",
+      "source": "Resolved private key and wallet configuration",
+      "data_scope": "Private key, chain identifier, optional proxy/funder address and derived API credentials",
+      "recipient_or_storage": "Local py_clob_client instance and process cache; authentication is directed at https://clob.polymarket.com, with exact wire payloads unresolved",
+      "condition": "A cache miss during balance, open-order, cancellation or live-placement access loads the key and invokes create_or_derive_api_creds. Passing the key into the SDK does not establish remote transmission of the raw key.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 24,
+          "end_line": 27
+        },
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 47,
+          "end_line": 107
+        }
+      ]
+    },
+    {
+      "operation": "Read the configured wallet's financial state",
+      "source": "Effective wallet address and authenticated CLOB client",
+      "data_scope": "Public wallet address, positions, USDC balance/allowance response and open orders",
+      "recipient_or_storage": "Address to https://data-api.polymarket.com/positions; authenticated reads through the CLOB SDK; results to process and caller",
+      "condition": "Positions use a configured proxy address or clear keystore address when available; only the address-resolution fallback loads a key. Balance and open orders use get_client.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 110,
+          "end_line": 175
+        }
+      ]
+    },
+    {
+      "operation": "Perform exchange reads before CLI order validation and confirmation",
+      "source": "Credential presence and proposed buy/sell",
+      "data_scope": "Signer/authentication access, balance, live open orders and journal reconciliation",
+      "recipient_or_storage": "Local credential loader/SDK, configured CLOB service and local journal",
+      "condition": "HALT exits first. Otherwise, credential presence triggers balance and open-order reads before evaluating the proposed order or requesting confirmation, including dry-run and subsequently rejected or declined proposals.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 748,
+          "end_line": 817
+        }
+      ]
+    },
+    {
+      "operation": "Submit signed orders and cancellations",
+      "source": "Authorized order parameters or cancellation request",
+      "data_scope": "Outcome token ID, side, price, size and signed GTC order; cancellation order ID or cancel-all request",
+      "recipient_or_storage": "Configured CLOB service through py_clob_client; result returned to caller",
+      "condition": "Placement follows validation and confirmation or valid autonomy. Lower-level dry-run returns before client creation/order posting. Cancellation authenticates and calls the exchange independently of placement dry-run/HALT checks. Exact SDK serialization is unavailable.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 178,
+          "end_line": 204
+        },
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 259,
+          "end_line": 361
+        }
+      ]
+    },
+    {
+      "operation": "Persist and read financial audit records",
+      "source": "Lower-level order evaluation, dry-run, submission/results, cancellation and safety actions",
+      "data_scope": "Record IDs/timestamps, token and order IDs, side, price, size, notional, optional market label, status and details; failed-order exception/response text is retained up to 400 characters",
+      "recipient_or_storage": "Local journal.jsonl and journal.jsonl.1; accounting and history callers",
+      "condition": "Intent precedes live posting. Status transitions append records. record() rotates after the size threshold, replacing one backup; status updates do not run rotation. Accounting age cutoffs do not delete records. Earlier CLI rejection/decline, invalid token and missing confirmation can exit without a record, despite the declared every-attempt trail.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/journal.py",
+          "start_line": 25,
+          "end_line": 107
+        },
+        {
+          "path": "polymarket_agent/journal.py",
+          "start_line": 127,
+          "end_line": 212
+        },
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 229,
+          "end_line": 236
+        },
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 263,
+          "end_line": 350
+        },
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 798,
+          "end_line": 817
+        }
+      ]
+    },
+    {
+      "operation": "Persist trading-control decisions",
+      "source": "Halt reason and autonomy enable/disable decisions",
+      "data_scope": "Halt timestamp/reason, autonomy expiry and configured caps",
+      "recipient_or_storage": "Local HALT file, settings and audit journal",
+      "condition": "Engaging HALT writes its reason to both HALT and the journal. Autonomy changes are journaled; enabling clamps duration to 24 hours.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/guardrails.py",
+          "start_line": 53,
+          "end_line": 69
+        },
+        {
+          "path": "polymarket_agent/guardrails.py",
+          "start_line": 198,
+          "end_line": 218
+        },
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 210,
+          "end_line": 211
+        }
+      ]
+    },
+    {
+      "operation": "Deduplicate and format whale alerts",
+      "source": "Public trades and existing alert state",
+      "data_scope": "Transaction hashes with seen timestamps, last_run timestamp; formatted trade values, sides, outcomes, prices, titles, trader labels and event links",
+      "recipient_or_storage": "Local alerts.json and normal stdout/caller",
+      "condition": "--alert reads state; non-preview execution marks fresh trades and saves it. Saving prunes entries older than 24 hours and retains at most 2,000. Preview still reads state. Output details at most 15 trades; no new trades produces NO_REPLY.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/alerts.py",
+          "start_line": 31,
+          "end_line": 89
+        },
+        {
+          "path": "polymarket_agent/alerts.py",
+          "start_line": 92,
+          "end_line": 142
+        },
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 397,
+          "end_line": 438
+        }
+      ]
+    },
+    {
+      "operation": "Schedule research and announce results through an external component",
+      "source": "User-approved schedule, command/prompt and subsequent research output",
+      "data_scope": "Schedule expression, local executable path or agent prompt, whale summaries and optional investigations of the three largest traders",
+      "recipient_or_storage": "OpenClaw cron job storage, optional isolated agent session and announcement channel; exact destinations and retention are unspecified",
+      "condition": "SKILL.md gives deterministic and agent-interpreted cron examples and requires disclosure/removal instructions. The Python package does not create schedules itself. Ordinary unscheduled stdout need not leave its caller.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 156,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "operation": "Conduct instruction-level web research",
+      "source": "Market/event context",
+      "data_scope": "News, event dates, historical base rates and supporting sources",
+      "recipient_or_storage": "Unspecified web-research tools/services and analyst context",
+      "condition": "The documented investigation/analysis workflow requests event research; no implementation establishes search payloads, providers or forwarding of complete wallet/API responses.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 132,
+          "end_line": 139
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 245,
+          "end_line": 252
+        }
+      ]
+    },
+    {
+      "operation": "Delete selected local state",
+      "source": "Keystore revocation, alert reset and HALT release",
+      "data_scope": "Encrypted keystore file, alert deduplication state or HALT file",
+      "recipient_or_storage": "Corresponding local file only",
+      "condition": "Keystore deletion attempts an overwrite before unlinking; alert reset and HALT release unlink their files. These operations do not delete other configuration/journal files or revoke the on-chain wallet.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/keystore.py",
+          "start_line": 225,
+          "end_line": 238
+        },
+        {
+          "path": "polymarket_agent/alerts.py",
+          "start_line": 145,
+          "end_line": 151
+        },
+        {
+          "path": "polymarket_agent/guardrails.py",
+          "start_line": 63,
+          "end_line": 69
+        },
+        {
+          "path": "README.md",
+          "start_line": 57,
+          "end_line": 57
+        }
+      ]
+    },
+    {
+      "operation": "Create test state and pass environment to a local test subprocess",
+      "source": "Test fixtures, temporary-directory configuration and parent environment",
+      "data_scope": "Synthetic financial records, alert state and the entire environment, including any credential variables present",
+      "recipient_or_storage": "Test state directory and a local Python lock-holder child process; no remote destination is shown",
+      "condition": "Test execution only. The lock test explicitly passes env=dict(os.environ). Journal-test directory isolation uses setdefault, so a preexisting state-directory override is retained.",
+      "evidence": [
+        {
+          "path": "tests/test_guardrails.py",
+          "start_line": 16,
+          "end_line": 34
+        },
+        {
+          "path": "tests/test_journal.py",
+          "start_line": 15,
+          "end_line": 25
+        },
+        {
+          "path": "tests/test_journal.py",
+          "start_line": 157,
+          "end_line": 182
+        },
+        {
+          "path": "tests/test_whales.py",
+          "start_line": 14,
+          "end_line": 35
+        }
+      ]
+    },
+    {
+      "operation": "Distribute a linked public-trade fixture",
+      "source": "A sample described as a real /trades response",
+      "data_scope": "Public wallet, trader names, transaction hash, asset/condition identifiers, market details, timestamp, price and size",
+      "recipient_or_storage": "Packaged tests/test_whales.py and anyone receiving that source",
+      "condition": "Static fixture distribution; this is separate from runtime API collection.",
+      "evidence": [
+        {
+          "path": "tests/test_whales.py",
+          "start_line": 18,
+          "end_line": 35
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Trades outside an explicitly selected market or side, including trader labels and transaction hashes",
+      "recipient_or_storage": "Data API /trades response, caller or cron announcement, and local alerts.json",
+      "condition": "poly whales combines --alert with --market or --side: the alert branch omits both filters although the ordinary branch forwards them.",
+      "purpose_basis": "Notify about the requested subset of whale activity.",
+      "necessary_behavior": "Fetch, deduplicate and report trades matching the requested filters.",
+      "proposed_reduction": "Forward market and side through alerts.new_whales into recent_whales before collecting, retaining or announcing trades. This narrows a required action's scope.",
+      "preservation_conditions": "Keep threshold/window filtering, preview behavior, deduplication and NO_REPLY suppression.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 397,
+          "end_line": 438
+        },
+        {
+          "path": "polymarket_agent/alerts.py",
+          "start_line": 92,
+          "end_line": 114
+        },
+        {
+          "path": "polymarket_agent/whales.py",
+          "start_line": 125,
+          "end_line": 138
+        }
+      ]
+    },
+    {
+      "data_scope": "Signer access, CLOB authentication and balance/open-order retrieval for proposals already rejectable locally",
+      "recipient_or_storage": "Local credential loader and py_clob_client; configured https://clob.polymarket.com",
+      "condition": "A credential exists and the CLI proposal has an invalid token, invalid numeric parameters or a notional exceeding the local per-order cap.",
+      "purpose_basis": "Validate proposed orders while enforcing deterministic limits.",
+      "necessary_behavior": "Reject locally invalid proposals; obtain live financial state for proposals that survive local checks.",
+      "proposed_reduction": "Run token/numeric/per-order prechecks before loading credentials or querying CLOB. These are avoidable actions on already-rejectable paths, not extra fields in an otherwise required request.",
+      "preservation_conditions": "Retain HALT precedence, all subsequent live-state checks, confirmation and existing accounting behavior.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/cli.py",
+          "start_line": 748,
+          "end_line": 782
+        },
+        {
+          "path": "polymarket_agent/guardrails.py",
+          "start_line": 111,
+          "end_line": 135
+        },
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 229,
+          "end_line": 236
+        },
+        {
+          "path": "polymarket_agent/trading.py",
+          "start_line": 77,
+          "end_line": 106
+        }
+      ]
+    },
+    {
+      "data_scope": "risk_profile and interests",
+      "recipient_or_storage": "Local config.json",
+      "condition": "Setup or a configuration update serializes all Settings fields; users can supply these preference values.",
+      "purpose_basis": "Implemented research display and deterministic financial controls do not consume these fields beyond configuration validation/readback.",
+      "necessary_behavior": "Persist operational risk limits, wallet settings and the liquidity threshold actually used by the implementation.",
+      "proposed_reduction": "Omit these unused preference fields from persisted operational settings until a defined consumer needs them. This removes extra data from the required configuration write.",
+      "preservation_conditions": "Preserve all documented trading controls and market outputs; retain preferences only if an explicit preference-storage feature is required.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 81,
+          "end_line": 85
+        },
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 157,
+          "end_line": 175
+        },
+        {
+          "path": "polymarket_agent/config.py",
+          "start_line": 210,
+          "end_line": 226
+        }
+      ]
+    },
+    {
+      "data_scope": "Exact last_run timestamp",
+      "recipient_or_storage": "Local alerts.json",
+      "condition": "Every persistent alert run stores it, including runs with no fresh trades; packaged code does not use it to filter, deduplicate or prune.",
+      "purpose_basis": "Prevent duplicate whale notifications.",
+      "necessary_behavior": "Store transaction identifiers and their seen timestamps for deduplication and expiry.",
+      "proposed_reduction": "Remove last_run from serialization and updates. This removes extra activity metadata from the required state write.",
+      "preservation_conditions": "Keep seen-entry timestamps, TTL/cap pruning, preview and reset behavior.",
+      "evidence": [
+        {
+          "path": "polymarket_agent/alerts.py",
+          "start_line": 43,
+          "end_line": 89
+        },
+        {
+          "path": "polymarket_agent/alerts.py",
+          "start_line": 103,
+          "end_line": 116
+        }
+      ]
+    },
+    {
+      "data_scope": "Entire parent environment, including any present POLYMARKET_KEY, POLYMARKET_PASSPHRASE or unrelated credentials",
+      "recipient_or_storage": "Local Python subprocess created by TradeLockTest",
+      "condition": "The lock test runs in an environment containing those variables.",
+      "purpose_basis": "Verify inter-process file-lock exclusion.",
+      "necessary_behavior": "Give the child enough environment to import the package and use the same test-state directory.",
+      "proposed_reduction": "Pass an explicit minimal environment containing required interpreter/import/platform settings and the test-state override. Merely dropping the env argument would still inherit the environment.",
+      "preservation_conditions": "Keep both processes pointed at the same lock file and preserve the timeout assertion.",
+      "evidence": [
+        {
+          "path": "tests/test_journal.py",
+          "start_line": 157,
+          "end_line": 182
+        }
+      ]
+    },
+    {
+      "data_scope": "Linked real public wallet, trader identities and transaction identifiers in SAMPLE_TRADE",
+      "recipient_or_storage": "Distributed tests/test_whales.py",
+      "condition": "The source package includes the real-response fixture.",
+      "purpose_basis": "Test parsing, calculations, URL construction and deduplication.",
+      "necessary_behavior": "Preserve response structure, field types, relationships and representative numeric cases.",
+      "proposed_reduction": "Replace real identifiers, names and event details with synthetic fixtures; update dependent assertions.",
+      "preservation_conditions": "Retain address/hash shapes, name fallback cases, mapping checks and deduplication identity distinctions.",
+      "evidence": [
+        {
+          "path": "tests/test_whales.py",
+          "start_line": 18,
+          "end_line": 35
+        },
+        {
+          "path": "tests/test_whales.py",
+          "start_line": 54,
+          "end_line": 79
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "All supplied source was reviewed. End-to-end SDK authentication/signing, external scheduling/delivery and web-research behavior remain unresolved because their implementations are absent.",
+    "py_clob_client and transitive dependency source is not supplied. Exact authentication payloads, private-key handling, HTTP environment inheritance, redirects, credential lifetime and any additional network behavior cannot be established.",
+    "Polymarket API logging, retention, onward disclosure and server-side processing are undocumented here. No raw-private-key transmission is established by the supplied package.",
+    "OpenClaw cron storage, announcement recipients, session retention and model-provider processing are unspecified. Normal CLI returns alone do not establish disclosure to those recipients.",
+    "Web-research tools, query contents, providers and retention are unspecified; the workflow does not establish forwarding complete wallet profiles or API responses.",
+    "Filesystem permissions are best-effort and platform-dependent. Keystore overwrite/unlink does not establish erasure from snapshots, backups, journaled storage or dependency-held memory.",
+    "There is no stated journal retention duration or user-configurable expiry. Size rotation and accounting age cutoffs do not establish a time-based deletion policy."
+  ]
+}

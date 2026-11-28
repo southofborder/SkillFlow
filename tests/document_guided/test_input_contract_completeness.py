@@ -276,7 +276,7 @@ def test_public_supplement_does_not_introduce_a_new_operation_target_syntax():
 
 
 def test_compiled_local_gap_preserves_actual_whole_input_and_observation():
-    from skillflow.propagation.contracts.specs import IRTransferSpec, operation_items
+    from skillflow.propagation.contracts.specs import IRSemantics, operation_items
     fixture = _fixture("local_input_gap", "Local uncertainty retains only its named information.",
         "Calculate the score from x. y may select the counting population, but its relation is unspecified. z does not affect the score.",
         [instruction("ir_compute", "calculate", [literal({"x": 1, "y": 2, "z": "extra"})], "score"),
@@ -295,8 +295,7 @@ def test_compiled_local_gap_preserves_actual_whole_input_and_observation():
     original = deepcopy(wire)
     _, _, compiled, _ = compile_flat_response(wire, example_material(fixture))
     assert wire == original and compiled["input_contracts"][0]["contract"] == transfer
-    ops = list(operation_items(IRTransferSpec.model_validate({k: compiled["ir_semantics"]["ir_compute"][k]
-        for k in IRTransferSpec.model_fields})).values())
+    ops = list(operation_items(IRSemantics.model_validate(compiled["ir_semantics"]["ir_compute"])).values())
     actual = next(op for op in ops if op.op == "compute")
     assert [x.model_dump(mode="json") for x in actual.inputs] == [{"kind": "input", "index": 0}]
     assert actual.dependencies == ["possible"]

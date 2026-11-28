@@ -1,0 +1,390 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide local conversational memory for OpenClaw: explicitly requested verbatim remembering, semantic recall with reinforcement, archival forgetting, status, and native-flush-driven learning. The entry declares plaintext local storage and no cloud synchronization (SKILL.md:20-37,43-85,102-106). Full-message caching, keyword extraction, payload details, and retention cutoffs are implementation choices described below.",
+  "data_operations": [
+    {
+      "operation": "Read local runtime configuration and discover Python",
+      "source": "Package configuration, environment, home directory, and executable paths",
+      "data_scope": "config.yaml; CONDA_PREFIX, CONDA, home-directory paths, PATH executable locations",
+      "recipient_or_storage": "Local Python processes",
+      "condition": "Core configuration loads at import; wrapper and daemon discover Python before launching their respective scripts.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 17,
+          "end_line": 29
+        },
+        {
+          "path": "wrapper.py",
+          "start_line": 10,
+          "end_line": 53
+        },
+        {
+          "path": "dream_daemon.py",
+          "start_line": 17,
+          "end_line": 59
+        }
+      ]
+    },
+    {
+      "operation": "Forward inputs to a local child process and return its output",
+      "source": "wrapper.py arguments",
+      "data_scope": "Remembered content, recall query, forget content, or supplied conversation; child stdout",
+      "recipient_or_storage": "fluid_skill.py through subprocess arguments; stdout returned to the wrapper's caller",
+      "condition": "The corresponding wrapper action and argument are supplied. No remote recipient or persistent process log is established.",
+      "evidence": [
+        {
+          "path": "wrapper.py",
+          "start_line": 55,
+          "end_line": 81
+        }
+      ]
+    },
+    {
+      "operation": "Initialize a persistent memory collection",
+      "source": "Chroma configuration and existing database",
+      "data_scope": "fluid_memory collection and its persistent records",
+      "recipient_or_storage": "Local CHROMA_PATH, constructed from ~/.openclaw/workspace and database\\chroma_store",
+      "condition": "Chroma imports and initialization succeeds. The legacy core branch explicitly disables anonymized telemetry; modern core and maintenance initialization omit that setting. Dependency-side behavior remains unknown.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 17,
+          "end_line": 18
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 34,
+          "end_line": 57
+        },
+        {
+          "path": "maintenance.py",
+          "start_line": 15,
+          "end_line": 41
+        }
+      ]
+    },
+    {
+      "operation": "Persist supplied memory text and access metadata",
+      "source": "remember(content), including calls from summarization functions",
+      "data_scope": "Complete content, timestamp-derived identifier, created_at, last_accessed, access_count, and active status",
+      "recipient_or_storage": "Persistent Chroma fluid_memory collection",
+      "condition": "Vector mode is available and collection.add succeeds. Explicit remembering is documented as preserving the user's original words.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 43,
+          "end_line": 55
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 73,
+          "end_line": 95
+        }
+      ]
+    },
+    {
+      "operation": "Append complete event content to a plaintext conversation cache",
+      "source": "OpenClaw message:sent event.content",
+      "data_scope": "Full event content and an ISO timestamp, labeled 用户说 without checking authorship",
+      "recipient_or_storage": "~/.openclaw/workspace/database/conversation_log.txt",
+      "condition": "The installed hook receives type message, action sent, and nonempty content. No auto_learn configuration check, rotation, consumption, or deletion appears in the handler.",
+      "evidence": [
+        {
+          "path": "hooks/fluid-memory-sync/HOOK.md",
+          "start_line": 24,
+          "end_line": 26
+        },
+        {
+          "path": "hooks/fluid-memory-sync/handler.js",
+          "start_line": 21,
+          "end_line": 27
+        },
+        {
+          "path": "hooks/fluid-memory-sync/handler.js",
+          "start_line": 47,
+          "end_line": 75
+        }
+      ]
+    },
+    {
+      "operation": "Infer categories through keyword matching, store selected segments, and return them",
+      "source": "Conversation supplied to summarize",
+      "data_scope": "Entire pipe-separated segments assigned to preferences, decisions, todos, or learning; deduplicated to at most five segments per category",
+      "recipient_or_storage": "Categorized JSON text submitted to remember; extracted categories returned to the caller",
+      "condition": "summarize is invoked. These are heuristic classifications, not verified user attributes. The implementation does not call an LLM API.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 210,
+          "end_line": 258
+        }
+      ]
+    },
+    {
+      "operation": "Read and construct an incremental summary; subsequent persistence is unresolved",
+      "source": "Existing summary buffer and new_conversation",
+      "data_scope": "Previous summary, round count, and entire segments containing 喜欢, 讨厌, 决定, 想, 要, or NSFW",
+      "recipient_or_storage": "Local process memory; intended writes to database\\summary_buffer.json or Chroma",
+      "condition": "increment_summarize reads and combines input, then references undefined SUMMARY_THRESHOLD. As packaged, it stops before writing. If that variable is supplied externally, it either saves the accumulated buffer or calls remember and resets the buffer. The reset does not check whether remembering succeeded.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 31,
+          "end_line": 32
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 260,
+          "end_line": 318
+        },
+        {
+          "path": "config.yaml",
+          "start_line": 4,
+          "end_line": 5
+        }
+      ]
+    },
+    {
+      "operation": "Conditionally capture a query, retrieve memories, and reinforce returned records",
+      "source": "recall(query) and active Chroma records",
+      "data_scope": "Query; up to ten candidate documents and metadata; up to three returned texts and scores; updated access counts and timestamps",
+      "recipient_or_storage": "Chroma query interface and persistent metadata; selected results returned to the caller",
+      "condition": "With vector mode available, packaged execution first fails on undefined AUTO_LEARN. If supplied externally, true additionally persists the query as conversation text; retrieval then filters by score above 0.05 and reinforces selected results. Decay uses created_at, not last_accessed.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 59,
+          "end_line": 71
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 97,
+          "end_line": 169
+        }
+      ]
+    },
+    {
+      "operation": "Find one matching memory and soft-archive it",
+      "source": "Forget keyword and active Chroma records",
+      "data_scope": "Nearest matching document, identifier, and metadata; status changed to archive",
+      "recipient_or_storage": "Existing Chroma record; matching text returned to the caller for confirmation",
+      "condition": "Vector mode exists and the semantic query finds a result. This retains the document rather than deleting it, consistent with the entry's archival requirement.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 29,
+          "end_line": 37
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 171,
+          "end_line": 196
+        }
+      ]
+    },
+    {
+      "operation": "Read and return memory status, including buffered content",
+      "source": "Chroma collection and existing summary_buffer.json",
+      "data_scope": "Total record count, backend, complete buffered summary, and round count",
+      "recipient_or_storage": "Status caller; no separate remote disclosure is established",
+      "condition": "Vector mode is available. Buffer content is returned when its file exists and parses successfully.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 198,
+          "end_line": 208
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 260,
+          "end_line": 269
+        }
+      ]
+    },
+    {
+      "operation": "Scan active memories, calculate retention scores, archive low scores, and print previews",
+      "source": "All active Chroma documents and metadata",
+      "data_scope": "Complete active documents; created_at and access_count; archive status updates; first 20 characters of each newly archived document",
+      "recipient_or_storage": "maintenance.py memory, Chroma metadata, and maintenance stdout; daemon relays captured stdout to its own stdout",
+      "condition": "Maintenance runs successfully, manually or through the running daemon around 06:00 Beijing time. Scores below 0.15 are archived. No persistent stdout destination is specified.",
+      "evidence": [
+        {
+          "path": "maintenance.py",
+          "start_line": 43,
+          "end_line": 87
+        },
+        {
+          "path": "dream_daemon.py",
+          "start_line": 61,
+          "end_line": 80
+        },
+        {
+          "path": "dream_daemon.py",
+          "start_line": 100,
+          "end_line": 115
+        }
+      ]
+    },
+    {
+      "operation": "Delete eligible archived collection records",
+      "source": "Archived Chroma identifiers and metadata",
+      "data_scope": "Archived records whose last_accessed is more than 120 days old",
+      "recipient_or_storage": "Chroma collection.delete",
+      "condition": "Maintenance must first find at least one active record, otherwise it returns before cleanup. Eligibility uses time since last access, not time since archiving; missing last_accessed defaults to now. This does not delete the conversation log or summary buffer, and physical erasure is not established.",
+      "evidence": [
+        {
+          "path": "maintenance.py",
+          "start_line": 45,
+          "end_line": 52
+        },
+        {
+          "path": "maintenance.py",
+          "start_line": 89,
+          "end_line": 114
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Accumulated raw event content and timestamps retained without a packaged cleanup mechanism",
+      "recipient_or_storage": "~/.openclaw/workspace/database/conversation_log.txt",
+      "condition": "The hook continues receiving eligible events; no supplied component consumes or truncates this file.",
+      "purpose_basis": "Conversation recording is explicitly part of the temporary cache-to-summary pipeline; indefinite retention is not required.",
+      "necessary_behavior": "Keep sufficient pending conversation to produce and safely persist the required memory summary.",
+      "proposed_reduction": "Bound pending-cache retention and remove successfully processed entries. This narrows retention in a required caching action.",
+      "preservation_conditions": "First implement reliable consumption and acknowledge successful summary persistence; preserve unprocessed input and required context.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "start_line": 22,
+          "end_line": 30
+        },
+        {
+          "path": "hooks/fluid-memory-sync/handler.js",
+          "start_line": 58,
+          "end_line": 70
+        }
+      ]
+    },
+    {
+      "data_scope": "Whole keyword-matching conversation segments, including unrelated material within a segment and possible repetition across categories",
+      "recipient_or_storage": "Summary documents persisted in Chroma",
+      "condition": "summarize selects a segment containing a category keyword and remembering succeeds.",
+      "purpose_basis": "The method declares extraction of key information; verbatim retention is explicitly required for manual remembering, not for summaries.",
+      "necessary_behavior": "Retain the relevant preference, decision, task, or learned fact with sufficient context.",
+      "proposed_reduction": "Extract bounded relevant facts and deduplicate shared content across categories. This narrows data in the required summary write.",
+      "preservation_conditions": "Preserve negation, attribution, and context needed for accurate recall; retain manual remember's documented verbatim behavior.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 210,
+          "end_line": 253
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 43,
+          "end_line": 55
+        }
+      ]
+    },
+    {
+      "data_scope": "Recall queries stored as new conversation memories",
+      "recipient_or_storage": "Persistent Chroma collection through remember",
+      "condition": "Only if an external integration supplies AUTO_LEARN=True; this branch is blocked by the undefined variable in the supplied package.",
+      "purpose_basis": "Recall requires searching and reinforcement. Documented automatic learning uses native flush, and packaged configuration declares auto_learn false.",
+      "necessary_behavior": "Use the query for retrieval and reinforce selected memories.",
+      "proposed_reduction": "Remove the additional query-storage action from recall, retaining separately authorized remembering and flush learning.",
+      "preservation_conditions": "Preserve semantic querying and access-metadata updates; resolve the undefined configuration binding before evaluating runtime behavior.",
+      "evidence": [
+        {
+          "path": "fluid_skill.py",
+          "start_line": 102,
+          "end_line": 112
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 20,
+          "end_line": 25
+        },
+        {
+          "path": "config.yaml",
+          "start_line": 4,
+          "end_line": 5
+        }
+      ]
+    },
+    {
+      "data_scope": "Complete buffered conversation summary in a routine status response",
+      "recipient_or_storage": "Status caller",
+      "condition": "Vector mode is available and a nonempty valid buffer exists.",
+      "purpose_basis": "The entry requests viewing memory status; content disclosure is an implementation choice beyond counts and operational state.",
+      "necessary_behavior": "Report backend, record count, and pending-buffer state.",
+      "proposed_reduction": "Return buffer rounds and a presence or size indicator; expose full summary content only through a separately requested inspection.",
+      "preservation_conditions": "Keep enough information to diagnose pending work. The existing response is a caller return, not evidence of external transmission.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 84,
+          "end_line": 92
+        },
+        {
+          "path": "fluid_skill.py",
+          "start_line": 198,
+          "end_line": 208
+        }
+      ]
+    },
+    {
+      "data_scope": "All active document bodies fetched for maintenance and 20-character previews printed for archived records",
+      "recipient_or_storage": "maintenance.py process memory; maintenance stdout and, when used, dream_daemon.py stdout",
+      "condition": "Maintenance scans active records; a preview is printed when a record falls below the archive threshold.",
+      "purpose_basis": "Archival scoring and updates use identifiers and metadata, not document contents.",
+      "necessary_behavior": "Fetch identifiers and scoring metadata, update status, and report maintenance results.",
+      "proposed_reduction": "Omit documents from the required fetch and remove the redundant content-preview output; retain scores and aggregate counts.",
+      "preservation_conditions": "Preserve scoring, archival updates, cleanup, and useful operational diagnostics.",
+      "evidence": [
+        {
+          "path": "maintenance.py",
+          "start_line": 43,
+          "end_line": 84
+        },
+        {
+          "path": "dream_daemon.py",
+          "start_line": 73,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "data_scope": "Archived records already eligible for the implementation's 120-day inactivity deletion",
+      "recipient_or_storage": "Persistent Chroma collection",
+      "condition": "No active memories exist, causing maintenance to return before checking archived records.",
+      "purpose_basis": "The implementation includes deletion of long-inactive archives, but its early return can retain them indefinitely.",
+      "necessary_behavior": "Apply the existing archive-cleanup eligibility rule independently of active-memory consolidation.",
+      "proposed_reduction": "Run archived-record cleanup even when the active scan is empty.",
+      "preservation_conditions": "Keep the archive-status and inactivity checks; preserve records that do not meet deletion eligibility.",
+      "evidence": [
+        {
+          "path": "maintenance.py",
+          "start_line": 45,
+          "end_line": 52
+        },
+        {
+          "path": "maintenance.py",
+          "start_line": 89,
+          "end_line": 114
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Automatic flush integration is unresolved: documentation specifies AI-triggered summarization, but supplied code contains no conversation-log reader, flush handler, or log cleanup. The hook only appends (hooks/fluid-memory-sync/HOOK.md:24-26; hooks/fluid-memory-sync/handler.js:47-77).",
+    "Recall and incremental persistence are blocked as packaged by undefined AUTO_LEARN and SUMMARY_THRESHOLD. CONFIG is loaded without binding either variable; config.yaml values cannot be assumed effective (fluid_skill.py:21-29,103-104,306-318; config.yaml:4-5).",
+    "Named OpenClaw tool registration and argument adaptation are absent. In particular, fluid_forget documents keyword while the CLI expects --content; the external mapping cannot be verified (SKILL.md:71-82; wrapper.py:55-65).",
+    "The actual author, direction, and extent of event.content are defined outside the package. The hook's 用户说 label does not establish that it records user messages or complete conversations (hooks/fluid-memory-sync/handler.js:47-61).",
+    "Chroma dependency source, version, embedding implementation, telemetry payloads, and recipients are unavailable. No explicit remote send appears in supplied code, but dependency-side disclosure and the documented no-cloud claim cannot be verified (fluid_skill.py:38-50,80-89,108-112; maintenance.py:31-38; README.md:150-159).",
+    "Collection deletion does not establish physical erasure, backup removal, or dependency retention behavior. Persistence of stdout by a hosting system is also undocumented (maintenance.py:111-114; dream_daemon.py:73-80)."
+  ]
+}

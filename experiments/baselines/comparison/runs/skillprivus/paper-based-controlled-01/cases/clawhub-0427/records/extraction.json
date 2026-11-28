@@ -1,0 +1,1785 @@
+{
+  "request_sha256": "76c11be550e88d80bea9c87aa5259eaa6b6b587dbde382b924c66494e66e8763",
+  "answer_sha256": "824de16d947fb5e26e8e6e2a8dd229b5e84b29589e609b95b0af436a7cf76b1a",
+  "result": {
+    "status": "complete",
+    "reason": "Completed static extraction from the supplied files without execution or tools. The implementation obtains account vehicle lists and full vehicle_data through teslapy, formats or prints selected/raw data, issues vehicle commands, and persists defaults and mileage locally. Token caching and browser login are documented and delegated to teslapy, whose implementation and actual network endpoints are absent. Export-file and launchd-log writes are documented execution examples. Mileage code permits waking stale/unrecorded cars unless --no-wake is set; the README's stated no-wake default is not implemented by the parser.",
+    "claim": "The skill states that it controls Tesla vehicles from macOS through the Tesla Owner API using teslapy, checks vehicle state, provides remote commands and chat-friendly output, caches authentication locally only, and requires confirmation for disruptive actions.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "description: Control Tesla vehicles from macOS via the Tesla Owner API using teslapy (auth, list cars, status, lock/unlock, climate, charging, location, and extras). Use when you want to check your car state or run safe remote commands. Designed for Parth Maniar (@officialpm) with local-only auth caching, confirmation gates for disruptive actions, and chat-friendly status output."
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "CLI arguments, including account email, vehicle selector, JSON/raw-output options, and confirmation flag.",
+        "source": "Process command line",
+        "recipient": "argparse namespace used by the CLI handlers",
+        "condition": "When main runs.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2070,
+            "end_line": 2090,
+            "quote": "    parser = argparse.ArgumentParser(description=\"Tesla vehicle control\")\n    parser.add_argument(\"--email\", \"-e\", help=\"Tesla account email\")\n    parser.add_argument(\"--car\", \"-c\", help=\"Vehicle name (default: first vehicle)\")\n    parser.add_argument(\"--json\", \"-j\", action=\"store_true\", help=\"Output JSON\")\n    parser.add_argument(\n        \"--raw-json\",\n        action=\"store_true\",\n        help=(\n            \"When used with --json on supported commands, output raw vehicle_data (may include location). \"\n            \"Default JSON output is sanitized/summary for safety.\"\n        ),\n    )\n    parser.add_argument(\n        \"--yes\",\n        action=\"store_true\",\n        help=(\n            \"Safety confirmation for sensitive/disruptive actions \"\n            \"(unlock/charge start|stop|limit|amps/trunk/windows/seats set/honk/flash/charge-port open|close/\"\n            \"scheduled-charging set|off/sentry on|off/location precise)\"\n        ),\n    )"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2256,
+            "end_line": 2256,
+            "quote": "    args = parser.parse_args()"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Read",
+        "data": "Tesla account email, stripped of surrounding whitespace.",
+        "source": "--email argument, otherwise TESLA_EMAIL environment variable, otherwise interactive input",
+        "recipient": "CLI authentication setup",
+        "condition": "Interactive prompting is allowed for auth; require_email disables prompting for other API commands.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 60,
+            "end_line": 80,
+            "quote": "def resolve_email(args, prompt: bool = True) -> str:\n    \"\"\"Resolve Tesla account email from args/env, optionally prompting.\"\"\"\n    email = getattr(args, \"email\", None) or os.environ.get(\"TESLA_EMAIL\")\n    if isinstance(email, str) and email.strip():\n        return email.strip()\n    if not prompt:\n        return None\n    return input(\"Tesla email: \").strip()\n\n\ndef require_email(args) -> str:\n    \"\"\"Require a Tesla email to be provided via --email or TESLA_EMAIL.\"\"\"\n    email = resolve_email(args, prompt=False)\n    if not email:\n        print(\n            \"❌ Missing Tesla email. Set TESLA_EMAIL or pass --email\\n\"\n            f\"   Example: TESLA_EMAIL=\\\"you@email.com\\\" {_invocation('list')}\",\n            file=sys.stderr,\n        )\n        sys.exit(2)\n    return email"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Send",
+        "data": "Authentication URL supplied to the authenticator, with browser-login and callback-paste instructions.",
+        "source": "teslapy custom_auth callback argument",
+        "recipient": "Standard output / CLI user",
+        "condition": "When teslapy invokes the custom authenticator.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 87,
+            "end_line": 93,
+            "quote": "    def custom_auth(url):\n        print(f\"\\n🔐 Open this URL in your browser:\\n{url}\\n\")\n        print(\"Log in to Tesla, then paste the final URL here\")\n        print(\"(it will start with https://auth.tesla.com/void/callback?...)\")\n        return input(\"\\nCallback URL: \").strip()\n    \n    tesla = teslapy.Tesla(email, authenticator=custom_auth, cache_file=str(CACHE_FILE))"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Send",
+        "data": "Manual browser login interaction; the submitted login fields are unspecified.",
+        "source": "User operating a browser",
+        "recipient": "Tesla login page at the displayed authentication URL",
+        "condition": "The first-time authentication instructions direct the user to open the URL and log in; the supplied code does not implement the browser submission.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 25,
+            "end_line": 25,
+            "quote": "This opens a Tesla login URL. Log in, then paste the callback URL back into the CLI."
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 87,
+            "end_line": 90,
+            "quote": "    def custom_auth(url):\n        print(f\"\\n🔐 Open this URL in your browser:\\n{url}\\n\")\n        print(\"Log in to Tesla, then paste the final URL here\")\n        print(\"(it will start with https://auth.tesla.com/void/callback?...)\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Read",
+        "data": "User-pasted authentication callback URL.",
+        "source": "Interactive standard input",
+        "recipient": "custom_auth return value supplied to teslapy",
+        "condition": "When the custom authenticator is invoked; surrounding whitespace is stripped.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 87,
+            "end_line": 93,
+            "quote": "    def custom_auth(url):\n        print(f\"\\n🔐 Open this URL in your browser:\\n{url}\\n\")\n        print(\"Log in to Tesla, then paste the final URL here\")\n        print(\"(it will start with https://auth.tesla.com/void/callback?...)\")\n        return input(\"\\nCallback URL: \").strip()\n    \n    tesla = teslapy.Tesla(email, authenticator=custom_auth, cache_file=str(CACHE_FILE))"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Send",
+        "data": "Account email and authenticator-returned callback URL, with a request to fetch an authentication token when unauthorized.",
+        "source": "Resolved account email and interactive custom_auth callback",
+        "recipient": "teslapy.Tesla authentication flow; actual network endpoints are not shown",
+        "condition": "get_tesla constructs the client; fetch_token runs only when tesla.authorized is false.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 83,
+            "end_line": 97,
+            "quote": "def get_tesla(email: str):\n    \"\"\"Get authenticated Tesla instance.\"\"\"\n    import teslapy\n    \n    def custom_auth(url):\n        print(f\"\\n🔐 Open this URL in your browser:\\n{url}\\n\")\n        print(\"Log in to Tesla, then paste the final URL here\")\n        print(\"(it will start with https://auth.tesla.com/void/callback?...)\")\n        return input(\"\\nCallback URL: \").strip()\n    \n    tesla = teslapy.Tesla(email, authenticator=custom_auth, cache_file=str(CACHE_FILE))\n    \n    if not tesla.authorized:\n        tesla.fetch_token()\n        print(\"✅ Authenticated successfully!\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Save",
+        "data": "Documented local authentication token/credential cache. The CLI configures the cache path; the dependency's actual cache I/O is not supplied.",
+        "source": "teslapy authentication flow",
+        "recipient": "~/.tesla_cache.json",
+        "condition": "Caching is described as local only. Existing cache files receive best-effort mode 0600; retention/expiry is unspecified.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "- Token cache: `~/.tesla_cache.json` (local only; best-effort chmod `0600`)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "CACHE_FILE = Path.home() / \".tesla_cache.json\""
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 93,
+            "end_line": 101,
+            "quote": "    tesla = teslapy.Tesla(email, authenticator=custom_auth, cache_file=str(CACHE_FILE))\n    \n    if not tesla.authorized:\n        tesla.fetch_token()\n        print(\"✅ Authenticated successfully!\")\n\n    # Best-effort: keep the local OAuth cache file private.\n    if CACHE_FILE.exists():\n        _chmod_0600(CACHE_FILE)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 116,
+            "end_line": 122,
+            "quote": "def _chmod_0600(path: Path):\n    \"\"\"Best-effort: set file permissions to user read/write only.\"\"\"\n    try:\n        path.chmod(0o600)\n    except Exception:\n        # Non-POSIX FS or permission error; ignore.\n        pass"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Read",
+        "data": "Default vehicle display name from an environment override.",
+        "source": "MY_TESLA_DEFAULT_CAR environment variable",
+        "recipient": "Default-car resolution used by vehicle selection and display",
+        "condition": "A nonempty environment value takes priority over the defaults file; whitespace is stripped.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 131,
+            "end_line": 139,
+            "quote": "def resolve_default_car_name():\n    # Highest priority: env var\n    env_name = os.environ.get(\"MY_TESLA_DEFAULT_CAR\")\n    if env_name:\n        return env_name.strip()\n\n    defaults = load_defaults()\n    name = defaults.get(\"default_car\")\n    return name.strip() if isinstance(name, str) and name.strip() else None"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Read",
+        "data": "Local defaults JSON, including the default_car vehicle name.",
+        "source": "~/.my_tesla.json",
+        "recipient": "CLI defaults object and default-car resolver",
+        "condition": "Read when the file exists; load exceptions produce an empty defaults object. Default-name resolution reads it only when the environment override is absent.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 28,
+            "end_line": 28,
+            "quote": "DEFAULTS_FILE = Path.home() / \".my_tesla.json\""
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 106,
+            "end_line": 113,
+            "quote": "def load_defaults():\n    \"\"\"Load optional user defaults from ~/.my_tesla.json (local only).\"\"\"\n    try:\n        if DEFAULTS_FILE.exists():\n            return json.loads(DEFAULTS_FILE.read_text())\n    except Exception:\n        pass\n    return {}"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 137,
+            "end_line": 139,
+            "quote": "    defaults = load_defaults()\n    name = defaults.get(\"default_car\")\n    return name.strip() if isinstance(name, str) and name.strip() else None"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Save",
+        "data": "Defaults JSON with default_car set to the supplied vehicle name, preserving other successfully loaded keys.",
+        "source": "default-car name argument and loaded defaults object",
+        "recipient": "~/.my_tesla.json",
+        "condition": "When default-car receives a name; write_text replaces the file contents and best-effort chmod sets mode 0600. No retention limit is specified.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 28,
+            "end_line": 28,
+            "quote": "DEFAULTS_FILE = Path.home() / \".my_tesla.json\""
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 125,
+            "end_line": 128,
+            "quote": "def save_defaults(obj: dict):\n    # Defaults can include human-readable vehicle names; keep them private.\n    DEFAULTS_FILE.write_text(json.dumps(obj, indent=2) + \"\\n\")\n    _chmod_0600(DEFAULTS_FILE)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2062,
+            "end_line": 2066,
+            "quote": "    defaults = load_defaults()\n    defaults[\"default_car\"] = args.name\n    save_defaults(defaults)\n    print(f\"✅ Default car set to: {args.name}\")\n    print(f\"Saved to: {DEFAULTS_FILE}\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 116,
+            "end_line": 122,
+            "quote": "def _chmod_0600(path: Path):\n    \"\"\"Best-effort: set file permissions to user read/write only.\"\"\"\n    try:\n        path.chmod(0o600)\n    except Exception:\n        # Non-POSIX FS or permission error; ignore.\n        pass"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Send",
+        "data": "Resolved or newly configured default vehicle name and, after saving, defaults-file path.",
+        "source": "Environment/defaults resolution or default-car name argument",
+        "recipient": "Standard output",
+        "condition": "When default-car is invoked.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2052,
+            "end_line": 2066,
+            "quote": "def cmd_default_car(args):\n    \"\"\"Set or show the default car used when --car is not provided.\"\"\"\n    if not args.name:\n        name = resolve_default_car_name()\n        if name:\n            print(f\"Default car: {name}\")\n        else:\n            print(\"Default car: (none)\")\n        return\n\n    defaults = load_defaults()\n    defaults[\"default_car\"] = args.name\n    save_defaults(defaults)\n    print(f\"✅ Default car set to: {args.name}\")\n    print(f\"Saved to: {DEFAULTS_FILE}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Read",
+        "data": "Account vehicle-list objects; visible uses include display names, online states, and mileage-recording identifiers.",
+        "source": "teslapy.Tesla.vehicle_list() return values",
+        "recipient": "CLI vehicle listing, selection, authentication summary, and mileage recorder",
+        "condition": "After authentication setup; the dependency's request endpoint and complete returned field set are unspecified.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 178,
+            "end_line": 185,
+            "quote": "def get_vehicle(tesla, name: str = None):\n    \"\"\"Get vehicle by name/index, else default car, else first vehicle.\"\"\"\n    vehicles = tesla.vehicle_list()\n    if not vehicles:\n        print(\"❌ No vehicles found on this account\", file=sys.stderr)\n        sys.exit(1)\n\n    target_name = name or resolve_default_car_name()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 264,
+            "end_line": 265,
+            "quote": "    tesla = get_tesla(email)\n    vehicles = tesla.vehicle_list()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 273,
+            "end_line": 278,
+            "quote": "def cmd_list(args):\n    \"\"\"List all vehicles.\"\"\"\n    tesla = get_tesla(require_email(args))\n    vehicles = tesla.vehicle_list()\n\n    default_name = resolve_default_car_name()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1825,
+            "end_line": 1828,
+            "quote": "def _vehicle_identity(vehicle) -> tuple[str, str]:\n    vid = vehicle.get(\"id_s\") or str(vehicle.get(\"vehicle_id\") or \"\")\n    name = vehicle.get(\"display_name\") or \"Vehicle\"\n    return (vid, name)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1877,
+            "end_line": 1879,
+            "quote": "    if args.action == \"record\":\n        tesla = get_tesla(require_email(args))\n        vehicles = tesla.vehicle_list()"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Infer",
+        "data": "Selected vehicle from an explicit selector, default name, or first vehicle; matching uses a one-based index, case-insensitive exact name, or unique substring.",
+        "source": "Vehicle-list objects, --car, and resolved default-car name",
+        "recipient": "Selected vehicle object used by command handlers",
+        "condition": "No selector chooses the first vehicle; ambiguous or missing matches return no selection and cause an error.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 149,
+            "end_line": 175,
+            "quote": "    if not vehicles:\n        return None\n\n    if not target_name:\n        return vehicles[0]\n\n    s = target_name.strip()\n    if s.isdigit():\n        idx = int(s) - 1\n        if 0 <= idx < len(vehicles):\n            return vehicles[idx]\n        return None\n\n    s_l = s.lower()\n\n    # 1) Exact match (case-insensitive)\n    for v in vehicles:\n        if v.get('display_name', '').lower() == s_l:\n            return v\n\n    # 2) Substring match (case-insensitive)\n    matches = [v for v in vehicles if s_l in v.get('display_name', '').lower()]\n    if len(matches) == 1:\n        return matches[0]\n\n    # Ambiguous / not found\n    return None"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 185,
+            "end_line": 190,
+            "quote": "    target_name = name or resolve_default_car_name()\n\n    if target_name:\n        selected = _select_vehicle(vehicles, target_name)\n        if selected:\n            return selected"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 228,
+            "end_line": 228,
+            "quote": "    return vehicles[0]"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Send",
+        "data": "Vehicle count, display names, states, list indices, default-car name/default markers, and authentication-cache path. List/auth output selects these fields rather than printing VINs.",
+        "source": "Vehicle list, resolved default name, and CACHE_FILE constant",
+        "recipient": "Standard output",
+        "condition": "auth or list; list JSON contains index, display_name, state, is_default, and default_car.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 264,
+            "end_line": 270,
+            "quote": "    tesla = get_tesla(email)\n    vehicles = tesla.vehicle_list()\n    print(f\"\\n✅ Authentication cached at {CACHE_FILE}\")\n    print(f\"\\n🚗 Found {len(vehicles)} vehicle(s):\")\n    for v in vehicles:\n        # Avoid printing VINs by default.\n        print(f\"   - {v['display_name']} ({v['state']})\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 280,
+            "end_line": 305,
+            "quote": "    if getattr(args, \"json\", False):\n        # Keep JSON output small + privacy-safe (no VINs).\n        out = []\n        for i, v in enumerate(vehicles):\n            name = v.get('display_name')\n            out.append({\n                'index': i + 1,\n                'display_name': name,\n                'state': v.get('state'),\n                'is_default': bool(default_name and isinstance(name, str) and name.lower() == default_name.lower()),\n            })\n        print(json.dumps({'vehicles': out, 'default_car': default_name}, indent=2))\n        return\n\n    print(f\"Found {len(vehicles)} vehicle(s):\\n\")\n    for i, v in enumerate(vehicles):\n        star = \" (default)\" if default_name and v['display_name'].lower() == default_name.lower() else \"\"\n        print(f\"{i+1}. {v['display_name']}{star}\")\n        # Avoid printing VIN in normal output (privacy).\n        print(f\"   State: {v['state']}\")\n        print()\n\n    if default_name:\n        print(f\"Default car: {default_name}\")\n    else:\n        print(f\"Default car: (none) — set with: {_invocation('default-car \"Name\"')}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Send",
+        "data": "Requested vehicle selector and matching/available vehicle display names with indices.",
+        "source": "Failed vehicle selection and account vehicle list",
+        "recipient": "Standard error",
+        "condition": "The requested/default selector is ambiguous or does not match a vehicle.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 193,
+            "end_line": 226,
+            "quote": "        s = str(target_name).strip()\n        ambiguous = False\n        matches = []\n        if s and not s.isdigit():\n            s_l = s.lower()\n            matches = [\n                (i + 1, v) for i, v in enumerate(vehicles)\n                if s_l in v.get('display_name', '').lower()\n            ]\n            ambiguous = len(matches) > 1\n\n        options = \"\\n\".join(\n            f\"   {i+1}. {v.get('display_name')}\" for i, v in enumerate(vehicles)\n        )\n\n        if ambiguous:\n            match_lines = \"\\n\".join(\n                f\"   {idx}. {v.get('display_name')}\" for idx, v in matches\n            )\n            print(\n                f\"❌ Vehicle '{target_name}' is ambiguous (matched multiple vehicles).\\n\"\n                \"   Tip: use a more specific name, or choose by index: --car <N>\\n\"\n                f\"Matches:\\n{match_lines}\\n\\n\"\n                f\"All vehicles:\\n{options}\",\n                file=sys.stderr,\n            )\n        else:\n            print(\n                f\"❌ Vehicle '{target_name}' not found.\\n\"\n                \"   Tip: you can pass --car with a partial name (substring match) or a 1-based index.\\n\"\n                f\"Available vehicles:\\n{options}\",\n                file=sys.stderr,\n            )\n        sys.exit(1)"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Send",
+        "data": "Vehicle wake request.",
+        "source": "CLI wake policy or explicit wake command",
+        "recipient": "Selected vehicle through teslapy sync_wake_up(); endpoint unspecified",
+        "condition": "wake_vehicle sends only when the cached state is not online and allow_wake is true. The explicit wake command calls sync_wake_up directly. Mileage has an additional stale-record gate.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 231,
+            "end_line": 247,
+            "quote": "def wake_vehicle(vehicle, allow_wake: bool = True) -> bool:\n    \"\"\"Wake vehicle if asleep.\n\n    Returns True if the vehicle is (or becomes) online.\n    If allow_wake is False and the vehicle is not online, returns False.\n    \"\"\"\n    state = vehicle.get('state')\n    if state == 'online':\n        return True\n\n    if not allow_wake:\n        return False\n\n    try:\n        print(\"⏳ Waking vehicle...\", file=sys.stderr)\n        vehicle.sync_wake_up()\n        return True"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1689,
+            "end_line": 1695,
+            "quote": "def cmd_wake(args):\n    \"\"\"Wake up the vehicle.\"\"\"\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    print(f\"⏳ Waking {vehicle['display_name']}...\")\n    vehicle.sync_wake_up()\n    print(f\"✅ {vehicle['display_name']} is awake\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1897,
+            "end_line": 1904,
+            "quote": "                # Determine if we should allow waking based on last successful capture.\n                last_ts = mileage_last_success_ts(conn, vid) if vid else None\n                too_old = last_ts is None or (ts - last_ts) >= wake_after_sec\n\n                allow_wake = allow_any_wake and bool(too_old)\n\n                # Try to avoid waking unless threshold exceeded.\n                if not wake_vehicle(v, allow_wake=allow_wake):"
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Read",
+        "data": "Full vehicle_data responses, subsequently used for battery, charging, climate, security, openings, tires, seat heaters, schedules, odometer, and location. Location handling explicitly accesses drive_state latitude and longitude.",
+        "source": "teslapy vehicle.get_vehicle_data() return values",
+        "recipient": "CLI handler memory",
+        "condition": "Read-oriented handlers fetch after online/wake gating. --no-wake blocks offline reads. Mileage fetches only for vehicles that pass its wake/online check. Focused output does not imply a focused upstream fetch.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 675,
+            "end_line": 686,
+            "quote": "def _ensure_online_or_exit(vehicle, allow_wake: bool):\n    if wake_vehicle(vehicle, allow_wake=allow_wake):\n        return\n\n    state = vehicle.get('state')\n    name = vehicle.get('display_name', 'Vehicle')\n    print(\n        f\"ℹ️ {name} is currently '{state}'. Skipping wake because --no-wake was set.\\n\"\n        f\"   Re-run without --no-wake, or run: {_invocation('wake')}\",\n        file=sys.stderr,\n    )\n    sys.exit(3)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 689,
+            "end_line": 694,
+            "quote": "def cmd_report(args):\n    \"\"\"One-screen status report.\"\"\"\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n    data = vehicle.get_vehicle_data()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 709,
+            "end_line": 715,
+            "quote": "def cmd_status(args):\n    \"\"\"Get vehicle status.\"\"\"\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n\n    _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n    data = vehicle.get_vehicle_data()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 803,
+            "end_line": 809,
+            "quote": "    if args.action == 'status':\n        # Read-only action can skip waking the car.\n        allow_wake = not getattr(args, 'no_wake', False)\n        _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n\n        data = vehicle.get_vehicle_data()\n        climate = data.get('climate_state', {})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 912,
+            "end_line": 914,
+            "quote": "    if args.action == 'status':\n        data = vehicle.get_vehicle_data()\n        charge = data['charge_state']"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1031,
+            "end_line": 1033,
+            "quote": "    if args.action == 'status':\n        data = vehicle.get_vehicle_data()\n        charge = data.get('charge_state', {})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1089,
+            "end_line": 1094,
+            "quote": "    allow_wake = not getattr(args, 'no_wake', False)\n    _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n\n    data = vehicle.get_vehicle_data()\n    charge = data.get('charge_state', {})\n    out = _scheduled_departure_status_json(charge)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1149,
+            "end_line": 1156,
+            "quote": "    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n\n    data = vehicle.get_vehicle_data()\n    drive = data['drive_state']\n\n    lat, lon = drive['latitude'], drive['longitude']"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1183,
+            "end_line": 1184,
+            "quote": "    data = vehicle.get_vehicle_data()\n    vs = data.get('vehicle_state', {})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1299,
+            "end_line": 1300,
+            "quote": "    data = vehicle.get_vehicle_data()\n    vs = data.get('vehicle_state', {})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1367,
+            "end_line": 1371,
+            "quote": "    if args.action == 'status':\n        allow_wake = not getattr(args, 'no_wake', False)\n        _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n        data = vehicle.get_vehicle_data()\n        vs = data.get('vehicle_state', {})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1525,
+            "end_line": 1530,
+            "quote": "    if args.action == \"status\":\n        allow_wake = not getattr(args, \"no_wake\", False)\n        _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n        data = vehicle.get_vehicle_data()\n        climate = data.get(\"climate_state\", {})\n        out = _seat_heater_fields(climate)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1576,
+            "end_line": 1578,
+            "quote": "    if args.action == 'status':\n        data = vehicle.get_vehicle_data()\n        sentry = data.get('vehicle_state', {}).get('sentry_mode')"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1653,
+            "end_line": 1656,
+            "quote": "    if args.action == 'status':\n        _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n        data = vehicle.get_vehicle_data()\n        out = _charge_port_status_json(vehicle, data)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1705,
+            "end_line": 1709,
+            "quote": "    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n\n    _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n    data = vehicle.get_vehicle_data()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1929,
+            "end_line": 1932,
+            "quote": "                # Online now.\n                data = v.get_vehicle_data()\n                vs = data.get(\"vehicle_state\", {})\n                odo = vs.get(\"odometer\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Infer",
+        "data": "Derived display values: Celsius-to-Fahrenheit temperatures, bar-to-PSI tire pressures, and minutes-from-midnight formatted as HH:MM.",
+        "source": "Vehicle telemetry numeric fields",
+        "recipient": "In-memory status/report formatting",
+        "condition": "When corresponding fields are available and conversions succeed; time formatting wraps hours modulo 24.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 308,
+            "end_line": 312,
+            "quote": "def _c_to_f(c):\n    try:\n        return c * 9 / 5 + 32\n    except Exception:\n        return None"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 410,
+            "end_line": 418,
+            "quote": "def _bar_to_psi(bar):\n    \"\"\"Convert bar to PSI.\n\n    Tesla APIs commonly return tire pressures in bar.\n    \"\"\"\n    try:\n        return float(bar) * 14.5037738\n    except Exception:\n        return None"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 435,
+            "end_line": 448,
+            "quote": "def _fmt_minutes_hhmm(minutes):\n    \"\"\"Format minutes-from-midnight as HH:MM.\n\n    Tesla endpoints commonly represent scheduled times as minutes after midnight.\n    \"\"\"\n    try:\n        m = int(minutes)\n    except Exception:\n        return None\n    if m < 0:\n        return None\n    hh = (m // 60) % 24\n    mm = m % 60\n    return f\"{hh:02d}:{mm:02d}\""
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Send",
+        "data": "Raw vehicle_data JSON, potentially including drive_state and location.",
+        "source": "Full get_vehicle_data() response",
+        "recipient": "Standard output",
+        "condition": "status with --json; report or summary only with both JSON and raw_json enabled.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 694,
+            "end_line": 704,
+            "quote": "    data = vehicle.get_vehicle_data()\n\n    if args.json:\n        # Default JSON output is a structured, sanitized report object.\n        # Use --raw-json if you explicitly want the full vehicle_data payload\n        # (which may include location/drive_state).\n        if getattr(args, \"raw_json\", False):\n            print(json.dumps(data, indent=2))\n        else:\n            print(json.dumps(_report_json(vehicle, data), indent=2))\n        return"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 715,
+            "end_line": 721,
+            "quote": "    data = vehicle.get_vehicle_data()\n\n    # When --json is requested, print *only* JSON (no extra human text), so it can\n    # be reliably piped/parsed.\n    if args.json:\n        print(json.dumps(data, indent=2))\n        return"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1709,
+            "end_line": 1716,
+            "quote": "    data = vehicle.get_vehicle_data()\n\n    if getattr(args, 'json', False):\n        if getattr(args, 'raw_json', False):\n            print(json.dumps(data, indent=2))\n        else:\n            print(json.dumps(_summary_json(vehicle, data), indent=2))\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Send",
+        "data": "Summary text or selected summary JSON: vehicle name/state, lock state, battery level/range/usable level, charging state, cabin temperature and climate state. The JSON constructor selects these fields and excludes location.",
+        "source": "Vehicle metadata and charge_state, climate_state, vehicle_state",
+        "recipient": "Standard output",
+        "condition": "summary command; JSON without raw_json uses the selected object. Human output uses _short_status.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 319,
+            "end_line": 347,
+            "quote": "def _short_status(vehicle, data):\n    charge = data.get('charge_state', {})\n    climate = data.get('climate_state', {})\n    vs = data.get('vehicle_state', {})\n\n    batt = charge.get('battery_level')\n    rng = charge.get('battery_range')\n    charging = charge.get('charging_state')\n    locked = vs.get('locked')\n    inside_c = climate.get('inside_temp')\n    inside_f = _c_to_f(inside_c) if inside_c is not None else None\n    climate_on = climate.get('is_climate_on')\n\n    parts = [f\"🚗 {vehicle['display_name']}\"]\n    if locked is not None:\n        parts.append(f\"🔒 {_fmt_bool(locked, 'Locked', 'Unlocked')}\")\n    if batt is not None:\n        if rng is not None:\n            parts.append(f\"🔋 {batt}% ({rng:.0f} mi)\")\n        else:\n            parts.append(f\"🔋 {batt}%\")\n    if charging:\n        parts.append(f\"⚡ {charging}\")\n    if inside_c is not None and inside_f is not None:\n        parts.append(f\"🌡️ {inside_f:.0f}°F\")\n    if climate_on is not None:\n        parts.append(f\"❄️ {_fmt_bool(climate_on, 'On', 'Off')}\")\n\n    return \" • \".join(parts)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 355,
+            "end_line": 398,
+            "quote": "    charge = data.get('charge_state', {})\n    climate = data.get('climate_state', {})\n    vs = data.get('vehicle_state', {})\n\n    inside_c = climate.get('inside_temp')\n    inside_f = _c_to_f(inside_c) if inside_c is not None else None\n\n    out = {\n        \"vehicle\": {\n            \"display_name\": vehicle.get(\"display_name\"),\n            \"state\": vehicle.get(\"state\"),\n        },\n        \"summary\": _short_status(vehicle, data),\n        \"security\": {\n            \"locked\": vs.get(\"locked\"),\n        },\n        \"battery\": {\n            \"level_percent\": charge.get(\"battery_level\"),\n            \"range_mi\": charge.get(\"battery_range\"),\n            \"usable_level_percent\": charge.get(\"usable_battery_level\"),\n        },\n        \"charging\": {\n            \"charging_state\": charge.get(\"charging_state\"),\n        },\n        \"climate\": {\n            \"inside_temp_c\": inside_c,\n            \"inside_temp_f\": inside_f,\n            \"is_climate_on\": climate.get(\"is_climate_on\"),\n        },\n    }\n\n    # Drop empty nested dicts / None values.\n    for k in list(out.keys()):\n        v = out[k]\n        if isinstance(v, dict):\n            v2 = {kk: vv for kk, vv in v.items() if vv is not None}\n            if v2:\n                out[k] = v2\n            else:\n                del out[k]\n        elif v is None:\n            del out[k]\n\n    return out"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1711,
+            "end_line": 1718,
+            "quote": "    if getattr(args, 'json', False):\n        if getattr(args, 'raw_json', False):\n            print(json.dumps(data, indent=2))\n        else:\n            print(json.dumps(_summary_json(vehicle, data), indent=2))\n        return\n\n    print(_short_status(vehicle, data))"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Send",
+        "data": "Formatted report or selected report JSON: vehicle identity/state, battery, charging/current/power/port/cable details, charging and departure schedules, climate/seat heaters, locks/Sentry, openings, tire pressures, and odometer. Selected report JSON omits location/drive_state.",
+        "source": "Vehicle metadata and charge_state, climate_state, vehicle_state",
+        "recipient": "Standard output",
+        "condition": "report; human output is the default, and JSON without raw_json uses _report_json. Missing values/empty sections are omitted.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 595,
+            "end_line": 672,
+            "quote": "def _report_json(vehicle, data: dict) -> dict:\n    \"\"\"Sanitized JSON equivalent of `_report`.\n\n    Intentionally excludes location/drive_state.\n    \"\"\"\n    charge = data.get('charge_state', {})\n    climate = data.get('climate_state', {})\n    vs = data.get('vehicle_state', {})\n\n    out = {\n        \"vehicle\": {\n            \"display_name\": vehicle.get('display_name'),\n            \"state\": vehicle.get('state'),\n        },\n        \"battery\": {\n            \"level_percent\": charge.get('battery_level'),\n            \"range_mi\": charge.get('battery_range'),\n            \"usable_battery_level_percent\": charge.get('usable_battery_level'),\n        },\n        \"charging\": {\n            \"charging_state\": charge.get('charging_state'),\n            \"charge_limit_percent\": charge.get('charge_limit_soc'),\n            \"minutes_to_full_charge\": charge.get('minutes_to_full_charge'),\n            \"time_to_full_charge_hours\": charge.get('time_to_full_charge'),\n            \"charge_rate_mph\": charge.get('charge_rate'),\n            \"charger_power_kw\": charge.get('charger_power'),\n            \"charger_voltage_v\": charge.get('charger_voltage'),\n            \"charger_actual_current_a\": charge.get('charger_actual_current'),\n            \"charge_current_request_a\": charge.get('charge_current_request'),\n            \"charge_current_request_max_a\": charge.get('charge_current_request_max'),\n            \"charging_amps\": charge.get('charging_amps'),\n            \"charge_port_door_open\": charge.get('charge_port_door_open'),\n            \"conn_charge_cable\": charge.get('conn_charge_cable'),\n        },\n        \"scheduled_charging\": {\n            \"mode\": charge.get('scheduled_charging_mode'),\n            \"pending\": charge.get('scheduled_charging_pending'),\n            \"start_time_hhmm\": _fmt_minutes_hhmm(charge.get('scheduled_charging_start_time')),\n        },\n        \"scheduled_departure\": {\n            \"enabled\": charge.get('scheduled_departure_enabled'),\n            \"time_hhmm\": _fmt_minutes_hhmm(charge.get('scheduled_departure_time')),\n            \"preconditioning_enabled\": charge.get('preconditioning_enabled'),\n            \"off_peak_charging_enabled\": charge.get('off_peak_charging_enabled'),\n        },\n        \"climate\": {\n            \"inside_temp_c\": climate.get('inside_temp'),\n            \"outside_temp_c\": climate.get('outside_temp'),\n            \"is_climate_on\": climate.get('is_climate_on'),\n            \"seat_heaters\": _seat_heater_fields(climate) or None,\n        },\n        \"security\": {\n            \"locked\": vs.get('locked'),\n            \"sentry_mode\": vs.get('sentry_mode'),\n        },\n        \"openings\": _openings_json(vs),\n        \"tpms\": {\n            \"pressure_fl\": vs.get('tpms_pressure_fl'),\n            \"pressure_fr\": vs.get('tpms_pressure_fr'),\n            \"pressure_rl\": vs.get('tpms_pressure_rl'),\n            \"pressure_rr\": vs.get('tpms_pressure_rr'),\n        },\n        \"odometer_mi\": vs.get('odometer'),\n    }\n\n    # Drop empty nested dicts for cleaner output.\n    for k in list(out.keys()):\n        v = out[k]\n        if isinstance(v, dict):\n            v2 = {kk: vv for kk, vv in v.items() if vv is not None}\n            if v2:\n                out[k] = v2\n            else:\n                del out[k]\n        elif v is None:\n            del out[k]\n\n    return out"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 689,
+            "end_line": 706,
+            "quote": "def cmd_report(args):\n    \"\"\"One-screen status report.\"\"\"\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n    data = vehicle.get_vehicle_data()\n\n    if args.json:\n        # Default JSON output is a structured, sanitized report object.\n        # Use --raw-json if you explicitly want the full vehicle_data payload\n        # (which may include location/drive_state).\n        if getattr(args, \"raw_json\", False):\n            print(json.dumps(data, indent=2))\n        else:\n            print(json.dumps(_report_json(vehicle, data), indent=2))\n        return\n\n    print(_report(vehicle, data))"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 451,
+            "end_line": 455,
+            "quote": "def _report(vehicle, data):\n    \"\"\"One-screen status report (safe for chat).\"\"\"\n    charge = data.get('charge_state', {})\n    climate = data.get('climate_state', {})\n    vs = data.get('vehicle_state', {})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 588,
+            "end_line": 592,
+            "quote": "    odo = vs.get('odometer')\n    if odo is not None:\n        lines.append(f\"Odometer: {odo:.0f} mi\")\n\n    return \"\\n\".join(lines)"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Send",
+        "data": "Human-readable detailed status: vehicle name/state, battery/range, charging state, inside/outside temperatures, climate state, lock state, and odometer; optional one-line summary.",
+        "source": "Vehicle metadata and fetched vehicle_data",
+        "recipient": "Standard output",
+        "condition": "status without JSON; --summary additionally prints the summary.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 723,
+            "end_line": 769,
+            "quote": "    charge = data.get('charge_state', {})\n    climate = data.get('climate_state', {})\n    vehicle_state = data.get('vehicle_state', {})\n\n    if getattr(args, 'summary', False):\n        # Print a one-line summary *in addition* to the detailed view.\n        # (If you only want the one-liner, use the `summary` command.)\n        print(_short_status(vehicle, data))\n        print()\n\n    # Human-friendly detailed view\n    print(f\"🚗 {vehicle['display_name']}\")\n    print(f\"   State: {vehicle.get('state')}\")\n\n    batt = charge.get('battery_level')\n    rng = charge.get('battery_range')\n    if batt is not None and rng is not None:\n        print(f\"   Battery: {batt}% ({rng:.0f} mi)\")\n    elif batt is not None:\n        print(f\"   Battery: {batt}%\")\n\n    charging_state = charge.get('charging_state')\n    if charging_state is not None:\n        print(f\"   Charging: {charging_state}\")\n\n    inside_c = climate.get('inside_temp')\n    outside_c = climate.get('outside_temp')\n    if inside_c is not None:\n        inside_f = _c_to_f(inside_c)\n        if inside_f is not None:\n            print(f\"   Inside temp: {inside_c}°C ({inside_f:.0f}°F)\")\n    if outside_c is not None:\n        outside_f = _c_to_f(outside_c)\n        if outside_f is not None:\n            print(f\"   Outside temp: {outside_c}°C ({outside_f:.0f}°F)\")\n\n    climate_on = climate.get('is_climate_on')\n    if climate_on is not None:\n        print(f\"   Climate on: {climate_on}\")\n\n    locked = vehicle_state.get('locked')\n    if locked is not None:\n        print(f\"   Locked: {locked}\")\n\n    odo = vehicle_state.get('odometer')\n    if odo is not None:\n        print(f\"   Odometer: {odo:.0f} mi\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Send",
+        "data": "Focused climate status: climate on/off, inside/outside temperatures, driver/passenger setpoints; human output includes vehicle name and converted temperatures.",
+        "source": "Fetched climate_state and selected vehicle name",
+        "recipient": "Standard output",
+        "condition": "climate status, after online gating; JSON or human format.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 803,
+            "end_line": 837,
+            "quote": "    if args.action == 'status':\n        # Read-only action can skip waking the car.\n        allow_wake = not getattr(args, 'no_wake', False)\n        _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n\n        data = vehicle.get_vehicle_data()\n        climate = data.get('climate_state', {})\n\n        out = {\n            'is_climate_on': climate.get('is_climate_on'),\n            'inside_temp_c': climate.get('inside_temp'),\n            'outside_temp_c': climate.get('outside_temp'),\n            'driver_temp_setting_c': climate.get('driver_temp_setting'),\n            'passenger_temp_setting_c': climate.get('passenger_temp_setting'),\n        }\n\n        if args.json:\n            print(json.dumps(out, indent=2))\n            return\n\n        inside = _fmt_temp_pair(climate.get('inside_temp'))\n        outside = _fmt_temp_pair(climate.get('outside_temp'))\n        print(f\"🚗 {vehicle['display_name']}\")\n        if out.get('is_climate_on') is not None:\n            print(f\"Climate: {_fmt_bool(out.get('is_climate_on'), 'On', 'Off')}\")\n        if inside:\n            print(f\"Inside: {inside}\")\n        if outside:\n            print(f\"Outside: {outside}\")\n\n        driver = _fmt_temp_pair(climate.get('driver_temp_setting'))\n        passenger = _fmt_temp_pair(climate.get('passenger_temp_setting'))\n        if driver or passenger:\n            print(f\"Setpoint: driver {driver or '(unknown)'} | passenger {passenger or '(unknown)'}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Send",
+        "data": "Focused charging status: battery level/range/usable level, charging state/limit/time/rate/power/voltage/current, scheduled charging fields, charge-port door and cable. Human output includes vehicle name.",
+        "source": "Fetched charge_state and selected vehicle name",
+        "recipient": "Standard output",
+        "condition": "charge status; JSON removes null values. Human time/rate/power details are shown while charging.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 875,
+            "end_line": 897,
+            "quote": "def _charge_status_json(charge: dict) -> dict:\n    \"\"\"Small, privacy-safe charging status object.\n\n    Intended for piping/parsing via `charge status --json`.\n    \"\"\"\n    charge = charge or {}\n    return {\n        'battery_level': charge.get('battery_level'),\n        'battery_range': charge.get('battery_range'),\n        'usable_battery_level': charge.get('usable_battery_level'),\n        'charging_state': charge.get('charging_state'),\n        'charge_limit_soc': charge.get('charge_limit_soc'),\n        'time_to_full_charge': charge.get('time_to_full_charge'),\n        'charge_rate': charge.get('charge_rate'),\n        'charger_power': charge.get('charger_power'),\n        'charger_voltage': charge.get('charger_voltage'),\n        'charger_actual_current': charge.get('charger_actual_current'),\n        'scheduled_charging_start_time': charge.get('scheduled_charging_start_time'),\n        'scheduled_charging_mode': charge.get('scheduled_charging_mode'),\n        'scheduled_charging_pending': charge.get('scheduled_charging_pending'),\n        'charge_port_door_open': charge.get('charge_port_door_open'),\n        'conn_charge_cable': charge.get('conn_charge_cable'),\n    }"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 912,
+            "end_line": 964,
+            "quote": "    if args.action == 'status':\n        data = vehicle.get_vehicle_data()\n        charge = data['charge_state']\n\n        if args.json:\n            # Print *only* JSON (no extra human text) so it can be piped/parsed.\n            # Keep it focused to avoid leaking unrelated vehicle details.\n            out = _charge_status_json(charge)\n            # Drop nulls for cleanliness.\n            out = {k: v for k, v in out.items() if v is not None}\n            print(json.dumps(out, indent=2))\n            return\n\n        print(f\"🔋 {vehicle['display_name']} Battery: {charge['battery_level']}%\")\n        print(f\"   Range: {charge['battery_range']:.0f} mi\")\n\n        usable = charge.get('usable_battery_level')\n        if usable is not None:\n            try:\n                print(f\"   Usable: {int(usable)}%\")\n            except Exception:\n                print(f\"   Usable: {usable}%\")\n\n        print(f\"   State: {charge['charging_state']}\")\n        print(f\"   Limit: {charge['charge_limit_soc']}%\")\n\n        cpd = charge.get('charge_port_door_open')\n        if cpd is not None:\n            print(f\"   Charge port door: {_fmt_bool(cpd, 'Open', 'Closed')}\")\n        cable = charge.get('conn_charge_cable')\n        if cable is not None:\n            print(f\"   Charge cable: {cable}\")\n\n        if charge['charging_state'] == 'Charging':\n            if charge.get('time_to_full_charge') is not None:\n                print(f\"   Time left: {charge['time_to_full_charge']:.1f} hrs\")\n            if charge.get('charge_rate') is not None:\n                print(f\"   Rate: {charge['charge_rate']} mph\")\n\n            # Power details when available\n            p = charge.get('charger_power')\n            v = charge.get('charger_voltage')\n            a = charge.get('charger_actual_current')\n            bits = []\n            if p is not None:\n                bits.append(f\"{p} kW\")\n            if v is not None:\n                bits.append(f\"{v}V\")\n            if a is not None:\n                bits.append(f\"{a}A\")\n            if bits:\n                print(f\"   Power: {' '.join(bits)}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Send",
+        "data": "Scheduled charging start time, mode and pending flag; human output includes vehicle name and formatted start time.",
+        "source": "Fetched charge_state",
+        "recipient": "Standard output",
+        "condition": "scheduled-charging status; JSON or human output.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1031,
+            "end_line": 1053,
+            "quote": "    if args.action == 'status':\n        data = vehicle.get_vehicle_data()\n        charge = data.get('charge_state', {})\n        sched_time = charge.get('scheduled_charging_start_time')\n        sched_mode = charge.get('scheduled_charging_mode')\n        sched_pending = charge.get('scheduled_charging_pending')\n\n        if args.json:\n            print(json.dumps({'scheduled_charging_start_time': sched_time,\n                              'scheduled_charging_mode': sched_mode,\n                              'scheduled_charging_pending': sched_pending}, indent=2))\n            return\n\n        hhmm = _fmt_minutes_hhmm(sched_time)\n        mode = (sched_mode.strip() if isinstance(sched_mode, str) else None)\n        if not mode and sched_pending is not None:\n            mode = 'On' if sched_pending else 'Off'\n\n        print(f\"🚗 {vehicle['display_name']}\")\n        print(f\"Scheduled charging: {mode or '(unknown)'}\")\n        if hhmm:\n            print(f\"Start time: {hhmm}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Send",
+        "data": "Scheduled departure enabled/time, formatted departure time, preconditioning enabled, and off-peak charging enabled; human output includes vehicle name.",
+        "source": "Fetched charge_state",
+        "recipient": "Standard output",
+        "condition": "scheduled-departure status; JSON or human format.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1072,
+            "end_line": 1081,
+            "quote": "def _scheduled_departure_status_json(charge: dict) -> dict:\n    \"\"\"Small, privacy-safe scheduled departure status object.\"\"\"\n    charge = charge or {}\n    return {\n        'scheduled_departure_enabled': charge.get('scheduled_departure_enabled'),\n        'scheduled_departure_time': charge.get('scheduled_departure_time'),\n        'scheduled_departure_time_hhmm': _fmt_minutes_hhmm(charge.get('scheduled_departure_time')),\n        'preconditioning_enabled': charge.get('preconditioning_enabled'),\n        'off_peak_charging_enabled': charge.get('off_peak_charging_enabled'),\n    }"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1092,
+            "end_line": 1114,
+            "quote": "    data = vehicle.get_vehicle_data()\n    charge = data.get('charge_state', {})\n    out = _scheduled_departure_status_json(charge)\n\n    if getattr(args, 'json', False):\n        print(json.dumps(out, indent=2))\n        return\n\n    print(f\"🚗 {vehicle['display_name']}\")\n    if out.get('scheduled_departure_enabled') is not None:\n        print(f\"Scheduled departure: {_fmt_bool(out.get('scheduled_departure_enabled'), 'On', 'Off')}\")\n    else:\n        print(\"Scheduled departure: (unknown)\")\n\n    hhmm = out.get('scheduled_departure_time_hhmm')\n    if hhmm:\n        print(f\"Departure time: {hhmm}\")\n\n    if out.get('preconditioning_enabled') is not None:\n        print(f\"Preconditioning: {_fmt_bool(out.get('preconditioning_enabled'), 'On', 'Off')}\")\n\n    if out.get('off_peak_charging_enabled') is not None:\n        print(f\"Off-peak charging: {_fmt_bool(out.get('off_peak_charging_enabled'), 'On', 'Off')}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Infer",
+        "data": "Approximate latitude and longitude produced by rounding the fetched precise coordinates.",
+        "source": "drive_state.latitude and drive_state.longitude, plus --digits",
+        "recipient": "lat_r and lon_r used in approximate location output",
+        "condition": "location without --yes; default precision is two decimal places, with accepted precision 0–6.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1126,
+            "end_line": 1138,
+            "quote": "    try:\n        d = int(digits)\n    except Exception:\n        return None\n\n    # 0..6 is still plenty for display; tighter by default.\n    if d < 0 or d > 6:\n        return None\n\n    try:\n        return round(float(x), d)\n    except Exception:\n        return None"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1153,
+            "end_line": 1167,
+            "quote": "    data = vehicle.get_vehicle_data()\n    drive = data['drive_state']\n\n    lat, lon = drive['latitude'], drive['longitude']\n\n    if getattr(args, \"yes\", False):\n        print(f\"📍 {vehicle['display_name']} Location (precise): {lat}, {lon}\")\n        print(f\"   https://www.google.com/maps?q={lat},{lon}\")\n        return\n\n    digits = getattr(args, 'digits', 2)\n    lat_r = _round_coord(lat, digits)\n    lon_r = _round_coord(lon, digits)\n    if lat_r is None or lon_r is None:\n        raise ValueError(\"Invalid or missing location coordinates (try --digits 0..6)\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2203,
+            "end_line": 2208,
+            "quote": "    location_parser.add_argument(\n        \"--digits\",\n        type=int,\n        default=2,\n        help=\"(approx output) Rounding precision for latitude/longitude (0–6). Default: 2\",\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Send",
+        "data": "Vehicle display name, precise coordinates, and a Google Maps URL containing those coordinates.",
+        "source": "Fetched drive_state latitude/longitude",
+        "recipient": "Standard output",
+        "condition": "location with --yes. The supplied code prints URL text; it does not request the Google Maps URL.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1153,
+            "end_line": 1161,
+            "quote": "    data = vehicle.get_vehicle_data()\n    drive = data['drive_state']\n\n    lat, lon = drive['latitude'], drive['longitude']\n\n    if getattr(args, \"yes\", False):\n        print(f\"📍 {vehicle['display_name']} Location (precise): {lat}, {lon}\")\n        print(f\"   https://www.google.com/maps?q={lat},{lon}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Send",
+        "data": "Vehicle display name, rounded coordinates, and a Google Maps URL containing the rounded coordinates.",
+        "source": "Coordinates derived by _round_coord from fetched drive_state",
+        "recipient": "Standard output",
+        "condition": "location without --yes and successful coordinate rounding. The URL is printed, not fetched.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1163,
+            "end_line": 1171,
+            "quote": "    digits = getattr(args, 'digits', 2)\n    lat_r = _round_coord(lat, digits)\n    lon_r = _round_coord(lon, digits)\n    if lat_r is None or lon_r is None:\n        raise ValueError(\"Invalid or missing location coordinates (try --digits 0..6)\")\n\n    print(f\"📍 {vehicle['display_name']} Location (approx): {lat_r}, {lon_r}\")\n    print(f\"   https://www.google.com/maps?q={lat_r},{lon_r}\")\n    print(\"   (Use --yes for precise coordinates)\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Send",
+        "data": "Four TPMS tire pressures, as selected JSON values or formatted bar/PSI text; human output includes vehicle display name.",
+        "source": "Fetched vehicle_state tpms_pressure_fl/fr/rl/rr",
+        "recipient": "Standard output",
+        "condition": "tires command after online gating; unavailable human values display as unknown.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1183,
+            "end_line": 1205,
+            "quote": "    data = vehicle.get_vehicle_data()\n    vs = data.get('vehicle_state', {})\n\n    fl = _fmt_tire_pressure(vs.get('tpms_pressure_fl'))\n    fr = _fmt_tire_pressure(vs.get('tpms_pressure_fr'))\n    rl = _fmt_tire_pressure(vs.get('tpms_pressure_rl'))\n    rr = _fmt_tire_pressure(vs.get('tpms_pressure_rr'))\n\n    if args.json:\n        print(json.dumps({\n            'tpms_pressure_fl': vs.get('tpms_pressure_fl'),\n            'tpms_pressure_fr': vs.get('tpms_pressure_fr'),\n            'tpms_pressure_rl': vs.get('tpms_pressure_rl'),\n            'tpms_pressure_rr': vs.get('tpms_pressure_rr'),\n        }, indent=2))\n        return\n\n    print(f\"🚗 {vehicle['display_name']}\")\n    print(\"Tire pressures (TPMS):\")\n    print(f\"  FL: {fl or '(unknown)'}\")\n    print(f\"  FR: {fr or '(unknown)'}\")\n    print(f\"  RL: {rl or '(unknown)'}\")\n    print(f\"  RR: {rr or '(unknown)'}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m31",
+        "operation": "Infer",
+        "data": "Open/closed labels, list of open doors/trunks/windows, and an all_closed flag based on the openings fields that are present.",
+        "source": "vehicle_state df, dr, pf, pr, ft, rt, fd_window, fp_window, rd_window, rp_window",
+        "recipient": "In-memory openings/report objects",
+        "condition": "No known openings fields returns None; all_closed is true when no present field is interpreted as open, including cases where some fields are absent.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1209,
+            "end_line": 1219,
+            "quote": "def _fmt_open(v):\n    if v is None:\n        return None\n    # Tesla often uses 0/1 ints for open states.\n    if isinstance(v, bool):\n        return 'Open' if v else 'Closed'\n    try:\n        i = int(v)\n        return 'Open' if i else 'Closed'\n    except Exception:\n        return None"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1259,
+            "end_line": 1288,
+            "quote": "    fields = [\n        (\"df\", \"driver_front_door\"),\n        (\"dr\", \"driver_rear_door\"),\n        (\"pf\", \"passenger_front_door\"),\n        (\"pr\", \"passenger_rear_door\"),\n        (\"ft\", \"frunk\"),\n        (\"rt\", \"trunk\"),\n        (\"fd_window\", \"front_driver_window\"),\n        (\"fp_window\", \"front_passenger_window\"),\n        (\"rd_window\", \"rear_driver_window\"),\n        (\"rp_window\", \"rear_passenger_window\"),\n    ]\n\n    any_known = False\n    open_items = []\n    for key, label in fields:\n        raw = vs.get(key)\n        if raw is None:\n            continue\n        any_known = True\n        if _fmt_open(raw) == 'Open':\n            open_items.append(label)\n\n    if not any_known:\n        return None\n\n    return {\n        \"open\": open_items,\n        \"all_closed\": len(open_items) == 0,\n    }"
+          }
+        ]
+      },
+      {
+        "move_id": "m32",
+        "operation": "Send",
+        "data": "Selected door, frunk/trunk, and window open/closed states, grouped by opening type; human output includes vehicle name.",
+        "source": "Fetched vehicle_state opening fields",
+        "recipient": "Standard output",
+        "condition": "openings command; unknown fields and empty groups are omitted.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1299,
+            "end_line": 1345,
+            "quote": "    data = vehicle.get_vehicle_data()\n    vs = data.get('vehicle_state', {})\n\n    out = {\n        'doors': {\n            'driver_front': _fmt_open(vs.get('df')),\n            'driver_rear': _fmt_open(vs.get('dr')),\n            'passenger_front': _fmt_open(vs.get('pf')),\n            'passenger_rear': _fmt_open(vs.get('pr')),\n        },\n        'trunks': {\n            'frunk': _fmt_open(vs.get('ft')),\n            'trunk': _fmt_open(vs.get('rt')),\n        },\n        'windows': {\n            'front_driver': _fmt_open(vs.get('fd_window')),\n            'front_passenger': _fmt_open(vs.get('fp_window')),\n            'rear_driver': _fmt_open(vs.get('rd_window')),\n            'rear_passenger': _fmt_open(vs.get('rp_window')),\n        },\n    }\n\n    # Drop unknown keys for cleaner output.\n    for k in list(out.keys()):\n        out[k] = {kk: vv for kk, vv in out[k].items() if vv is not None}\n        if not out[k]:\n            del out[k]\n\n    if args.json:\n        print(json.dumps(out, indent=2))\n        return\n\n    print(f\"🚗 {vehicle['display_name']}\")\n    if not out:\n        print(\"Openings: (unavailable)\")\n        return\n\n    def _section(title, d):\n        if not d:\n            return\n        print(f\"{title}:\")\n        for kk, vv in d.items():\n            print(f\"  - {kk.replace('_',' ')}: {vv}\")\n\n    _section('Doors', out.get('doors'))\n    _section('Trunks', out.get('trunks'))\n    _section('Windows', out.get('windows'))"
+          }
+        ]
+      },
+      {
+        "move_id": "m33",
+        "operation": "Send",
+        "data": "Four window open/closed states, plus vehicle name in human output.",
+        "source": "Fetched vehicle_state window fields",
+        "recipient": "Standard output",
+        "condition": "windows status; null/unknown values are removed.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1367,
+            "end_line": 1393,
+            "quote": "    if args.action == 'status':\n        allow_wake = not getattr(args, 'no_wake', False)\n        _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n        data = vehicle.get_vehicle_data()\n        vs = data.get('vehicle_state', {})\n\n        out = {\n            'front_driver': _fmt_open(vs.get('fd_window')),\n            'front_passenger': _fmt_open(vs.get('fp_window')),\n            'rear_driver': _fmt_open(vs.get('rd_window')),\n            'rear_passenger': _fmt_open(vs.get('rp_window')),\n        }\n        # Drop unknowns for cleaner output\n        out = {k: v for k, v in out.items() if v is not None}\n\n        if getattr(args, 'json', False):\n            print(json.dumps(out, indent=2))\n            return\n\n        print(f\"🚗 {vehicle['display_name']}\")\n        if not out:\n            print(\"Windows: (unavailable)\")\n            return\n        print(\"Windows:\")\n        for k, v in out.items():\n            print(f\"  - {k.replace('_',' ')}: {v}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m34",
+        "operation": "Send",
+        "data": "Available seat-heater levels for driver, passenger, rear seats, and third-row seats; human output includes vehicle name.",
+        "source": "Fetched climate_state seat_heater fields",
+        "recipient": "Standard output",
+        "condition": "seats status; only present, nonnull heater fields are selected.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1412,
+            "end_line": 1429,
+            "quote": "def _seat_heater_fields(climate_state: dict) -> dict:\n    \"\"\"Extract seat heater levels from climate_state (if present).\"\"\"\n    if not isinstance(climate_state, dict):\n        return {}\n\n    # Common Tesla API fields (may vary by model/firmware).\n    keys = [\n        \"seat_heater_left\",  # driver\n        \"seat_heater_right\",  # passenger\n        \"seat_heater_rear_left\",\n        \"seat_heater_rear_center\",\n        \"seat_heater_rear_right\",\n        \"seat_heater_third_row_left\",\n        \"seat_heater_third_row_right\",\n    ]\n    out = {k: climate_state.get(k) for k in keys if k in climate_state}\n    # Drop unknown/nulls for clean output.\n    return {k: v for k, v in out.items() if v is not None}"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1525,
+            "end_line": 1544,
+            "quote": "    if args.action == \"status\":\n        allow_wake = not getattr(args, \"no_wake\", False)\n        _ensure_online_or_exit(vehicle, allow_wake=allow_wake)\n        data = vehicle.get_vehicle_data()\n        climate = data.get(\"climate_state\", {})\n        out = _seat_heater_fields(climate)\n\n        if getattr(args, \"json\", False):\n            print(json.dumps(out, indent=2))\n            return\n\n        print(f\"🚗 {vehicle['display_name']}\")\n        if not out:\n            print(\"Seat heaters: (unavailable)\")\n            return\n        print(\"Seat heaters (0=off .. 3=high):\")\n        for k, v in out.items():\n            label = k.replace(\"seat_heater_\", \"\").replace(\"_\", \" \")\n            print(f\"  - {label}: {v}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m35",
+        "operation": "Send",
+        "data": "Sentry Mode state, and vehicle name in human output.",
+        "source": "Fetched vehicle_state.sentry_mode",
+        "recipient": "Standard output",
+        "condition": "sentry status; JSON or human format.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1576,
+            "end_line": 1586,
+            "quote": "    if args.action == 'status':\n        data = vehicle.get_vehicle_data()\n        sentry = data.get('vehicle_state', {}).get('sentry_mode')\n        if args.json:\n            print(json.dumps({'sentry_mode': sentry}, indent=2))\n            return\n        if sentry is None:\n            print(f\"🚗 {vehicle['display_name']}\\nSentry: (unknown)\")\n        else:\n            print(f\"🚗 {vehicle['display_name']}\\nSentry: {_fmt_bool(sentry, 'On', 'Off')}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m36",
+        "operation": "Send",
+        "data": "Vehicle display name/state, charge-port door/latch state, connected cable, and charging state.",
+        "source": "Vehicle metadata and fetched charge_state",
+        "recipient": "Standard output",
+        "condition": "charge-port status; JSON or human format.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1631,
+            "end_line": 1641,
+            "quote": "def _charge_port_status_json(vehicle, data: dict) -> dict:\n    \"\"\"Small, privacy-safe charge port status object.\"\"\"\n    charge = (data or {}).get('charge_state', {})\n    return {\n        'display_name': (vehicle or {}).get('display_name'),\n        'state': (vehicle or {}).get('state'),\n        'charge_port_door_open': charge.get('charge_port_door_open'),\n        'charge_port_latch': charge.get('charge_port_latch'),\n        'conn_charge_cable': charge.get('conn_charge_cable'),\n        'charging_state': charge.get('charging_state'),\n    }"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1653,
+            "end_line": 1673,
+            "quote": "    if args.action == 'status':\n        _ensure_online_or_exit(vehicle, allow_wake=not getattr(args, 'no_wake', False))\n        data = vehicle.get_vehicle_data()\n        out = _charge_port_status_json(vehicle, data)\n\n        if getattr(args, 'json', False):\n            # Keep this privacy-safe + stable.\n            print(json.dumps(out, indent=2))\n            return\n\n        print(f\"🔌 {vehicle.get('display_name')}\")\n        print(f\"   State: {vehicle.get('state')}\")\n        if out.get('charge_port_door_open') is not None:\n            print(f\"   Port door open: {_fmt_bool(out.get('charge_port_door_open'))}\")\n        if out.get('charge_port_latch') is not None:\n            print(f\"   Port latch: {out.get('charge_port_latch')}\")\n        if out.get('conn_charge_cable') is not None:\n            print(f\"   Cable: {out.get('conn_charge_cable')}\")\n        if out.get('charging_state') is not None:\n            print(f\"   Charging: {out.get('charging_state')}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m37",
+        "operation": "Send",
+        "data": "LOCK or UNLOCK vehicle command.",
+        "source": "CLI lock/unlock command selection",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Unlock requires --yes before authentication/selection/wake; lock has no confirmation gate.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 772,
+            "end_line": 788,
+            "quote": "def cmd_lock(args):\n    \"\"\"Lock the vehicle.\"\"\"\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    wake_vehicle(vehicle)\n    vehicle.command('LOCK')\n    print(f\"🔒 {vehicle['display_name']} locked\")\n\n\ndef cmd_unlock(args):\n    \"\"\"Unlock the vehicle.\"\"\"\n    require_yes(args, 'unlock')\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    wake_vehicle(vehicle)\n    vehicle.command('UNLOCK')\n    print(f\"🔓 {vehicle['display_name']} unlocked\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1615,
+            "end_line": 1618,
+            "quote": "def require_yes(args, action: str):\n    if not getattr(args, \"yes\", False):\n        print(f\"❌ Refusing to run '{action}' without --yes (safety gate)\", file=sys.stderr)\n        sys.exit(2)"
+          }
+        ]
+      },
+      {
+        "move_id": "m38",
+        "operation": "Send",
+        "data": "CLIMATE_ON or CLIMATE_OFF command.",
+        "source": "CLI climate action",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Mutating climate action after wake; no --yes check in this handler.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 839,
+            "end_line": 847,
+            "quote": "    # Mutating actions (wake is allowed)\n    wake_vehicle(vehicle)\n\n    if args.action == 'on':\n        vehicle.command('CLIMATE_ON')\n        print(f\"❄️ {vehicle['display_name']} climate turned on\")\n    elif args.action == 'off':\n        vehicle.command('CLIMATE_OFF')\n        print(f\"🌡️ {vehicle['display_name']} climate turned off\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m39",
+        "operation": "Send",
+        "data": "CHANGE_CLIMATE_TEMPERATURE_SETTING with identical driver_temp and passenger_temp in Celsius, derived from the supplied temperature.",
+        "source": "CLI climate temp value and units flags",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Temperature is required. Fahrenheit is the default; --celsius bypasses Fahrenheit conversion. No --yes check is implemented.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 848,
+            "end_line": 862,
+            "quote": "    elif args.action == 'temp':\n        if args.value is None:\n            raise ValueError(\"Missing temperature value (e.g., climate temp 72 or climate temp 22 --celsius)\")\n\n        value = float(args.value)\n        # Default is Fahrenheit unless --celsius is provided.\n        in_f = True\n        if getattr(args, \"celsius\", False):\n            in_f = False\n        elif getattr(args, \"fahrenheit\", False):\n            in_f = True\n\n        temp_c = (value - 32) * 5 / 9 if in_f else value\n        vehicle.command('CHANGE_CLIMATE_TEMPERATURE_SETTING', driver_temp=temp_c, passenger_temp=temp_c)\n        print(f\"🌡️ {vehicle['display_name']} temperature set to {value:g}°{'F' if in_f else 'C'}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m40",
+        "operation": "Send",
+        "data": "SET_PRECONDITIONING_MAX command with an on boolean derived from on/off.",
+        "source": "CLI climate defrost value",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires an on/off value; no --yes check is implemented.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 863,
+            "end_line": 869,
+            "quote": "    elif args.action == 'defrost':\n        if args.value is None or str(args.value).strip().lower() not in ('on', 'off'):\n            raise ValueError(\"Missing defrost value. Use: climate defrost on|off\")\n\n        on = str(args.value).strip().lower() == 'on'\n        vehicle.command('SET_PRECONDITIONING_MAX', on=on)\n        print(f\"🧊 {vehicle['display_name']} max defrost {('enabled' if on else 'disabled')}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m41",
+        "operation": "Send",
+        "data": "START_CHARGE or STOP_CHARGE command.",
+        "source": "CLI charge action",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes. The handler performs online/wake gating before the confirmation check.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 905,
+            "end_line": 910,
+            "quote": "    # Read-only action can skip waking the car.\n    allow_wake = True\n    if args.action == 'status':\n        allow_wake = not getattr(args, 'no_wake', False)\n\n    _ensure_online_or_exit(vehicle, allow_wake=allow_wake)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 966,
+            "end_line": 976,
+            "quote": "    if args.action == 'start':\n        require_yes(args, 'charge start')\n        vehicle.command('START_CHARGE')\n        print(f\"⚡ {vehicle['display_name']} charging started\")\n        return\n\n    if args.action == 'stop':\n        require_yes(args, 'charge stop')\n        vehicle.command('STOP_CHARGE')\n        print(f\"🛑 {vehicle['display_name']} charging stopped\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m42",
+        "operation": "Send",
+        "data": "CHANGE_CHARGE_LIMIT command with an integer charge-limit percentage.",
+        "source": "CLI charge limit value",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes and a percentage from 50 through 100.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 978,
+            "end_line": 987,
+            "quote": "    if args.action == 'limit':\n        require_yes(args, 'charge limit')\n        if args.value is None:\n            raise ValueError(\"Missing charge limit percent (e.g., charge limit 80)\")\n        pct = int(args.value)\n        if pct < 50 or pct > 100:\n            raise ValueError(\"Invalid charge limit percent. Expected 50–100\")\n        vehicle.command('CHANGE_CHARGE_LIMIT', percent=pct)\n        print(f\"🎚️ {vehicle['display_name']} charge limit set to {pct}%\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m43",
+        "operation": "Send",
+        "data": "CHARGING_AMPS command with integer charging_amps.",
+        "source": "CLI charge amps value",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes and an integer from 1 through 48.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 989,
+            "end_line": 999,
+            "quote": "    if args.action == 'amps':\n        require_yes(args, 'charge amps')\n        if args.value is None:\n            raise ValueError(\"Missing amps value (e.g., charge amps 16)\")\n        amps = int(args.value)\n        if amps < 1 or amps > 48:\n            # Conservative guardrail. Many cars support 5-48A depending on setup.\n            raise ValueError(\"Invalid amps. Expected 1–48\")\n        vehicle.command('CHARGING_AMPS', charging_amps=amps)\n        print(f\"🔌 {vehicle['display_name']} charging amps set to {amps}A\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m44",
+        "operation": "Send",
+        "data": "SCHEDULED_CHARGING command: enable false/time zero for off, or enable true/time in minutes after midnight for set.",
+        "source": "CLI scheduled-charging action and HH:MM time",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Mutating actions require --yes; set validates a 24-hour time.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1004,
+            "end_line": 1016,
+            "quote": "def _parse_hhmm(value: str):\n    \"\"\"Parse HH:MM into minutes after midnight.\"\"\"\n    if not isinstance(value, str) or not value.strip():\n        raise ValueError(\"Missing time. Expected HH:MM (e.g., 23:30)\")\n    s = value.strip()\n    if \":\" not in s:\n        raise ValueError(\"Invalid time. Expected HH:MM (e.g., 23:30)\")\n    hh_s, mm_s = s.split(\":\", 1)\n    hh = int(hh_s)\n    mm = int(mm_s)\n    if hh < 0 or hh > 23 or mm < 0 or mm > 59:\n        raise ValueError(\"Invalid time. Expected HH:MM using 24-hour time\")\n    return hh * 60 + mm"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1055,
+            "end_line": 1067,
+            "quote": "    # Mutating actions\n    require_yes(args, 'scheduled-charging')\n\n    if args.action == 'off':\n        vehicle.command('SCHEDULED_CHARGING', enable=False, time=0)\n        print(f\"⏱️ {vehicle['display_name']} scheduled charging disabled\")\n        return\n\n    if args.action == 'set':\n        minutes = _parse_hhmm(args.time)\n        vehicle.command('SCHEDULED_CHARGING', enable=True, time=minutes)\n        print(f\"⏱️ {vehicle['display_name']} scheduled charging set to {_fmt_minutes_hhmm(minutes)}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m45",
+        "operation": "Send",
+        "data": "ACTUATE_TRUNK command with which_trunk front for frunk or rear for trunk.",
+        "source": "CLI trunk selection",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes before authentication, vehicle selection and wake.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1348,
+            "end_line": 1358,
+            "quote": "def cmd_trunk(args):\n    \"\"\"Toggle frunk/trunk (requires --yes).\"\"\"\n    require_yes(args, 'trunk')\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    wake_vehicle(vehicle)\n\n    which = 'front' if args.which == 'frunk' else 'rear'\n    vehicle.command('ACTUATE_TRUNK', which_trunk=which)\n    label = 'Frunk' if which == 'front' else 'Trunk'\n    print(f\"🧳 {vehicle['display_name']} {label} toggled\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m46",
+        "operation": "Send",
+        "data": "WINDOW_CONTROL command with vent or close and literal lat=0, lon=0. These parameters are constants, not read vehicle coordinates.",
+        "source": "CLI windows action and hard-coded zero coordinates",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes and wakes the vehicle before sending.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1395,
+            "end_line": 1407,
+            "quote": "    # Mutating actions\n    require_yes(args, 'windows')\n    wake_vehicle(vehicle)\n\n    # Tesla API requires lat/lon parameters; 0/0 works for this endpoint.\n    if args.action == 'vent':\n        vehicle.command('WINDOW_CONTROL', command='vent', lat=0, lon=0)\n        print(f\"🪟 {vehicle['display_name']} windows vented\")\n        return\n    if args.action == 'close':\n        vehicle.command('WINDOW_CONTROL', command='close', lat=0, lon=0)\n        print(f\"🪟 {vehicle['display_name']} windows closed\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m47",
+        "operation": "Send",
+        "data": "REMOTE_SEAT_HEATER_REQUEST with heater ID resolved from the seat argument and integer level.",
+        "source": "CLI seats set seat/level arguments",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes, a valid seat accepted by _parse_seat_heater, and level 0–3; wake occurs before parameter validation.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1546,
+            "end_line": 1559,
+            "quote": "    if args.action == \"set\":\n        require_yes(args, \"seats set\")\n        wake_vehicle(vehicle)\n\n        heater = _parse_seat_heater(getattr(args, \"seat\", None))\n        if getattr(args, \"level\", None) is None:\n            raise ValueError(\"Missing level. Expected 0–3\")\n        level = int(getattr(args, \"level\"))\n        if level < 0 or level > 3:\n            raise ValueError(\"Invalid level. Expected 0–3\")\n\n        vehicle.command(\"REMOTE_SEAT_HEATER_REQUEST\", heater=heater, level=level)\n        print(f\"🔥 {vehicle['display_name']} seat heater {heater} set to {level}\")\n        return"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1506,
+            "end_line": 1517,
+            "quote": "    if s.isdigit():\n        hid = int(s)\n        if hid < 0 or hid > 6:\n            raise ValueError(\"Invalid seat heater id. Expected 0–6\")\n        return hid\n\n    hid = _SEAT_NAME_TO_HEATER_ID.get(s)\n    if hid is None:\n        raise ValueError(\n            \"Unknown seat. Use one of: driver, passenger, rear-left, rear-center, rear-right, 3rd-left, 3rd-right (or 0–6)\"\n        )\n    return hid"
+          }
+        ]
+      },
+      {
+        "move_id": "m48",
+        "operation": "Send",
+        "data": "SET_SENTRY_MODE with on true or false.",
+        "source": "CLI sentry on/off action",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes for the command. An earlier online/wake check can occur before this gate.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1569,
+            "end_line": 1574,
+            "quote": "    # Read-only action can skip waking the car.\n    allow_wake = True\n    if args.action == 'status':\n        allow_wake = not getattr(args, 'no_wake', False)\n\n    _ensure_online_or_exit(vehicle, allow_wake=allow_wake)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1588,
+            "end_line": 1600,
+            "quote": "    # Mutating actions\n    require_yes(args, 'sentry')\n    wake_vehicle(vehicle)\n\n    if args.action == 'on':\n        vehicle.command('SET_SENTRY_MODE', on=True)\n        print(f\"🛡️ {vehicle['display_name']} Sentry turned on\")\n        return\n\n    if args.action == 'off':\n        vehicle.command('SET_SENTRY_MODE', on=False)\n        print(f\"🛡️ {vehicle['display_name']} Sentry turned off\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m49",
+        "operation": "Send",
+        "data": "HONK_HORN or FLASH_LIGHTS command.",
+        "source": "CLI honk/flash command selection",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes before authentication, selection and wake.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1605,
+            "end_line": 1612,
+            "quote": "def cmd_honk(args):\n    \"\"\"Honk the horn.\"\"\"\n    require_yes(args, 'honk')\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    wake_vehicle(vehicle)\n    vehicle.command('HONK_HORN')\n    print(f\"📢 {vehicle['display_name']} honked!\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1621,
+            "end_line": 1628,
+            "quote": "def cmd_flash(args):\n    \"\"\"Flash the lights.\"\"\"\n    require_yes(args, 'flash')\n    tesla = get_tesla(require_email(args))\n    vehicle = get_vehicle(tesla, args.car)\n    wake_vehicle(vehicle)\n    vehicle.command('FLASH_LIGHTS')\n    print(f\"💡 {vehicle['display_name']} flashed lights!\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m50",
+        "operation": "Send",
+        "data": "CHARGE_PORT_DOOR_OPEN or CHARGE_PORT_DOOR_CLOSE command.",
+        "source": "CLI charge-port open/close action",
+        "recipient": "Selected vehicle through teslapy vehicle.command; endpoint unspecified",
+        "condition": "Requires --yes and wakes the vehicle before sending.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1675,
+            "end_line": 1686,
+            "quote": "    # open/close\n    require_yes(args, 'charge-port')\n    wake_vehicle(vehicle)\n\n    if args.action == 'open':\n        vehicle.command('CHARGE_PORT_DOOR_OPEN')\n        print(f\"🔌 {vehicle['display_name']} charge port opened\")\n    elif args.action == 'close':\n        vehicle.command('CHARGE_PORT_DOOR_CLOSE')\n        print(f\"🔌 {vehicle['display_name']} charge port closed\")\n    else:\n        raise ValueError(f\"Unknown action: {args.action}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m51",
+        "operation": "Send",
+        "data": "Vehicle display name and command acknowledgement text, including supplied/converted settings where the handler prints them.",
+        "source": "Selected vehicle metadata and command parameters",
+        "recipient": "Standard output",
+        "condition": "After a vehicle-command call returns; acknowledgements are CLI messages rather than independently fetched post-command state.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 777,
+            "end_line": 778,
+            "quote": "    vehicle.command('LOCK')\n    print(f\"🔒 {vehicle['display_name']} locked\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 787,
+            "end_line": 788,
+            "quote": "    vehicle.command('UNLOCK')\n    print(f\"🔓 {vehicle['display_name']} unlocked\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 861,
+            "end_line": 869,
+            "quote": "        vehicle.command('CHANGE_CLIMATE_TEMPERATURE_SETTING', driver_temp=temp_c, passenger_temp=temp_c)\n        print(f\"🌡️ {vehicle['display_name']} temperature set to {value:g}°{'F' if in_f else 'C'}\")\n    elif args.action == 'defrost':\n        if args.value is None or str(args.value).strip().lower() not in ('on', 'off'):\n            raise ValueError(\"Missing defrost value. Use: climate defrost on|off\")\n\n        on = str(args.value).strip().lower() == 'on'\n        vehicle.command('SET_PRECONDITIONING_MAX', on=on)\n        print(f\"🧊 {vehicle['display_name']} max defrost {('enabled' if on else 'disabled')}\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 985,
+            "end_line": 986,
+            "quote": "        vehicle.command('CHANGE_CHARGE_LIMIT', percent=pct)\n        print(f\"🎚️ {vehicle['display_name']} charge limit set to {pct}%\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 997,
+            "end_line": 998,
+            "quote": "        vehicle.command('CHARGING_AMPS', charging_amps=amps)\n        print(f\"🔌 {vehicle['display_name']} charging amps set to {amps}A\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1557,
+            "end_line": 1558,
+            "quote": "        vehicle.command(\"REMOTE_SEAT_HEATER_REQUEST\", heater=heater, level=level)\n        print(f\"🔥 {vehicle['display_name']} seat heater {heater} set to {level}\")"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1680,
+            "end_line": 1684,
+            "quote": "        vehicle.command('CHARGE_PORT_DOOR_OPEN')\n        print(f\"🔌 {vehicle['display_name']} charge port opened\")\n    elif args.action == 'close':\n        vehicle.command('CHARGE_PORT_DOOR_CLOSE')\n        print(f\"🔌 {vehicle['display_name']} charge port closed\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m52",
+        "operation": "Read",
+        "data": "Mileage database path override.",
+        "source": "mileage --db argument, otherwise MY_TESLA_MILEAGE_DB environment variable",
+        "recipient": "Resolved SQLite database path",
+        "condition": "CLI path takes precedence, then nonblank environment value, then ~/.my_tesla/mileage.sqlite; user-home expansion is applied to overrides.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1725,
+            "end_line": 1742,
+            "quote": "MILEAGE_DIR = Path.home() / \".my_tesla\"\nMILEAGE_DB_DEFAULT = MILEAGE_DIR / \"mileage.sqlite\"\n\n\ndef resolve_mileage_db_path(args=None) -> Path:\n    \"\"\"Resolve mileage DB path.\n\n    Priority:\n    1) --db (for mileage commands)\n    2) MY_TESLA_MILEAGE_DB env var\n    3) ~/.my_tesla/mileage.sqlite\n    \"\"\"\n    if args is not None and getattr(args, \"db\", None):\n        return Path(getattr(args, \"db\")).expanduser()\n    env = os.environ.get(\"MY_TESLA_MILEAGE_DB\")\n    if env and env.strip():\n        return Path(env.strip()).expanduser()\n    return MILEAGE_DB_DEFAULT"
+          }
+        ]
+      },
+      {
+        "move_id": "m53",
+        "operation": "Save",
+        "data": "Mileage database, mileage_points table and timestamp/vehicle indexes; missing parent directories are created and WAL mode is requested.",
+        "source": "Resolved mileage path and hard-coded SQLite schema",
+        "recipient": "~/.my_tesla/mileage.sqlite or the CLI/environment-selected local path",
+        "condition": "All mileage actions initialize the database, including status and export. No data-retention or pruning policy is implemented here.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1788,
+            "end_line": 1822,
+            "quote": "def _db_connect(path: Path):\n    path = Path(path)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    conn = sqlite3.connect(str(path))\n    conn.execute(\"PRAGMA journal_mode=WAL;\")\n    conn.execute(\"PRAGMA foreign_keys=ON;\")\n    return conn\n\n\ndef mileage_init_db(path: Path):\n    conn = _db_connect(path)\n    try:\n        conn.execute(\n            \"\"\"\n            CREATE TABLE IF NOT EXISTS mileage_points (\n              id INTEGER PRIMARY KEY AUTOINCREMENT,\n              ts_utc INTEGER NOT NULL,\n              vehicle_id TEXT,\n              vehicle_name TEXT,\n              odometer_mi REAL,\n              state TEXT,\n              source TEXT,\n              note TEXT\n            );\n            \"\"\"\n        )\n        conn.execute(\n            \"CREATE INDEX IF NOT EXISTS idx_mileage_points_vehicle_ts ON mileage_points(vehicle_id, ts_utc);\"\n        )\n        conn.execute(\n            \"CREATE INDEX IF NOT EXISTS idx_mileage_points_ts ON mileage_points(ts_utc);\"\n        )\n        conn.commit()\n    finally:\n        conn.close()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1865,
+            "end_line": 1875,
+            "quote": "def cmd_mileage(args):\n    \"\"\"Mileage tracking commands.\"\"\"\n    db_path = resolve_mileage_db_path(args)\n\n    if args.action == \"init\":\n        mileage_init_db(db_path)\n        print(f\"✅ Mileage DB ready: {db_path}\")\n        return\n\n    # record/status/export require DB\n    mileage_init_db(db_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "m54",
+        "operation": "Read",
+        "data": "Most recent successful odometer-record timestamp for a vehicle ID.",
+        "source": "mileage_points in the resolved SQLite database",
+        "recipient": "Mileage recorder's last_ts value",
+        "condition": "During record, when a vehicle ID is available; success means odometer_mi is not null.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1831,
+            "end_line": 1837,
+            "quote": "def mileage_last_success_ts(conn, vehicle_id: str) -> int | None:\n    cur = conn.execute(\n        \"SELECT ts_utc FROM mileage_points WHERE vehicle_id=? AND odometer_mi IS NOT NULL ORDER BY ts_utc DESC LIMIT 1\",\n        (vehicle_id,),\n    )\n    row = cur.fetchone()\n    return int(row[0]) if row else None"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1891,
+            "end_line": 1899,
+            "quote": "        conn = _db_connect(db_path)\n        try:\n            for v in vehicles:\n                vid, name = _vehicle_identity(v)\n                state = v.get(\"state\")\n\n                # Determine if we should allow waking based on last successful capture.\n                last_ts = mileage_last_success_ts(conn, vid) if vid else None\n                too_old = last_ts is None or (ts - last_ts) >= wake_after_sec"
+          }
+        ]
+      },
+      {
+        "move_id": "m55",
+        "operation": "Infer",
+        "data": "Whether each vehicle is eligible to be woken based on record age and the no-wake flag.",
+        "source": "Current epoch time, last successful database timestamp, --auto-wake-after-hours, and --no-wake",
+        "recipient": "allow_wake passed to wake_vehicle",
+        "condition": "Eligibility requires no_wake to be false and no successful record or an age at least the threshold. Default threshold is 24 hours; the parser's store_true no-wake flag is false when omitted.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1884,
+            "end_line": 1904,
+            "quote": "        ts = int(time.time())\n        allow_any_wake = not getattr(args, \"no_wake\", False)\n        wake_after_hours = float(getattr(args, \"auto_wake_after_hours\", 24.0) or 24.0)\n        wake_after_sec = int(wake_after_hours * 3600)\n\n        results = []\n\n        conn = _db_connect(db_path)\n        try:\n            for v in vehicles:\n                vid, name = _vehicle_identity(v)\n                state = v.get(\"state\")\n\n                # Determine if we should allow waking based on last successful capture.\n                last_ts = mileage_last_success_ts(conn, vid) if vid else None\n                too_old = last_ts is None or (ts - last_ts) >= wake_after_sec\n\n                allow_wake = allow_any_wake and bool(too_old)\n\n                # Try to avoid waking unless threshold exceeded.\n                if not wake_vehicle(v, allow_wake=allow_wake):"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2137,
+            "end_line": 2143,
+            "quote": "    mileage_parser.add_argument(\"--no-wake\", action=\"store_true\", help=\"Do not wake sleeping cars\")\n    mileage_parser.add_argument(\n        \"--auto-wake-after-hours\",\n        type=float,\n        default=24.0,\n        help=\"If a car hasn't recorded mileage in this many hours, allow waking it (default: 24)\",\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m56",
+        "operation": "Save",
+        "data": "Skipped mileage point: current UTC epoch timestamp, vehicle ID/name, null odometer, vehicle state, source='skip', and a note containing state, no_wake, and last-success time or 'never'.",
+        "source": "Account vehicle metadata, recorder clock/flags, and last-success database lookup",
+        "recipient": "mileage_points in the resolved local SQLite database",
+        "condition": "When wake_vehicle returns false; rows persist after the recorder commits. No expiry/pruning is specified.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1825,
+            "end_line": 1828,
+            "quote": "def _vehicle_identity(vehicle) -> tuple[str, str]:\n    vid = vehicle.get(\"id_s\") or str(vehicle.get(\"vehicle_id\") or \"\")\n    name = vehicle.get(\"display_name\") or \"Vehicle\"\n    return (vid, name)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1851,
+            "end_line": 1857,
+            "quote": "    conn.execute(\n        \"\"\"\n        INSERT INTO mileage_points(ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note)\n        VALUES (?, ?, ?, ?, ?, ?, ?)\n        \"\"\",\n        (ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note),\n    )"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1904,
+            "end_line": 1917,
+            "quote": "                if not wake_vehicle(v, allow_wake=allow_wake):\n                    mileage_insert_point(\n                        conn,\n                        ts_utc=ts,\n                        vehicle_id=vid,\n                        vehicle_name=name,\n                        odometer_mi=None,\n                        state=state,\n                        source=\"skip\",\n                        note=(\n                            f\"skipped (state={state}); no_wake={getattr(args,'no_wake',False)}; \"\n                            f\"last_ok={_fmt_dt(last_ts) if last_ts else 'never'}\"\n                        ),\n                    )"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1954,
+            "end_line": 1956,
+            "quote": "            conn.commit()\n        finally:\n            conn.close()"
+          }
+        ]
+      },
+      {
+        "move_id": "m57",
+        "operation": "Save",
+        "data": "Online mileage point: UTC epoch timestamp, vehicle ID/name, odometer converted to float or null, current vehicle state, source='vehicle_data', and null note.",
+        "source": "Vehicle-list identity, current clock, and fetched vehicle_state.odometer",
+        "recipient": "mileage_points in the resolved local SQLite database",
+        "condition": "For every vehicle passing the online/wake check, including cases with no odometer value; committed after iteration. No expiry/pruning is specified.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1851,
+            "end_line": 1857,
+            "quote": "    conn.execute(\n        \"\"\"\n        INSERT INTO mileage_points(ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note)\n        VALUES (?, ?, ?, ?, ?, ?, ?)\n        \"\"\",\n        (ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note),\n    )"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1929,
+            "end_line": 1943,
+            "quote": "                # Online now.\n                data = v.get_vehicle_data()\n                vs = data.get(\"vehicle_state\", {})\n                odo = vs.get(\"odometer\")\n\n                mileage_insert_point(\n                    conn,\n                    ts_utc=ts,\n                    vehicle_id=vid,\n                    vehicle_name=name,\n                    odometer_mi=float(odo) if odo is not None else None,\n                    state=v.get(\"state\"),\n                    source=\"vehicle_data\",\n                    note=None,\n                )"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1954,
+            "end_line": 1956,
+            "quote": "            conn.commit()\n        finally:\n            conn.close()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1884,
+            "end_line": 1884,
+            "quote": "        ts = int(time.time())"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1893,
+            "end_line": 1895,
+            "quote": "            for v in vehicles:\n                vid, name = _vehicle_identity(v)\n                state = v.get(\"state\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m58",
+        "operation": "Send",
+        "data": "Mileage-record results: database path, capture timestamp, vehicle names/IDs/states, recorded flag, odometer when available, inferred woke flag, or skip reason and last-success timestamp. Human output contains counts and per-vehicle miles/skip reason.",
+        "source": "Recorder results assembled from vehicle metadata, database history and fetched odometer",
+        "recipient": "Standard output",
+        "condition": "mileage record after database commit; JSON or human output.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1918,
+            "end_line": 1927,
+            "quote": "                    results.append({\n                        \"vehicle\": name,\n                        \"vehicle_id\": vid,\n                        \"state\": state,\n                        \"recorded\": False,\n                        \"reason\": \"asleep_or_offline\",\n                        \"last_success_ts_utc\": last_ts,\n                        \"woke\": False,\n                    })\n                    continue"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1945,
+            "end_line": 1952,
+            "quote": "                results.append({\n                    \"vehicle\": name,\n                    \"vehicle_id\": vid,\n                    \"state\": v.get(\"state\"),\n                    \"recorded\": odo is not None,\n                    \"odometer_mi\": float(odo) if odo is not None else None,\n                    \"woke\": bool(allow_wake and state != 'online'),\n                })"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1958,
+            "end_line": 1969,
+            "quote": "        if args.json:\n            print(json.dumps({\"db\": str(db_path), \"ts_utc\": ts, \"results\": results}, indent=2))\n            return\n\n        ok = sum(1 for r in results if r.get(\"recorded\"))\n        print(f\"✅ Recorded mileage: {ok}/{len(results)} vehicles\")\n        for r in results:\n            if r.get(\"recorded\"):\n                print(f\"- {r['vehicle']}: {r.get('odometer_mi'):.1f} mi\")\n            else:\n                print(f\"- {r['vehicle']}: skipped ({r.get('reason')})\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m59",
+        "operation": "Read",
+        "data": "All successful mileage rows' vehicle names, IDs, timestamps and odometers, ordered newest first.",
+        "source": "mileage_points in the resolved local SQLite database",
+        "recipient": "Mileage status handler rows",
+        "condition": "mileage status; rows with null odometer are excluded.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1971,
+            "end_line": 1984,
+            "quote": "    if args.action == \"status\":\n        conn = _db_connect(db_path)\n        try:\n            cur = conn.execute(\n                \"\"\"\n                SELECT vehicle_name, vehicle_id, ts_utc, odometer_mi\n                FROM mileage_points\n                WHERE odometer_mi IS NOT NULL\n                ORDER BY ts_utc DESC\n                \"\"\"\n            )\n            rows = cur.fetchall()\n        finally:\n            conn.close()"
+          }
+        ]
+      },
+      {
+        "move_id": "m60",
+        "operation": "Infer",
+        "data": "Latest successful recorded odometer and timestamp per vehicle ID.",
+        "source": "Successful mileage rows ordered by descending timestamp",
+        "recipient": "Mileage status latest/out objects",
+        "condition": "mileage status keeps the first row encountered for each ID.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1986,
+            "end_line": 1992,
+            "quote": "        # latest per vehicle\n        latest = {}\n        for name, vid, ts, odo in rows:\n            if vid not in latest:\n                latest[vid] = {\"vehicle\": name, \"vehicle_id\": vid, \"ts_utc\": int(ts), \"odometer_mi\": float(odo)}\n\n        out = {\"db\": str(db_path), \"vehicles\": list(latest.values())}"
+          }
+        ]
+      },
+      {
+        "move_id": "m61",
+        "operation": "Send",
+        "data": "Mileage database path and latest successful vehicle name/ID, timestamp and odometer; human output formats the timestamp in UTC.",
+        "source": "Latest-per-vehicle mileage status object",
+        "recipient": "Standard output",
+        "condition": "mileage status; JSON includes identifiers, while human lines print vehicle name, miles and last timestamp.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1986,
+            "end_line": 2003,
+            "quote": "        # latest per vehicle\n        latest = {}\n        for name, vid, ts, odo in rows:\n            if vid not in latest:\n                latest[vid] = {\"vehicle\": name, \"vehicle_id\": vid, \"ts_utc\": int(ts), \"odometer_mi\": float(odo)}\n\n        out = {\"db\": str(db_path), \"vehicles\": list(latest.values())}\n        if args.json:\n            print(json.dumps(out, indent=2))\n            return\n\n        print(f\"Mileage DB: {db_path}\")\n        if not latest:\n            print(\"No mileage points recorded yet. Run: \" + _invocation(\"mileage record\"))\n            return\n        for v in out[\"vehicles\"]:\n            print(f\"- {v['vehicle']}: {v['odometer_mi']:.1f} mi (last: {_fmt_dt(v['ts_utc'])})\")\n        return"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1860,
+            "end_line": 1862,
+            "quote": "def _fmt_dt(ts_utc: int) -> str:\n    dt = datetime.fromtimestamp(ts_utc, tz=timezone.utc)\n    return dt.strftime(\"%Y-%m-%d %H:%M UTC\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m62",
+        "operation": "Infer",
+        "data": "Mileage-export cutoff timestamp.",
+        "source": "--since-ts, or --since-days and current epoch time",
+        "recipient": "since_ts used in the SQLite export query",
+        "condition": "Explicit since_ts wins. Otherwise nonnegative days is converted to now minus days times 86400; no requested cutoff returns None.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1753,
+            "end_line": 1770,
+            "quote": "    if since_ts is not None:\n        try:\n            return int(since_ts)\n        except Exception:\n            raise ValueError(\"--since-ts must be an integer epoch timestamp (seconds)\")\n\n    if since_days is None:\n        return None\n\n    try:\n        days = float(since_days)\n    except Exception:\n        raise ValueError(\"--since-days must be a number (e.g., 7 or 0.5)\")\n\n    if days < 0:\n        raise ValueError(\"--since-days must be >= 0\")\n\n    return int(time.time() - days * 86400)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2008,
+            "end_line": 2011,
+            "quote": "        since_ts = resolve_since_ts(\n            since_ts=getattr(args, \"since_ts\", None),\n            since_days=getattr(args, \"since_days\", None),\n        )"
+          }
+        ]
+      },
+      {
+        "move_id": "m63",
+        "operation": "Read",
+        "data": "Mileage-history timestamps, vehicle IDs/names, odometer values including nulls, states, source labels and notes.",
+        "source": "mileage_points in the resolved local SQLite database",
+        "recipient": "Mileage export rows",
+        "condition": "mileage export; all rows or rows with ts_utc >= cutoff, ordered oldest first.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1773,
+            "end_line": 1785,
+            "quote": "def mileage_fetch_points(conn, *, since_ts: int | None = None):\n    \"\"\"Fetch mileage points ordered by timestamp asc, optionally filtered.\"\"\"\n    if since_ts is None:\n        cur = conn.execute(\n            \"SELECT ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note FROM mileage_points ORDER BY ts_utc ASC\"\n        )\n        return cur.fetchall()\n\n    cur = conn.execute(\n        \"SELECT ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note FROM mileage_points WHERE ts_utc >= ? ORDER BY ts_utc ASC\",\n        (int(since_ts),),\n    )\n    return cur.fetchall()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2013,
+            "end_line": 2017,
+            "quote": "        conn = _db_connect(db_path)\n        try:\n            rows = mileage_fetch_points(conn, since_ts=since_ts)\n        finally:\n            conn.close()"
+          }
+        ]
+      },
+      {
+        "move_id": "m64",
+        "operation": "Send",
+        "data": "Mileage history as JSON or CSV: timestamps, vehicle IDs/names, odometers, states, source and notes. JSON additionally includes database path and cutoff.",
+        "source": "Mileage export query rows",
+        "recipient": "Standard output",
+        "condition": "mileage export; CSV is the default format. File persistence occurs only if the execution context redirects output.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2019,
+            "end_line": 2041,
+            "quote": "        if fmt == \"json\":\n            items = [\n                {\n                    \"ts_utc\": int(ts),\n                    \"vehicle_id\": vid,\n                    \"vehicle\": name,\n                    \"odometer_mi\": odo,\n                    \"state\": state,\n                    \"source\": source,\n                    \"note\": note,\n                }\n                for (ts, vid, name, odo, state, source, note) in rows\n            ]\n            print(json.dumps({\"db\": str(db_path), \"since_ts_utc\": since_ts, \"items\": items}, indent=2))\n            return\n\n        # csv\n        import csv\n        w = csv.writer(sys.stdout)\n        w.writerow([\"ts_utc\", \"vehicle_id\", \"vehicle\", \"odometer_mi\", \"state\", \"source\", \"note\"])\n        for (ts, vid, name, odo, state, source, note) in rows:\n            w.writerow([int(ts), vid, name, odo, state, source, note or \"\"])\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m65",
+        "operation": "Save",
+        "data": "Exported mileage history in CSV or JSON files.",
+        "source": "mileage export standard output",
+        "recipient": "mileage.csv, mileage.json, mileage_last_7d.csv, or mileage_since_ts.json in the shell working directory",
+        "condition": "Only when the user executes the README's shell-redirection examples; > replaces the named file. No retention period is specified.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "start_line": 167,
+            "end_line": 172,
+            "quote": "python3 scripts/tesla.py mileage export --format csv > mileage.csv\npython3 scripts/tesla.py mileage export --format json > mileage.json\n\n# Export a time window\npython3 scripts/tesla.py mileage export --format csv --since-days 7 > mileage_last_7d.csv\npython3 scripts/tesla.py mileage export --format json --since-ts 1738195200 > mileage_since_ts.json"
+          }
+        ]
+      },
+      {
+        "move_id": "m66",
+        "operation": "Save",
+        "data": "Example hourly launchd job configuration containing the recorder invocation, a TESLA_EMAIL placeholder, no-wake policy, and output/error paths.",
+        "source": "README launchd setup example",
+        "recipient": "~/Library/LaunchAgents/com.mytesla.mileage.plist",
+        "condition": "The instructions ask the user to create this file and load it on macOS. Actual replacement of placeholders and execution are outside the supplied code.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "start_line": 191,
+            "end_line": 221,
+            "quote": "Create `~/Library/LaunchAgents/com.mytesla.mileage.plist`:\n```xml\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n  <dict>\n    <key>Label</key><string>com.mytesla.mileage</string>\n    <key>StartInterval</key><integer>3600</integer>\n    <key>ProgramArguments</key>\n    <array>\n      <string>/usr/bin/python3</string>\n      <string>/ABS/PATH/TO/scripts/tesla.py</string>\n      <string>mileage</string>\n      <string>record</string>\n      <string>--no-wake</string>\n      <string>--auto-wake-after-hours</string><string>24</string>\n      <string>--json</string>\n    </array>\n    <key>EnvironmentVariables</key>\n    <dict>\n      <key>TESLA_EMAIL</key><string>you@email.com</string>\n    </dict>\n    <key>StandardOutPath</key><string>~/.my_tesla/mileage.log</string>\n    <key>StandardErrorPath</key><string>~/.my_tesla/mileage.err.log</string>\n  </dict>\n</plist>\n```\nLoad it:\n```bash\nlaunchctl load -w ~/Library/LaunchAgents/com.mytesla.mileage.plist\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "m67",
+        "operation": "Save",
+        "data": "Mileage recorder JSON results on stdout and any stderr diagnostics.",
+        "source": "Hourly mileage record process in the README launchd example",
+        "recipient": "Configured StandardOutPath '~/.my_tesla/mileage.log' and StandardErrorPath '~/.my_tesla/mileage.err.log'",
+        "condition": "If the documented launchd job is created and run. Paths contain literal tilde strings; expansion and actual logging depend on launchd/runtime context. Rotation and retention are unspecified.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "start_line": 198,
+            "end_line": 214,
+            "quote": "    <key>StartInterval</key><integer>3600</integer>\n    <key>ProgramArguments</key>\n    <array>\n      <string>/usr/bin/python3</string>\n      <string>/ABS/PATH/TO/scripts/tesla.py</string>\n      <string>mileage</string>\n      <string>record</string>\n      <string>--no-wake</string>\n      <string>--auto-wake-after-hours</string><string>24</string>\n      <string>--json</string>\n    </array>\n    <key>EnvironmentVariables</key>\n    <dict>\n      <key>TESLA_EMAIL</key><string>you@email.com</string>\n    </dict>\n    <key>StandardOutPath</key><string>~/.my_tesla/mileage.log</string>\n    <key>StandardErrorPath</key><string>~/.my_tesla/mileage.err.log</string>"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1958,
+            "end_line": 1960,
+            "quote": "        if args.json:\n            print(json.dumps({\"db\": str(db_path), \"ts_utc\": ts, \"results\": results}, indent=2))\n            return"
+          }
+        ]
+      },
+      {
+        "move_id": "m68",
+        "operation": "Read",
+        "data": "Installed skill version text.",
+        "source": "VERSION.txt, falling back to VERSION, under the script's parent project directory",
+        "recipient": "read_skill_version return value",
+        "condition": "Reads the first existing, readable, nonempty candidate; exceptions are ignored and unresolved version returns '(unknown)'.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 29,
+            "end_line": 29,
+            "quote": "SKILL_DIR = Path(__file__).resolve().parent.parent"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 42,
+            "end_line": 57,
+            "quote": "def read_skill_version() -> str:\n    \"\"\"Read the skill version from VERSION.txt/VERSION in the repo.\n\n    ClawdHub ignores extensionless files like `VERSION`, so published artifacts\n    also include `VERSION.txt`. Prefer VERSION.txt when present.\n    \"\"\"\n    for name in (\"VERSION.txt\", \"VERSION\"):\n        p = SKILL_DIR / name\n        try:\n            if p.exists():\n                v = p.read_text().strip()\n                if v:\n                    return v\n        except Exception:\n            continue\n    return \"(unknown)\""
+          }
+        ]
+      },
+      {
+        "move_id": "m69",
+        "operation": "Send",
+        "data": "Installed skill version or '(unknown)' fallback.",
+        "source": "read_skill_version() result",
+        "recipient": "Standard output",
+        "condition": "version command or --version.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2046,
+            "end_line": 2049,
+            "quote": "def cmd_version(args):\n    \"\"\"Print the installed skill version.\"\"\"\n    # Keep output simple for scripts.\n    print(read_skill_version())"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2258,
+            "end_line": 2260,
+            "quote": "    if getattr(args, \"version\", False):\n        cmd_version(args)\n        return"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2269,
+            "end_line": 2269,
+            "quote": "        \"version\": cmd_version,"
+          }
+        ]
+      },
+      {
+        "move_id": "m70",
+        "operation": "Read",
+        "data": "Debug-output enablement.",
+        "source": "--debug argument or MY_TESLA_DEBUG environment variable",
+        "recipient": "Exception handler debug flag",
+        "condition": "On a caught handler exception; environment enables debug only when equal to '1'.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2299,
+            "end_line": 2304,
+            "quote": "    except Exception as e:\n        debug = bool(getattr(args, \"debug\", False)) or os.environ.get(\"MY_TESLA_DEBUG\") == \"1\"\n        if debug:\n            # Print both a friendly line and a full traceback.\n            print(f\"❌ Error: {e}\", file=sys.stderr)\n            traceback.print_exc()"
+          }
+        ]
+      },
+      {
+        "move_id": "m71",
+        "operation": "Send",
+        "data": "Exception messages and, in debug mode, full Python traceback; wake failures include prior vehicle state and exception details, and skipped online checks include vehicle name/state.",
+        "source": "Runtime exceptions and selected vehicle metadata",
+        "recipient": "Standard error",
+        "condition": "On failures or a blocked no-wake read. Traceback requires --debug or MY_TESLA_DEBUG=1; exception contents are not statically specified.",
+        "evidence": [
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 248,
+            "end_line": 254,
+            "quote": "    except Exception as e:\n        print(\n            f\"❌ Failed to wake vehicle (state was: {state}). Try again, or run: {_invocation('wake')}\\n\"\n            f\"   Details: {e}\",\n            file=sys.stderr,\n        )\n        sys.exit(1)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 679,
+            "end_line": 686,
+            "quote": "    state = vehicle.get('state')\n    name = vehicle.get('display_name', 'Vehicle')\n    print(\n        f\"ℹ️ {name} is currently '{state}'. Skipping wake because --no-wake was set.\\n\"\n        f\"   Re-run without --no-wake, or run: {_invocation('wake')}\",\n        file=sys.stderr,\n    )\n    sys.exit(3)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 2299,
+            "end_line": 2308,
+            "quote": "    except Exception as e:\n        debug = bool(getattr(args, \"debug\", False)) or os.environ.get(\"MY_TESLA_DEBUG\") == \"1\"\n        if debug:\n            # Print both a friendly line and a full traceback.\n            print(f\"❌ Error: {e}\", file=sys.stderr)\n            traceback.print_exc()\n        else:\n            print(f\"❌ Error: {e}\", file=sys.stderr)\n            print(\"   Tip: re-run with --debug for a full traceback\", file=sys.stderr)\n        sys.exit(1)"
+          }
+        ]
+      },
+      {
+        "move_id": "m72",
+        "operation": "Delete",
+        "data": "Repository __pycache__ directories and their contents, plus files named *.pyc.",
+        "source": "Project tree after changing to the test script's parent directory",
+        "recipient": null,
+        "condition": "Before unit tests when scripts/run_tests.sh runs; recursive rm removes matching cache directories and find -delete removes matching bytecode files.",
+        "evidence": [
+          {
+            "path": "scripts/run_tests.sh",
+            "start_line": 7,
+            "end_line": 11,
+            "quote": "cd \"$(dirname \"$0\")/..\"\n\n# Clean up any stray bytecode from previous runs (should never be committed).\nfind . -name '__pycache__' -type d -prune -exec rm -rf {} +\nfind . -name '*.pyc' -type f -delete"
+          }
+        ]
+      },
+      {
+        "move_id": "m73",
+        "operation": "Read",
+        "data": "Project directory entries matching __pycache__ or *.pyc, checked for existence after tests.",
+        "source": "Project tree",
+        "recipient": "Test-runner sanity-check pipeline",
+        "condition": "After unittest completes; this scan does not read bytecode-file contents.",
+        "evidence": [
+          {
+            "path": "scripts/run_tests.sh",
+            "start_line": 7,
+            "end_line": 7,
+            "quote": "cd \"$(dirname \"$0\")/..\""
+          },
+          {
+            "path": "scripts/run_tests.sh",
+            "start_line": 13,
+            "end_line": 20,
+            "quote": "python3 -m unittest discover -s tests -v\n\n# Sanity check: tests should not leave bytecode behind.\nif find . -name '__pycache__' -o -name '*.pyc' | grep -q .; then\n  echo \"ERROR: Python bytecode (__pycache__ / *.pyc) was created during tests.\" >&2\n  echo \"Tip: ensure PYTHONDONTWRITEBYTECODE=1 is honored and you're not running Python with -B disabled.\" >&2\n  exit 1\nfi"
+          }
+        ]
+      },
+      {
+        "move_id": "m74",
+        "operation": "Save",
+        "data": "Synthetic defaults fixture containing default_car='Test'.",
+        "source": "Hard-coded unit-test fixture",
+        "recipient": "defaults.json under a tempfile.TemporaryDirectory path, substituted for DEFAULTS_FILE",
+        "condition": "Only when the POSIX defaults-permission unit test executes; this is a test path rather than the user's normal defaults file.",
+        "evidence": [
+          {
+            "path": "tests/test_defaults_permissions.py",
+            "start_line": 11,
+            "end_line": 23,
+            "quote": "    def test_save_defaults_sets_0600_permissions_best_effort(self):\n        # On Windows this may not apply; but this repo targets macOS/Linux.\n        if os.name != \"posix\":\n            self.skipTest(\"POSIX-only permissions\")\n\n        with tempfile.TemporaryDirectory() as td:\n            p = Path(td) / \"defaults.json\"\n\n            # Patch the module-level DEFAULTS_FILE for this test.\n            old = tesla.DEFAULTS_FILE\n            try:\n                tesla.DEFAULTS_FILE = p\n                tesla.save_defaults({\"default_car\": \"Test\"})"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 125,
+            "end_line": 128,
+            "quote": "def save_defaults(obj: dict):\n    # Defaults can include human-readable vehicle names; keep them private.\n    DEFAULTS_FILE.write_text(json.dumps(obj, indent=2) + \"\\n\")\n    _chmod_0600(DEFAULTS_FILE)"
+          }
+        ]
+      },
+      {
+        "move_id": "m75",
+        "operation": "Save",
+        "data": "Synthetic mileage fixture with timestamp 1700000000, vehicle ID '123', name 'Car', odometer 100.0, state 'online', source 'test', and null note.",
+        "source": "Hard-coded unit-test fixture",
+        "recipient": "mileage.sqlite in a tempfile.TemporaryDirectory path",
+        "condition": "Only when the mileage database unit test executes and commits.",
+        "evidence": [
+          {
+            "path": "tests/test_mileage_db.py",
+            "start_line": 10,
+            "end_line": 27,
+            "quote": "    def test_init_and_insert(self):\n        with tempfile.TemporaryDirectory() as td:\n            db = Path(td) / \"mileage.sqlite\"\n            tesla.mileage_init_db(db)\n\n            conn = tesla._db_connect(db)\n            try:\n                tesla.mileage_insert_point(\n                    conn,\n                    ts_utc=1700000000,\n                    vehicle_id=\"123\",\n                    vehicle_name=\"Car\",\n                    odometer_mi=100.0,\n                    state=\"online\",\n                    source=\"test\",\n                    note=None,\n                )\n                conn.commit()"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1851,
+            "end_line": 1857,
+            "quote": "    conn.execute(\n        \"\"\"\n        INSERT INTO mileage_points(ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note)\n        VALUES (?, ?, ?, ?, ?, ?, ?)\n        \"\"\",\n        (ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note),\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m76",
+        "operation": "Save",
+        "data": "Synthetic skipped-mileage record for vehicle name 'Car', ID '1', state 'asleep', with the record handler's skip note and timestamp.",
+        "source": "FakeVehicle fixture and mocked wake/authentication dependencies",
+        "recipient": "mileage.sqlite under a tempfile.TemporaryDirectory path",
+        "condition": "Only during the no-wake mileage-record unit test; no real vehicle-data fetch occurs in that test.",
+        "evidence": [
+          {
+            "path": "tests/test_cmd_mileage_record.py",
+            "start_line": 11,
+            "end_line": 37,
+            "quote": "    def test_record_skips_when_no_wake_and_asleep(self):\n        with tempfile.TemporaryDirectory() as td:\n            db = Path(td) / \"mileage.sqlite\"\n\n            class FakeVehicle(dict):\n                def get_vehicle_data(self):\n                    raise AssertionError(\"should not be called when asleep + no-wake\")\n\n            v = FakeVehicle(display_name=\"Car\", id_s=\"1\", state=\"asleep\")\n\n            fake_tesla = SimpleNamespace(vehicle_list=lambda: [v])\n\n            args = SimpleNamespace(\n                action=\"record\",\n                db=str(db),\n                no_wake=True,\n                auto_wake_after_hours=24.0,\n                json=True,\n                email=None,\n                car=None,\n            )\n\n            with mock.patch.object(tesla, \"get_tesla\", return_value=fake_tesla), \\\n                 mock.patch.object(tesla, \"require_email\", return_value=\"x@example.com\"), \\\n                 mock.patch.object(tesla, \"wake_vehicle\", return_value=False):\n                # Should not raise\n                tesla.cmd_mileage(args)"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1904,
+            "end_line": 1917,
+            "quote": "                if not wake_vehicle(v, allow_wake=allow_wake):\n                    mileage_insert_point(\n                        conn,\n                        ts_utc=ts,\n                        vehicle_id=vid,\n                        vehicle_name=name,\n                        odometer_mi=None,\n                        state=state,\n                        source=\"skip\",\n                        note=(\n                            f\"skipped (state={state}); no_wake={getattr(args,'no_wake',False)}; \"\n                            f\"last_ok={_fmt_dt(last_ts) if last_ts else 'never'}\"\n                        ),\n                    )"
+          },
+          {
+            "path": "scripts/tesla.py",
+            "start_line": 1954,
+            "end_line": 1956,
+            "quote": "            conn.commit()\n        finally:\n            conn.close()"
+          }
+        ]
+      },
+      {
+        "move_id": "m77",
+        "operation": "Save",
+        "data": "Synthetic mileage table and three fixture rows with timestamps 10/20/30 and odometers 1.0/2.0/3.0 for vehicle 'v1'/'Car'.",
+        "source": "Hard-coded export-filter unit-test fixtures",
+        "recipient": "SQLite :memory: connection",
+        "condition": "Only during the export-filter test; this destination is in memory and is closed by the test.",
+        "evidence": [
+          {
+            "path": "tests/test_mileage_export_filter.py",
+            "start_line": 18,
+            "end_line": 47,
+            "quote": "        conn = sqlite3.connect(\":memory:\")\n        try:\n            conn.execute(\n                \"\"\"\n                CREATE TABLE mileage_points (\n                  id INTEGER PRIMARY KEY AUTOINCREMENT,\n                  ts_utc INTEGER NOT NULL,\n                  vehicle_id TEXT,\n                  vehicle_name TEXT,\n                  odometer_mi REAL,\n                  state TEXT,\n                  source TEXT,\n                  note TEXT\n                );\n                \"\"\"\n            )\n\n            # Insert three points\n            conn.execute(\n                \"INSERT INTO mileage_points(ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note) VALUES (?,?,?,?,?,?,?)\",\n                (10, \"v1\", \"Car\", 1.0, \"online\", \"test\", None),\n            )\n            conn.execute(\n                \"INSERT INTO mileage_points(ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note) VALUES (?,?,?,?,?,?,?)\",\n                (20, \"v1\", \"Car\", 2.0, \"online\", \"test\", None),\n            )\n            conn.execute(\n                \"INSERT INTO mileage_points(ts_utc, vehicle_id, vehicle_name, odometer_mi, state, source, note) VALUES (?,?,?,?,?,?,?)\",\n                (30, \"v1\", \"Car\", 3.0, \"online\", \"test\", None),\n            )"
+          },
+          {
+            "path": "tests/test_mileage_export_filter.py",
+            "start_line": 54,
+            "end_line": 55,
+            "quote": "        finally:\n            conn.close()"
+          }
+        ]
+      }
+    ]
+  }
+}

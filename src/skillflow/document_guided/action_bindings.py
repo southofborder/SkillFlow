@@ -21,6 +21,8 @@ def action_coordinates(record):
             path = (*prefix, i)
             for j, _ in enumerate(segment.get("ops", [])):
                 yield (*path, "ops", j), choices
+            if segment.get("outcome") is not None:
+                yield (*path, "outcome"), choices
             for j, case in enumerate(segment.get("cases", [])):
                 branch = {**choices, path: j}
                 guard = "guard" if case.get("guard") is not None else "condition"
@@ -28,6 +30,8 @@ def action_coordinates(record):
                 yield from walk(case.get("segments", []), (*path, "cases", j, "segments"), branch)
                 if "yield" in case:
                     yield (*path, "cases", j, "yield"), branch
+                if "raise" in case:
+                    yield (*path, "cases", j, "raise"), branch
                 if case.get("disposition") == "throw":
                     yield (*path, "cases", j, "disposition"), branch
             if "body" in segment:
@@ -111,6 +115,8 @@ def _role_errors(record, instruction, processing, ref, role, paths, split_calls=
             return role == "branch"
         if context_acquisition and role == "receive" and path[0] == "output_bindings":
             return _at(record, path)["value"].get("kind") == "input"
+        if context_acquisition and role == "receive" and path[-1] == "yield":
+            return _at(record, path).get("kind") == "input"
         if len(path) < 2 or path[-2] != "ops":
             return False
         op = _at(record, path)
@@ -145,6 +151,12 @@ def _role_errors(record, instruction, processing, ref, role, paths, split_calls=
                 valid_cases = []
                 for j, case in enumerate(seg["cases"]):
                     phase_here = case["phase"]
+                    # A failed local read, write or emission has no completed
+                    # boundary by default. Its actual effects (if any) are
+                    # recorded on that case. Prove the source action on return.
+                    if (seg.get("outcome") and case["disposition"] == "throw"
+                            and phase_here == "local_error" and role in {"read", "write", "deliver"}):
+                        continue
                     if role in interface_roles and phase_here == "pre_request_error":
                         continue
                     if role == "receive" and phase_here == "post_request_error" and case["disposition"] == "throw":
@@ -300,6 +312,11 @@ def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=
         pairs = None
         def role_diagnostics(name, role, bound):
             nonlocal pairs
+            if role == "call" and len(actions) == 1 and cfg.get("metadata", {}).get("ordered_argument_bindings"):
+                from .local_call_transfers import binding_errors, local_call_inputs
+                inputs = local_call_inputs(material["cfg"], cfg, actions[0], task_source_files(material["source"]))
+                if inputs is not None:
+                    return binding_errors(record, inputs)
             if role == "call" and raw_specs is not None and pairs is None and any(
                     len(p) >= 2 and p[-2] == "ops" and _at(record, p).get("op") == "receive" for p in bound):
                 try:
@@ -365,6 +382,17 @@ def checked_action_bindings(processing, material, *, raw_specs=None, wire_paths=
                   "Bind every actual operation, selected case test/throw, loop collection, return, yield, output binding and terminator to exactly one action. "
                   f"Missing {sorted(map(str, set(paths) - set(owners)))}. Invalid or repeated "
                   f"{sorted(map(str, {p for p,c in counts.items() if p not in paths or c != 1}))}.")
+            continue
+        protected_error = False
+        for path in paths:
+            if path[-1] != "outcome":
+                continue
+            group = path[:-1]
+            if any(owners[p] != owners[path] for p in paths if p[:len(group)] == group):
+                error("source_action_binding", "action_bindings",
+                      "A protected outcome and all its cases must belong to the same source action.")
+                protected_error = True
+        if protected_error:
             continue
         roles = set()
         for index, row in enumerate(parsed):

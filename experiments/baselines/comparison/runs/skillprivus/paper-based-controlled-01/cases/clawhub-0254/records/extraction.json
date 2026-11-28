@@ -1,0 +1,907 @@
+{
+  "request_sha256": "a061a1f0629787088c0b1e0cc91e11e056f923a62f0eee355d6c9090acc5af48",
+  "answer_sha256": "aa38449e70023dba36705baf3564a3e7b7d54ef54d64266a94f01d63208454a2",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from all supplied static sources without execution or additional reads. Runtime paths and filesystem context remain unknown. Relocations are recorded as Save, with removal of the original pathname stated explicitly. Instruction-only recommendations are distinguished from implemented script behavior.",
+    "claim": "An OpenClaw file-management assistant for classification, batch renaming, hash-based duplicate cleanup, directory synchronization, backups, and automated file workflows. Documentation promises default previews requiring --execute, yes confirmation, symlink skipping, and conflict protection. Size classification and bidirectional synchronization are marked unimplemented. The cleanup workflow also describes scanning expired/large files and using a recycle bin; best practices recommend scheduled organization.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "description: OpenClaw自动化文件管理助手，用于批量文件操作、智能分类、重复文件清理、文件重命名、目录同步等任务。当用户需要整理文件、批量重命名、清理重复文件、同步目录或自动化文件工作流时使用此技能。"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 10,
+        "end_line": 21,
+        "quote": "### 1. 智能文件分类 (`organize`)\n按文件类型、日期、大小或自定义规则自动分类文件。\n\n```bash\n# 按文件类型分类\npython scripts/organize.py <source_dir> --by-type\n\n# 按日期分类 (年/月/日)\npython scripts/organize.py <source_dir> --by-date --date-format year/month\n\n# 按文件大小分类 (尚未实现)\n# python scripts/organize.py <source_dir> --by-size --size-ranges \"10MB,100MB,1GB\""
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 24,
+        "end_line": 25,
+        "quote": "### 2. 批量重命名 (`batch_rename`)\n支持正则表达式、序列号、日期等模式的重命名。"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 38,
+        "end_line": 39,
+        "quote": "### 3. 重复文件清理 (`deduplicate`)\n基于内容哈希检测并处理重复文件。"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 52,
+        "end_line": 60,
+        "quote": "### 4. 目录同步 (`sync`)\n双向或单向目录同步，支持排除模式和增量同步。\n\n```bash\n# 单向同步 (源 → 目标)\npython scripts/sync.py <source> <target> --mirror\n\n# 双向同步 (尚未实现)\npython scripts/sync.py <dir1> <dir2> --bidirectional"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 102,
+        "end_line": 106,
+        "quote": "### 清理工作流\n1. 扫描重复/过期/大文件\n2. 生成报告并预览\n3. 用户确认或自动处理\n4. 移动到回收站/隔离区/直接删除"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 114,
+        "end_line": 119,
+        "quote": "## 安全原则\n\n- **预览优先**: 所有修改操作默认执行 dry-run 预览，需加 --execute 才执行\n- **操作确认**: 执行前需要用户输入 yes 确认\n- **符号链接安全**: 遍历目录时跳过符号链接，避免无限递归\n- **冲突保护**: 目标文件已存在时自动重命名或跳过，不会覆盖"
+      },
+      {
+        "path": "references/best_practices.md",
+        "start_line": 68,
+        "end_line": 70,
+        "quote": "# 添加到 crontab (Linux/Mac) 或任务计划程序 (Windows)\n# 每小时整理下载文件夹\n0 * * * * python organize.py ~/Downloads --by-type --execute --move"
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "Recursive filesystem entries, filenames/extensions, symlink and file status; modification timestamps for date classification.",
+        "source": "Caller-supplied organize source_dir",
+        "recipient": "Organization functions in process memory",
+        "condition": "Scanning also occurs in preview mode. Encountered symlink entries are skipped. Type classification skips existing category subtrees; date classification skips files beneath a four-digit top-level directory.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 36,
+            "end_line": 58,
+            "quote": "def organize_by_type(source_dir, dry_run=True, move=False):\n    \"\"\"按文件类型分类\"\"\"\n    source_path = Path(source_dir)\n    if not source_path.exists():\n        print(f\"错误: 目录不存在 {source_dir}\")\n        return\n    \n    files_by_type = defaultdict(list)\n    \n    # 收集文件\n    for file_path in source_path.rglob('*'):\n        if file_path.is_symlink():\n            continue\n        if file_path.is_file():\n            # Skip files already in a category subdir\n            try:\n                rel = file_path.relative_to(source_path)\n                if rel.parts[0] in FILE_TYPES or rel.parts[0] == 'others':\n                    continue\n            except (ValueError, IndexError):\n                pass\n            category = get_file_category(file_path)\n            files_by_type[category].append(file_path)"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 102,
+            "end_line": 124,
+            "quote": "def organize_by_date(source_dir, date_format='year/month', dry_run=True, move=False):\n    \"\"\"按日期分类\"\"\"\n    source_path = Path(source_dir)\n    if not source_path.exists():\n        print(f\"错误: 目录不存在 {source_dir}\")\n        return\n    \n    files_by_date = defaultdict(list)\n    \n    for file_path in source_path.rglob('*'):\n        if file_path.is_symlink():\n            continue\n        if file_path.is_file():\n            # Skip files already in a date subdir\n            try:\n                rel = file_path.relative_to(source_path)\n                if len(rel.parts) > 1 and re.match(r'^\\d{4}$', rel.parts[0]):\n                    continue\n            except (ValueError, IndexError):\n                pass\n            try:\n                mtime = file_path.stat().st_mtime\n                date = datetime.fromtimestamp(mtime)"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Infer",
+        "data": "Extension-based category and grouping of selected files into images, documents, videos, audio, archives, code, data, or others.",
+        "source": "Selected filenames and the static FILE_TYPES mapping",
+        "recipient": "In-memory files_by_type grouping",
+        "condition": "Type classification; extensions are lowercased before matching.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 16,
+            "end_line": 33,
+            "quote": "FILE_TYPES = {\n    'images': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico'],\n    'documents': ['.pdf', '.doc', '.docx', '.txt', '.md', '.xls', '.xlsx', '.ppt', '.pptx'],\n    'videos': ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm'],\n    'audio': ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'],\n    'archives': ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2'],\n    'code': ['.py', '.js', '.html', '.css', '.java', '.cpp', '.c', '.h', '.go', '.rs'],\n    'data': ['.json', '.xml', '.csv', '.yaml', '.yml', '.sql', '.db'],\n}\n\n\ndef get_file_category(file_path):\n    \"\"\"根据扩展名返回文件类别\"\"\"\n    ext = Path(file_path).suffix.lower()\n    for category, extensions in FILE_TYPES.items():\n        if ext in extensions:\n            return category\n    return 'others'"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 57,
+            "end_line": 58,
+            "quote": "            category = get_file_category(file_path)\n            files_by_type[category].append(file_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Infer",
+        "data": "Date-directory keys and file groups derived from modification timestamps using the execution environment's local datetime conversion.",
+        "source": "Selected files' st_mtime values and date_format",
+        "recipient": "In-memory files_by_date grouping",
+        "condition": "Date classification; supported CLI formats are year, year/month, and year/month/day. The function also has a year-month fallback.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 123,
+            "end_line": 135,
+            "quote": "                mtime = file_path.stat().st_mtime\n                date = datetime.fromtimestamp(mtime)\n                \n                if date_format == 'year/month':\n                    date_key = date.strftime('%Y/%m')\n                elif date_format == 'year/month/day':\n                    date_key = date.strftime('%Y/%m/%d')\n                elif date_format == 'year':\n                    date_key = date.strftime('%Y')\n                else:\n                    date_key = date.strftime('%Y-%m')\n                \n                files_by_date[date_key].append(file_path)"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 187,
+            "end_line": 189,
+            "quote": "    parser.add_argument('--date-format', default='year/month', \n                       choices=['year', 'year/month', 'year/month/day'],\n                       help='日期格式 (默认: year/month)')"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Save",
+        "data": "Category directories and copies or relocations of selected files. Copy is the default; relocation removes the original pathname. Existing destination names cause numbered suffixes.",
+        "source": "Files grouped by type beneath source_dir",
+        "recipient": "source_dir/category/original_filename, or a numbered collision alternative",
+        "condition": "CLI --by-type and --execute, followed by a yes response. --move selects shutil.move; otherwise shutil.copy2 is used. No retention period is specified.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 36,
+            "end_line": 38,
+            "quote": "def organize_by_type(source_dir, dry_run=True, move=False):\n    \"\"\"按文件类型分类\"\"\"\n    source_path = Path(source_dir)"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 57,
+            "end_line": 58,
+            "quote": "            category = get_file_category(file_path)\n            files_by_type[category].append(file_path)"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 72,
+            "end_line": 96,
+            "quote": "    if dry_run:\n        print(f\"\\n这是一个预览。使用 --execute 来执行实际移动。\")\n        return\n\n    confirm = input(\"\\n确认执行? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n\n    # 执行移动\n    for category, files in files_by_type.items():\n        target_dir = source_path / category\n        target_dir.mkdir(exist_ok=True)\n        \n        for file_path in files:\n            try:\n                target_path = target_dir / file_path.name\n                counter = 1\n                while target_path.exists():\n                    target_path = target_dir / f\"{file_path.stem}_{counter}{file_path.suffix}\"\n                    counter += 1\n                if move:\n                    shutil.move(str(file_path), str(target_path))\n                else:\n                    shutil.copy2(str(file_path), str(target_path))"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 197,
+            "end_line": 200,
+            "quote": "    dry_run = not args.execute\n    \n    if args.by_type:\n        organize_by_type(args.source, dry_run=dry_run, move=args.move)"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Save",
+        "data": "Date directories and copies or relocations of selected files. Relocation removes the original pathname; collisions receive numbered suffixes.",
+        "source": "Files grouped by modification date beneath source_dir",
+        "recipient": "source_dir/date_key/original_filename, or a numbered collision alternative",
+        "condition": "CLI --by-date and --execute, followed by yes. --move selects relocation; otherwise files are copied. No retention period is specified.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 102,
+            "end_line": 104,
+            "quote": "def organize_by_date(source_dir, date_format='year/month', dry_run=True, move=False):\n    \"\"\"按日期分类\"\"\"\n    source_path = Path(source_dir)"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 123,
+            "end_line": 135,
+            "quote": "                mtime = file_path.stat().st_mtime\n                date = datetime.fromtimestamp(mtime)\n                \n                if date_format == 'year/month':\n                    date_key = date.strftime('%Y/%m')\n                elif date_format == 'year/month/day':\n                    date_key = date.strftime('%Y/%m/%d')\n                elif date_format == 'year':\n                    date_key = date.strftime('%Y')\n                else:\n                    date_key = date.strftime('%Y-%m')\n                \n                files_by_date[date_key].append(file_path)"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 152,
+            "end_line": 176,
+            "quote": "    if dry_run:\n        print(f\"\\n这是一个预览。使用 --execute 来执行实际移动。\")\n        return\n\n    confirm = input(\"\\n确认执行? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n\n    # 执行移动\n    for date_key, files in files_by_date.items():\n        target_dir = source_path / date_key.replace('/', os.sep)\n        target_dir.mkdir(parents=True, exist_ok=True)\n        \n        for file_path in files:\n            try:\n                target_path = target_dir / file_path.name\n                counter = 1\n                while target_path.exists():\n                    target_path = target_dir / f\"{file_path.stem}_{counter}{file_path.suffix}\"\n                    counter += 1\n                if move:\n                    shutil.move(str(file_path), str(target_path))\n                else:\n                    shutil.copy2(str(file_path), str(target_path))"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 197,
+            "end_line": 202,
+            "quote": "    dry_run = not args.execute\n    \n    if args.by_type:\n        organize_by_type(args.source, dry_run=dry_run, move=args.move)\n    elif args.by_date:\n        organize_by_date(args.source, args.date_format, dry_run=dry_run, move=args.move)"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "Source file contents and filesystem metadata consumed by shutil.copy2 when making organization copies or synchronization copies/updates.",
+        "source": "Selected organization source files, or sync source_files entries",
+        "recipient": "Local copy2 operations",
+        "condition": "Organization uses these calls when move is false. Sync uses them for planned copy/update actions. These copy calls follow the respective execution and confirmation gates; exact metadata copied depends on the runtime platform.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 82,
+            "end_line": 96,
+            "quote": "    for category, files in files_by_type.items():\n        target_dir = source_path / category\n        target_dir.mkdir(exist_ok=True)\n        \n        for file_path in files:\n            try:\n                target_path = target_dir / file_path.name\n                counter = 1\n                while target_path.exists():\n                    target_path = target_dir / f\"{file_path.stem}_{counter}{file_path.suffix}\"\n                    counter += 1\n                if move:\n                    shutil.move(str(file_path), str(target_path))\n                else:\n                    shutil.copy2(str(file_path), str(target_path))"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 162,
+            "end_line": 176,
+            "quote": "    for date_key, files in files_by_date.items():\n        target_dir = source_path / date_key.replace('/', os.sep)\n        target_dir.mkdir(parents=True, exist_ok=True)\n        \n        for file_path in files:\n            try:\n                target_path = target_dir / file_path.name\n                counter = 1\n                while target_path.exists():\n                    target_path = target_dir / f\"{file_path.stem}_{counter}{file_path.suffix}\"\n                    counter += 1\n                if move:\n                    shutil.move(str(file_path), str(target_path))\n                else:\n                    shutil.copy2(str(file_path), str(target_path))"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 74,
+            "end_line": 75,
+            "quote": "    for rel_path, src_file in source_files.items():\n        tgt_file = target_path / rel_path"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 118,
+            "end_line": 138,
+            "quote": "    if dry_run:\n        print(\"\\n这是预览模式。使用 --execute 执行实际同步。\")\n        return\n\n    # 确认执行\n    confirm = input(\"\\n确认执行同步? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n\n    # 执行操作\n    for action, src, tgt in actions:\n        try:\n            tgt.parent.mkdir(parents=True, exist_ok=True)\n            \n            if action == 'copy':\n                shutil.copy2(src, tgt)\n                stats['copied'] += 1\n                print(f\"复制: {src.name}\")\n            elif action == 'update':\n                shutil.copy2(src, tgt)"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Read",
+        "data": "Matching filesystem paths, names, and file status for batch renaming.",
+        "source": "directory argument, defaulting to the current directory",
+        "recipient": "In-memory sorted file list",
+        "condition": "Wildcard patterns use glob; otherwise a compiled regex filters is_file entries. Invalid regex falls back to a contains-style glob. Glob branches do not explicitly restrict results to regular files or skip symlinks.",
+        "evidence": [
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 13,
+            "end_line": 28,
+            "quote": "def get_files(pattern, directory='.'):\n    \"\"\"根据模式获取文件列表\"\"\"\n    path = Path(directory)\n    \n    # 如果模式包含通配符，使用 glob\n    if '*' in pattern or '?' in pattern:\n        return sorted(path.glob(pattern))\n    else:\n        # 尝试作为正则表达式\n        try:\n            regex = re.compile(pattern)\n            return sorted([f for f in path.iterdir() \n                          if f.is_file() and regex.search(f.name)])\n        except re.error:\n            # 如果正则无效，使用简单通配符匹配\n            return sorted(path.glob(f\"*{pattern}*\"))"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 37,
+            "end_line": 39,
+            "quote": "def batch_rename(pattern, directory='.', **kwargs):\n    \"\"\"批量重命名文件\"\"\"\n    files = get_files(pattern, directory)"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Infer",
+        "data": "Proposed replacement filenames and duplicate-target collision findings, derived from old names, optional prefix/suffix, regex substitution, sequence, current date, and case conversion.",
+        "source": "Matched paths, caller rename options, enumeration index, and datetime.now() when add_date is enabled",
+        "recipient": "In-memory operations and collisions collections",
+        "condition": "Only changed names produce operations. Invalid replacement regex aborts planning. Repeated planned target strings produce warnings.",
+        "evidence": [
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 31,
+            "end_line": 34,
+            "quote": "def generate_sequence_name(template, index, padding=3):\n    \"\"\"生成序列号文件名\"\"\"\n    seq_str = str(index).zfill(padding)\n    return template.replace('{n}', seq_str).replace('{N}', seq_str)"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 47,
+            "end_line": 107,
+            "quote": "    for i, file_path in enumerate(files, 1):\n        old_name = file_path.name\n        new_name = old_name\n        \n        # 添加前缀\n        if kwargs.get('prefix'):\n            new_name = kwargs['prefix'] + new_name\n        \n        # 添加后缀\n        if kwargs.get('suffix'):\n            stem = Path(new_name).stem\n            suffix = kwargs['suffix']\n            ext = Path(new_name).suffix\n            new_name = f\"{stem}{suffix}{ext}\"\n        \n        # 正则替换\n        if kwargs.get('replace_pattern') and kwargs.get('replace_with') is not None:\n            try:\n                regex = re.compile(kwargs['replace_pattern'])\n                new_name = regex.sub(kwargs['replace_with'], new_name)\n            except re.error as e:\n                print(f\"正则表达式错误: {e}\")\n                return []\n        \n        # 序列号重命名\n        if kwargs.get('sequence'):\n            template = kwargs.get('sequence_template', 'file_{n}')\n            padding = kwargs.get('padding', 3)\n            ext = file_path.suffix\n            new_name = generate_sequence_name(template, i, padding) + ext\n        \n        # 添加日期\n        if kwargs.get('add_date'):\n            date_str = datetime.now().strftime(kwargs.get('date_format', '%Y%m%d'))\n            stem = Path(new_name).stem\n            ext = Path(new_name).suffix\n            new_name = f\"{stem}_{date_str}{ext}\"\n        \n        # 转换为小写/大写\n        if kwargs.get('lowercase'):\n            new_name = new_name.lower()\n        if kwargs.get('uppercase'):\n            new_name = new_name.upper()\n        \n        if new_name != old_name:\n            operations.append((file_path, file_path.parent / new_name))\n\n    # Check for collisions\n    target_names = [str(new) for _, new in operations]\n    seen = set()\n    collisions = set()\n    for t in target_names:\n        if t in seen:\n            collisions.add(t)\n        seen.add(t)\n    if collisions:\n        print(f\"警告: 检测到 {len(collisions)} 个目标文件名冲突\")\n        for c in collisions:\n            print(f\"  冲突: {c}\")\n\n    return operations"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Save",
+        "data": "Filesystem entries renamed to planned paths in their existing parent directories; the original pathname is removed by the rename.",
+        "source": "Matched old_path entries from the rename plan",
+        "recipient": "file_path.parent / computed new_name",
+        "condition": "--execute and either --no-confirm or a yes response. Existing target paths are skipped. No file-content read is explicit in this operation.",
+        "evidence": [
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 37,
+            "end_line": 39,
+            "quote": "def batch_rename(pattern, directory='.', **kwargs):\n    \"\"\"批量重命名文件\"\"\"\n    files = get_files(pattern, directory)"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 91,
+            "end_line": 92,
+            "quote": "        if new_name != old_name:\n            operations.append((file_path, file_path.parent / new_name))"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 153,
+            "end_line": 156,
+            "quote": "    parser.add_argument('--execute', action='store_true',\n                       help='执行重命名 (默认仅预览)')\n    parser.add_argument('--no-confirm', action='store_true',\n                       help='跳过确认')"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 175,
+            "end_line": 176,
+            "quote": "    # 获取操作列表\n    operations = batch_rename(args.pattern, args.dir, **kwargs)"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 191,
+            "end_line": 212,
+            "quote": "    if not args.execute:\n        print(\"这是一个预览。使用 --execute 来执行实际重命名。\")\n        return\n    \n    # 确认\n    if not args.no_confirm:\n        confirm = input(\"\\n确认执行重命名? (yes/no): \")\n        if confirm.lower() != 'yes':\n            print(\"操作已取消\")\n            return\n    \n    # 执行重命名\n    success = 0\n    failed = 0\n    \n    for old_path, new_path in operations:\n        try:\n            if new_path.exists():\n                print(f\"✗ 跳过 {old_path.name}: 目标文件已存在 {new_path.name}\")\n                failed += 1\n                continue\n            old_path.rename(new_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Read",
+        "data": "Recursive duplicate-scan paths, symlink/file status, sizes, and modification times used by oldest/newest retention selection; optionally a separate list of empty files.",
+        "source": "Caller-supplied deduplication directory",
+        "recipient": "Duplicate scanner and retention-selection functions",
+        "condition": "Encountered symlinks are skipped. Hash candidates must be at least max(1, min_size) bytes and within a truthy max_size bound. --include-empty scans zero-byte files separately; these do not enter automatic hash deduplication.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 18,
+            "end_line": 39,
+            "quote": "def find_duplicates(directory, min_size=1, max_size=None):\n    \"\"\"查找重复文件\"\"\"\n    path = Path(directory)\n    if not path.exists():\n        print(f\"错误: 目录不存在 {directory}\")\n        return {}\n    \n    size_map = defaultdict(list)\n    \n    # 第一步: 按文件大小分组\n    print(\"扫描文件大小...\")\n    for file_path in path.rglob('*'):\n        if file_path.is_symlink():\n            continue\n        if file_path.is_file():\n            try:\n                size = file_path.stat().st_size\n                if size < min_size:\n                    continue\n                if max_size and size > max_size:\n                    continue\n                size_map[size].append(file_path)"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 66,
+            "end_line": 75,
+            "quote": "def select_keep_file(files, strategy='oldest'):\n    \"\"\"根据策略选择保留的文件\"\"\"\n    if strategy == 'oldest':\n        return min(files, key=lambda f: f.stat().st_mtime)\n    elif strategy == 'newest':\n        return max(files, key=lambda f: f.stat().st_mtime)\n    elif strategy == 'shortest':\n        return min(files, key=lambda f: len(str(f)))\n    else:  # default to oldest\n        return min(files, key=lambda f: f.stat().st_mtime)"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 101,
+            "end_line": 117,
+            "quote": "    # 空文件单独扫描报告，不参与哈希去重\n    if args.include_empty:\n        empty_files = [\n            f for f in Path(args.directory).rglob('*')\n            if not f.is_symlink() and f.is_file() and f.stat().st_size == 0\n        ]\n        if empty_files:\n            print(f\"\\n发现 {len(empty_files)} 个空文件 (空文件不参与自动去重操作):\")\n            for ef in empty_files:\n                print(f\"  {ef}\")\n\n    # 查找重复 (min_size 始终 >= 1，空文件不参与哈希去重)\n    duplicates = find_duplicates(\n        args.directory,\n        min_size=max(1, args.min_size),\n        max_size=args.max_size\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Read",
+        "data": "Complete selected file contents streamed in 8192-byte chunks for content hashing.",
+        "source": "Same-size duplicate candidates, and same-size existing source/target file pairs during mirror synchronization",
+        "recipient": "The supplied utils.calculate_hash function and its hash state",
+        "condition": "Deduplication hashes only size groups containing multiple files. Sync hashes both sides only when sizes match. These reads occur during preview/scan-only operation as well. OSError or IOError returns None.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 14,
+            "end_line": 15,
+            "quote": "sys.path.insert(0, str(Path(__file__).resolve().parent))\nfrom utils import calculate_hash"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 43,
+            "end_line": 58,
+            "quote": "    # 只保留大小相同的文件\n    size_map = {k: v for k, v in size_map.items() if len(v) > 1}\n    \n    if not size_map:\n        print(\"未找到大小相同的文件\")\n        return {}\n    \n    # 第二步: 计算哈希找出真正的重复\n    print(\"计算文件哈希...\")\n    hash_map = defaultdict(list)\n    \n    for size, files in size_map.items():\n        for file_path in files:\n            file_hash = calculate_hash(file_path)\n            if file_hash:\n                hash_map[file_hash].append(file_path)"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 12,
+            "end_line": 13,
+            "quote": "sys.path.insert(0, str(Path(__file__).resolve().parent))\nfrom utils import calculate_hash"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 74,
+            "end_line": 88,
+            "quote": "    for rel_path, src_file in source_files.items():\n        tgt_file = target_path / rel_path\n        \n        if rel_path in target_files:\n            # 文件存在，检查是否需要更新\n            src_size = src_file.stat().st_size\n            tgt_size = tgt_file.stat().st_size\n            \n            if src_size != tgt_size:\n                actions.append(('update', src_file, tgt_file))\n            else:\n                # 大小相同，检查哈希\n                src_hash = calculate_hash(src_file)\n                tgt_hash = calculate_hash(tgt_file)\n                if src_hash is None or tgt_hash is None:"
+          },
+          {
+            "path": "scripts/utils.py",
+            "start_line": 7,
+            "end_line": 7,
+            "quote": "def calculate_hash(file_path, algorithm='blake2b', chunk_size=8192):"
+          },
+          {
+            "path": "scripts/utils.py",
+            "start_line": 18,
+            "end_line": 24,
+            "quote": "    try:\n        with open(file_path, 'rb') as f:\n            while chunk := f.read(chunk_size):\n                hasher.update(chunk)\n        return hasher.hexdigest()\n    except (OSError, IOError):\n        return None"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Infer",
+        "data": "Hexadecimal content digests. Supplied callers use the default 32-byte BLAKE2b digest; the helper also supports MD5 and SHA-256 and falls back to BLAKE2b for other algorithm values.",
+        "source": "File bytes read by calculate_hash",
+        "recipient": "Returned digest strings used by duplicate grouping and synchronization comparisons",
+        "condition": "Successful file reading; read errors return None instead of a digest.",
+        "evidence": [
+          {
+            "path": "scripts/utils.py",
+            "start_line": 7,
+            "end_line": 24,
+            "quote": "def calculate_hash(file_path, algorithm='blake2b', chunk_size=8192):\n    \"\"\"计算文件哈希值\"\"\"\n    if algorithm == 'blake2b':\n        hasher = hashlib.blake2b(digest_size=32)\n    elif algorithm == 'md5':\n        hasher = hashlib.md5()\n    elif algorithm == 'sha256':\n        hasher = hashlib.sha256()\n    else:\n        hasher = hashlib.blake2b(digest_size=32)\n\n    try:\n        with open(file_path, 'rb') as f:\n            while chunk := f.read(chunk_size):\n                hasher.update(chunk)\n        return hasher.hexdigest()\n    except (OSError, IOError):\n        return None"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 54,
+            "end_line": 58,
+            "quote": "    for size, files in size_map.items():\n        for file_path in files:\n            file_hash = calculate_hash(file_path)\n            if file_hash:\n                hash_map[file_hash].append(file_path)"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 85,
+            "end_line": 91,
+            "quote": "                # 大小相同，检查哈希\n                src_hash = calculate_hash(src_file)\n                tgt_hash = calculate_hash(tgt_file)\n                if src_hash is None or tgt_hash is None:\n                    stats['skipped'] += 1\n                elif src_hash != tgt_hash:\n                    actions.append(('update', src_file, tgt_file))"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Infer",
+        "data": "Duplicate groups, selected file to retain in each group, duplicate counts, and estimated reclaimable bytes.",
+        "source": "File sizes, content digests, modification times, path lengths, and --keep strategy",
+        "recipient": "In-memory duplicate findings, retention choices, and statistics",
+        "condition": "Only digest groups with multiple files survive. Retention defaults to oldest modification time; newest and shortest stringified path are alternatives.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 54,
+            "end_line": 75,
+            "quote": "    for size, files in size_map.items():\n        for file_path in files:\n            file_hash = calculate_hash(file_path)\n            if file_hash:\n                hash_map[file_hash].append(file_path)\n    \n    # 只保留真正的重复\n    duplicates = {k: v for k, v in hash_map.items() if len(v) > 1}\n    \n    return duplicates\n\n\ndef select_keep_file(files, strategy='oldest'):\n    \"\"\"根据策略选择保留的文件\"\"\"\n    if strategy == 'oldest':\n        return min(files, key=lambda f: f.stat().st_mtime)\n    elif strategy == 'newest':\n        return max(files, key=lambda f: f.stat().st_mtime)\n    elif strategy == 'shortest':\n        return min(files, key=lambda f: len(str(f)))\n    else:  # default to oldest\n        return min(files, key=lambda f: f.stat().st_mtime)"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 123,
+            "end_line": 129,
+            "quote": "    # 统计信息\n    total_groups = len(duplicates)\n    total_duplicates = sum(len(files) - 1 for files in duplicates.values())\n    total_wasted = sum(\n        (len(files) - 1) * files[0].stat().st_size \n        for files in duplicates.values()\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Save",
+        "data": "UTF-8 JSON report containing total_groups, total_duplicates, wasted_bytes, and full digest-to-file-path lists.",
+        "source": "In-memory duplicate findings and statistics",
+        "recipient": "Caller-specified --export path",
+        "condition": "Duplicates must be found, and both --scan-only and --export must be supplied. The path is opened with mode w, replacing existing contents. No retention period is specified.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 113,
+            "end_line": 121,
+            "quote": "    duplicates = find_duplicates(\n        args.directory,\n        min_size=max(1, args.min_size),\n        max_size=args.max_size\n    )\n\n    if not duplicates:\n        print(\"未发现重复文件\")\n        return"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 147,
+            "end_line": 162,
+            "quote": "    if args.scan_only:\n        print(f\"\\n仅扫描模式完成\")\n        if args.export:\n            export_data = {\n                'total_groups': total_groups,\n                'total_duplicates': total_duplicates,\n                'wasted_bytes': total_wasted,\n                'duplicates': {\n                    h: [str(f) for f in files]\n                    for h, files in duplicates.items()\n                }\n            }\n            with open(args.export, 'w', encoding='utf-8') as f:\n                json.dump(export_data, f, ensure_ascii=False, indent=2)\n            print(f\"结果已导出到: {args.export}\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Delete",
+        "data": "Duplicate files other than the selected keep_file, removed using unlink.",
+        "source": "Duplicate groups found under args.directory",
+        "recipient": null,
+        "condition": "Not --scan-only, action delete (the default), and a yes response. One selected file per group is retained; no recycle-bin operation is used by this branch.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 81,
+            "end_line": 86,
+            "quote": "    parser.add_argument('--scan-only', action='store_true', help='仅扫描并显示结果')\n    parser.add_argument('--keep', choices=['oldest', 'newest', 'shortest'], \n                       default='oldest', help='保留策略')\n    # 'link' (hardlink/symlink replacement) is not yet implemented\n    parser.add_argument('--action', choices=['delete', 'move'],\n                       default='delete', help='对重复文件的操作')"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 113,
+            "end_line": 117,
+            "quote": "    duplicates = find_duplicates(\n        args.directory,\n        min_size=max(1, args.min_size),\n        max_size=args.max_size\n    )"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 147,
+            "end_line": 148,
+            "quote": "    if args.scan_only:\n        print(f\"\\n仅扫描模式完成\")"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 162,
+            "end_line": 187,
+            "quote": "        return\n    \n    # 执行操作\n    print(f\"\\n准备执行操作: {args.action} (保留策略: {args.keep})\")\n    confirm = input(\"确认执行? (yes/no): \")\n    \n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n    \n    # 执行清理\n    if args.action == 'move' and args.to:\n        quarantine_path = Path(args.to)\n        quarantine_path.mkdir(parents=True, exist_ok=True)\n    \n    processed = 0\n    for file_hash, files in duplicates.items():\n        keep_file = select_keep_file(files, args.keep)\n        \n        for f in files:\n            if f == keep_file:\n                continue\n            \n            try:\n                if args.action == 'delete':\n                    f.unlink()"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Save",
+        "data": "Quarantine directory and relocated duplicate files, preserving one selected file per group. Relocation removes original pathnames; destination collisions receive numbered suffixes.",
+        "source": "Duplicate files other than keep_file under args.directory",
+        "recipient": "Caller-specified --to directory, using each file's basename or numbered collision alternative",
+        "condition": "--action move requires --to. Not --scan-only, and yes confirmation. No quarantine retention or later purge is specified.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 98,
+            "end_line": 99,
+            "quote": "    if args.action == 'move' and not args.to:\n        parser.error(\"使用 --action move 时必须指定 --to 目标目录\")"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 113,
+            "end_line": 117,
+            "quote": "    duplicates = find_duplicates(\n        args.directory,\n        min_size=max(1, args.min_size),\n        max_size=args.max_size\n    )"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 147,
+            "end_line": 148,
+            "quote": "    if args.scan_only:\n        print(f\"\\n仅扫描模式完成\")"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 162,
+            "end_line": 196,
+            "quote": "        return\n    \n    # 执行操作\n    print(f\"\\n准备执行操作: {args.action} (保留策略: {args.keep})\")\n    confirm = input(\"确认执行? (yes/no): \")\n    \n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n    \n    # 执行清理\n    if args.action == 'move' and args.to:\n        quarantine_path = Path(args.to)\n        quarantine_path.mkdir(parents=True, exist_ok=True)\n    \n    processed = 0\n    for file_hash, files in duplicates.items():\n        keep_file = select_keep_file(files, args.keep)\n        \n        for f in files:\n            if f == keep_file:\n                continue\n            \n            try:\n                if args.action == 'delete':\n                    f.unlink()\n                    print(f\"删除: {f}\")\n                elif args.action == 'move' and args.to:\n                    target = quarantine_path / f.name\n                    counter = 1\n                    while target.exists():\n                        target = quarantine_path / f\"{f.stem}_{counter}{f.suffix}\"\n                        counter += 1\n                    shutil.move(str(f), str(target))\n                    print(f\"移动: {f} → {target}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Read",
+        "data": "Recursive source and target filesystem paths, relative names, symlink/file status, and sizes of corresponding files.",
+        "source": "Caller-supplied mirror source and target directories",
+        "recipient": "In-memory source_files and target_files dictionaries and comparison logic",
+        "condition": "CLI --mirror. Enumeration and size comparison occur during preview. Encountered symlink entries and configured exclusions are omitted.",
+        "evidence": [
+          {
+            "path": "scripts/sync.py",
+            "start_line": 34,
+            "end_line": 64,
+            "quote": "def sync_mirror(source, target, exclude=None, dry_run=True, delete=False):\n    \"\"\"单向镜像同步 (源 → 目标)\"\"\"\n    source_path = Path(source)\n    target_path = Path(target)\n    exclude = exclude or []\n    \n    if not source_path.exists():\n        print(f\"错误: 源目录不存在 {source}\")\n        return\n    \n    target_path.mkdir(parents=True, exist_ok=True)\n    \n    stats = {'copied': 0, 'updated': 0, 'deleted': 0, 'skipped': 0}\n    \n    # 获取源目录文件列表\n    source_files = {}\n    for file_path in source_path.rglob('*'):\n        if file_path.is_symlink():\n            continue\n        if file_path.is_file() and not should_exclude(file_path, exclude, base_path=source_path):\n            rel_path = file_path.relative_to(source_path)\n            source_files[rel_path] = file_path\n\n    # 获取目标目录文件列表\n    target_files = {}\n    for file_path in target_path.rglob('*'):\n        if file_path.is_symlink():\n            continue\n        if file_path.is_file() and not should_exclude(file_path, exclude, base_path=target_path):\n            rel_path = file_path.relative_to(target_path)\n            target_files[rel_path] = file_path"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 74,
+            "end_line": 80,
+            "quote": "    for rel_path, src_file in source_files.items():\n        tgt_file = target_path / rel_path\n        \n        if rel_path in target_files:\n            # 文件存在，检查是否需要更新\n            src_size = src_file.stat().st_size\n            tgt_size = tgt_file.stat().st_size"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 175,
+            "end_line": 179,
+            "quote": "    exclude = [e.strip() for e in args.exclude.split(',') if e.strip()]\n    \n    if args.mirror:\n        sync_mirror(args.source, args.target, exclude, \n                   dry_run=not args.execute, delete=args.delete)"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Infer",
+        "data": "Exclusion decisions and a mirror plan of copy, update, optional delete, or skip decisions.",
+        "source": "Relative path components, filenames, exclusion patterns, source/target presence, file sizes, and content digests",
+        "recipient": "In-memory actions list and skipped statistics",
+        "condition": "Leading-star exclusions use filename suffix matching; other patterns match complete path components. Missing targets are copied; size or digest differences cause updates. Hash failures are skipped. Target-only files are marked for deletion only when delete is enabled.",
+        "evidence": [
+          {
+            "path": "scripts/sync.py",
+            "start_line": 16,
+            "end_line": 31,
+            "quote": "def should_exclude(file_path, exclude_patterns, base_path=None):\n    \"\"\"检查文件是否应该被排除\"\"\"\n    name = file_path.name\n    if base_path is not None:\n        rel = file_path.relative_to(base_path)\n        parts = rel.parts\n    else:\n        parts = file_path.parts\n    for pattern in exclude_patterns:\n        if pattern.startswith('*'):\n            if name.endswith(pattern[1:]):\n                return True\n        else:\n            if pattern in parts:\n                return True\n    return False"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 74,
+            "end_line": 101,
+            "quote": "    for rel_path, src_file in source_files.items():\n        tgt_file = target_path / rel_path\n        \n        if rel_path in target_files:\n            # 文件存在，检查是否需要更新\n            src_size = src_file.stat().st_size\n            tgt_size = tgt_file.stat().st_size\n            \n            if src_size != tgt_size:\n                actions.append(('update', src_file, tgt_file))\n            else:\n                # 大小相同，检查哈希\n                src_hash = calculate_hash(src_file)\n                tgt_hash = calculate_hash(tgt_file)\n                if src_hash is None or tgt_hash is None:\n                    stats['skipped'] += 1\n                elif src_hash != tgt_hash:\n                    actions.append(('update', src_file, tgt_file))\n                else:\n                    stats['skipped'] += 1\n        else:\n            actions.append(('copy', src_file, tgt_file))\n    \n    # 删除目标中多余的文件\n    if delete:\n        for rel_path, tgt_file in target_files.items():\n            if rel_path not in source_files:\n                actions.append(('delete', None, tgt_file))"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Save",
+        "data": "Target directory and any missing parent directories.",
+        "source": null,
+        "recipient": "Caller-supplied synchronization target path",
+        "condition": "Mirror source must exist. mkdir runs before preview handling and confirmation, including when dry_run is true.",
+        "evidence": [
+          {
+            "path": "scripts/sync.py",
+            "start_line": 34,
+            "end_line": 44,
+            "quote": "def sync_mirror(source, target, exclude=None, dry_run=True, delete=False):\n    \"\"\"单向镜像同步 (源 → 目标)\"\"\"\n    source_path = Path(source)\n    target_path = Path(target)\n    exclude = exclude or []\n    \n    if not source_path.exists():\n        print(f\"错误: 源目录不存在 {source}\")\n        return\n    \n    target_path.mkdir(parents=True, exist_ok=True)"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 177,
+            "end_line": 179,
+            "quote": "    if args.mirror:\n        sync_mirror(args.source, args.target, exclude, \n                   dry_run=not args.execute, delete=args.delete)"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Save",
+        "data": "Source file contents and copyable metadata written to matching relative target paths, creating parent directories. Update actions replace existing target contents.",
+        "source": "Included source_files under the synchronization source directory",
+        "recipient": "Synchronization target directory / source-relative path",
+        "condition": "CLI --mirror --execute and yes confirmation. Applies to missing targets or planned updates from size/digest differences. Source files remain in place; no backup history or retention period is specified.",
+        "evidence": [
+          {
+            "path": "scripts/sync.py",
+            "start_line": 74,
+            "end_line": 95,
+            "quote": "    for rel_path, src_file in source_files.items():\n        tgt_file = target_path / rel_path\n        \n        if rel_path in target_files:\n            # 文件存在，检查是否需要更新\n            src_size = src_file.stat().st_size\n            tgt_size = tgt_file.stat().st_size\n            \n            if src_size != tgt_size:\n                actions.append(('update', src_file, tgt_file))\n            else:\n                # 大小相同，检查哈希\n                src_hash = calculate_hash(src_file)\n                tgt_hash = calculate_hash(tgt_file)\n                if src_hash is None or tgt_hash is None:\n                    stats['skipped'] += 1\n                elif src_hash != tgt_hash:\n                    actions.append(('update', src_file, tgt_file))\n                else:\n                    stats['skipped'] += 1\n        else:\n            actions.append(('copy', src_file, tgt_file))"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 118,
+            "end_line": 138,
+            "quote": "    if dry_run:\n        print(\"\\n这是预览模式。使用 --execute 执行实际同步。\")\n        return\n\n    # 确认执行\n    confirm = input(\"\\n确认执行同步? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n\n    # 执行操作\n    for action, src, tgt in actions:\n        try:\n            tgt.parent.mkdir(parents=True, exist_ok=True)\n            \n            if action == 'copy':\n                shutil.copy2(src, tgt)\n                stats['copied'] += 1\n                print(f\"复制: {src.name}\")\n            elif action == 'update':\n                shutil.copy2(src, tgt)"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 177,
+            "end_line": 179,
+            "quote": "    if args.mirror:\n        sync_mirror(args.source, args.target, exclude, \n                   dry_run=not args.execute, delete=args.delete)"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Delete",
+        "data": "Included target files whose relative paths are absent from the included source file set.",
+        "source": "Synchronization target_files entries",
+        "recipient": null,
+        "condition": "CLI --mirror --delete --execute and yes confirmation. Excluded entries and encountered symlink entries are omitted from target_files. Removal uses unlink; no recycle-bin or recovery copy is specified.",
+        "evidence": [
+          {
+            "path": "scripts/sync.py",
+            "start_line": 58,
+            "end_line": 64,
+            "quote": "    target_files = {}\n    for file_path in target_path.rglob('*'):\n        if file_path.is_symlink():\n            continue\n        if file_path.is_file() and not should_exclude(file_path, exclude, base_path=target_path):\n            rel_path = file_path.relative_to(target_path)\n            target_files[rel_path] = file_path"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 97,
+            "end_line": 101,
+            "quote": "    # 删除目标中多余的文件\n    if delete:\n        for rel_path, tgt_file in target_files.items():\n            if rel_path not in source_files:\n                actions.append(('delete', None, tgt_file))"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 118,
+            "end_line": 129,
+            "quote": "    if dry_run:\n        print(\"\\n这是预览模式。使用 --execute 执行实际同步。\")\n        return\n\n    # 确认执行\n    confirm = input(\"\\n确认执行同步? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return\n\n    # 执行操作\n    for action, src, tgt in actions:"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 141,
+            "end_line": 144,
+            "quote": "            elif action == 'delete':\n                tgt.unlink()\n                stats['deleted'] += 1\n                print(f\"删除: {tgt.name}\")"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 177,
+            "end_line": 179,
+            "quote": "    if args.mirror:\n        sync_mirror(args.source, args.target, exclude, \n                   dry_run=not args.execute, delete=args.delete)"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Read",
+        "data": "Interactive confirmation strings, lowercased and compared to yes.",
+        "source": "Standard input",
+        "recipient": "Organization, batch-renaming, duplicate-cleanup, and synchronization execution gates",
+        "condition": "Organization and sync prompt after leaving preview mode. Batch rename can bypass the prompt with --no-confirm. Deduplication prompts after findings unless --scan-only returns first.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 72,
+            "end_line": 79,
+            "quote": "    if dry_run:\n        print(f\"\\n这是一个预览。使用 --execute 来执行实际移动。\")\n        return\n\n    confirm = input(\"\\n确认执行? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 152,
+            "end_line": 159,
+            "quote": "    if dry_run:\n        print(f\"\\n这是一个预览。使用 --execute 来执行实际移动。\")\n        return\n\n    confirm = input(\"\\n确认执行? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 191,
+            "end_line": 200,
+            "quote": "    if not args.execute:\n        print(\"这是一个预览。使用 --execute 来执行实际重命名。\")\n        return\n    \n    # 确认\n    if not args.no_confirm:\n        confirm = input(\"\\n确认执行重命名? (yes/no): \")\n        if confirm.lower() != 'yes':\n            print(\"操作已取消\")\n            return"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 162,
+            "end_line": 170,
+            "quote": "        return\n    \n    # 执行操作\n    print(f\"\\n准备执行操作: {args.action} (保留策略: {args.keep})\")\n    confirm = input(\"确认执行? (yes/no): \")\n    \n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 118,
+            "end_line": 126,
+            "quote": "    if dry_run:\n        print(\"\\n这是预览模式。使用 --execute 执行实际同步。\")\n        return\n\n    # 确认执行\n    confirm = input(\"\\n确认执行同步? (yes/no): \")\n    if confirm.lower() != 'yes':\n        print(\"操作已取消\")\n        return"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Send",
+        "data": "Organization previews containing source directory, category/date groups, counts, sampled relative paths or filenames; type-operation results and errors. Size classification emits an unimplemented message.",
+        "source": "Organization arguments, grouped file paths, and operation outcomes",
+        "recipient": "Standard output",
+        "condition": "Previews appear before modification gates. Type previews show up to five paths per category; date previews show up to three filenames per date group. No network recipient is specified.",
+        "evidence": [
+          {
+            "path": "scripts/organize.py",
+            "start_line": 60,
+            "end_line": 70,
+            "quote": "    # 显示预览\n    print(f\"\\n{'='*50}\")\n    print(f\"文件分类预览 (源目录: {source_dir})\")\n    print(f\"{'='*50}\")\n    \n    for category, files in sorted(files_by_type.items()):\n        print(f\"\\n{category.upper()} ({len(files)} 个文件):\")\n        for f in files[:5]:  # 只显示前5个\n            print(f\"  - {f.relative_to(source_path)}\")\n        if len(files) > 5:\n            print(f\"  ... 还有 {len(files) - 5} 个文件\")"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 93,
+            "end_line": 99,
+            "quote": "                if move:\n                    shutil.move(str(file_path), str(target_path))\n                else:\n                    shutil.copy2(str(file_path), str(target_path))\n                print(f\"{'移动' if move else '复制'}: {file_path.name} → {category}/\")\n            except Exception as e:\n                print(f\"错误: 无法处理 {file_path.name}: {e}\")"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 139,
+            "end_line": 150,
+            "quote": "    # 显示预览\n    print(f\"\\n{'='*50}\")\n    print(f\"按日期分类预览 (格式: {date_format})\")\n    print(f\"{'='*50}\")\n    \n    for date_key in sorted(files_by_date.keys()):\n        files = files_by_date[date_key]\n        print(f\"\\n{date_key}/ ({len(files)} 个文件)\")\n        for f in files[:3]:\n            print(f\"  - {f.name}\")\n        if len(files) > 3:\n            print(f\"  ... 还有 {len(files) - 3} 个文件\")"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 173,
+            "end_line": 178,
+            "quote": "                if move:\n                    shutil.move(str(file_path), str(target_path))\n                else:\n                    shutil.copy2(str(file_path), str(target_path))\n            except Exception as e:\n                print(f\"错误: 无法处理 {file_path.name}: {e}\")"
+          },
+          {
+            "path": "scripts/organize.py",
+            "start_line": 203,
+            "end_line": 204,
+            "quote": "    elif args.by_size:\n        print(\"按大小分类功能开发中...\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Send",
+        "data": "Rename collision paths, proposed old/new basenames, existing-target skips, successful rename pairs, exception details, and success/failure totals.",
+        "source": "Rename operations, collision findings, and execution outcomes",
+        "recipient": "Standard output",
+        "condition": "Proposed names and collision warnings can appear in preview mode; execution results follow the execution gate.",
+        "evidence": [
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 94,
+            "end_line": 105,
+            "quote": "    # Check for collisions\n    target_names = [str(new) for _, new in operations]\n    seen = set()\n    collisions = set()\n    for t in target_names:\n        if t in seen:\n            collisions.add(t)\n        seen.add(t)\n    if collisions:\n        print(f\"警告: 检测到 {len(collisions)} 个目标文件名冲突\")\n        for c in collisions:\n            print(f\"  冲突: {c}\")"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 182,
+            "end_line": 189,
+            "quote": "    # 显示预览\n    print(f\"\\n{'='*60}\")\n    print(f\"重命名预览 (共 {len(operations)} 个文件):\")\n    print(f\"{'='*60}\\n\")\n    \n    for old_path, new_path in operations:\n        print(f\"  {old_path.name}\")\n        print(f\"    → {new_path.name}\\n\")"
+          },
+          {
+            "path": "scripts/batch_rename.py",
+            "start_line": 206,
+            "end_line": 219,
+            "quote": "    for old_path, new_path in operations:\n        try:\n            if new_path.exists():\n                print(f\"✗ 跳过 {old_path.name}: 目标文件已存在 {new_path.name}\")\n                failed += 1\n                continue\n            old_path.rename(new_path)\n            print(f\"✓ {old_path.name} → {new_path.name}\")\n            success += 1\n        except Exception as e:\n            print(f\"✗ {old_path.name}: {e}\")\n            failed += 1\n    \n    print(f\"\\n完成: {success} 成功, {failed} 失败\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Send",
+        "data": "Optional empty-file paths; duplicate-group counts, estimated reclaimable space, first 16 digest characters, file paths, sizes, keep/delete markers; export destination, cleanup paths, errors, and processed count.",
+        "source": "Deduplication filesystem observations, duplicate findings, selected keep_file values, arguments, and operation outcomes",
+        "recipient": "Standard output",
+        "condition": "Findings are printed before scan-only return or cleanup confirmation. Empty-file output requires --include-empty; export and mutation messages require their respective branches.",
+        "evidence": [
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 102,
+            "end_line": 110,
+            "quote": "    if args.include_empty:\n        empty_files = [\n            f for f in Path(args.directory).rglob('*')\n            if not f.is_symlink() and f.is_file() and f.stat().st_size == 0\n        ]\n        if empty_files:\n            print(f\"\\n发现 {len(empty_files)} 个空文件 (空文件不参与自动去重操作):\")\n            for ef in empty_files:\n                print(f\"  {ef}\")"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 123,
+            "end_line": 145,
+            "quote": "    # 统计信息\n    total_groups = len(duplicates)\n    total_duplicates = sum(len(files) - 1 for files in duplicates.values())\n    total_wasted = sum(\n        (len(files) - 1) * files[0].stat().st_size \n        for files in duplicates.values()\n    )\n    \n    print(f\"\\n{'='*60}\")\n    print(f\"扫描结果: {total_groups} 组重复文件\")\n    print(f\"可清理的重复文件数: {total_duplicates}\")\n    print(f\"可释放空间: {total_wasted / (1024*1024):.2f} MB\")\n    print(f\"{'='*60}\")\n    \n    # 显示重复文件详情\n    for i, (file_hash, files) in enumerate(sorted(duplicates.items()), 1):\n        print(f\"\\n组 {i}/{total_groups} (哈希: {file_hash[:16]}...)\")\n        keep_file = select_keep_file(files, args.keep)\n        \n        for f in files:\n            size_mb = f.stat().st_size / (1024 * 1024)\n            marker = \"[保留]\" if f == keep_file else \"[删除]\"\n            print(f\"  {marker} {f} ({size_mb:.2f} MB)\")"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 159,
+            "end_line": 161,
+            "quote": "            with open(args.export, 'w', encoding='utf-8') as f:\n                json.dump(export_data, f, ensure_ascii=False, indent=2)\n            print(f\"结果已导出到: {args.export}\")"
+          },
+          {
+            "path": "scripts/deduplicate.py",
+            "start_line": 178,
+            "end_line": 201,
+            "quote": "    for file_hash, files in duplicates.items():\n        keep_file = select_keep_file(files, args.keep)\n        \n        for f in files:\n            if f == keep_file:\n                continue\n            \n            try:\n                if args.action == 'delete':\n                    f.unlink()\n                    print(f\"删除: {f}\")\n                elif args.action == 'move' and args.to:\n                    target = quarantine_path / f.name\n                    counter = 1\n                    while target.exists():\n                        target = quarantine_path / f\"{f.stem}_{counter}{f.suffix}\"\n                        counter += 1\n                    shutil.move(str(f), str(target))\n                    print(f\"移动: {f} → {target}\")\n                processed += 1\n            except Exception as e:\n                print(f\"错误: 无法处理 {f}: {e}\")\n    \n    print(f\"\\n完成: 处理了 {processed} 个重复文件\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Send",
+        "data": "Synchronization source/target paths, up to 20 planned relative-path actions, action totals, executed file basenames, errors, and copied/updated/deleted/skipped totals. Bidirectional mode prints that it is unimplemented and recommends other tools.",
+        "source": "Synchronization arguments, action plan, and execution statistics",
+        "recipient": "Standard output",
+        "condition": "Mirror previews precede execution confirmation. Bidirectional mode only emits messages in the supplied implementation.",
+        "evidence": [
+          {
+            "path": "scripts/sync.py",
+            "start_line": 66,
+            "end_line": 69,
+            "quote": "    # 显示预览\n    print(f\"\\n{'='*60}\")\n    print(f\"同步预览: {source} → {target}\")\n    print(f\"{'='*60}\\n\")"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 103,
+            "end_line": 116,
+            "quote": "    # 显示操作\n    for action, src, tgt in actions[:20]:\n        if action == 'copy':\n            print(f\"[复制] {src.relative_to(source_path)} → {tgt.relative_to(target_path)}\")\n        elif action == 'update':\n            print(f\"[更新] {tgt.relative_to(target_path)}\")\n        elif action == 'delete':\n            print(f\"[删除] {tgt.relative_to(target_path)}\")\n    \n    if len(actions) > 20:\n        print(f\"... 还有 {len(actions) - 20} 个操作\")\n    \n    print(f\"\\n总计: {len([a for a in actions if a[0] != 'delete'])} 个文件需要同步\")\n    print(f\"       {len([a for a in actions if a[0] == 'delete'])} 个文件将被删除\")"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 129,
+            "end_line": 149,
+            "quote": "    for action, src, tgt in actions:\n        try:\n            tgt.parent.mkdir(parents=True, exist_ok=True)\n            \n            if action == 'copy':\n                shutil.copy2(src, tgt)\n                stats['copied'] += 1\n                print(f\"复制: {src.name}\")\n            elif action == 'update':\n                shutil.copy2(src, tgt)\n                stats['updated'] += 1\n                print(f\"更新: {tgt.name}\")\n            elif action == 'delete':\n                tgt.unlink()\n                stats['deleted'] += 1\n                print(f\"删除: {tgt.name}\")\n        except Exception as e:\n            print(f\"错误: {e}\")\n    \n    print(f\"\\n同步完成: {stats['copied']} 复制, {stats['updated']} 更新, \"\n          f\"{stats['deleted']} 删除, {stats['skipped']} 跳过\")"
+          },
+          {
+            "path": "scripts/sync.py",
+            "start_line": 152,
+            "end_line": 155,
+            "quote": "def sync_bidirectional(dir1, dir2, exclude=None, dry_run=True):\n    \"\"\"双向同步\"\"\"\n    print(\"双向同步功能开发中...\")\n    print(\"建议使用 rsync 或其他专业工具进行双向同步\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Read",
+        "data": "Files examined for duplicate, expired, or large-file cleanup, as specified by the instruction-level cleanup workflow.",
+        "source": null,
+        "recipient": "Cleanup workflow",
+        "condition": "Instruction-only workflow; exact roots, expiry criteria, and large-file criteria are unspecified. Supplied code implements duplicate scanning but provides no expired-file or large-file cleanup scanner.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 102,
+            "end_line": 104,
+            "quote": "### 清理工作流\n1. 扫描重复/过期/大文件\n2. 生成报告并预览"
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Save",
+        "data": "Cleanup-selected files relocated to a recycle bin or isolation area.",
+        "source": "Files selected by the documented cleanup workflow; exact paths unspecified",
+        "recipient": "Recycle bin or isolation area; exact destination unspecified",
+        "condition": "Instruction-only alternative after report/preview and user confirmation or automatic handling. The supplied code implements a configurable quarantine move, but no recycle-bin mechanism or retention policy.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 102,
+            "end_line": 106,
+            "quote": "### 清理工作流\n1. 扫描重复/过期/大文件\n2. 生成报告并预览\n3. 用户确认或自动处理\n4. 移动到回收站/隔离区/直接删除"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Delete",
+        "data": "Cleanup-selected duplicate, expired, or large files directly deleted under the documented workflow.",
+        "source": "Files selected by the documented cleanup workflow; exact paths unspecified",
+        "recipient": null,
+        "condition": "Instruction-only alternative after report/preview and user confirmation or automatic handling. Supplied deletion code covers duplicate files; expired/large-file selection and deletion are not implemented separately.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 102,
+            "end_line": 106,
+            "quote": "### 清理工作流\n1. 扫描重复/过期/大文件\n2. 生成报告并预览\n3. 用户确认或自动处理\n4. 移动到回收站/隔离区/直接删除"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Save",
+        "data": "Suggested hourly scheduler configuration invoking organize.py on ~/Downloads with --by-type --execute --move.",
+        "source": "Best-practices schedule example",
+        "recipient": "User's crontab on Linux/Mac or Task Scheduler on Windows",
+        "condition": "Optional instruction to add a scheduled job; no scheduler-installation code is supplied. Resolution of the unqualified organize.py command depends on execution context.",
+        "evidence": [
+          {
+            "path": "references/best_practices.md",
+            "start_line": 66,
+            "end_line": 71,
+            "quote": "### 下载文件夹自动整理\n```bash\n# 添加到 crontab (Linux/Mac) 或任务计划程序 (Windows)\n# 每小时整理下载文件夹\n0 * * * * python organize.py ~/Downloads --by-type --execute --move\n```"
+          }
+        ]
+      }
+    ]
+  }
+}

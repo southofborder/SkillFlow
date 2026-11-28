@@ -1,0 +1,458 @@
+{
+  "status": "completed",
+  "declared_purpose": "Query and manage GitHub repositories: list, inspect, search, check CI, view commits, and create issues and repositories (SKILL.md:18-30). The registered implementation also supports creating pull requests (index.js:123-137). Documentation requires a PAT and offers environment or configuration credentials; response projections, caching, and default repository visibility are implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Read local credentials and prepare authentication headers",
+      "source": "api.js:getAuthHeaders",
+      "data_scope": "GITHUB_TOKEN, falling back to context.config.github.token; static Accept and User-Agent headers.",
+      "recipient_or_storage": "Transient header object returned to the calling function.",
+      "condition": "When getAuthHeaders is called; Authorization is omitted when neither token source exists. This helper itself performs no network request.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 23,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "operation": "Disclose authentication credentials to GitHub",
+      "source": "api.js fetch callers",
+      "data_scope": "Configured PAT in the Authorization header, alongside each request's endpoint and parameters.",
+      "recipient_or_storage": "https://api.github.com",
+      "condition": "Each API request sends the selected token when available. Main handlers delegate to these API functions.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 17,
+          "end_line": 17
+        },
+        {
+          "path": "api.js",
+          "start_line": 55,
+          "end_line": 57
+        },
+        {
+          "path": "api.js",
+          "start_line": 69,
+          "end_line": 70
+        },
+        {
+          "path": "api.js",
+          "start_line": 177,
+          "end_line": 186
+        },
+        {
+          "path": "index.js",
+          "start_line": 16,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "operation": "Document optional local credential persistence",
+      "source": "SKILL.md setup instructions",
+      "data_scope": "GitHub PAT and username.",
+      "recipient_or_storage": "~/.openclaw/openclaw.json under github.token and github.username, if the user follows Option B.",
+      "condition": "User-selected setup alternative to environment variables. The packaged runtime receives configuration through context; it does not itself write this file.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 55,
+          "end_line": 77
+        },
+        {
+          "path": "api.js",
+          "start_line": 33,
+          "end_line": 36
+        },
+        {
+          "path": "api.js",
+          "start_line": 48,
+          "end_line": 51
+        }
+      ]
+    },
+    {
+      "operation": "Resolve account identity and cache the returned login",
+      "source": "api.js:getUsername",
+      "data_scope": "Locally configured username; otherwise the /user JSON response, from which only data.login is retained.",
+      "recipient_or_storage": "Username returned to the calling API function; fallback request goes to GitHub /user; login persists in module-level process memory as cachedUser.",
+      "condition": "Environment username takes precedence over configuration. With neither configured, /user is requested only when cachedUser is falsy. Listing, activity, issue creation, repository creation, search, and PR creation invoke this resolver; get_repo and check_ci_status do not.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 18,
+          "end_line": 19
+        },
+        {
+          "path": "api.js",
+          "start_line": 43,
+          "end_line": 62
+        },
+        {
+          "path": "api.js",
+          "start_line": 66,
+          "end_line": 67
+        },
+        {
+          "path": "api.js",
+          "start_line": 144,
+          "end_line": 145
+        },
+        {
+          "path": "api.js",
+          "start_line": 171,
+          "end_line": 172
+        },
+        {
+          "path": "api.js",
+          "start_line": 202,
+          "end_line": 203
+        },
+        {
+          "path": "api.js",
+          "start_line": 239,
+          "end_line": 240
+        },
+        {
+          "path": "api.js",
+          "start_line": 270,
+          "end_line": 271
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve, locally filter, and return repository listings",
+      "source": "api.js:listRepos",
+      "data_scope": "Username, type, sort, direction and limit sent to GitHub; returned repository objects parsed locally. Optional language filtering is local.",
+      "recipient_or_storage": "GitHub /users/{username}/repos receives request parameters; the invoking caller receives total and unprojected matching repository objects.",
+      "condition": "list_repos invocation; defaults are owner, updated, descending and 30. Results are sliced to limit after filtering.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 66,
+          "end_line": 86
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve and project repository details",
+      "source": "api.js:getRepo",
+      "data_scope": "Owner and repository name; returned name, description, counts, language, timestamps, URL, default branch and private flag.",
+      "recipient_or_storage": "GitHub /repos/{owner}/{repo}; selected response fields return to the invoking caller.",
+      "condition": "get_repo invocation. The response is parsed locally and projected before return.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 90,
+          "end_line": 114
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve and project CI status",
+      "source": "api.js:checkCIStatus",
+      "data_scope": "Owner and repository name; workflow name, status, conclusion, branch, abbreviated commit identifier, timestamp and URL.",
+      "recipient_or_storage": "GitHub /repos/{owner}/{repo}/actions/runs?per_page=5; projected runs return to the invoking caller.",
+      "condition": "check_ci_status invocation. Requesting five runs is an implementation choice.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 118,
+          "end_line": 140
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve and project recent commits",
+      "source": "api.js:getRecentActivity",
+      "data_scope": "Resolved username, repository and limit; returned abbreviated SHA, first message line, author name, author date and commit URL.",
+      "recipient_or_storage": "GitHub /repos/{username}/{repo}/commits; projected commits return to the invoking caller.",
+      "condition": "get_recent_activity with a repository; default limit is 10. Username resolution precedes validation of the repository argument.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 144,
+          "end_line": 167
+        }
+      ]
+    },
+    {
+      "operation": "Search repositories and construct result attributes",
+      "source": "api.js:searchRepos",
+      "data_scope": "Encoded search query, username qualifier, sort and limit; selected repository fields. forks=0, updated='' and private=false are hardcoded rather than derived from returned attributes.",
+      "recipient_or_storage": "GitHub /search/repositories receives the query; constructed results return to the invoking caller.",
+      "condition": "search_repos with a nonempty query; default sort is updated and limit is 30. Username resolution occurs before query validation.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 239,
+          "end_line": 266
+        }
+      ]
+    },
+    {
+      "operation": "Submit an issue for remote creation",
+      "source": "api.js:createIssue",
+      "data_scope": "Resolved username and repository in the URL; title, body and every enumerable property of args.extra in the JSON payload. extra can override title or body.",
+      "recipient_or_storage": "GitHub POST /repos/{username}/{repo}/issues; returned issue number, title, URL and state go to the invoking caller.",
+      "condition": "create_issue with a title. Body defaults to an empty string. The registered action explicitly exposes optional extra; username resolution precedes title validation.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 171,
+          "end_line": 198
+        },
+        {
+          "path": "index.js",
+          "start_line": 95,
+          "end_line": 107
+        }
+      ]
+    },
+    {
+      "operation": "Submit repository metadata and visibility for remote creation",
+      "source": "api.js:createRepo",
+      "data_scope": "Repository name, description, private and auto_init. Defaults request private=false and auto_init=true.",
+      "recipient_or_storage": "GitHub POST /user/repos; selected created-repository metadata returns to the invoking caller. Actual GitHub persistence and access behavior are external.",
+      "condition": "create_repo with a name. Username resolution runs first although its result is unused in the creation request.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 202,
+          "end_line": 235
+        },
+        {
+          "path": "index.js",
+          "start_line": 109,
+          "end_line": 121
+        }
+      ]
+    },
+    {
+      "operation": "Submit a pull request for remote creation",
+      "source": "api.js:createPullRequest",
+      "data_scope": "Owner and repository in the URL; title, body, head and base in JSON. Base defaults to main.",
+      "recipient_or_storage": "GitHub POST /repos/{prOwner}/{repo}/pulls; number, title, URL, state and branch references return to the invoking caller.",
+      "condition": "API helper requires a resolved owner, repository, title and head. The registered action requires owner, while the helper permits a username fallback. Username resolution happens even when owner is supplied.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 270,
+          "end_line": 302
+        },
+        {
+          "path": "index.js",
+          "start_line": 123,
+          "end_line": 137
+        }
+      ]
+    },
+    {
+      "operation": "Return remote error messages to the caller",
+      "source": "api.js creation error branches",
+      "data_scope": "GitHub error.message, falling back to HTTP status, for failed issue, repository or PR creation.",
+      "recipient_or_storage": "Thrown Error delivered to the invoking caller; no runtime logging or durable storage is shown.",
+      "condition": "A creation response is not successful. The contents of external error messages are unspecified by the package.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 187,
+          "end_line": 190
+        },
+        {
+          "path": "api.js",
+          "start_line": 219,
+          "end_line": 222
+        },
+        {
+          "path": "api.js",
+          "start_line": 289,
+          "end_line": 292
+        }
+      ]
+    },
+    {
+      "operation": "Run separate authenticated integration-test reads",
+      "source": "test.js:githubAPI and tests",
+      "data_scope": "GITHUB_TOKEN sent with /user and hardcoded fixture repository, workflow, search and commit requests. Authentication compares returned login against GITHUB_USERNAME locally.",
+      "recipient_or_storage": "https://api.github.com; responses remain with the test process except for selected console output.",
+      "condition": "When test.js is executed directly; runTests executes at file load and continues after individual test failures. Repository creation is explicitly skipped. package.json contains duplicate test scripts, with the later entry specifying node index.js.",
+      "evidence": [
+        {
+          "path": "test.js",
+          "start_line": 7,
+          "end_line": 23
+        },
+        {
+          "path": "test.js",
+          "start_line": 26,
+          "end_line": 116
+        },
+        {
+          "path": "test.js",
+          "start_line": 126,
+          "end_line": 142
+        },
+        {
+          "path": "test.js",
+          "start_line": 156,
+          "end_line": 156
+        },
+        {
+          "path": "package.json",
+          "start_line": 6,
+          "end_line": 8
+        },
+        {
+          "path": "package.json",
+          "start_line": 20,
+          "end_line": 22
+        }
+      ]
+    },
+    {
+      "operation": "Print selected test data and failures",
+      "source": "test.js console output",
+      "data_scope": "Repository counts, fixture repository name and stars, workflow name, search count, abbreviated commit SHA and first message line. Authentication mismatch errors contain expected and returned usernames.",
+      "recipient_or_storage": "Test process stdout. Subsequent capture or persistence is outside the supplied source.",
+      "condition": "Corresponding test reaches its log statement or throws an error caught by runTests.",
+      "evidence": [
+        {
+          "path": "test.js",
+          "start_line": 40,
+          "end_line": 42
+        },
+        {
+          "path": "test.js",
+          "start_line": 56,
+          "end_line": 56
+        },
+        {
+          "path": "test.js",
+          "start_line": 69,
+          "end_line": 69
+        },
+        {
+          "path": "test.js",
+          "start_line": 79,
+          "end_line": 79
+        },
+        {
+          "path": "test.js",
+          "start_line": 92,
+          "end_line": 92
+        },
+        {
+          "path": "test.js",
+          "start_line": 105,
+          "end_line": 105
+        },
+        {
+          "path": "test.js",
+          "start_line": 138,
+          "end_line": 140
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "An additional authenticated /user request, its parsed response and cached login, although the target operation does not use the resolved username.",
+      "recipient_or_storage": "GitHub /user receives an additional authenticated request; its response enters local memory and login enters module-level cachedUser.",
+      "condition": "No configured username and no truthy cachedUser, when create_repo runs or create_pull_request has an explicit owner.",
+      "purpose_basis": "Repository creation uses /user/repos without username. PR creation already has its target owner, which the registered action requires.",
+      "necessary_behavior": "Perform the requested creation POST with authentication. The preliminary identity request is redundant on these paths.",
+      "proposed_reduction": "Remove getUsername from createRepo; resolve username in createPullRequest only when owner is absent.",
+      "preservation_conditions": "Keep authentication and creation payloads unchanged. Preserve the API helper's owner fallback where that fallback is reachable.",
+      "evidence": [
+        {
+          "path": "api.js",
+          "start_line": 43,
+          "end_line": 62
+        },
+        {
+          "path": "api.js",
+          "start_line": 202,
+          "end_line": 218
+        },
+        {
+          "path": "api.js",
+          "start_line": 270,
+          "end_line": 288
+        },
+        {
+          "path": "index.js",
+          "start_line": 128,
+          "end_line": 135
+        }
+      ]
+    },
+    {
+      "data_scope": "Any repository-response fields beyond those needed for the listing or declared Repository result contract.",
+      "recipient_or_storage": "The list_repos return boundary from the API component to its invoking caller; no further recipient is established.",
+      "condition": "GitHub repository objects contain fields unnecessary to the caller's listing. listRepos returns matching objects without field projection; actual extra fields are unspecified.",
+      "purpose_basis": "The declared capability is repository listing with filters; types.d.ts describes a bounded Repository result.",
+      "necessary_behavior": "Fetch and filter repositories, then return the requested listing. This concerns extra data in a required result, rather than a redundant request.",
+      "proposed_reduction": "Project a defined set of repository fields before returning results.",
+      "preservation_conditions": "Retain fields needed by supported callers, filtering and the result contract; check caller dependencies before removing additional fields.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 24,
+          "end_line": 25
+        },
+        {
+          "path": "api.js",
+          "start_line": 74,
+          "end_line": 85
+        },
+        {
+          "path": "types.d.ts",
+          "start_line": 13,
+          "end_line": 28
+        },
+        {
+          "path": "types.d.ts",
+          "start_line": 103,
+          "end_line": 106
+        }
+      ]
+    },
+    {
+      "data_scope": "Created repository metadata under an implicitly selected non-private visibility setting.",
+      "recipient_or_storage": "GitHub /user/repos receives private=false; any resulting audience or durable exposure depends on GitHub behavior outside the source.",
+      "condition": "The caller omits private. Both the registered schema and API helper default it to false.",
+      "purpose_basis": "Creating a repository is declared; making it non-private is an implementation default rather than a requirement of that purpose.",
+      "necessary_behavior": "Create the repository with the caller's intended visibility.",
+      "proposed_reduction": "Require an explicit visibility choice when none was supplied, or use a private default where compatible with the intended workflow.",
+      "preservation_conditions": "Preserve explicitly requested public repositories and verify that credentials support the chosen visibility. Actual external access controls remain unresolved.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 28,
+          "end_line": 28
+        },
+        {
+          "path": "index.js",
+          "start_line": 114,
+          "end_line": 119
+        },
+        {
+          "path": "api.js",
+          "start_line": 204,
+          "end_line": 218
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "OpenClaw is not supplied. Its credential-file loading, enforcement of SKILL.md requirements, argument validation, and handling or retention of returns and errors are unknown. Requirement enforcement may prevent the missing-username fallback from being reached.",
+    "GitHub response schemas, authorization requirements, logging, retention, creation persistence, audiences and deletion behavior are outside the source. Exact extra fields in /user and repository responses cannot be established.",
+    "No invocation inputs, actual token scopes or caller field dependencies are supplied. Whether optional issue extra fields, selected limits or returned repository fields exceed a particular request remains unresolved.",
+    "cachedUser is module-global, with no explicit expiry, credential key or clearing operation. Process lifetime and whether multiple users share a module instance are unknown.",
+    "The supplied package shows no deletion workflow. External deletion and retention of created objects, API records, credentials and captured stdout remain unresolved; these limits do not prevent completion of the supplied-source audit."
+  ]
+}

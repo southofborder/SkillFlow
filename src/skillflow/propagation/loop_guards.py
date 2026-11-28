@@ -63,6 +63,29 @@ def guard_values(data, identities, predicate, *, traversal_exit=True, selector=N
     return truths or {False, True}
 
 
+def _admitted_outcomes(producer, spec, record, data):
+    """A missing case excludes an edge only when its entry guard rules it out."""
+    from skillflow.propagation.selectors import literal_choice, selector_outcomes
+    bindings = {(row["location"]["kind"], row["location"]["name"]): row["data_ids"]
+                for row in record["entry_state"]["bindings"]}
+    groups = {group["group"] for group in spec.get("outcome_bindings", [])}
+    possible = set()
+    for event in spec["events"]:
+        case = event.get("case")
+        if not case or case["group"] not in groups:
+            continue
+        guard = case.get("guard")
+        if guard is not None:
+            operand = producer["inputs"][guard["input_index"]]
+            if operand["type"] == "literal" and literal_choice(operand.get("literal_value"), guard) != guard["outcome"]:
+                continue
+            ids = bindings.get(("result", operand.get("identifier"))) if operand["type"] == "result" else None
+            if ids and not any(guard["outcome"] in selector_outcomes(data, identity, guard) for identity in ids):
+                continue
+        possible.add(case["disposition"])
+    return possible
+
+
 def admitted_instructions(cfg, annotation, records, data):
     """Recompute pruning from compiled guards and recorded actual operands.
 
@@ -86,6 +109,15 @@ def admitted_instructions(cfg, annotation, records, data):
             spec = annotation["ir_semantics"].get(identity)
             if spec is None:
                 continue
+            dispatch = instruction.get("metadata", {}).get("outcome_dispatch")
+            if dispatch is not None:
+                producer = body["instructions"][-2]
+                previous = records.get(dispatch["producer"])
+                if previous is not None:
+                    previous = previous.model_dump(mode="json") if hasattr(previous, "model_dump") else previous
+                    origin = annotation["ir_semantics"][producer["id"]]
+                    admitted = _admitted_outcomes(producer, origin, previous, data)
+                    outgoing[block] &= {dispatch["on_" + disposition] for disposition in admitted}
             for event_index, event in enumerate(spec["events"]):
                 if event.get("kind") == "for_each":
                     continue

@@ -1,0 +1,246 @@
+{
+  "status": "completed",
+  "declared_purpose": "FreeRide configures OpenClaw to use ranked free OpenRouter models with fallbacks, preserving unrelated configuration. Optional live rotation and a watcher support recovery from failures. The entry document requires an OpenRouter credential and declares local configuration, cache and watcher-state writes; attribution headers, credential display and detailed logging are implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Read credentials locally",
+      "source": "Shared main.py credential loader used by the CLI and watcher",
+      "data_scope": "One or multiple OPENROUTER_API_KEY credentials; the complete OpenClaw configuration is parsed when the environment value is absent.",
+      "recipient_or_storage": "Calling process memory; no remote disclosure occurs in this loader.",
+      "condition": "Credential-dependent commands and probes; the environment takes precedence over env.OPENROUTER_API_KEY in ~/.openclaw/openclaw.json.",
+      "evidence": [
+        {"path": "main.py", "start_line": 81, "end_line": 123},
+        {"path": "watcher.py", "start_line": 23, "end_line": 30}
+      ]
+    },
+    {
+      "operation": "Instruct credential display and optional persistence",
+      "source": "Skill prerequisites",
+      "data_scope": "The complete OPENROUTER_API_KEY environment value; optionally the supplied credential for persistent configuration.",
+      "recipient_or_storage": "The echo command's stdout and its caller; optional env.OPENROUTER_API_KEY configuration through the external openclaw command.",
+      "condition": "Following the prerequisite before any FreeRide command; persistence is offered as an option. External command implementation is not supplied.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 24, "end_line": 33},
+        {"path": "main.py", "start_line": 108, "end_line": 113}
+      ]
+    },
+    {
+      "operation": "Fetch the model catalog with authentication and application attribution",
+      "source": "main.py fetch_all_models and shared request headers",
+      "data_scope": "Bearer credential, static repository attribution and application title; the response supplies model records. No conversation content is included in this GET.",
+      "recipient_or_storage": "https://openrouter.ai/api/v1/models; returned records initially remain in caller memory. The repository URL is a header value, not a separate request recipient.",
+      "condition": "A catalog refresh is required or forced and a non-cooling credential is available. Credentials are retried after 401/429; network failures also advance to another key.",
+      "evidence": [
+        {"path": "main.py", "start_line": 25, "end_line": 44},
+        {"path": "main.py", "start_line": 126, "end_line": 157},
+        {"path": "main.py", "start_line": 282, "end_line": 295}
+      ]
+    },
+    {
+      "operation": "Filter models and infer ranking scores",
+      "source": "main.py model filtering and ranking",
+      "data_scope": "API model IDs, output modalities, pricing, context length, supported parameters, creation time and provider identity; derived _score values concern models, not people.",
+      "recipient_or_storage": "Local process memory, followed by the model cache.",
+      "condition": "A fresh catalog is processed; free text-output models are retained and ranked.",
+      "evidence": [
+        {"path": "main.py", "start_line": 160, "end_line": 253},
+        {"path": "main.py", "start_line": 289, "end_line": 295}
+      ]
+    },
+    {
+      "operation": "Read and persist ranked model records",
+      "source": "main.py cache functions",
+      "data_scope": "Complete retained API model objects, derived _score values and a local cached_at timestamp.",
+      "recipient_or_storage": "~/.openclaw/.freeride-cache.json",
+      "condition": "Nonempty fresh results overwrite the cache. Non-forced lookups can reuse it for six hours. Expiration rejects reuse; it does not delete the file.",
+      "evidence": [
+        {"path": "main.py", "start_line": 27, "end_line": 29},
+        {"path": "main.py", "start_line": 244, "end_line": 295}
+      ]
+    },
+    {
+      "operation": "Read and rewrite OpenClaw configuration",
+      "source": "main.py configuration helpers and configuration-changing commands",
+      "data_scope": "The whole existing JSON document is read and serialized locally. Normal changes set primary/fallback model IDs and allowlist entries. Explicit --setup-auth can additionally create auth.profiles.openrouter:default containing provider and mode, without copying a credential into that profile.",
+      "recipient_or_storage": "~/.openclaw/openclaw.json",
+      "condition": "Successful auto, switch, fallbacks or rotation paths. Existing allowlist entries are retained. Optional auth-profile creation extends beyond the entry document's advertised model-key-only changes.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 75, "end_line": 85},
+        {"path": "main.py", "start_line": 298, "end_line": 312},
+        {"path": "main.py", "start_line": 381, "end_line": 464},
+        {"path": "main.py", "start_line": 740, "end_line": 781},
+        {"path": "main.py", "start_line": 900, "end_line": 913},
+        {"path": "main.py", "start_line": 955, "end_line": 972}
+      ]
+    },
+    {
+      "operation": "Display local configuration and credential fragments",
+      "source": "main.py cmd_status",
+      "data_scope": "Credential count and, for sufficiently long keys, the first eight and last four characters; auth-profile presence, selected models, cache count/age and the configuration path.",
+      "recipient_or_storage": "Stdout and the invoking caller, potentially a terminal or agent tool return. Further transmission or retention is not established.",
+      "condition": "freeride status; this handler makes no HTTP request.",
+      "evidence": [
+        {"path": "main.py", "start_line": 664, "end_line": 725}
+      ]
+    },
+    {
+      "operation": "Send synthetic health probes",
+      "source": "main.py _test_model, invoked by rotate and watcher checks",
+      "data_scope": "Bearer credential, application-attribution headers, target model ID and a fixed synthetic greeting, with max_tokens set to five. Successful generated content is not read or saved; error fields may be parsed.",
+      "recipient_or_storage": "https://openrouter.ai/api/v1/chat/completions; downstream provider handling is undocumented in the supplied source.",
+      "condition": "rotate tests the current primary unless forced, then tests candidates when rebuilding. The watcher probes once or repeatedly, defaulting to 60 seconds with a 15-second minimum. Credential retries occur on 401/429.",
+      "evidence": [
+        {"path": "main.py", "start_line": 25, "end_line": 44},
+        {"path": "main.py", "start_line": 791, "end_line": 837},
+        {"path": "main.py", "start_line": 840, "end_line": 895},
+        {"path": "watcher.py", "start_line": 33, "end_line": 35},
+        {"path": "watcher.py", "start_line": 66, "end_line": 127},
+        {"path": "watcher.py", "start_line": 132, "end_line": 137}
+      ]
+    },
+    {
+      "operation": "Infer and temporarily retain credential and model health",
+      "source": "main.py request-status handling and watcher rotation logic",
+      "data_scope": "Credential-to-failure timestamps for 401/429, model success/failure codes and rotation reasons.",
+      "recipient_or_storage": "Process memory; a successful watcher rotation also persists its last reason in watcher state.",
+      "condition": "Relevant request outcomes. Credential cooldown entries are removed lazily when checked after 120 seconds; no credential cooldown file is written.",
+      "evidence": [
+        {"path": "main.py", "start_line": 46, "end_line": 64},
+        {"path": "main.py", "start_line": 142, "end_line": 149},
+        {"path": "main.py", "start_line": 817, "end_line": 837},
+        {"path": "watcher.py", "start_line": 59, "end_line": 92}
+      ]
+    },
+    {
+      "operation": "Read, persist and display bounded watcher state",
+      "source": "watcher.py state helpers and status handler",
+      "data_scope": "Rotation count, last successful rotation timestamp and last reason; this is last-event state rather than a growing event history.",
+      "recipient_or_storage": "~/.openclaw/.freeride-watcher-state.json, temporarily its .json.tmp sibling during replacement, and stdout for --status.",
+      "condition": "State is read on watcher startup, one-shot checks or status inspection. Successful rotations update it through temporary-file replacement.",
+      "evidence": [
+        {"path": "watcher.py", "start_line": 33, "end_line": 63},
+        {"path": "watcher.py", "start_line": 66, "end_line": 92},
+        {"path": "watcher.py", "start_line": 140, "end_line": 147}
+      ]
+    },
+    {
+      "operation": "Emit watcher diagnostics and optionally persist them",
+      "source": "watcher.py output and the documented background command",
+      "data_scope": "Startup credential count, interval, model IDs, timestamped healthy/failed checks, rotation diagnostics and exception text.",
+      "recipient_or_storage": "Normally stdout/stderr and their caller; the documented nohup invocation redirects both to ~/.openclaw/freeride-watcher.log.",
+      "condition": "The watcher emits output during execution. File persistence occurs only when the documented redirection or another output collector is used; no log-size or retention control is supplied.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 94, "end_line": 106},
+        {"path": "watcher.py", "start_line": 66, "end_line": 127},
+        {"path": "main.py", "start_line": 857, "end_line": 918}
+      ]
+    },
+    {
+      "operation": "Delete watcher state",
+      "source": "watcher.py clear_state and argument dispatch",
+      "data_scope": "The watcher-state file only.",
+      "recipient_or_storage": "~/.openclaw/.freeride-watcher-state.json is unlinked; cache, configuration and logs are not covered by this operation.",
+      "condition": "--clear is selected without --status taking precedence. Secure erasure and deletion of copies are not established.",
+      "evidence": [
+        {"path": "watcher.py", "start_line": 150, "end_line": 155},
+        {"path": "watcher.py", "start_line": 163, "end_line": 180}
+      ]
+    },
+    {
+      "operation": "Declare remotely hosted documentation images",
+      "source": "README.md badge markup",
+      "data_scope": "Badge resource paths; actual request metadata and any viewer linkage depend on the renderer.",
+      "recipient_or_storage": "Referenced image hosts are api.clawhub-badge.xyz and img.shields.io; a renderer may instead fetch through a proxy.",
+      "condition": "Only if a documentation renderer retrieves embedded images. No corresponding CLI or watcher request is implemented.",
+      "evidence": [
+        {"path": "README.md", "start_line": 5, "end_line": 11}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "The complete OPENROUTER_API_KEY environment value.",
+      "recipient_or_storage": "Prerequisite command stdout and its terminal or agent caller.",
+      "condition": "The entry document's echo-based credential check is followed.",
+      "purpose_basis": "The explicit requirement is to establish that a credential is configured; displaying its value is unnecessary.",
+      "necessary_behavior": "Check for a nonempty credential without revealing it.",
+      "proposed_reduction": "Replace echo with a presence check that prints only a configured/not-configured result.",
+      "preservation_conditions": "Preserve missing-credential guidance and the supported credential sources; no remote validation is needed merely to check presence.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 4, "end_line": 8},
+        {"path": "SKILL.md", "start_line": 26, "end_line": 33},
+        {"path": "main.py", "start_line": 98, "end_line": 117}
+      ]
+    },
+    {
+      "data_scope": "First-eight and last-four credential characters for each sufficiently long configured key.",
+      "recipient_or_storage": "freeride status stdout and its caller.",
+      "condition": "Status is requested with configured credentials.",
+      "purpose_basis": "Configuration status and multiple-key visibility require presence/count information; secret-derived identifiers are an implementation choice.",
+      "necessary_behavior": "Report whether credentials exist and how many are configured.",
+      "proposed_reduction": "Use ordinal or user-assigned labels instead of credential substrings.",
+      "preservation_conditions": "Retain key count and individual labels where users need to distinguish configured entries. This narrows status output rather than removing the status action.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 68, "end_line": 68},
+        {"path": "main.py", "start_line": 674, "end_line": 688}
+      ]
+    },
+    {
+      "data_scope": "Static repository identity and application title attached to authenticated catalog and probe traffic.",
+      "recipient_or_storage": "OpenRouter through HTTP-Referer and X-Title on /api/v1/models and /api/v1/chat/completions.",
+      "condition": "Any implemented OpenRouter HTTP request.",
+      "purpose_basis": "The source explicitly adds these headers for application attribution. Ranking, configuration and availability testing do not depend on attribution in the supplied implementation.",
+      "necessary_behavior": "Fetch model records and send authenticated synthetic probes.",
+      "proposed_reduction": "Omit attribution headers by default or make them opt-in.",
+      "preservation_conditions": "Keep authentication, endpoint selection and required request bodies. Confirm external API acceptance because server-side header requirements are not supplied. This removes extra metadata from required requests, not the requests themselves.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 20, "end_line": 22},
+        {"path": "main.py", "start_line": 31, "end_line": 44},
+        {"path": "main.py", "start_line": 137, "end_line": 137},
+        {"path": "main.py", "start_line": 802, "end_line": 811}
+      ]
+    },
+    {
+      "data_scope": "Complete API-supplied free-model objects, including fields unused after ranking; these are catalog metadata, with no user content evidenced.",
+      "recipient_or_storage": "~/.openclaw/.freeride-cache.json",
+      "condition": "A refresh produces nonempty ranked results.",
+      "purpose_basis": "Caching supports model selection and listing. Supplied cached-result consumers use model IDs, context lengths and scores rather than complete API records.",
+      "necessary_behavior": "Retain sufficient ranked metadata for the six-hour cache and existing command output.",
+      "proposed_reduction": "Persist a projection containing id, context_length and _score alongside cached_at.",
+      "preservation_conditions": "Continue filtering and scoring fresh full records before projection; preserve ordering and all supplied cached-result consumers.",
+      "evidence": [
+        {"path": "main.py", "start_line": 244, "end_line": 295},
+        {"path": "main.py", "start_line": 427, "end_line": 459},
+        {"path": "main.py", "start_line": 492, "end_line": 514},
+        {"path": "main.py", "start_line": 535, "end_line": 548},
+        {"path": "main.py", "start_line": 608, "end_line": 633},
+        {"path": "main.py", "start_line": 756, "end_line": 778},
+        {"path": "main.py", "start_line": 875, "end_line": 895}
+      ]
+    },
+    {
+      "data_scope": "Repeated timestamped successful checks and model IDs, accumulated with other watcher diagnostics.",
+      "recipient_or_storage": "~/.openclaw/freeride-watcher.log under the documented background redirection.",
+      "condition": "The background logging example is used during prolonged watcher operation.",
+      "purpose_basis": "Autonomous recovery requires periodic probes; persisting every healthy result indefinitely is not required for recovery or the supplied last-rotation status.",
+      "necessary_behavior": "Keep checking health, rotate on failures and expose useful operational status.",
+      "proposed_reduction": "Suppress routine successful-check output by default and bound retained diagnostics through log rotation or retention limits.",
+      "preservation_conditions": "Keep probes, failure/rotation diagnostics and watcher-state updates. This narrows optional persistence; it does not remove necessary health checks.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 87, "end_line": 110},
+        {"path": "watcher.py", "start_line": 59, "end_line": 63},
+        {"path": "watcher.py", "start_line": 80, "end_line": 92},
+        {"path": "watcher.py", "start_line": 116, "end_line": 127},
+        {"path": "watcher.py", "start_line": 140, "end_line": 147}
+      ]
+    }
+  ],
+  "unknowns": [
+    "OpenRouter retention, application-activity visibility, downstream provider selection and provider handling of synthetic probes are not established by the supplied source.",
+    "Whether the catalog endpoint requires authentication or either endpoint requires attribution headers cannot be verified from packaged client code.",
+    "OpenClaw source is absent: actual conversation forwarding, runtime fallback/key rotation, credential persistence and gateway behavior remain unresolved. Documentation alone does not establish these external operations.",
+    "The watcher rewrites configuration without invoking gateway restart; whether a running gateway adopts those changes is unresolved.",
+    "Terminal, agent-tool, supervisor and documentation-renderer retention or forwarding are unspecified. Ordinary stdout/tool returns do not establish third-party disclosure.",
+    "Dependency, installer and external command implementations are absent; their additional data operations cannot be audited from this package. File permissions, backups and secure deletion guarantees are also unspecified."
+  ]
+}

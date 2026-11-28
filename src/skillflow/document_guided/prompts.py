@@ -241,6 +241,15 @@ def build_fragment_prompt(step, *, files, documents, cfg, global_requirements,
             "ir_semantics record or an explicit source-backed unmodeled processing gap. A control terminator is not omitted "
             "merely because it has no output. Precision-only gaps do not replace its record. Do not return only edited records.\n"
             "REQUIRED_IR_IDS\n" + compact_json(ids) + "\n")
+        from .fragments import program_processing_controls
+        generated = program_processing_controls(cfg, files)
+        if generated:
+            coverage += ("The program fills the control records listed below. Omit these IDs from your ir_semantics and gaps. "
+                         "For each other ID, provide its full processing record or a specific source-backed gap. "
+                         "For a protected operation with several source actions, bind each supported prefix action and its "
+                         "actual intermediate value in source order. Assign the final protected group to the action it executes. "
+                         "Localize earlier failure timing or unavailable versions when the output interface cannot represent them.\n"
+                         "PROGRAM_FILLED_IR_IDS\n" + compact_json(sorted(generated)) + "\n")
     output = common + necessity + coverage + "FRAGMENT FORMAT\n" + _fragment_format(step)
     if repair_context is not None:
         output += ("\nWrite each current IR, declaration and requirement record on its own physical line, "
@@ -276,11 +285,33 @@ def build_compact_graph_prompt(**kwargs):
         previous, kwargs["global_requirements"], packet, _pre_submit(output, "cfg", kwargs.get("self_check", False)))
 
 
+SOURCE_OPERATION_ROLE_GUIDANCE = (
+    "Choose a source-action role by its effect, not by the presence of parentheses. "
+    "Use call for an actual tool or remote interaction. When source proves a local computation "
+    "such as a built-in collection length, use value and retain its actual operands. "
+    "Represent a source-proven process exit as a terminating path with its exit value, with no response or "
+    "successor. Its actual terminating instruction owns the exit action exactly once; do not also list that "
+    "same sys.exit in a preceding print or formatting instruction. Local decoding or status checks retain their actual result, conditions and exceptional routes "
+    "without introducing a second receiver for an existing response. "
+    "For a local wrapper whose body is represented in the graph, keep the call-site argument transfer as one "
+    "source-located action immediately before the callee's formal entry; do not group it with neighbouring "
+    "actions or model another request at the wrapper. Retain independently invoked entries separately. "
+    "Keep unknown dependencies or effects explicit and source-located.\n"
+)
+
+
 def build_graph_facts_prompt(*, files, documents, global_requirements, self_check=False, normalize_blocks=True,
                              check_occurrences=True, check_calls=True):
-    from .graph_facts import BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA
+    from .graph_facts import BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA, PRE_OUTCOME_GRAPH_FACTS_SCHEMA, OUTCOME_DISPATCH_RULES
     from .entry_occurrences import ENTRY_OCCURRENCE_RULES
     from .source_calls import CALL_RULES
+    granularity = ("Use maximal straight-line basic blocks unless an acquisition rule, distinct predecessor, branch, "
+                   "loop or exceptional continuation requires a split. Do not introduce an unconditional jump "
+                   "just to separate adjacent operations on the same path. Within a block, prefer a single IR "
+                   "for consecutive operations with only local intermediates; preserve each action and data "
+                   "boundary through its source-action entry. Keep distinct results and continuations where "
+                   "the source uses them separately.\n" + SOURCE_OPERATION_ROLE_GUIDANCE
+                   ) if check_calls and check_occurrences and normalize_blocks else ""
     output = ("Return source-located GraphFacts. The program builds and validates the CFG. "
               "Use stable local references to the actual producer and result version; do not use a nearby "
               "replacement value. Identify the entry, each operation's operands and results, and every exit's "
@@ -297,10 +328,13 @@ def build_graph_facts_prompt(*, files, documents, global_requirements, self_chec
               "supported action outside those roles. Preserve each known boundary even when its response value is unknown. "
               "Localize unknown required facts, keep other supported facts, and cite exact physical source lines. "
               "Do not include source text as a generated value, blocks of machine-authored CFG structure, or a whole-analysis refusal.\n"
+              + granularity
               + (BLOCK_KIND_RULES + "\n" if normalize_blocks else "")
               + (ENTRY_OCCURRENCE_RULES + "\n" if normalize_blocks and check_occurrences else "")
               + (CALL_RULES + "\n" if normalize_blocks and check_occurrences and check_calls else "")
-              + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n" + render_prompt_format(GRAPH_FACTS_SCHEMA))
+              + (OUTCOME_DISPATCH_RULES + "\n" if check_calls else "")
+              + BOUNDARY_GRANULARITY + "\nGRAPH FACTS FORMAT\n"
+              + render_prompt_format(GRAPH_FACTS_SCHEMA if check_calls else PRE_OUTCOME_GRAPH_FACTS_SCHEMA))
     return _render("Identify the control and data facts in the frozen Skill.",
         _working_documents(documents, ("flow",)), global_requirements, source_packet(files),
         _pre_submit(output, "cfg", self_check))
@@ -323,12 +357,14 @@ def _fragment_format(step):
 
 
 def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=False, normalize_blocks=True,
-                               check_occurrences=True, check_calls=True, revision_slots=True):
+                               check_occurrences=True, check_calls=True, revision_slots=True, outcome_dispatch=True):
     from .graph_slots import GRAPH_UPDATES_SCHEMA
     from .fragment_display import render_fragment_material
     output = "GRAPH UPDATES FORMAT\n" + render_prompt_format(GRAPH_UPDATES_SCHEMA)
     if not archived_v16:
-        from .graph_facts import ARCHIVED_GRAPH_FACTS_SCHEMA, BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA
+        from .graph_facts import (ARCHIVED_GRAPH_FACTS_SCHEMA, BLOCK_KIND_RULES, GRAPH_FACTS_SCHEMA,
+                                  OUTCOME_DISPATCH_RULES, PRE_OUTCOME_GRAPH_FACTS_SCHEMA)
+        with_routes = outcome_dispatch and check_calls and not archived_v17
         action_rule = ("An action addition, removal or move cannot be encoded by a region. Leave that finding open.\n"
                        if archived_v17 else
                        "For kind=action_region the value is also a NONEMPTY ARRAY of Block. Editable action "
@@ -348,7 +384,11 @@ def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=
                "handles the block kind, separates the actual acquisition and updates dependent operands together. "
                "Keep existing results, external ports and source-supported actions in order.\n"
                if normalize_blocks and not archived_v17 else "")
-            + render_prompt_format(ARCHIVED_GRAPH_FACTS_SCHEMA if archived_v17 else GRAPH_FACTS_SCHEMA))
+            + (OUTCOME_DISPATCH_RULES + "\nFor kind=outcome_targets give only {on_return:<existing target>, "
+               "on_throw:<other existing target>}. Read the physical source to assign both roles. The program retains "
+               "the producer, live data operands, constraints and source.\n" if with_routes else "")
+            + render_prompt_format(ARCHIVED_GRAPH_FACTS_SCHEMA if archived_v17 else
+                                   GRAPH_FACTS_SCHEMA if with_routes else PRE_OUTCOME_GRAPH_FACTS_SCHEMA))
     if normalize_blocks and check_occurrences and not archived_v16 and not archived_v17:
         from .entry_occurrences import ENTRY_OCCURRENCE_RULES
         output += ("\n" + ENTRY_OCCURRENCE_RULES + "\nAn occurrence_region accepts one Block[] keyed by ref. "
@@ -357,7 +397,11 @@ def build_graph_updates_prompt(*, files, plan, archived_v16=False, archived_v17=
                    "uses within the supplied boundary.\n")
     if normalize_blocks and check_occurrences and check_calls and not archived_v16 and not archived_v17:
         from .source_calls import CALL_RULES
-        output += "\n" + CALL_RULES + " For a call_region return only changed Block[] rows at the listed call, parameter, return and consumer sites."
+        output += ("\n" + CALL_RULES + " For a call_region return only changed Block[] rows at the listed call, "
+                   "parameter, return and consumer sites. Correct a predecessor binding in the named caller's "
+                   "parameter row, using its actual argument versions in source order. Keep the existing physical "
+                   "source and child action spans. Normal and exceptional continuations use CFG edges.\n"
+                   + SOURCE_OPERATION_ROLE_GUIDANCE)
     if revision_slots and check_calls and check_occurrences and not archived_v16 and not archived_v17:
         output += "\n" + slot_wire_instructions("updates", "slot_id")
     return _render("Supply only the listed, missing or challenged graph facts.",

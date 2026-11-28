@@ -1,0 +1,405 @@
+{
+  "status": "completed",
+  "declared_purpose": "Local multi-agent coordination through a shared blackboard, advisory permission scoring, budget and health checks, and persistent project context. The documented workflow requires decomposition, budget checks before delegation, result verification, and sensitive-action auditing; persistent project memory is intentional (SKILL.md:86–101,145–196,200–239,525–538). Exact stored fields, archival payloads, and retention periods are implementation choices. Bundled execution uses Python standard library scripts; requirements.txt contains only documentation and commented development dependencies (requirements.txt:1–16).",
+  "data_operations": [
+    {
+      "operation": "Read environment selector",
+      "source": "NETWORK_AI_ENV and optional --env arguments",
+      "data_scope": "Environment name used to select local state directories.",
+      "recipient_or_storage": "Each script's local process; data/ or data/<env>/.",
+      "condition": "At startup. CLI overrides have the split-routing exceptions identified below.",
+      "evidence": [
+        {"path": "scripts/blackboard.py", "start_line": 81, "end_line": 95},
+        {"path": "scripts/check_permission.py", "start_line": 66, "end_line": 80},
+        {"path": "scripts/context_manager.py", "start_line": 48, "end_line": 61},
+        {"path": "scripts/revoke_token.py", "start_line": 33, "end_line": 45},
+        {"path": "scripts/swarm_guard.py", "start_line": 47, "end_line": 60},
+        {"path": "scripts/validate_token.py", "start_line": 29, "end_line": 40}
+      ]
+    },
+    {
+      "operation": "Read, persist, and return shared coordination entries",
+      "source": "Caller-supplied keys, values, agent identifiers, and optional TTL; existing blackboard.",
+      "data_scope": "Entire markdown file is read locally. Entries contain value, source agent, timestamp, and TTL. Reads return an entry; lists return keys; snapshots return all valid entries.",
+      "recipient_or_storage": "Normally data[/<env>]/swarm-blackboard.md; caller-selected project-local --path is also supported. Returned data goes to the caller.",
+      "condition": "Blackboard invocation initializes and loads the file. Writes persist entries; delete removes a selected entry. Missing TTL means no expiration. Expired entries are removed during reads or persistence, without a background purge.",
+      "evidence": [
+        {"path": "scripts/blackboard.py", "start_line": 190, "end_line": 242},
+        {"path": "scripts/blackboard.py", "start_line": 249, "end_line": 338},
+        {"path": "scripts/blackboard.py", "start_line": 611, "end_line": 626},
+        {"path": "scripts/blackboard.py", "start_line": 690, "end_line": 721},
+        {"path": "scripts/blackboard.py", "start_line": 743, "end_line": 765}
+      ]
+    },
+    {
+      "operation": "Stage and validate proposed changes",
+      "source": "Proposed key/value, operation, agent, TTL, and current blackboard entry.",
+      "data_scope": "Full proposed value and metadata, plus a hash of the current entry. Validation reads pending changes and can return the current entry on conflict.",
+      "recipient_or_storage": "Startup-selected data[/<env>]/pending_changes/<id>.pending.json; validation results go to the caller.",
+      "condition": "propose_change stages a proposal. validate_change checks current state and competing pending changes, then persists validation status.",
+      "evidence": [
+        {"path": "scripts/blackboard.py", "start_line": 375, "end_line": 421},
+        {"path": "scripts/blackboard.py", "start_line": 440, "end_line": 500},
+        {"path": "scripts/blackboard.py", "start_line": 592, "end_line": 605}
+      ]
+    },
+    {
+      "operation": "Commit or abort, archive payload, and delete pending file",
+      "source": "Pending change record.",
+      "data_scope": "Commit applies the value or deletion to the blackboard. Both commit and abort archive the full proposal, including its value, with final status and timestamp.",
+      "recipient_or_storage": "Main blackboard and pending_changes/archive/<id>.committed.json or <id>.aborted.json.",
+      "condition": "Commit requires validated status. Abort does not apply the proposal. Both delete the pending file after archiving; neither path applies TTL to the archive.",
+      "evidence": [
+        {"path": "scripts/blackboard.py", "start_line": 502, "end_line": 584}
+      ]
+    },
+    {
+      "operation": "Persist lock metadata and remove Windows lock markers",
+      "source": "Process identifier, current time, and marker filesystem metadata.",
+      "data_scope": "PID and acquisition timestamp; Windows marker timestamp and age.",
+      "recipient_or_storage": "Startup-selected data[/<env>]/.blackboard.lock and, on Windows, .blackboard.locked.",
+      "condition": "Lock acquisition writes metadata. Windows release deletes its marker, and acquisition deletes stale markers. The .blackboard.lock file itself is not deleted by release.",
+      "evidence": [
+        {"path": "scripts/blackboard.py", "start_line": 108, "end_line": 169}
+      ]
+    },
+    {
+      "operation": "Score permission requests and audit requests and denials",
+      "source": "Caller-supplied agent identifier, resource label, justification, scope, and high-risk acknowledgment.",
+      "data_scope": "Derives justification quality, static identifier-based trust, risk, and approval scores. Request logs include scope, unknown-agent flag, and up to 200 justification characters plus a truncation marker; denial logs include reasons and available scores.",
+      "recipient_or_storage": "Local permission-checker process, data[/<env>]/audit_log.jsonl, and decision output to the caller.",
+      "condition": "Every evaluated request is logged before confirmation and scoring checks. Every denial adds a separate outcome event. Identity is caller asserted; no protected external system is accessed.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 19, "end_line": 33},
+        {"path": "scripts/check_permission.py", "start_line": 94, "end_line": 111},
+        {"path": "scripts/check_permission.py", "start_line": 389, "end_line": 511}
+      ]
+    },
+    {
+      "operation": "Generate and persist advisory grants and signing key",
+      "source": "Approved permission request and locally generated randomness.",
+      "data_scope": "UUID-based advisory token; agent, resource, scope, restrictions, timestamps, advisory flags, and HMAC signature. A local HMAC signing key is loaded or generated.",
+      "recipient_or_storage": "active_grants.json and audit_log.jsonl receive the full grant. .signing_key stores the signing key; it is not included in the grant. Issuance returns the full token to the caller.",
+      "condition": "Approval creates a five-minute grant. Key creation occurs when no readable valid key exists; owner-only chmod is attempted. CLI environment routing differs for the key, as described below.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 64, "end_line": 80},
+        {"path": "scripts/check_permission.py", "start_line": 291, "end_line": 366},
+        {"path": "scripts/check_permission.py", "start_line": 513, "end_line": 556}
+      ]
+    },
+    {
+      "operation": "List active grants without deleting expired records",
+      "source": "active_grants.json.",
+      "data_scope": "Agent/resource/scope, restrictions, timestamps, remaining lifetime, and masked token prefixes.",
+      "recipient_or_storage": "Caller output; source file remains unchanged.",
+      "condition": "--active-grants optionally filters by agent and skips expired or malformed-expiry records. The expired_cleaned output field counts skipped records rather than actual deletions.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 559, "end_line": 648}
+      ]
+    },
+    {
+      "operation": "Read shared audit history and return permission summary",
+      "source": "Entire audit_log.jsonl, including events from sibling components.",
+      "data_scope": "Permission counts grouped by agent and resource, time range, and recent events. JSON removes only the top-level details.justification field; other event details remain.",
+      "recipient_or_storage": "Permission-checker memory and caller output.",
+      "condition": "--audit-summary scans the whole log. Recent entries are selected across all event types; text output is narrower than JSON output.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 651, "end_line": 750},
+        {"path": "scripts/check_permission.py", "start_line": 782, "end_line": 791}
+      ]
+    },
+    {
+      "operation": "Validate token using local grant and key",
+      "source": "Caller-supplied token, active_grants.json, and its adjacent .signing_key.",
+      "data_scope": "Grant lookup, signature verification, and expiry evaluation. Successful JSON output includes the full grant and signature-verification flag.",
+      "recipient_or_storage": "Validator process and caller; no persistence or deletion.",
+      "condition": "Invalid signatures and parseable expired dates are rejected. Unsigned grants, unavailable keys, and missing or unparseable expiry can still produce valid results. No agent identity authentication occurs.",
+      "evidence": [
+        {"path": "scripts/validate_token.py", "start_line": 43, "end_line": 136},
+        {"path": "scripts/validate_token.py", "start_line": 156, "end_line": 168}
+      ]
+    },
+    {
+      "operation": "Revoke or clean grants while retaining audit copies",
+      "source": "active_grants.json and optional caller-supplied token.",
+      "data_scope": "Revocation removes one grant but logs its token and full original grant. Cleanup removes parseably expired grants but logs their tokens and agent/resource/expiry metadata. JSON results contain these unmasked records.",
+      "recipient_or_storage": "Rewritten active_grants.json, appended audit_log.jsonl, and caller output.",
+      "condition": "Explicit token revocation or --cleanup is required. --list-expired only reads and returns records. Missing or unparseable expiry is not treated as expired.",
+      "evidence": [
+        {"path": "scripts/revoke_token.py", "start_line": 60, "end_line": 190},
+        {"path": "scripts/revoke_token.py", "start_line": 217, "end_line": 259}
+      ]
+    },
+    {
+      "operation": "Persist validated long-term project context and duplicate updates into audit",
+      "source": "Caller-supplied project fields, goals, stack, milestones, decisions/rationales, and banned approaches; existing context.",
+      "data_scope": "Project context and update timestamp. Initialization audits name/version; updates audit complete added or changed values. Validation checks injection patterns and size, not personal-data redaction.",
+      "recipient_or_storage": "data[/<env>]/project-context.json and audit_log.jsonl.",
+      "condition": "Successful init or update. Context is intentionally persistent across sessions; the supplied commands have no context deletion or retention workflow.",
+      "evidence": [
+        {"path": "scripts/context_manager.py", "start_line": 114, "end_line": 190},
+        {"path": "scripts/context_manager.py", "start_line": 238, "end_line": 280},
+        {"path": "scripts/context_manager.py", "start_line": 407, "end_line": 521}
+      ]
+    },
+    {
+      "operation": "Return project context for viewing or prompt insertion",
+      "source": "project-context.json.",
+      "data_scope": "show returns the full JSON. inject formats project details, goals, stack, all milestone buckets, decisions/rationales, banned approaches, and update time; it does not emit the agents section.",
+      "recipient_or_storage": "Caller output. Documentation instructs the caller to copy the injection block into agent system prompts.",
+      "condition": "show warns but still returns context. inject blocks on validation warnings unless --force is supplied. Prompt insertion is a separate caller action.",
+      "evidence": [
+        {"path": "scripts/context_manager.py", "start_line": 283, "end_line": 383},
+        {"path": "SKILL.md", "start_line": 233, "end_line": 239}
+      ]
+    },
+    {
+      "operation": "Load and rewrite guard tracking state",
+      "source": "Existing task, health, and budget tracking files.",
+      "data_scope": "All tasks, agents, and budget histories in three JSON objects.",
+      "recipient_or_storage": "Guard memory; task_tracking.json, agent_health.json, and budget_tracking.json.",
+      "condition": "Every guard construction attempts all three reads when task_tracking.json exists. Each _save_state rewrites all three. The supplied implementation does not use the separately advertised heartbeats.json or swarm_budgets.json.",
+      "evidence": [
+        {"path": "scripts/swarm_guard.py", "start_line": 130, "end_line": 162}
+      ]
+    },
+    {
+      "operation": "Record handoff metadata and infer budget cost",
+      "source": "Task identifier, source/target agent identifiers, message, and artifact flag.",
+      "data_scope": "Stores timestamps, agent identifiers, message length, artifact flags, counts, and task status. Message content is processed for length and estimated cost, rather than stored. Interception records budget spending and allowed/blocked audit metadata.",
+      "recipient_or_storage": "task_tracking.json, budget_tracking.json, audit_log.jsonl, and caller output.",
+      "condition": "record-handoff or intercept-handoff. Interception can initialize a default budget; spending and handoff recording precede the final handoff-policy decision. It does not send a message or invoke another agent.",
+      "evidence": [
+        {"path": "scripts/swarm_guard.py", "start_line": 168, "end_line": 253},
+        {"path": "scripts/swarm_guard.py", "start_line": 729, "end_line": 835}
+      ]
+    },
+    {
+      "operation": "Record heartbeats and infer agent health",
+      "source": "Caller-supplied agent, task, status, and current time.",
+      "data_scope": "First/last seen, current task, status, and counters. Health is inferred from registration and heartbeat recency, rather than confirmed agent failure.",
+      "recipient_or_storage": "agent_health.json for heartbeat records; health assessments return to the caller.",
+      "condition": "heartbeat persists state. health-check treats a heartbeat older than 60 seconds as unhealthy but does not delete the record.",
+      "evidence": [
+        {"path": "scripts/swarm_guard.py", "start_line": 284, "end_line": 360}
+      ]
+    },
+    {
+      "operation": "Persist budget history and return spending reports",
+      "source": "Task budget, description, token amounts, reasons, agent identifiers, and operation labels.",
+      "data_scope": "Budget totals, timestamps, description, and detailed spending history. Initialization duplicates the description into audit; shutdown logs its reason and may mark task status.",
+      "recipient_or_storage": "budget_tracking.json, task_tracking.json when termination is recorded, audit_log.jsonl, and caller output.",
+      "condition": "Successful budget-init or budget-spend; budget-report JSON returns full spending history and aggregates. Shutdown is a local status/advisory result, not termination of an external agent.",
+      "evidence": [
+        {"path": "scripts/swarm_guard.py", "start_line": 526, "end_line": 561},
+        {"path": "scripts/swarm_guard.py", "start_line": 601, "end_line": 723},
+        {"path": "scripts/swarm_guard.py", "start_line": 994, "end_line": 1005}
+      ]
+    },
+    {
+      "operation": "Validate results and infer supervisory verdicts",
+      "source": "Caller-supplied result, stored agent health, handoffs, validations, and budget.",
+      "data_scope": "Checks status, required fields, confidence, output emptiness, and agent health. Persists validation time, agent, validity, and issues; error text can be copied into issues. Ordinary output content is not persisted by validation.",
+      "recipient_or_storage": "task_tracking.json when the task exists; assessments and supervisory verdicts return to the caller.",
+      "condition": "validate-result or supervisor-review. Contrary to the documented automatic result audit events, this validation path saves tracking state without appending result_validated/result_rejected to audit_log.jsonl.",
+      "evidence": [
+        {"path": "scripts/swarm_guard.py", "start_line": 362, "end_line": 520},
+        {"path": "SKILL.md", "start_line": 540, "end_line": 547}
+      ]
+    },
+    {
+      "operation": "Require caller-managed logging of sensitive actions",
+      "source": "Caller-performed sensitive action and supplied action metadata.",
+      "data_scope": "Example includes timestamp, action, agent, description, and justification without truncation or redaction.",
+      "recipient_or_storage": "The example appends to {baseDir}/data/audit_log.jsonl.",
+      "condition": "Documentation requires every sensitive action to be logged; the manual example executes only if followed by the caller and does not implement environment routing.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 534, "end_line": 538},
+        {"path": "SKILL.md", "start_line": 578, "end_line": 598}
+      ]
+    },
+    {
+      "operation": "Describe conditional host-platform delegation",
+      "source": "Caller-created task instructions, relevant context, constraints, expected output, and optionally returned project context.",
+      "data_scope": "Delegated task payload and prompt context.",
+      "recipient_or_storage": "Named agents through host-platform tools; external model APIs may be involved, but providers and storage are unspecified.",
+      "condition": "Caller follows the documented workflow after a budget allowance. The bundled Python scripts do not implement this transfer; ordinary script returns can remain with their caller.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 22, "end_line": 24},
+        {"path": "SKILL.md", "start_line": 51, "end_line": 53},
+        {"path": "SKILL.md", "start_line": 389, "end_line": 398},
+        {"path": "skill.json", "start_line": 4, "end_line": 4},
+        {"path": "skill.json", "start_line": 23, "end_line": 34}
+      ]
+    },
+    {
+      "operation": "Include existing coordination records in the public package",
+      "source": "Packaged root swarm-blackboard.md.",
+      "data_scope": "Authentication-related source paths, agent/reviewer identifiers, review comments, test metrics, infrastructure configuration, and timestamps; all four entries have null TTL.",
+      "recipient_or_storage": "The public skill package's root swarm-blackboard.md.",
+      "condition": "Already present in the supplied package. The Python default points to data[/<env>]/swarm-blackboard.md; loading this root artifact requires selecting its path. Its provenance is unknown.",
+      "evidence": [
+        {"path": "swarm-blackboard.md", "start_line": 1, "end_line": 68},
+        {"path": "scripts/blackboard.py", "start_line": 92, "end_line": 95},
+        {"path": "scripts/blackboard.py", "start_line": 690, "end_line": 721}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Full committed or aborted proposal values and associated agent metadata.",
+      "recipient_or_storage": "pending_changes/archive/<id>.committed.json and <id>.aborted.json.",
+      "condition": "Every successful commit or abort; archives have no TTL enforcement.",
+      "purpose_basis": "Atomic coordination requires staging and conflict checking. Archiving full payloads is an implementation choice, separate from maintaining an outcome audit.",
+      "necessary_behavior": "Keep the proposal until resolution and apply the committed value with its intended lifetime.",
+      "proposed_reduction": "Archive outcome metadata and a change identifier/hash; omit resolved payloads or give payload archives an explicit short retention period.",
+      "preservation_conditions": "Retain any payload genuinely needed for an authorized recovery window; preserve conflict checks and commit/abort traceability.",
+      "evidence": [
+        {"path": "scripts/blackboard.py", "start_line": 401, "end_line": 413},
+        {"path": "scripts/blackboard.py", "start_line": 526, "end_line": 584}
+      ]
+    },
+    {
+      "data_scope": "Task results, cached values, and coordination entries with omitted TTL.",
+      "recipient_or_storage": "Main blackboard markdown file.",
+      "condition": "write/propose accepts absent TTL; null TTL never expires. Expiration otherwise requires subsequent access or persistence.",
+      "purpose_basis": "The entry document describes the blackboard as TTL-scoped coordination memory, while project context supplies intentional long-term memory.",
+      "necessary_behavior": "Keep shared results available through verification and synthesis.",
+      "proposed_reduction": "Add task-lifecycle deletion or suitable default TTLs for ephemeral entries, plus explicit cleanup of expired entries.",
+      "preservation_conditions": "Allow deliberate longer retention for unfinished tasks; preserve authorized persistent project knowledge in project context.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 200, "end_line": 217},
+        {"path": "scripts/blackboard.py", "start_line": 249, "end_line": 326}
+      ]
+    },
+    {
+      "data_scope": "Full advisory token identifiers, signatures, and duplicated original grant records.",
+      "recipient_or_storage": "Append-only audit_log.jsonl.",
+      "condition": "Grant issuance logs the complete signed grant; revocation logs the full original grant; cleanup logs expired token identifiers.",
+      "purpose_basis": "Sensitive-action auditing is explicitly required. Full token/signature duplication is extra data in that required action, rather than a reason to remove the audit event.",
+      "necessary_behavior": "Retain attributable grant, denial, revocation, and cleanup outcomes; keep live verification material in active grant storage.",
+      "proposed_reduction": "Use a non-authorizing correlation identifier in audit records and omit full token values and signatures; retain necessary agent/resource/scope/outcome metadata.",
+      "preservation_conditions": "Preserve reliable event correlation and live token validation. These tokens are advisory, not external service credentials.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 534, "end_line": 538},
+        {"path": "scripts/check_permission.py", "start_line": 518, "end_line": 535},
+        {"path": "scripts/revoke_token.py", "start_line": 82, "end_line": 88},
+        {"path": "scripts/revoke_token.py", "start_line": 160, "end_line": 182}
+      ]
+    },
+    {
+      "data_scope": "Expired grant records, including tokens, scope, agent, restrictions, and signature.",
+      "recipient_or_storage": "active_grants.json.",
+      "condition": "Expiry does not delete records. Active listing skips them; removal requires explicit revocation or cleanup.",
+      "purpose_basis": "Advisory grants have a five-minute validity period; retaining complete expired live-state records is not required for validation.",
+      "necessary_behavior": "Reject expired grants and preserve a minimized lifecycle audit.",
+      "proposed_reduction": "Prune expired records during routine grant maintenance or provide an explicit bounded cleanup lifecycle.",
+      "preservation_conditions": "Keep unexpired grants and necessary audit metadata; do not confuse expiry or file removal with deletion of audit copies.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 355, "end_line": 366},
+        {"path": "scripts/check_permission.py", "start_line": 587, "end_line": 613},
+        {"path": "scripts/revoke_token.py", "start_line": 138, "end_line": 190},
+        {"path": "SKILL.md", "start_line": 601, "end_line": 621}
+      ]
+    },
+    {
+      "data_scope": "Justification prefixes, complete project-context changes, budget descriptions, and manually supplied descriptive text.",
+      "recipient_or_storage": "audit_log.jsonl, separate from the operational context or budget files.",
+      "condition": "Permission requests, context updates, budget initialization, or caller-managed manual logging. Permission justification truncation does not redact sensitive content; it does not apply to sibling components.",
+      "purpose_basis": "Audit events and meaningful business justification are required; unlimited duplication of raw project or task content is an implementation choice.",
+      "necessary_behavior": "Record who changed or requested what, the outcome, and a sufficient non-sensitive rationale.",
+      "proposed_reduction": "Use reviewed concise rationales, structured purpose/change identifiers, field names and hashes; redact unnecessary sensitive substrings before audit persistence.",
+      "preservation_conditions": "Keep full authorized project notes in project-context.json where needed, and preserve enough audit detail for attribution and investigation.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 391, "end_line": 404},
+        {"path": "scripts/context_manager.py", "start_line": 413, "end_line": 519},
+        {"path": "scripts/swarm_guard.py", "start_line": 538, "end_line": 554},
+        {"path": "SKILL.md", "start_line": 578, "end_line": 598}
+      ]
+    },
+    {
+      "data_scope": "Recent non-permission events, full grant records, and context update payloads preserved after justification-only redaction.",
+      "recipient_or_storage": "Caller receiving --audit-summary --json.",
+      "condition": "Recent shared-log entries contain these fields. Selection includes all event types, and redaction removes only details.justification.",
+      "purpose_basis": "This command declares a permission-summary purpose: counts, per-agent/resource breakdowns, and recent permission activity.",
+      "necessary_behavior": "Return accurate permission aggregates and relevant recent permission outcomes.",
+      "proposed_reduction": "Filter recent activity to permission events and allowlist summary fields; mask token identifiers and omit signatures and unrelated context payloads.",
+      "preservation_conditions": "Keep denial counting based on explicit denial events. Treat this as narrowing a caller return, not as preventing an observed remote disclosure.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 651, "end_line": 660},
+        {"path": "scripts/check_permission.py", "start_line": 699, "end_line": 750},
+        {"path": "scripts/context_manager.py", "start_line": 246, "end_line": 254},
+        {"path": "scripts/context_manager.py", "start_line": 426, "end_line": 427}
+      ]
+    },
+    {
+      "data_scope": "Accumulating handoff/validation histories, error text, task associations, budget descriptions, and free-text spending reasons.",
+      "recipient_or_storage": "task_tracking.json, agent_health.json, and budget_tracking.json.",
+      "condition": "Records persist across guard runs without a supplied task-finalization or retention cleanup path.",
+      "purpose_basis": "Budget enforcement, health checks, and supervisory review need working task state; permanent detailed histories are distinct from intentional persistent project memory.",
+      "necessary_behavior": "Preserve current counters, recent health, and evidence needed for an unfinished task's review.",
+      "proposed_reduction": "Add a task-finish retention policy, compact old histories into necessary aggregates, unlink stale task associations, and store structured validation errors instead of unnecessary raw error text.",
+      "preservation_conditions": "Do not purge state needed for ongoing supervision, budget enforcement, or an expressly authorized diagnostic window.",
+      "evidence": [
+        {"path": "scripts/swarm_guard.py", "start_line": 189, "end_line": 201},
+        {"path": "scripts/swarm_guard.py", "start_line": 292, "end_line": 306},
+        {"path": "scripts/swarm_guard.py", "start_line": 382, "end_line": 412},
+        {"path": "scripts/swarm_guard.py", "start_line": 538, "end_line": 554},
+        {"path": "scripts/swarm_guard.py", "start_line": 635, "end_line": 654}
+      ]
+    },
+    {
+      "data_scope": "Full proposed values and their agent/change metadata.",
+      "recipient_or_storage": "Startup environment's pending_changes/ and archive/, instead of the CLI-selected environment's directories.",
+      "condition": "blackboard.py --env differs from NETWORK_AI_ENV or the startup default. --env changes args.path but leaves PENDING_DIR and LOCK_PATH unchanged.",
+      "purpose_basis": "Environment selection is explicitly presented as state isolation. Staging proposals is necessary, but persisting them across the selected environment boundary is not.",
+      "necessary_behavior": "Keep proposal, validation, commit, archive, and locking state consistent with the selected blackboard environment.",
+      "proposed_reduction": "Resolve the environment once and pass its pending directory and lock path into the blackboard instance.",
+      "preservation_conditions": "Keep atomic coordination within each environment; handle existing misplaced pending records explicitly.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 78, "end_line": 84},
+        {"path": "scripts/blackboard.py", "start_line": 81, "end_line": 95},
+        {"path": "scripts/blackboard.py", "start_line": 173, "end_line": 175},
+        {"path": "scripts/blackboard.py", "start_line": 190, "end_line": 194},
+        {"path": "scripts/blackboard.py", "start_line": 401, "end_line": 413},
+        {"path": "scripts/blackboard.py", "start_line": 546, "end_line": 550},
+        {"path": "scripts/blackboard.py", "start_line": 702, "end_line": 706}
+      ]
+    },
+    {
+      "data_scope": "HMAC signing-key access and use across environment boundaries.",
+      "recipient_or_storage": "Permission-checker process reads or creates the startup environment's .signing_key while grants and audit records target the CLI-selected environment.",
+      "condition": "check_permission.py --env differs from the startup environment and issuance reaches signing. --env changes GRANTS_FILE/AUDIT_LOG but not _DATA_DIR used by the signer.",
+      "purpose_basis": "Local grant integrity requires signing, while documented environment isolation calls for separate state. Access to another environment's key is avoidable.",
+      "necessary_behavior": "Sign and validate a grant using its selected environment's key.",
+      "proposed_reduction": "Derive the signing key and directory creation from the resolved GRANTS_FILE parent, consistently with validate_token.py.",
+      "preservation_conditions": "Provide a compatibility plan for existing grants signed using the previous routing. No raw key disclosure is shown.",
+      "evidence": [
+        {"path": "scripts/check_permission.py", "start_line": 305, "end_line": 340},
+        {"path": "scripts/check_permission.py", "start_line": 879, "end_line": 884},
+        {"path": "scripts/validate_token.py", "start_line": 43, "end_line": 54},
+        {"path": "SKILL.md", "start_line": 78, "end_line": 84}
+      ]
+    },
+    {
+      "data_scope": "Operational-looking source paths, review comments, agent identifiers, test metrics, infrastructure settings, and timestamps.",
+      "recipient_or_storage": "Publicly distributed root swarm-blackboard.md.",
+      "condition": "These records are included in the supplied package, with null TTL. Whether they are real operational records or synthetic examples is unresolved.",
+      "purpose_basis": "A reusable orchestration skill needs a state schema or example, rather than these particular task records.",
+      "necessary_behavior": "Provide an initial blackboard structure and demonstrate supported entry shapes.",
+      "proposed_reduction": "Ship an empty template or clearly synthetic minimal examples.",
+      "preservation_conditions": "Preserve the documented format; establish provenance before characterizing this as exposure of real project data.",
+      "evidence": [
+        {"path": "swarm-blackboard.md", "start_line": 9, "end_line": 65},
+        {"path": "scripts/blackboard.py", "start_line": 198, "end_line": 218}
+      ]
+    }
+  ],
+  "unknowns": [
+    "End-to-end remote disclosure remains unresolved: host delegation and prompt insertion may use external model APIs, but supplied source identifies no provider, exact transmitted envelope, attached conversation history, retention, or deletion behavior.",
+    "skill.json declares delegation, spawning, swarm queries, traces, and broad state-return interfaces, but their host adapters and the separate TypeScript engine are absent. Metadata alone does not establish execution or data capture.",
+    "Actual runtime inputs and state are unavailable. The root blackboard's provenance is unknown, so its records cannot be classified as real personal or confidential project data.",
+    "Downstream enforcement of advisory grants, real sensitive-system access, and caller-managed sensitive-action logging cannot be verified from the bundled scripts.",
+    "Filesystem readership, effective access permissions, backups, and external copies are unspecified. Local deletion shown here does not establish erasure from archives, audit logs, backups, or host-platform storage."
+  ]
+}

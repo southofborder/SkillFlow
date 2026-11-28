@@ -1,0 +1,39 @@
+# Document-guided analysis
+
+Status: partial; stage: doe.
+
+Seven normal analysis calls; program-assembled annotation; two dependency-aware workers; no model monitoring calls.
+
+| Stage | Status |
+|---|---|
+| assembly | partial |
+| doe | partial |
+| flow | complete |
+| graph | complete |
+| processing | partial |
+| propagation | incomplete |
+| review | complete |
+| revision-graph | request_failure |
+| revision-processing | skipped |
+| revision-sensitivity | skipped |
+| revision-task-correspondence | skipped |
+| revision/review | skipped |
+| revision/task | complete |
+| sensitivity | complete |
+| task | complete |
+| task-correspondence | complete |
+
+Retained limitations:
+- A shared-repair request ended without a complete answer; no consistent revised annotation exists. The original Task, CFG, annotation and their bound review remain selected together; all original findings remain unresolved by this repair.
+- The shared repair was not confirmed by a completed source re-review; prior findings remain recorded in review/result.json and are not marked resolved.
+- The shared repair did not form a consistent new annotation; retaining the original candidate.
+- graph: ModelRequestFailure: CLI produced no complete answer; this is not an eligible transient network retry
+- processing: Invalid records retained as explicit local validation gaps
+- Unified source review is partial or retains material issues.
+- Propagation is incomplete: incomplete
+- DOE retains analysis limitations: partial
+
+Local call counts: {'logical_calls': 13, 'structural_corrections': 4, 'json_normalizations': 0}
+Unreported findings are not per-item acceptance; missing annotation is not evidence of no DOE.
+
+The semantic repair remains unconfirmed; original review findings remain in review/result.json.

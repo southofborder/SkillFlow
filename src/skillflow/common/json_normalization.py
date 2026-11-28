@@ -1,8 +1,9 @@
 """Auditable, deliberately narrow normalization of completed model responses.
 
-This module makes no transport or schema acceptance decision. It removes only
-one superfluous object closer following an otherwise complete strict JSON
-object. Callers must still validate the candidate and retain the raw response.
+This module makes no transport or schema acceptance decision. It removes at
+most one unambiguous extra character: a final object closer or a trailing
+comma before a container closer. The result must be a complete strict JSON
+object. Callers still validate the candidate and retain the raw response.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from skillflow.common.recording import canonical_sha256
 
 NORMALIZATION_VERSION = "skillflow-json-normalization-v1"
 TRAILING_CLOSER_RULE = "trailing_single_object_closer"
+TRAILING_COMMA_RULE = "single_trailing_container_comma"
 _JSON_WHITESPACE = " \t\r\n"
 
 
@@ -70,10 +72,9 @@ def _after_whitespace(text: str, offset: int) -> int:
 def normalize_response(raw: Any) -> tuple[Any, dict[str, Any] | None]:
     """Return the unchanged response or a one-character deletion and receipt.
 
-    Dictionary injection remains untouched. Text must begin with one complete
-    object (apart from JSON whitespace), contain unique keys and finite JSON
-    numbers, and have exactly one ``}`` after it, surrounded only by JSON
-    whitespace. The receipt uses Unicode code-point offsets and canonical
+    Dictionary injection remains untouched. A deletion must leave one complete
+    object with unique keys and finite JSON numbers. The receipt uses Unicode
+    code-point offsets and canonical
     digests of the raw and normalized *strings*, not parsed objects.
 
     Ineligible text is returned unchanged so the existing validation/correction
@@ -86,15 +87,23 @@ def normalize_response(raw: Any) -> tuple[Any, dict[str, Any] | None]:
     decoder = _decoder()
     try:
         value, end = decoder.raw_decode(raw, _after_whitespace(raw, 0))
-    except (json.JSONDecodeError, _NotStrictJSON):
+    except _NotStrictJSON:
         return raw, None
-    if not isinstance(value, dict):
-        return raw, None
-
-    offset = _after_whitespace(raw, end)
-    if (offset == len(raw) or raw[offset] != "}"
-            or _after_whitespace(raw, offset + 1) != len(raw)):
-        return raw, None
+    except json.JSONDecodeError as error:
+        if error.pos >= len(raw) or raw[error.pos] not in "]}":
+            return raw, None
+        offset = len(raw[:error.pos].rstrip(_JSON_WHITESPACE)) - 1
+        if offset < 0 or raw[offset] != ",":
+            return raw, None
+        rule = TRAILING_COMMA_RULE
+    else:
+        if not isinstance(value, dict):
+            return raw, None
+        offset = _after_whitespace(raw, end)
+        if (offset == len(raw) or raw[offset] != "}"
+                or _after_whitespace(raw, offset + 1) != len(raw)):
+            return raw, None
+        rule = TRAILING_CLOSER_RULE
 
     candidate = raw[:offset] + raw[offset + 1:]
     try:
@@ -108,9 +117,9 @@ def normalize_response(raw: Any) -> tuple[Any, dict[str, Any] | None]:
 
     return candidate, {
         "version": NORMALIZATION_VERSION,
-        "rule": TRAILING_CLOSER_RULE,
+        "rule": rule,
         "raw_sha256": canonical_sha256(raw),
         "normalized_sha256": canonical_sha256(candidate),
         "removed_offset": offset,
-        "removed_character": "}",
+        "removed_character": raw[offset],
     }

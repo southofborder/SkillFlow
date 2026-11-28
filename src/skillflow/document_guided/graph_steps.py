@@ -7,6 +7,7 @@ from skillflow.common.validation import StructuralValidationError, structural_er
 
 FACTS = "graph_facts_v1"
 UPDATES = "graph_updates_v1"
+ROUTE_CONTRACT = "skillflow-graph-outcome-dispatch-v1"
 REPAIR_IDENTITY = "skillflow-graph-repair-input-v5"
 OCCURRENCE_REPAIR_IDENTITY = "skillflow-graph-repair-input-v4"
 BLOCK_LAYOUT_REPAIR_IDENTITY = "skillflow-graph-repair-input-v3"
@@ -14,12 +15,20 @@ PRIOR_REPAIR_IDENTITY = "skillflow-graph-repair-input-v2"
 ARCHIVED_REPAIR_IDENTITY = "skillflow-graph-repair-input-v1"
 
 
+def has_outcome_contract(manifest):
+    if "graph_route_contract" not in manifest:
+        return False
+    if manifest["graph_route_contract"] != ROUTE_CONTRACT:
+        raise ValueError("Unsupported graph outcome route contract")
+    return True
+
+
 def rejected_facts(evidence):
     material = evidence["material"]
     return material.get("candidate", material["response"])
 
 
-def _repair_base(previous, files, accepted, archived, normalize_blocks, check_occurrences, check_calls):
+def _repair_base(previous, files, accepted, archived, normalize_blocks, check_occurrences, check_calls, check_outcome_routes):
     from .graph_facts import assemble_graph_facts, from_accepted_cfg
     if not accepted:
         try:
@@ -32,7 +41,7 @@ def _repair_base(previous, files, accepted, archived, normalize_blocks, check_oc
             return None
     try:
         options = {"files": files, "archived": archived, "normalize_blocks": normalize_blocks,
-                   "check_occurrences": check_occurrences, "check_calls": check_calls}
+                   "check_occurrences": check_occurrences, "check_calls": check_calls, "check_outcome_routes": check_outcome_routes}
         return from_accepted_cfg(previous, **options) if accepted else assemble_graph_facts(facts, **options)
     except ValueError:
         return None
@@ -47,8 +56,8 @@ def _repair_material(base, previous, accepted, findings, files):
 
 
 def repair_input(*, files, previous, findings, accepted, archived=False, normalize_blocks=True,
-                 check_occurrences=True, check_calls=True, failure_evidence=None):
-    base = _repair_base(previous, files, accepted, archived, normalize_blocks, check_occurrences, check_calls)
+                 check_occurrences=True, check_calls=True, check_outcome_routes=True, failure_evidence=None):
+    base = _repair_base(previous, files, accepted, archived, normalize_blocks, check_occurrences, check_calls, check_outcome_routes)
     if base is None:
         return None
     if failure_evidence is not None and base.normalize_blocks:
@@ -62,12 +71,14 @@ def repair_input(*, files, previous, findings, accepted, archived=False, normali
     return _repair_material(base, previous, accepted, findings, files)
 
 
-def checked_repair(material, files, *, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True):
+def checked_repair(material, files, *, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True,
+                   check_outcome_routes=True):
     if (not isinstance(material, dict) or set(material) != {"identity", "previous", "accepted", "findings", "plan"}
             or type(material["accepted"]) is not bool or not isinstance(material["plan"], dict)
             or not isinstance(material["plan"].get("base"), dict)):
         raise ValueError("Missing exact graph repair input")
-    base = _repair_base(material["previous"], files, material["accepted"], archived, normalize_blocks, check_occurrences, check_calls)
+    base = _repair_base(material["previous"], files, material["accepted"], archived, normalize_blocks, check_occurrences,
+                        check_calls, check_outcome_routes)
     if base is not None and base.normalize_blocks and not material["accepted"]:
         # The stage reader checks this input against the terminal failure receipt.
         base = replace(base, patch_diagnostics=material["plan"]["base"].get("patch_diagnostics", []))
@@ -88,7 +99,7 @@ def revision_paths(run):
 
 
 def load_revision_input(directory, path, files, dependencies, *, archived=False, normalize_blocks=True,
-                        check_occurrences=True, check_calls=True):
+                        check_occurrences=True, check_calls=True, check_outcome_routes=True):
     from .online import read
     base_path, review_path, plan_path = revision_paths(directory.parent.parent)
     if path != plan_path or tuple(dependencies[-3:]) != (base_path, review_path, plan_path):
@@ -102,7 +113,7 @@ def load_revision_input(directory, path, files, dependencies, *, archived=False,
     review = read(review_path).get("review") or {}
     expected = repair_input(files=files, previous=base["cfg"] if accepted else rejected_facts(base),
                             accepted=accepted, archived=archived, normalize_blocks=normalize_blocks,
-                            check_occurrences=check_occurrences, check_calls=check_calls,
+                            check_occurrences=check_occurrences, check_calls=check_calls, check_outcome_routes=check_outcome_routes,
                             failure_evidence=None if accepted else base, findings=[row for row in review.get("findings", [])
                                                          if row["domain"] == "cfg"])
     if expected is None or read(path) != {"repair": expected}:
@@ -133,16 +144,18 @@ def validate_graph(kind, value, context):
     normalize_blocks = context.get("normalize_blocks", True)
     check_occurrences = context.get("check_occurrences", True)
     check_calls = context.get("check_calls", True)
+    check_outcome_routes = context.get("check_outcome_routes", True)
     if kind == UPDATES:
         base, plan = checked_repair(context["graph_repair"], files, archived=archived, normalize_blocks=normalize_blocks,
-                                    check_occurrences=check_occurrences, check_calls=check_calls)
+                                    check_occurrences=check_occurrences, check_calls=check_calls, check_outcome_routes=check_outcome_routes)
     try:
         if kind == FACTS:
             strategy = context.get("graph_facts_strategy")
             assembly = strategy.merged_assembly(value) if strategy else None
             if assembly is None:
                 assembly = assemble_graph_facts(value, files=files, archived=archived, normalize_blocks=normalize_blocks,
-                                                check_occurrences=check_occurrences, check_calls=check_calls)
+                                                check_occurrences=check_occurrences, check_calls=check_calls,
+                                                check_outcome_routes=check_outcome_routes)
         else:
             if context.get("slot_revisions"):
                 from skillflow.common.revision_slots import decode_revision_slots
@@ -167,12 +180,14 @@ def validate_graph(kind, value, context):
 class GraphFactsCorrection:
     identity = "skillflow-graph-facts-correction-v6"
 
-    def __init__(self, files, *, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True):
+    def __init__(self, files, *, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True,
+                 check_outcome_routes=True):
         self.files = files
         self.archived = archived
         self.normalize_blocks = normalize_blocks and not archived
         self.check_occurrences = check_occurrences and self.normalize_blocks
         self.check_calls = check_calls and self.check_occurrences
+        self.check_outcome_routes = check_outcome_routes and self.check_calls
         if not self.check_calls and self.identity == "skillflow-graph-facts-correction-v6":
             self.identity = "skillflow-graph-facts-correction-v5"
         if not self.check_occurrences and self.identity == "skillflow-graph-facts-correction-v5":
@@ -187,7 +202,8 @@ class GraphFactsCorrection:
 
     def _plan(self, candidate):
         return repair_input(files=self.files, previous=candidate, findings=[], accepted=False, archived=self.archived,
-                            normalize_blocks=self.normalize_blocks, check_occurrences=self.check_occurrences, check_calls=self.check_calls)
+                            normalize_blocks=self.normalize_blocks, check_occurrences=self.check_occurrences, check_calls=self.check_calls,
+                            check_outcome_routes=self.check_outcome_routes)
 
     def can_correct(self, candidate, diagnostics):
         material = self._plan(candidate)
@@ -196,12 +212,15 @@ class GraphFactsCorrection:
     def build_prompt(self, base_prompt, candidate, diagnostics):
         from .prompts import build_graph_updates_prompt
         return build_graph_updates_prompt(files=self.files, plan=self._plan(candidate)["plan"], archived_v17=self.archived,
-                                          normalize_blocks=self.normalize_blocks, check_occurrences=self.check_occurrences, check_calls=self.check_calls, revision_slots=False)
+                                          normalize_blocks=self.normalize_blocks, check_occurrences=self.check_occurrences,
+                                          check_calls=self.check_calls, revision_slots=False,
+                                          outcome_dispatch=self.check_outcome_routes)
 
     def merge(self, candidate, response):
         from .graph_slots import apply_graph_updates
         base, plan = checked_repair(self._plan(candidate), self.files, archived=self.archived,
-                                    normalize_blocks=self.normalize_blocks, check_occurrences=self.check_occurrences, check_calls=self.check_calls)
+                                    normalize_blocks=self.normalize_blocks, check_occurrences=self.check_occurrences, check_calls=self.check_calls,
+                                    check_outcome_routes=self.check_outcome_routes)
         try:
             self._merged = apply_graph_updates(base, plan, _json_object(response), files=self.files)
             return self._merged.facts

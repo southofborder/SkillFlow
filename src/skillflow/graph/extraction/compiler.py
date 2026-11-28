@@ -303,6 +303,9 @@ def compile_candidate(
         return CompileResult(diagnostics=diagnostics)
     if canonical_ids is not None:
         canonical_ids = allocate_candidate_ids(parsed, canonical_ids)
+    route_ids = canonical_ids
+    if route_ids is None and any("outcome_dispatch" in op.metadata for block in parsed.blocks for op in block.instructions):
+        route_ids = allocate_candidate_ids(parsed)
 
     warnings = list(parsed.diagnostics)
     block_refs: dict[str, int] = {}
@@ -409,6 +412,18 @@ def compile_candidate(
                     )
                 )
 
+            metadata = instruction.metadata
+            if "outcome_dispatch" in metadata:
+                route = metadata["outcome_dispatch"]
+                fields = {"producer": "instructions", "on_return": "blocks", "on_throw": "blocks"}
+                if (not isinstance(route, dict) or set(route) != set(fields)
+                        or any(not isinstance(route[key], str) or route[key] not in route_ids[table]
+                               for key, table in fields.items())):
+                    diagnostics.append(_diagnostic("OUTCOME_DISPATCH_REFERENCE", instruction_path + ".metadata.outcome_dispatch",
+                                                   "An outcome dispatch requires a declared producer and two declared continuations."))
+                else:
+                    metadata = {**metadata, "outcome_dispatch": {
+                        key: route_ids[table][route[key]] for key, table in fields.items()}}
             try:
                 canonical_instructions.append(
                     IRInstruction(
@@ -417,7 +432,7 @@ def compile_candidate(
                         inputs=canonical_inputs,
                         outputs=canonical_outputs,
                         constraints=instruction.constraints,
-                        metadata=instruction.metadata,
+                        metadata=metadata,
                         draft_instruction_id=instruction.instruction_ref,
                     )
                 )

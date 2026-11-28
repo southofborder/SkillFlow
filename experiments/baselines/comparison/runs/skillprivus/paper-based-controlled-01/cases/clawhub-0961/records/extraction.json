@@ -1,0 +1,1209 @@
+{
+  "request_sha256": "43254afb9d2cbc783fb39b369776bef2b50699389e2c9e307b95dada8ec44dc1",
+  "answer_sha256": "6efa8c79b1071ec035ad07eebeb853832037d8cef5a2273a44981480ec33083e",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from all supplied files without execution or additional reads. The implementation queries session metadata, produces local artifacts, and delegates AI summarization and context injection to OpenClaw. OpenClaw's implementation, context access, storage effects, transport, and external endpoints are not supplied. Legacy compression reselects the most recently updated session, configuration saves reload values before writing, and replacement injects into the literal destination main. Error-recovery branches are present, but set -euo pipefail can prevent their execution.",
+    "claim": "The skill advertises AI-powered context management for OpenClaw: ask an agent to summarize its conversation, back up and delete the session JSONL, then inject compressed context into a fresh session. It labels summarization without replacement as read-only and also offers usage monitoring and legacy extraction.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 9,
+        "end_line": 9,
+        "quote": "AI-powered context management for OpenClaw sessions. Uses the agent itself to generate intelligent summaries, then resets the session with compressed context."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 36,
+        "end_line": 40,
+        "quote": "1. **AI Summarization**: Sends a prompt to the agent asking it to summarize its own context\n2. **Backup**: Saves the original JSONL session file to `memory/compressed/`\n3. **Reset**: Deletes the JSONL file (official reset method)\n4. **Inject**: Sends the AI-generated summary as the first message in the fresh session\n5. **Result**: Same session key, new session ID, compressed context"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 50,
+        "end_line": 56,
+        "quote": "| `list` | List all sessions with token usage |\n| `status [KEY]` | Show detailed status for a session |\n| `summarize [KEY]` | Generate AI summary (read-only) |\n| `summarize [KEY] --replace` | Summarize AND reset session with compressed context |\n| `compress [KEY]` | Legacy grep-based extraction (not recommended) |\n| `check [KEY]` | Check if session exceeds threshold |\n| `check-all` | Check all sessions at once |"
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "Script location and state-directory environment values used to construct configuration, artifact, and session-file paths.",
+        "source": "BASH_SOURCE[0], OPENCLAW_STATE_DIR, and HOME in the shell execution context",
+        "recipient": "Local script path variables",
+        "condition": "Script location is resolved at startup; the state-directory override or HOME fallback is used during session lookup and replacement.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 12,
+            "end_line": 14,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nCOMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\"\nCONFIG_FILE=\"$SCRIPT_DIR/config.json\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 167,
+            "end_line": 168,
+            "quote": "    local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n    SESSION_FILE=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\""
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Read",
+        "data": "Compression threshold, depth, quiet-hours range, and total-compression counter. The supplied values are 80, balanced, an empty range, and 6; last_compression is present but is not loaded by this function.",
+        "source": "$SCRIPT_DIR/config.json",
+        "recipient": "THRESHOLD, DEPTH, QUIET_HOURS, and TOTAL_COMPRESSIONS runtime variables",
+        "condition": "When load_config runs and the configuration file exists; otherwise defaults are assigned.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 14,
+            "end_line": 14,
+            "quote": "CONFIG_FILE=\"$SCRIPT_DIR/config.json\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 77,
+            "end_line": 89,
+            "quote": "load_config() {\n    if [[ -f \"$CONFIG_FILE\" ]]; then\n        THRESHOLD=$(jq -r '.threshold // env.DEFAULT_THRESHOLD' \"$CONFIG_FILE\" 2>/dev/null || echo \"$DEFAULT_THRESHOLD\")\n        DEPTH=$(jq -r '.depth // env.DEFAULT_DEPTH' \"$CONFIG_FILE\" 2>/dev/null || echo \"$DEFAULT_DEPTH\")\n        QUIET_HOURS=$(jq -r '.quiet_hours // \"\"' \"$CONFIG_FILE\" 2>/dev/null || echo \"\")\n        TOTAL_COMPRESSIONS=$(jq -r '.total_compressions // 0' \"$CONFIG_FILE\" 2>/dev/null || echo \"0\")\n    else\n        THRESHOLD=$DEFAULT_THRESHOLD\n        DEPTH=$DEFAULT_DEPTH\n        QUIET_HOURS=\"\"\n        TOTAL_COMPRESSIONS=0\n    fi\n}"
+          },
+          {
+            "path": "config.json",
+            "start_line": 1,
+            "end_line": 7,
+            "quote": "{\n  \"threshold\": 80,\n  \"depth\": \"balanced\",\n  \"quiet_hours\": \"\",\n  \"last_compression\": \"2026-01-27T11:51:26-05:00\",\n  \"total_compressions\": 6\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Save",
+        "data": "Overwritten configuration containing threshold, depth, quiet hours, current timestamp, and a counter incremented by one. save_config reloads configuration first, so preceding setter assignments can be overwritten.",
+        "source": "Reloaded configuration or defaults, host date command, and TOTAL_COMPRESSIONS",
+        "recipient": "$SCRIPT_DIR/config.json",
+        "condition": "Called after legacy compression and by configuration setters; the counter also increments for setter calls.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 14,
+            "end_line": 14,
+            "quote": "CONFIG_FILE=\"$SCRIPT_DIR/config.json\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 92,
+            "end_line": 103,
+            "quote": "save_config() {\n    load_config\n    cat > \"$CONFIG_FILE\" <<EOF\n{\n  \"threshold\": $THRESHOLD,\n  \"depth\": \"$DEPTH\",\n  \"quiet_hours\": \"$QUIET_HOURS\",\n  \"last_compression\": \"$(date -Iseconds 2>/dev/null || echo \"\")\",\n  \"total_compressions\": $((TOTAL_COMPRESSIONS + 1))\n}\nEOF\n}"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 498,
+            "end_line": 499,
+            "quote": "    # Save configuration with updated compression count\n    save_config"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 602,
+            "end_line": 603,
+            "quote": "    THRESHOLD=$new_threshold\n    save_config"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 616,
+            "end_line": 617,
+            "quote": "    DEPTH=$new_depth\n    save_config"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 625,
+            "end_line": 638,
+            "quote": "    if [[ -z \"$range\" ]]; then\n        QUIET_HOURS=\"\"\n        echo -e \"${GREEN}✅ Quiet hours disabled${NC}\"\n    else\n        # Validate format HH:00-HH:00\n        if ! [[ \"$range\" =~ ^[0-2][0-9]:00-[0-2][0-9]:00$ ]]; then\n            echo -e \"${RED}Error: Format must be HH:00-HH:00 (e.g., 23:00-07:00)${NC}\"\n            exit 1\n        fi\n        QUIET_HOURS=$range\n        echo -e \"${GREEN}✅ Quiet hours set to ${QUIET_HOURS}${NC}\"\n    fi\n    \n    save_config"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Read",
+        "data": "Session JSON returned by OpenClaw, including session count, update timestamps, keys, IDs, kinds, models, total tokens, and context-token capacities where present.",
+        "source": "Standard output of openclaw sessions --json; its underlying storage and transport are not supplied",
+        "recipient": "Local sessions_json variables and jq processing",
+        "condition": "Session lookup, list, and check-all call this command; command stderr is discarded.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 105,
+            "end_line": 108,
+            "quote": "# Get all sessions as JSON\nget_all_sessions() {\n    openclaw sessions --json 2>/dev/null\n}"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 114,
+            "end_line": 117,
+            "quote": "get_session_info() {\n    local target_session=\"${1:-}\"\n    local sessions_json\n    sessions_json=$(get_all_sessions)"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 512,
+            "end_line": 513,
+            "quote": "    local sessions_json\n    sessions_json=$(get_all_sessions)"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 858,
+            "end_line": 859,
+            "quote": "    local sessions_json\n    sessions_json=$(get_all_sessions)"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Infer",
+        "data": "Selected session, extracted metadata, agent identifier derived from the session key, and corresponding local JSONL path.",
+        "source": "OpenClaw session JSON, optional target key or ID, and state-directory environment values",
+        "recipient": "Session runtime variables and SESSION_FILE",
+        "condition": "An omitted target selects the last session after sorting by updatedAt; a supplied target matches key or sessionId. Missing session files cause lookup failure.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 114,
+            "end_line": 117,
+            "quote": "get_session_info() {\n    local target_session=\"${1:-}\"\n    local sessions_json\n    sessions_json=$(get_all_sessions)"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 130,
+            "end_line": 144,
+            "quote": "    local session_data\n    if [[ -z \"$target_session\" ]]; then\n        # Get the most recently updated session\n        session_data=$(echo \"$sessions_json\" | jq -r '.sessions | sort_by(.updatedAt) | last')\n    else\n        # Find session by key or sessionId\n        session_data=$(echo \"$sessions_json\" | jq -r --arg target \"$target_session\" \\\n            '.sessions[] | select(.key == $target or .sessionId == $target)')\n        \n        if [[ -z \"$session_data\" ]] || [[ \"$session_data\" == \"null\" ]]; then\n            echo \"Error: Session not found: $target_session\" >&2\n            echo \"Run './compress.sh list' to see available sessions.\" >&2\n            return 1\n        fi\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 157,
+            "end_line": 174,
+            "quote": "    # Extract session metadata and token usage\n    SESSION_ID=$(echo \"$session_data\" | jq -r '.sessionId // \"unknown\"')\n    SESSION_KEY=$(echo \"$session_data\" | jq -r '.key // \"unknown\"')\n    SESSION_KIND=$(echo \"$session_data\" | jq -r '.kind // \"unknown\"')\n    SESSION_MODEL=$(echo \"$session_data\" | jq -r '.model // \"unknown\"')\n    AGENT_ID=$(echo \"$SESSION_KEY\" | cut -d':' -f2) # Extract from key like \"agent:main:...\"\n    CURRENT_TOKENS=$(echo \"$session_data\" | jq -r '.totalTokens // 0')\n    MAX_TOKENS=$(echo \"$session_data\" | jq -r '.contextTokens // 100000')\n\n    # Determine session file path\n    local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n    SESSION_FILE=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\"\n\n    if [[ ! -f \"$SESSION_FILE\" ]]; then\n        echo \"Warning: Session file not found: $SESSION_FILE\" >&2\n        SESSION_FILE=\"\"\n        return 1\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Infer",
+        "data": "Integer context-usage percentages and classifications against the configured threshold and, for list/check-all coloring, 90 percent.",
+        "source": "Session totalTokens and contextTokens plus THRESHOLD",
+        "recipient": "Local usage/status variables, reports, and the check command's compression decision",
+        "condition": "Calculated for session monitoring. check invokes legacy compression when usage reaches the threshold and quiet hours do not prevent it.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 529,
+            "end_line": 539,
+            "quote": "    echo \"$sessions_json\" | jq -r '.sessions | sort_by(.updatedAt) | reverse | .[] | [.key, .kind, .totalTokens, .contextTokens] | @tsv' | \\\n    while IFS=$'\\t' read -r key kind tokens context; do\n        local usage=$((tokens * 100 / context))\n        local usage_color=\"$GREEN\"\n        if [[ $usage -ge $THRESHOLD ]]; then\n            usage_color=\"$YELLOW\"\n        fi\n        if [[ $usage -ge 90 ]]; then\n            usage_color=\"$RED\"\n        fi\n        printf \"%-4s %-45s %-8s %8s ${usage_color}%7s%%${NC}\\n\" \"$i\" \"$key\" \"$kind\" \"$tokens\" \"$usage\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 675,
+            "end_line": 694,
+            "quote": "    # Prevent division by zero\n    if [[ \"$MAX_TOKENS\" -le 0 ]]; then\n        MAX_TOKENS=100000\n    fi\n    local usage=$((CURRENT_TOKENS * 100 / MAX_TOKENS))\n    \n    echo \"Session: $SESSION_KEY\"\n    echo \"Context usage: ${usage}% (threshold: ${THRESHOLD}%)\"\n    \n    if in_quiet_hours; then\n        echo \"In quiet hours - skipping compression check.\"\n        exit 0\n    fi\n    \n    if [[ \"$usage\" -ge \"$THRESHOLD\" ]]; then\n        echo -e \"${YELLOW}⚠️  Context above threshold. Compressing...${NC}\"\n        compress_session\n    else\n        echo -e \"${GREEN}✓ Context within limits${NC}\"\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Infer",
+        "data": "Whether the current local hour falls within the configured quiet-hours interval, using only hour components.",
+        "source": "Host date +%H output and QUIET_HOURS loaded from configuration",
+        "recipient": "Quiet-hours return status controlling compress and check",
+        "condition": "A nonempty quiet-hours value is evaluated; overnight and same-day ranges use separate comparisons. These gates are not present in AI summarization.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 193,
+            "end_line": 216,
+            "quote": "in_quiet_hours() {\n    if [[ -z \"$QUIET_HOURS\" ]]; then\n        return 1\n    fi\n\n    local current_hour=$(date +%H)\n    local start=$(echo \"$QUIET_HOURS\" | cut -d'-' -f1 | cut -d':' -f1)\n    local end=$(echo \"$QUIET_HOURS\" | cut -d'-' -f2 | cut -d':' -f1)\n\n    # Handle overnight ranges (e.g., 23:00-07:00)\n    if [[ \"$start\" -gt \"$end\" ]]; then\n        # Overnight: current hour >= start OR current hour < end\n        if [[ \"$current_hour\" -ge \"$start\" ]] || [[ \"$current_hour\" -lt \"$end\" ]]; then\n            return 0\n        fi\n    else\n        # Same day: current hour >= start AND current hour < end\n        if [[ \"$current_hour\" -ge \"$start\" ]] && [[ \"$current_hour\" -lt \"$end\" ]]; then\n            return 0\n        fi\n    fi\n\n    return 1\n}"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 649,
+            "end_line": 652,
+            "quote": "    if in_quiet_hours; then\n        echo -e \"${YELLOW}⏸️  In quiet hours (${QUIET_HOURS}). Compression skipped.${NC}\"\n        exit 0\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 684,
+            "end_line": 687,
+            "quote": "    if in_quiet_hours; then\n        echo \"In quiet hours - skipping compression check.\"\n        exit 0\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Read",
+        "data": "Names of files matching *.summary.md and their count; file contents are not read by this operation.",
+        "source": "$SCRIPT_DIR/memory/compressed directory",
+        "recipient": "Local compressions variable",
+        "condition": "During status reporting if the compressed-artifact directory exists.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 577,
+            "end_line": 581,
+            "quote": "    if [[ -d \"$COMPRESSED_DIR\" ]]; then\n        local compressions\n        compressions=$(find \"$COMPRESSED_DIR\" -maxdepth 1 -name \"*.summary.md\" 2>/dev/null | wc -l | tr -d ' ')\n        echo \"  Compressions: $compressions\"\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Send",
+        "data": "Session keys, IDs, kinds, model names, token counts, usage percentages, threshold classifications, artifact counts and paths; optional troubleshooting directory listings and filtered log records.",
+        "source": "Queried session metadata, derived monitoring values, artifact paths/counts, and optional diagnostic command output",
+        "recipient": "Standard output; downstream consumer is unspecified",
+        "condition": "Corresponding list, status, check-all, legacy compression/handoff commands, or documented troubleshooting commands are invoked.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 529,
+            "end_line": 539,
+            "quote": "    echo \"$sessions_json\" | jq -r '.sessions | sort_by(.updatedAt) | reverse | .[] | [.key, .kind, .totalTokens, .contextTokens] | @tsv' | \\\n    while IFS=$'\\t' read -r key kind tokens context; do\n        local usage=$((tokens * 100 / context))\n        local usage_color=\"$GREEN\"\n        if [[ $usage -ge $THRESHOLD ]]; then\n            usage_color=\"$YELLOW\"\n        fi\n        if [[ $usage -ge 90 ]]; then\n            usage_color=\"$RED\"\n        fi\n        printf \"%-4s %-45s %-8s %8s ${usage_color}%7s%%${NC}\\n\" \"$i\" \"$key\" \"$kind\" \"$tokens\" \"$usage\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 568,
+            "end_line": 580,
+            "quote": "    echo \"  Session Key: ${SESSION_KEY}\"\n    echo \"  Session ID:  ${SESSION_ID}\"\n    echo \"  Kind:        ${SESSION_KIND}\"\n    echo \"  Model:       ${SESSION_MODEL}\"\n    echo \"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\"\n    echo \"  Threshold:   ${THRESHOLD}%\"\n    echo \"  Tokens:      ${CURRENT_TOKENS} / ${MAX_TOKENS}\"\n    echo \"  Usage:       ${usage}%\"\n    \n    if [[ -d \"$COMPRESSED_DIR\" ]]; then\n        local compressions\n        compressions=$(find \"$COMPRESSED_DIR\" -maxdepth 1 -name \"*.summary.md\" 2>/dev/null | wc -l | tr -d ' ')\n        echo \"  Compressions: $compressions\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 871,
+            "end_line": 887,
+            "quote": "    echo \"$sessions_json\" | jq -r '.sessions[] | [.key, .totalTokens, .contextTokens] | @tsv' | \\\n    while IFS=$'\\t' read -r key tokens context; do\n        local usage=$((tokens * 100 / context))\n        local status=\"✓\"\n        local color=\"$GREEN\"\n        \n        if [[ $usage -ge $THRESHOLD ]]; then\n            status=\"⚠️\"\n            color=\"$YELLOW\"\n            needs_compression=1\n        fi\n        if [[ $usage -ge 90 ]]; then\n            color=\"$RED\"\n        fi\n        \n        printf \"${color}%s %3s%%${NC} %s\\n\" \"$status\" \"$usage\" \"$key\"\n    done"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 415,
+            "end_line": 416,
+            "quote": "    echo \"📄 Summary: $summary_file\"\n    echo \"📋 Continuation: $continuation_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 444,
+            "end_line": 446,
+            "quote": "    echo \"  Session: $SESSION_ID\"\n    echo \"  Agent: $AGENT_ID\"\n    echo \"  File: $SESSION_FILE\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 492,
+            "end_line": 493,
+            "quote": "    echo \"  - Transcript: $transcript_file\"\n    echo \"  - Summary: $summary_file\""
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 197,
+            "end_line": 197,
+            "quote": "ls ~/.openclaw/agents/main/sessions/"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 212,
+            "end_line": 212,
+            "quote": "openclaw logs --limit 50 --json | grep -i \"error\\|fail\""
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Read",
+        "data": "Session JSONL records after the first line, extracting message roles and text elements and flattening text newlines into spaces.",
+        "source": "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl",
+        "recipient": "Local role/content variables in the legacy transcript-extraction loop",
+        "condition": "Legacy compression reaches transcript extraction and the file exists. compress_session calls get_session_info without the previously supplied target, reselecting the most recently updated session.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 131,
+            "end_line": 133,
+            "quote": "    if [[ -z \"$target_session\" ]]; then\n        # Get the most recently updated session\n        session_data=$(echo \"$sessions_json\" | jq -r '.sessions | sort_by(.updatedAt) | last')"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 158,
+            "end_line": 168,
+            "quote": "    SESSION_ID=$(echo \"$session_data\" | jq -r '.sessionId // \"unknown\"')\n    SESSION_KEY=$(echo \"$session_data\" | jq -r '.key // \"unknown\"')\n    SESSION_KIND=$(echo \"$session_data\" | jq -r '.kind // \"unknown\"')\n    SESSION_MODEL=$(echo \"$session_data\" | jq -r '.model // \"unknown\"')\n    AGENT_ID=$(echo \"$SESSION_KEY\" | cut -d':' -f2) # Extract from key like \"agent:main:...\"\n    CURRENT_TOKENS=$(echo \"$session_data\" | jq -r '.totalTokens // 0')\n    MAX_TOKENS=$(echo \"$session_data\" | jq -r '.contextTokens // 100000')\n\n    # Determine session file path\n    local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n    SESSION_FILE=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 438,
+            "end_line": 442,
+            "quote": "    # Get current session info\n    if ! get_session_info; then\n        echo -e \"${RED}Error: Could not get session info${NC}\" >&2\n        return 1\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 466,
+            "end_line": 479,
+            "quote": "    # Read and parse JSONL transcript file\n    if [[ -f \"$SESSION_FILE\" ]]; then\n        echo \"  Reading session file...\"\n\n        # Skip first line (metadata), process rest as messages\n        tail -n +2 \"$SESSION_FILE\" | while IFS= read -r line; do\n            # Extract role and content from each message\n            local role=$(echo \"$line\" | jq -r '.message.role // \"unknown\"' 2>/dev/null)\n            local content=$(echo \"$line\" | jq -r '.message.content[]?.text // empty' 2>/dev/null | tr '\\n' ' ')\n\n            if [[ -n \"$content\" ]]; then\n                echo \"$role: $content\" >> \"$transcript_file\"\n            fi\n        done"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Save",
+        "data": "Legacy Markdown transcript with session key/ID, agent, timestamp, token statistics, threshold/depth settings, and nonempty role-prefixed message text.",
+        "source": "Session metadata, configuration, host date output, and parsed session JSONL text",
+        "recipient": "$SCRIPT_DIR/memory/compressed/{timestamp}.transcript.md",
+        "condition": "During legacy compression after successful session lookup. The header is written before message extraction; a missing file at the subsequent check appends an unavailable marker and returns failure. No artifact expiry is specified.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 431,
+            "end_line": 433,
+            "quote": "    local session_id=$(date +%Y%m%d-%H%M%S)\n    local transcript_file=\"$COMPRESSED_DIR/$session_id.transcript.md\"\n    local summary_file=\"$COMPRESSED_DIR/$session_id.summary.md\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 449,
+            "end_line": 464,
+            "quote": "    cat > \"$transcript_file\" <<EOF\n# Session Transcript - $SESSION_ID\nSession Key: $SESSION_KEY\nAgent: $AGENT_ID\nTimestamp: $(date -Iseconds 2>/dev/null || date)\n\n## Session Statistics\n- Context Usage: $((CURRENT_TOKENS * 100 / MAX_TOKENS))%\n- Current Tokens: $CURRENT_TOKENS\n- Max Tokens: $MAX_TOKENS\n- Threshold: ${THRESHOLD}%\n- Compression Depth: ${DEPTH}\n\n## Transcript\n\nEOF"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 471,
+            "end_line": 479,
+            "quote": "        tail -n +2 \"$SESSION_FILE\" | while IFS= read -r line; do\n            # Extract role and content from each message\n            local role=$(echo \"$line\" | jq -r '.message.role // \"unknown\"' 2>/dev/null)\n            local content=$(echo \"$line\" | jq -r '.message.content[]?.text // empty' 2>/dev/null | tr '\\n' ' ')\n\n            if [[ -n \"$content\" ]]; then\n                echo \"$role: $content\" >> \"$transcript_file\"\n            fi\n        done"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 482,
+            "end_line": 485,
+            "quote": "    else\n        echo -e \"${RED}Error: Session file not found: $SESSION_FILE${NC}\" >&2\n        echo \"[Transcript unavailable - session file not found]\" >> \"$transcript_file\"\n        return 1"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Read",
+        "data": "Current working-directory path, up to ten lines of short Git status, and up to ten recent one-line Git commits.",
+        "source": "pwd and Git commands in the script's current execution directory",
+        "recipient": "Legacy summary-generation command pipelines",
+        "condition": "During generate_summary. The execution directory is not necessarily SCRIPT_DIR; Git failures produce fallback text.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 354,
+            "end_line": 357,
+            "quote": "    # Add current working directory and key files\n    echo \"- Working Directory: $(pwd)\" >> \"$output\"\n    echo \"- Git Status:\" >> \"$output\"\n    git status --short 2>/dev/null | head -10 >> \"$output\" || echo \"  (Not a git repository)\" >> \"$output\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 365,
+            "end_line": 367,
+            "quote": "    # Add recent git commits as timeline\n    echo -e \"\\n## Recent Activity\" >> \"$output\"\n    git log --oneline -10 2>/dev/null >> \"$output\" || echo \"  No git history\" >> \"$output\""
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Read",
+        "data": "Legacy transcript contents searched for decision language, file-modification statements, code fences, and pending-task language.",
+        "source": "The generated {timestamp}.transcript.md passed to generate_summary and its four extractors",
+        "recipient": "Local grep/head pipelines",
+        "condition": "During legacy summary generation when each extractor's transcript existence check succeeds.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 337,
+            "end_line": 340,
+            "quote": "generate_summary() {\n    local transcript=\"$1\"\n    local session_id=\"$2\"\n    local output=\"$3\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 360,
+            "end_line": 363,
+            "quote": "    extract_decisions \"$transcript\" \"$output\"\n    extract_files \"$transcript\" \"$output\"\n    extract_code \"$transcript\" \"$output\"\n    extract_todos \"$transcript\" \"$output\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 259,
+            "end_line": 261,
+            "quote": "    if grep -i \"decided\\|decision\\|chose\\|chose to\\|we'll\\|we're going\\|let's go with\\|i'll use\\|using\" \"$transcript\" 2>/dev/null | \\\n        grep -v \"let me know\\|feel free to\\|you might want\" | \\\n        head -20 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 282,
+            "end_line": 284,
+            "quote": "    if grep -E \"(created|modified|edited|updated|deleted|changed)\" \"$transcript\" 2>/dev/null | \\\n        grep -E \"\\.(tsx|ts|jsx|js|py|md|json|yaml|yml|css|html|svelte|sh|bash)$\" | \\\n        head -15 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 305,
+            "end_line": 305,
+            "quote": "    if grep -A5 '```' \"$transcript\" 2>/dev/null | head -100 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 326,
+            "end_line": 327,
+            "quote": "    if grep -i \"todo\\|to-do\\|pending\\|still need\\|remaining\\|next step\" \"$transcript\" 2>/dev/null | \\\n        head -10 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Infer",
+        "data": "Heuristically categorized legacy summary excerpts: up to 20 decision lines, 15 file-modification lines, 100 lines from code-fence matches with five following lines, and 10 pending-task lines.",
+        "source": "Legacy transcript text",
+        "recipient": "Decision, file-modification, code-snippet, and pending-task summary sections",
+        "condition": "Selection is by the literal grep patterns, not verified semantic understanding. Sections are appended only when their pipelines succeed and their temporary files are nonempty.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 259,
+            "end_line": 264,
+            "quote": "    if grep -i \"decided\\|decision\\|chose\\|chose to\\|we'll\\|we're going\\|let's go with\\|i'll use\\|using\" \"$transcript\" 2>/dev/null | \\\n        grep -v \"let me know\\|feel free to\\|you might want\" | \\\n        head -20 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then\n        echo -e \"\\n## Key Decisions\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\"\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 282,
+            "end_line": 287,
+            "quote": "    if grep -E \"(created|modified|edited|updated|deleted|changed)\" \"$transcript\" 2>/dev/null | \\\n        grep -E \"\\.(tsx|ts|jsx|js|py|md|json|yaml|yml|css|html|svelte|sh|bash)$\" | \\\n        head -15 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then\n        echo -e \"\\n## File Modifications\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\"\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 305,
+            "end_line": 308,
+            "quote": "    if grep -A5 '```' \"$transcript\" 2>/dev/null | head -100 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then\n        echo -e \"\\n## Code Snippets\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\"\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 326,
+            "end_line": 330,
+            "quote": "    if grep -i \"todo\\|to-do\\|pending\\|still need\\|remaining\\|next step\" \"$transcript\" 2>/dev/null | \\\n        head -10 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then\n        echo -e \"\\n## Pending Tasks\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\"\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Save",
+        "data": "Temporary files containing the four legacy extractors' filtered transcript excerpts, or empty results.",
+        "source": "Transcript grep/head pipeline output",
+        "recipient": "Separate paths returned by mktemp; directory and filenames are unspecified",
+        "condition": "Each extractor allocates a temporary file before its transcript existence check and populates it when its search runs. Paths are registered for cleanup.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 251,
+            "end_line": 253,
+            "quote": "    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 259,
+            "end_line": 261,
+            "quote": "    if grep -i \"decided\\|decision\\|chose\\|chose to\\|we'll\\|we're going\\|let's go with\\|i'll use\\|using\" \"$transcript\" 2>/dev/null | \\\n        grep -v \"let me know\\|feel free to\\|you might want\" | \\\n        head -20 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 274,
+            "end_line": 276,
+            "quote": "    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 282,
+            "end_line": 284,
+            "quote": "    if grep -E \"(created|modified|edited|updated|deleted|changed)\" \"$transcript\" 2>/dev/null | \\\n        grep -E \"\\.(tsx|ts|jsx|js|py|md|json|yaml|yml|css|html|svelte|sh|bash)$\" | \\\n        head -15 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 297,
+            "end_line": 299,
+            "quote": "    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 305,
+            "end_line": 305,
+            "quote": "    if grep -A5 '```' \"$transcript\" 2>/dev/null | head -100 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 318,
+            "end_line": 320,
+            "quote": "    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 326,
+            "end_line": 327,
+            "quote": "    if grep -i \"todo\\|to-do\\|pending\\|still need\\|remaining\\|next step\" \"$transcript\" 2>/dev/null | \\\n        head -10 > \"$temp_file\" && [[ -s \"$temp_file\" ]]; then"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Delete",
+        "data": "Tracked temporary excerpt files, including the generic helper's temporary file if that helper is invoked.",
+        "source": "Paths created by mktemp and added to TEMP_FILES",
+        "recipient": null,
+        "condition": "Removed explicitly at normal helper completion; an EXIT trap also removes tracked paths that still exist as files. This is ordinary rm deletion, with no secure-erasure mechanism shown.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 42,
+            "end_line": 49,
+            "quote": "cleanup() {\n    if [[ ${#TEMP_FILES[@]} -gt 0 ]]; then\n        for f in \"${TEMP_FILES[@]}\"; do\n            [[ -f \"$f\" ]] && rm -f \"$f\"\n        done\n    fi\n}\ntrap cleanup EXIT"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 233,
+            "end_line": 234,
+            "quote": "    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 243,
+            "end_line": 243,
+            "quote": "    rm -f \"$temp_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 252,
+            "end_line": 253,
+            "quote": "    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 266,
+            "end_line": 266,
+            "quote": "    rm -f \"$temp_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 275,
+            "end_line": 276,
+            "quote": "    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 289,
+            "end_line": 289,
+            "quote": "    rm -f \"$temp_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 298,
+            "end_line": 299,
+            "quote": "    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 310,
+            "end_line": 310,
+            "quote": "    rm -f \"$temp_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 319,
+            "end_line": 320,
+            "quote": "    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 332,
+            "end_line": 332,
+            "quote": "    rm -f \"$temp_file\""
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Save",
+        "data": "Legacy summary containing a timestamp-based job identifier, generation time, current working directory, Git status/history, selected transcript excerpts, continuation notes, and a transcript path.",
+        "source": "Generated boilerplate, host execution context, Git output, and temporary transcript-excerpt files",
+        "recipient": "$SCRIPT_DIR/memory/compressed/{timestamp}.summary.md",
+        "condition": "During legacy compression after transcript extraction; matching extractor sections are appended conditionally. No expiry is specified.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 431,
+            "end_line": 433,
+            "quote": "    local session_id=$(date +%Y%m%d-%H%M%S)\n    local transcript_file=\"$COMPRESSED_DIR/$session_id.transcript.md\"\n    local summary_file=\"$COMPRESSED_DIR/$session_id.summary.md\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 489,
+            "end_line": 489,
+            "quote": "    generate_summary \"$transcript_file\" \"$session_id\" \"$summary_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 337,
+            "end_line": 372,
+            "quote": "generate_summary() {\n    local transcript=\"$1\"\n    local session_id=\"$2\"\n    local output=\"$3\"\n    \n    local timestamp=$(date -Iseconds 2>/dev/null || date)\n    \n    cat > \"$output\" <<EOF\n# Session Summary - $session_id\nGenerated: $timestamp\n\n## Executive Summary\nAutomated context compression summary for session handoff.\n\n## Session Context\nEOF\n    \n    # Add current working directory and key files\n    echo \"- Working Directory: $(pwd)\" >> \"$output\"\n    echo \"- Git Status:\" >> \"$output\"\n    git status --short 2>/dev/null | head -10 >> \"$output\" || echo \"  (Not a git repository)\" >> \"$output\"\n    \n    # Extract key information\n    extract_decisions \"$transcript\" \"$output\"\n    extract_files \"$transcript\" \"$output\"\n    extract_code \"$transcript\" \"$output\"\n    extract_todos \"$transcript\" \"$output\"\n    \n    # Add recent git commits as timeline\n    echo -e \"\\n## Recent Activity\" >> \"$output\"\n    git log --oneline -10 2>/dev/null >> \"$output\" || echo \"  No git history\" >> \"$output\"\n    \n    echo -e \"\\n## Continuation Notes\" >> \"$output\"\n    echo \"This summary was automatically generated to preserve context across session handoff.\" >> \"$output\"\n    echo \"For full details, see: $COMPRESSED_DIR/$session_id.transcript.md\" >> \"$output\"\n}"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 262,
+            "end_line": 263,
+            "quote": "        echo -e \"\\n## Key Decisions\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 285,
+            "end_line": 286,
+            "quote": "        echo -e \"\\n## File Modifications\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 306,
+            "end_line": 307,
+            "quote": "        echo -e \"\\n## Code Snippets\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 328,
+            "end_line": 329,
+            "quote": "        echo -e \"\\n## Pending Tasks\" >> \"$output\"\n        cat \"$temp_file\" >> \"$output\""
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Read",
+        "data": "Legacy summary lines matching Key Decisions and Pending Tasks headings, with ten following lines for each match.",
+        "source": "$SCRIPT_DIR/memory/compressed/{timestamp}.summary.md",
+        "recipient": "Local grep pipelines preparing continuation text",
+        "condition": "handoff_to_new_session runs after legacy compression and the summary file exists.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 375,
+            "end_line": 378,
+            "quote": "handoff_to_new_session() {\n    local session_id=\"$1\"\n    local summary_file=\"$COMPRESSED_DIR/$session_id.summary.md\"\n    local continuation_file=\"$COMPRESSED_DIR/$session_id.continuation.txt\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 383,
+            "end_line": 386,
+            "quote": "    if [[ ! -f \"$summary_file\" ]]; then\n        echo -e \"${RED}Error: Summary file not found: $summary_file${NC}\" >&2\n        return 1\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 399,
+            "end_line": 400,
+            "quote": "    grep -A 10 \"## Key Decisions\" \"$summary_file\" >> \"$continuation_file\" 2>/dev/null || true\n    grep -A 10 \"## Pending Tasks\" \"$summary_file\" >> \"$continuation_file\" 2>/dev/null || true"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Save",
+        "data": "Continuation prompt containing compression time, summary location, selected decision/task sections, and instructions to start a new session.",
+        "source": "Host date output, legacy summary path and matched summary text, and fixed instructions",
+        "recipient": "$SCRIPT_DIR/memory/compressed/{timestamp}.continuation.txt",
+        "condition": "Legacy handoff finds its summary file. This path creates a copy/paste artifact; it does not itself invoke an agent or reset a session. No expiry is specified.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 375,
+            "end_line": 378,
+            "quote": "handoff_to_new_session() {\n    local session_id=\"$1\"\n    local summary_file=\"$COMPRESSED_DIR/$session_id.summary.md\"\n    local continuation_file=\"$COMPRESSED_DIR/$session_id.continuation.txt\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 388,
+            "end_line": 408,
+            "quote": "    # Create a continuation prompt file for easy copy/paste\n    cat > \"$continuation_file\" <<EOF\nContext was compressed at $(date). Please review the summary below and continue work.\n\nSummary location: $summary_file\n\nKey points from previous session:\n---\nEOF\n\n    # Extract key sections from summary\n    grep -A 10 \"## Key Decisions\" \"$summary_file\" >> \"$continuation_file\" 2>/dev/null || true\n    grep -A 10 \"## Pending Tasks\" \"$summary_file\" >> \"$continuation_file\" 2>/dev/null || true\n\n    cat >> \"$continuation_file\" <<EOF\n\n---\nFor full details, see: $summary_file\n\nTo continue with compressed context, start a new session with /new or /reset\nEOF"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 501,
+            "end_line": 502,
+            "quote": "    # Trigger session handoff\n    handoff_to_new_session \"$session_id\""
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Send",
+        "data": "Selected session ID and a fixed request to summarize accomplishments, decisions, current state, pending tasks, and important context, with an instruction not to use tools. The shell command does not inline the JSONL transcript.",
+        "source": "SESSION_ID selected by get_session_info and the script's prompt string",
+        "recipient": "OpenClaw agent addressed by --session-id \"$SESSION_ID\"; further routing is unspecified",
+        "condition": "summarize, ai-summarize, or ai is invoked and session lookup succeeds, with or without --replace.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 720,
+            "end_line": 722,
+            "quote": "    if ! get_session_info \"$target_session\"; then\n        return 1\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 731,
+            "end_line": 745,
+            "quote": "    # Summarization prompt\n    local prompt='Please provide a comprehensive summary of our conversation so far. Include:\n1. **What was accomplished** - Key tasks completed\n2. **Key decisions made** - Important choices and their rationale  \n3. **Current state** - Where we left off\n4. **Pending tasks** - What still needs to be done\n5. **Important context** - Any critical information to remember\n\nFormat this as a clear, structured summary that could be used to continue this work in a new session. Do NOT use any tools, just write the summary.'\n    \n    # Call the agent with the summarization prompt\n    # Note: redirect stderr to /dev/null to avoid Node deprecation warnings breaking JSON\n    local response\n    response=$(openclaw agent --session-id \"$SESSION_ID\" -m \"$prompt\" --json 2>/dev/null)\n    local exit_code=$?"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 909,
+            "end_line": 911,
+            "quote": "    summarize|ai-summarize|ai)\n        shift\n        cmd_ai_summarize \"$@\""
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Infer",
+        "data": "Requested structured conversation summary covering completed tasks, decision rationale, current state, outstanding work, and critical context.",
+        "source": "The conversation context the selected OpenClaw agent is asked to summarize; its actual availability and scope are not demonstrated",
+        "recipient": "Expected agent summary response",
+        "condition": "Delegated through the summarization prompt. The agent implementation and actual summarization behavior are outside the supplied source.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 732,
+            "end_line": 739,
+            "quote": "    local prompt='Please provide a comprehensive summary of our conversation so far. Include:\n1. **What was accomplished** - Key tasks completed\n2. **Key decisions made** - Important choices and their rationale  \n3. **Current state** - Where we left off\n4. **Pending tasks** - What still needs to be done\n5. **Important context** - Any critical information to remember\n\nFormat this as a clear, structured summary that could be used to continue this work in a new session. Do NOT use any tools, just write the summary.'"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 744,
+            "end_line": 744,
+            "quote": "    response=$(openclaw agent --session-id \"$SESSION_ID\" -m \"$prompt\" --json 2>/dev/null)"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Read",
+        "data": "Agent CLI JSON response and extracted summary text, using result.payloads[0].text with alternative message/content/text fields.",
+        "source": "Standard output of the selected-session openclaw agent command",
+        "recipient": "Local response and summary_text variables",
+        "condition": "During AI summarization; command stderr is discarded. Empty extracted text takes the raw-response diagnostic branch.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 743,
+            "end_line": 745,
+            "quote": "    local response\n    response=$(openclaw agent --session-id \"$SESSION_ID\" -m \"$prompt\" --json 2>/dev/null)\n    local exit_code=$?"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 753,
+            "end_line": 762,
+            "quote": "    # Extract the response text from openclaw agent --json output\n    # Structure: { result: { payloads: [{ text: \"...\" }] } }\n    local summary_text\n    summary_text=$(echo \"$response\" | jq -r '.result.payloads[0].text // .message.content[0].text // .content // .text // empty' 2>/dev/null)\n    \n    if [[ -z \"$summary_text\" ]]; then\n        echo -e \"${YELLOW}Raw response:${NC}\"\n        echo \"$response\"\n        return 1\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Save",
+        "data": "AI summary text plus session key, session ID, generation timestamp, and model name.",
+        "source": "Extracted agent response, selected session metadata, and host date output",
+        "recipient": "$SCRIPT_DIR/memory/compressed/{timestamp}.ai-summary.md",
+        "condition": "Summary extraction is nonempty, including when --replace is absent. No expiry or pruning is specified.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 755,
+            "end_line": 762,
+            "quote": "    local summary_text\n    summary_text=$(echo \"$response\" | jq -r '.result.payloads[0].text // .message.content[0].text // .content // .text // empty' 2>/dev/null)\n    \n    if [[ -z \"$summary_text\" ]]; then\n        echo -e \"${YELLOW}Raw response:${NC}\"\n        echo \"$response\"\n        return 1\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 764,
+            "end_line": 779,
+            "quote": "    # Save the summary\n    local timestamp\n    timestamp=$(date +%Y%m%d-%H%M%S)\n    local summary_file=\"$COMPRESSED_DIR/$timestamp.ai-summary.md\"\n    \n    cat > \"$summary_file\" <<EOF\n# AI-Generated Session Summary\nSession: $SESSION_KEY\nSession ID: $SESSION_ID\nGenerated: $(date -Iseconds 2>/dev/null || date)\nModel: $SESSION_MODEL\n\n---\n\n$summary_text\nEOF"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Send",
+        "data": "Generated summary text and saved-artifact path, or raw agent response on diagnostic branches.",
+        "source": "Local summary_text, summary_file, and response variables from AI summarization",
+        "recipient": "Standard output; the nonzero-agent diagnostic branch writes response to standard error",
+        "condition": "A nonempty summary is printed after saving; empty extraction prints the raw response. The written nonzero-command branch may be preempted by set -e.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 10,
+            "end_line": 10,
+            "quote": "set -euo pipefail"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 743,
+            "end_line": 751,
+            "quote": "    local response\n    response=$(openclaw agent --session-id \"$SESSION_ID\" -m \"$prompt\" --json 2>/dev/null)\n    local exit_code=$?\n    \n    if [[ $exit_code -ne 0 ]]; then\n        echo -e \"${RED}Error: Failed to get AI summary (exit code: $exit_code)${NC}\" >&2\n        echo \"$response\" >&2\n        return 1\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 758,
+            "end_line": 762,
+            "quote": "    if [[ -z \"$summary_text\" ]]; then\n        echo -e \"${YELLOW}Raw response:${NC}\"\n        echo \"$response\"\n        return 1\n    fi"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 781,
+            "end_line": 786,
+            "quote": "    echo -e \"${GREEN}✅ AI Summary generated!${NC}\"\n    echo \"  Saved to: $summary_file\"\n    echo \"\"\n    echo -e \"${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\"\n    echo \"$summary_text\"\n    echo -e \"${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\""
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Read",
+        "data": "Whole selected-session JSONL file at backup time.",
+        "source": "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl",
+        "recipient": "Local cp backup operation",
+        "condition": "AI summarization has produced a nonempty saved summary, --replace or -r was supplied, and the JSONL file still exists.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 707,
+            "end_line": 711,
+            "quote": "    while [[ $# -gt 0 ]]; do\n        case \"$1\" in\n            --replace|-r)\n                do_replace=true\n                shift"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 789,
+            "end_line": 801,
+            "quote": "    if $do_replace; then\n        echo \"\"\n        echo -e \"${YELLOW}🔄 Resetting session and injecting compressed context...${NC}\"\n        \n        local old_session_id=\"$SESSION_ID\"\n        local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n        local jsonl_file=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\"\n        \n        # Backup the JSONL file before deleting\n        if [[ -f \"$jsonl_file\" ]]; then\n            local backup_file=\"$COMPRESSED_DIR/$timestamp.session-backup.jsonl\"\n            echo \"  Backing up session file...\"\n            cp \"$jsonl_file\" \"$backup_file\""
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Save",
+        "data": "Full copy of the selected session JSONL.",
+        "source": "$jsonl_file in the selected agent's state directory",
+        "recipient": "$SCRIPT_DIR/memory/compressed/{timestamp}.session-backup.jsonl",
+        "condition": "Replacement mode and an existing JSONL file. Copy precedes deletion. No automatic expiry or backup removal is specified.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "COMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 765,
+            "end_line": 766,
+            "quote": "    local timestamp\n    timestamp=$(date +%Y%m%d-%H%M%S)"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 789,
+            "end_line": 801,
+            "quote": "    if $do_replace; then\n        echo \"\"\n        echo -e \"${YELLOW}🔄 Resetting session and injecting compressed context...${NC}\"\n        \n        local old_session_id=\"$SESSION_ID\"\n        local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n        local jsonl_file=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\"\n        \n        # Backup the JSONL file before deleting\n        if [[ -f \"$jsonl_file\" ]]; then\n            local backup_file=\"$COMPRESSED_DIR/$timestamp.session-backup.jsonl\"\n            echo \"  Backing up session file...\"\n            cp \"$jsonl_file\" \"$backup_file\""
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Delete",
+        "data": "Selected session's original JSONL file, described by the source as the reset mechanism.",
+        "source": "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl",
+        "recipient": null,
+        "condition": "Replacement mode, file exists, and execution proceeds past the preceding backup copy. Other session metadata or backups are not deleted by this operation.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 789,
+            "end_line": 806,
+            "quote": "    if $do_replace; then\n        echo \"\"\n        echo -e \"${YELLOW}🔄 Resetting session and injecting compressed context...${NC}\"\n        \n        local old_session_id=\"$SESSION_ID\"\n        local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n        local jsonl_file=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\"\n        \n        # Backup the JSONL file before deleting\n        if [[ -f \"$jsonl_file\" ]]; then\n            local backup_file=\"$COMPRESSED_DIR/$timestamp.session-backup.jsonl\"\n            echo \"  Backing up session file...\"\n            cp \"$jsonl_file\" \"$backup_file\"\n            echo \"  Backup saved: $backup_file\"\n            \n            # Delete the JSONL to reset the session (official method per docs)\n            echo \"  Deleting session JSONL to reset...\"\n            rm \"$jsonl_file\""
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Send",
+        "data": "AI-generated summary embedded in a compressed-context message with a compression timestamp and request for acknowledgment.",
+        "source": "Local summary_text and host date output",
+        "recipient": "OpenClaw agent addressed by the literal --to main; further routing and any external destination are unspecified",
+        "condition": "Replacement mode after the backup/deletion block and a one-second delay. The command does not use the selected session ID or agent ID as its destination; fresh-session creation depends on the unavailable CLI implementation.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 789,
+            "end_line": 789,
+            "quote": "    if $do_replace; then"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 811,
+            "end_line": 829,
+            "quote": "        # Wait a moment for the system to recognize the deletion\n        sleep 1\n        \n        # Inject the summary - this will create a fresh session\n        local context_msg=\"[COMPRESSED CONTEXT - Session was compressed on $(date -Iseconds)]\n\nThe following is a summary of the previous conversation. Use this to continue the work:\n\n---\n\n$summary_text\n\n---\n\nPlease acknowledge that you have received this compressed context and are ready to continue.\"\n        \n        echo \"  Injecting compressed context into fresh session...\"\n        local inject_response\n        inject_response=$(openclaw agent --to main -m \"$context_msg\" --json 2>/dev/null)"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Read",
+        "data": "Context-injection CLI response and, on the success path, refreshed session metadata for the original session key.",
+        "source": "Standard output of openclaw agent --to main and the subsequent get_session_info query",
+        "recipient": "Local inject_response and session runtime variables",
+        "condition": "Replacement mode reaches injection; the session lookup follows a reported successful command status. Injection stderr is discarded, and set -e can interrupt nonzero-command handling.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 828,
+            "end_line": 834,
+            "quote": "        local inject_response\n        inject_response=$(openclaw agent --to main -m \"$context_msg\" --json 2>/dev/null)\n        \n        if [[ $? -eq 0 ]]; then\n            # Get the new session info\n            sleep 1\n            get_session_info \"$SESSION_KEY\" 2>/dev/null"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 114,
+            "end_line": 117,
+            "quote": "get_session_info() {\n    local target_session=\"${1:-}\"\n    local sessions_json\n    sessions_json=$(get_all_sessions)"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 105,
+            "end_line": 108,
+            "quote": "# Get all sessions as JSON\nget_all_sessions() {\n    openclaw sessions --json 2>/dev/null\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Send",
+        "data": "Backup path and old/new session IDs on replacement progress/success, or the injection response on the written failure branch.",
+        "source": "Replacement runtime variables, refreshed session metadata, and inject_response",
+        "recipient": "Standard output for progress/success; standard error for the failure response",
+        "condition": "Replacement reaches the corresponding branch. The failure branch can be preempted by set -e; referencing backup_file can fail under set -u if no backup was created.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 10,
+            "end_line": 10,
+            "quote": "set -euo pipefail"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 793,
+            "end_line": 802,
+            "quote": "        local old_session_id=\"$SESSION_ID\"\n        local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n        local jsonl_file=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\"\n        \n        # Backup the JSONL file before deleting\n        if [[ -f \"$jsonl_file\" ]]; then\n            local backup_file=\"$COMPRESSED_DIR/$timestamp.session-backup.jsonl\"\n            echo \"  Backing up session file...\"\n            cp \"$jsonl_file\" \"$backup_file\"\n            echo \"  Backup saved: $backup_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 828,
+            "end_line": 845,
+            "quote": "        local inject_response\n        inject_response=$(openclaw agent --to main -m \"$context_msg\" --json 2>/dev/null)\n        \n        if [[ $? -eq 0 ]]; then\n            # Get the new session info\n            sleep 1\n            get_session_info \"$SESSION_KEY\" 2>/dev/null\n            \n            echo -e \"${GREEN}✅ Session compressed successfully!${NC}\"\n            echo \"  Old session ID: $old_session_id\"\n            echo \"  New session ID: $SESSION_ID\"\n            echo \"  Backup: $backup_file\"\n            echo \"  Session is ready to continue with compressed context\"\n        else\n            echo -e \"${RED}Error injecting compressed context${NC}\" >&2\n            echo \"$inject_response\" >&2\n            echo \"  Restoring backup...\"\n            cp \"$backup_file\" \"$jsonl_file\""
+          }
+        ]
+      },
+      {
+        "move_id": "m31",
+        "operation": "Read",
+        "data": "Full session JSONL backup used for restoration.",
+        "source": "Script-generated $COMPRESSED_DIR/$timestamp.session-backup.jsonl, or the documented relative memory/compressed/{timestamp}.session-backup.jsonl",
+        "recipient": "Local cp restoration operation",
+        "condition": "The script contains a failed-injection fallback, but set -e can terminate before it and backup_file is not assigned when the original file was absent. The documentation separately instructs manual restoration if something goes wrong.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 10,
+            "end_line": 10,
+            "quote": "set -euo pipefail"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 798,
+            "end_line": 801,
+            "quote": "        if [[ -f \"$jsonl_file\" ]]; then\n            local backup_file=\"$COMPRESSED_DIR/$timestamp.session-backup.jsonl\"\n            echo \"  Backing up session file...\"\n            cp \"$jsonl_file\" \"$backup_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 841,
+            "end_line": 846,
+            "quote": "        else\n            echo -e \"${RED}Error injecting compressed context${NC}\" >&2\n            echo \"$inject_response\" >&2\n            echo \"  Restoring backup...\"\n            cp \"$backup_file\" \"$jsonl_file\"\n            return 1"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 202,
+            "end_line": 206,
+            "quote": "If something goes wrong:\n```bash\ncp memory/compressed/{timestamp}.session-backup.jsonl \\\n   ~/.openclaw/agents/main/sessions/{sessionId}.jsonl\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "m32",
+        "operation": "Save",
+        "data": "Restored full session JSONL copied from a backup.",
+        "source": "Session-backup JSONL file",
+        "recipient": "Script: $state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl; documented manual command: ~/.openclaw/agents/main/sessions/{sessionId}.jsonl",
+        "condition": "Written failed-injection fallback or manually invoked documented recovery. Script fallback reachability depends on shell error handling and an assigned backup_file; cp can overwrite the destination.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 794,
+            "end_line": 801,
+            "quote": "        local state_dir=\"${OPENCLAW_STATE_DIR:-$HOME/.openclaw}\"\n        local jsonl_file=\"$state_dir/agents/$AGENT_ID/sessions/$SESSION_ID.jsonl\"\n        \n        # Backup the JSONL file before deleting\n        if [[ -f \"$jsonl_file\" ]]; then\n            local backup_file=\"$COMPRESSED_DIR/$timestamp.session-backup.jsonl\"\n            echo \"  Backing up session file...\"\n            cp \"$jsonl_file\" \"$backup_file\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 841,
+            "end_line": 846,
+            "quote": "        else\n            echo -e \"${RED}Error injecting compressed context${NC}\" >&2\n            echo \"$inject_response\" >&2\n            echo \"  Restoring backup...\"\n            cp \"$backup_file\" \"$jsonl_file\"\n            return 1"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 202,
+            "end_line": 206,
+            "quote": "If something goes wrong:\n```bash\ncp memory/compressed/{timestamp}.session-backup.jsonl \\\n   ~/.openclaw/agents/main/sessions/{sessionId}.jsonl\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "m33",
+        "operation": "Read",
+        "data": "Up to 50 OpenClaw log records requested as JSON and filtered for case-insensitive error or fail matches.",
+        "source": "Standard output of openclaw logs --limit 50 --json; underlying log source is unspecified",
+        "recipient": "Local grep troubleshooting pipeline",
+        "condition": "Optional documented troubleshooting command is invoked; compress.sh does not invoke this command.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 208,
+            "end_line": 213,
+            "quote": "### Check Logs\n\nUse `openclaw logs` to troubleshoot:\n```bash\nopenclaw logs --limit 50 --json | grep -i \"error\\|fail\"\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "m34",
+        "operation": "Read",
+        "data": "Directory entries for the main agent's session directory, without reading session-file contents.",
+        "source": "~/.openclaw/agents/main/sessions/",
+        "recipient": "Local ls command",
+        "condition": "Optional documented session-reset troubleshooting command is invoked.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 193,
+            "end_line": 198,
+            "quote": "### Session Not Resetting\n\nVerify the JSONL file path:\n```bash\nls ~/.openclaw/agents/main/sessions/\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "m35",
+        "operation": "Read",
+        "data": "Caller-supplied transcript searched by caller-supplied command arguments.",
+        "source": "extract_pattern's first argument",
+        "recipient": "The command array assembled from extract_pattern's remaining arguments",
+        "condition": "Only if extract_pattern is invoked and the transcript exists. No invocation of this generic helper appears in the supplied command paths.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 218,
+            "end_line": 240,
+            "quote": "# Generic pattern extraction function\n# Usage: extract_pattern <transcript> <output> <section_title> <grep_args...>\nextract_pattern() {\n    local transcript=\"$1\"\n    local output=\"$2\"\n    local section_title=\"$3\"\n    shift 3\n    local grep_cmd=(\"$@\")\n    \n    if [[ ! -f \"$transcript\" ]]; then\n        echo \"Warning: Transcript file not found: $transcript\" >&2\n        return 1\n    fi\n    \n    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")\n    \n    if \"${grep_cmd[@]}\" \"$transcript\" 2>/dev/null > \"$temp_file\"; then\n        if [[ -s \"$temp_file\" ]]; then\n            echo -e \"\\n## $section_title\" >> \"$output\"\n            cat \"$temp_file\" >> \"$output\"\n        fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m36",
+        "operation": "Save",
+        "data": "Output of the generic helper's caller-supplied transcript-processing command.",
+        "source": "Command array invoked with the caller-supplied transcript path",
+        "recipient": "mktemp-generated path of unspecified location",
+        "condition": "Only if the otherwise uncalled extract_pattern helper is invoked and its transcript exists. The file is tracked and explicitly removed afterward or by EXIT cleanup.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 220,
+            "end_line": 225,
+            "quote": "extract_pattern() {\n    local transcript=\"$1\"\n    local output=\"$2\"\n    local section_title=\"$3\"\n    shift 3\n    local grep_cmd=(\"$@\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 232,
+            "end_line": 244,
+            "quote": "    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")\n    \n    if \"${grep_cmd[@]}\" \"$transcript\" 2>/dev/null > \"$temp_file\"; then\n        if [[ -s \"$temp_file\" ]]; then\n            echo -e \"\\n## $section_title\" >> \"$output\"\n            cat \"$temp_file\" >> \"$output\"\n        fi\n    fi\n    \n    rm -f \"$temp_file\"\n    return 0"
+          }
+        ]
+      },
+      {
+        "move_id": "m37",
+        "operation": "Save",
+        "data": "Caller-supplied section heading and nonempty generic-command output read from its temporary file.",
+        "source": "extract_pattern's section_title argument and temporary command-output file",
+        "recipient": "Caller-supplied output path, extract_pattern's second argument",
+        "condition": "Only if the otherwise uncalled helper is invoked, its command succeeds, and the temporary output is nonempty. Content is appended.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 220,
+            "end_line": 225,
+            "quote": "extract_pattern() {\n    local transcript=\"$1\"\n    local output=\"$2\"\n    local section_title=\"$3\"\n    shift 3\n    local grep_cmd=(\"$@\")"
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 232,
+            "end_line": 240,
+            "quote": "    local temp_file\n    temp_file=$(mktemp)\n    TEMP_FILES+=(\"$temp_file\")\n    \n    if \"${grep_cmd[@]}\" \"$transcript\" 2>/dev/null > \"$temp_file\"; then\n        if [[ -s \"$temp_file\" ]]; then\n            echo -e \"\\n## $section_title\" >> \"$output\"\n            cat \"$temp_file\" >> \"$output\"\n        fi"
+          }
+        ]
+      },
+      {
+        "move_id": "m38",
+        "operation": "Save",
+        "data": "Compressed-artifact directory and any missing parent directories.",
+        "source": null,
+        "recipient": "$SCRIPT_DIR/memory/compressed",
+        "condition": "mkdir -p runs at script startup before command routing, including for monitoring/help invocations; existing directories are retained.",
+        "evidence": [
+          {
+            "path": "compress.sh",
+            "start_line": 12,
+            "end_line": 13,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nCOMPRESSED_DIR=\"$SCRIPT_DIR/memory/compressed\""
+          },
+          {
+            "path": "compress.sh",
+            "start_line": 73,
+            "end_line": 74,
+            "quote": "# Ensure compressed memory directory exists\nmkdir -p \"$COMPRESSED_DIR\""
+          }
+        ]
+      }
+    ]
+  }
+}

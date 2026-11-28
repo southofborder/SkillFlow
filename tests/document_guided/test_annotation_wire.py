@@ -8,7 +8,7 @@ from skillflow.document_guided.annotation_wire import FlatAnnotationResponse, co
 from skillflow.propagation.annotation.binding_examples import (
     _fixture, example_material, evidence, instruction, literal, result,
 )
-from skillflow.propagation.contracts.specs import IRTransferSpec, operation_items
+from skillflow.propagation.contracts.specs import IRSemantics, operation_items
 from skillflow.propagation.contracts.uses import request_pairs
 
 
@@ -85,8 +85,7 @@ def test_identical_partial_calls_are_explicitly_paired():
     spec["order"] = "partial"
     spec["segments"].append({"ops": [second]})
     _, _, compiled, _ = compile_flat_response(wire, material)
-    typed = IRTransferSpec.model_validate({key: compiled["ir_semantics"]["ir_call"][key]
-        for key in IRTransferSpec.model_fields})
+    typed = IRSemantics.model_validate(compiled["ir_semantics"]["ir_call"])
     operations = operation_items(typed)
     pairs = request_pairs(typed)
     assert len(pairs) == 2

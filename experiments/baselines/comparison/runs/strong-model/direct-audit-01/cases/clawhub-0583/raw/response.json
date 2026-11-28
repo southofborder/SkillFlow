@@ -1,0 +1,503 @@
+{
+  "status": "partial",
+  "declared_purpose": "Provide Amap POI and nearby search, geocoding, multimodal routes, travel planning, and map/heatmap visualization links. Local configuration persistence and Web Service key management are explicit features (SKILL.md:24-36). Navigation and search also have a Python/Electron path (SKILL.md:439-463). Usage counting is a separately declared ancillary purpose (SKILL.md:491).",
+  "data_operations": [
+    {
+      "operation": "Read API credentials locally",
+      "source": "Node library and POI CLI",
+      "data_scope": "AMAP_WEBSERVICE_KEY, deprecated AMAP_KEY, or config.json.webServiceKey; reading configuration parses the complete JSON file.",
+      "recipient_or_storage": "Executing Node process",
+      "condition": "Library credential resolution prefers environment variables, then configuration, and throws if absent. The POI CLI separately requires an environment key, preventing configuration-only use. Credential resolution does not prompt or save automatically.",
+      "evidence": [
+        {
+          "path": "index.js",
+          "start_line": 6,
+          "end_line": 20
+        },
+        {
+          "path": "index.js",
+          "start_line": 42,
+          "end_line": 80
+        },
+        {
+          "path": "scripts/poi-search.js",
+          "start_line": 38,
+          "end_line": 48
+        }
+      ]
+    },
+    {
+      "operation": "Persist configuration",
+      "source": "Exported saveConfig and setWebServiceKey functions",
+      "data_scope": "Complete supplied configuration object; the key setter preserves existing fields and updates webServiceKey.",
+      "recipient_or_storage": "Package-root config.json",
+      "condition": "An explicit function call writes plaintext JSON, then applies mode 0600. Environment-key resolution does not persist it. No deletion or expiry routine is supplied.",
+      "evidence": [
+        {
+          "path": "index.js",
+          "start_line": 26,
+          "end_line": 54
+        },
+        {
+          "path": "index.js",
+          "start_line": 372,
+          "end_line": 377
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 469,
+          "end_line": 485
+        }
+      ]
+    },
+    {
+      "operation": "Send instructed usage telemetry",
+      "source": "Agent following SKILL.md scenarios one through six",
+      "data_scope": "Fixed eventId, product, platform, feature label, and value fields indicating an invocation. The shown queries contain neither user search content nor an API key.",
+      "recipient_or_storage": "https://restapi.amap.com/v3/log/init",
+      "condition": "The entry document instructs a separate request before each scenario. These are document-directed requests, not telemetry calls implemented inside the supplied JavaScript or Python functions.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 87,
+          "end_line": 90
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 125,
+          "end_line": 130
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 254,
+          "end_line": 257
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 309,
+          "end_line": 313
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 373,
+          "end_line": 377
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 409,
+          "end_line": 413
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 491,
+          "end_line": 491
+        }
+      ]
+    },
+    {
+      "operation": "Collect a key and geocode a supplied place",
+      "source": "Document-directed nearby-search scenario",
+      "data_scope": "User-specified center place and Web Service API key; returned formatted address and coordinates.",
+      "recipient_or_storage": "Executing assistant; https://restapi.amap.com/v3/geocode/geo receives address and key in its query; response returns to the caller.",
+      "condition": "If no key was previously provided, ask and wait. Geocode the named place, then extract the first result's coordinates. These are derived coordinates of the supplied place, not an observed current device location.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 134,
+          "end_line": 168
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 171,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "operation": "Construct search links and return them",
+      "source": "Document-directed keyword and nearby-search scenarios",
+      "data_scope": "Extracted keyword, or category plus geocoded longitude, latitude, and search radius.",
+      "recipient_or_storage": "Caller receives the link; opening it discloses its query to www.amap.com/search or ditu.amap.com/search respectively.",
+      "condition": "Link construction and return do not themselves fetch the search page. The nearby-link format does not include the API key.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 75,
+          "end_line": 94
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 190,
+          "end_line": 225
+        }
+      ]
+    },
+    {
+      "operation": "Construct a heatmap link containing a data-source URL",
+      "source": "Document-directed heatmap scenario",
+      "data_scope": "Complete user-provided JSON data URL and map style; the reply also repeats the original data URL.",
+      "recipient_or_storage": "Caller receives the link; opening the specified HTTP URL sends dataUrl and mapStyle to a.amap.com/jsapi_demo_show/static/openclaw/heatmap.html.",
+      "condition": "Ask for a data URL if missing, URL-encode it, and generate the link. Encoding preserves URL contents rather than concealing them. Dataset fetching and subsequent disclosure by the hosted page are unresolved.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 234,
+          "end_line": 263
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 278,
+          "end_line": 298
+        }
+      ]
+    },
+    {
+      "operation": "Request POIs and return API results",
+      "source": "searchPOI, POI CLI, travelPlanner, and the direct index.js example",
+      "data_scope": "API key, keywords, city/region, city restriction, and supplied search parameters, including types, pagination, coordinates, and radius when supplied. Successful responses return the full response body to the caller.",
+      "recipient_or_storage": "https://restapi.amap.com/v5/place/text receives GET query parameters; results remain with the invoking component unless it outputs them.",
+      "condition": "A usable key is required. The library spreads all supplied params into the request. Directly executing index.js runs a fixed example search using environment/configuration credentials; it does not process a positional key argument.",
+      "evidence": [
+        {
+          "path": "index.js",
+          "start_line": 94,
+          "end_line": 121
+        },
+        {
+          "path": "scripts/poi-search.js",
+          "start_line": 50,
+          "end_line": 65
+        },
+        {
+          "path": "index.js",
+          "start_line": 302,
+          "end_line": 309
+        },
+        {
+          "path": "index.js",
+          "start_line": 388,
+          "end_line": 397
+        }
+      ]
+    },
+    {
+      "operation": "Print POI results and pagination details",
+      "source": "POI CLI and direct index.js example",
+      "data_scope": "POI names, addresses, types, coordinates; the POI CLI also prints available telephone numbers and distances, and repeats keywords/city in a pagination command.",
+      "recipient_or_storage": "Standard output to the invoking caller; no persistent log destination is specified.",
+      "condition": "Successful results are present. This is caller-facing result output, not evidence of disclosure to another remote service.",
+      "evidence": [
+        {
+          "path": "scripts/poi-search.js",
+          "start_line": 67,
+          "end_line": 90
+        },
+        {
+          "path": "index.js",
+          "start_line": 399,
+          "end_line": 406
+        }
+      ]
+    },
+    {
+      "operation": "Request route calculations",
+      "source": "Node walkingRoute, drivingRoute, ridingRoute, and transitRoute",
+      "data_scope": "API key and origin/destination coordinates. Driving adds strategy, base extensions, and optional waypoints; transit adds city, strategy, and nightflag. Successful API bodies return to the caller.",
+      "recipient_or_storage": "restapi.amap.com endpoints /v3/direction/walking, /v3/direction/driving, /v4/direction/bicycling, and /v3/direction/transit/integrated, respectively.",
+      "condition": "The selected function resolves a key and sends a GET request. Mode-specific fields are explicit request fields rather than arbitrary parameter forwarding.",
+      "evidence": [
+        {
+          "path": "index.js",
+          "start_line": 130,
+          "end_line": 155
+        },
+        {
+          "path": "index.js",
+          "start_line": 166,
+          "end_line": 197
+        },
+        {
+          "path": "index.js",
+          "start_line": 206,
+          "end_line": 231
+        },
+        {
+          "path": "index.js",
+          "start_line": 243,
+          "end_line": 271
+        }
+      ]
+    },
+    {
+      "operation": "Serialize route visualization data into a link",
+      "source": "generateMapLink and route-planning CLI",
+      "data_scope": "The helper serializes the complete supplied task array. The CLI supplies route mode, endpoint coordinates, derived route remarks, and city for transit.",
+      "recipient_or_storage": "Returned or printed URL; opening it sends the encoded data query to https://a.amap.com/jsapi_demo_show/static/openclaw/travel_plan.html.",
+      "condition": "The CLI generates a link after a successful route result. Link generation performs no HTTP request. The hosted viewer's processing is not supplied.",
+      "evidence": [
+        {
+          "path": "index.js",
+          "start_line": 279,
+          "end_line": 283
+        },
+        {
+          "path": "scripts/route-planning.js",
+          "start_line": 62,
+          "end_line": 68
+        },
+        {
+          "path": "scripts/route-planning.js",
+          "start_line": 88,
+          "end_line": 94
+        },
+        {
+          "path": "scripts/route-planning.js",
+          "start_line": 108,
+          "end_line": 114
+        },
+        {
+          "path": "scripts/route-planning.js",
+          "start_line": 138,
+          "end_line": 168
+        }
+      ]
+    },
+    {
+      "operation": "Search travel interests and derive a local itinerary",
+      "source": "travelPlanner and travel-planner CLI",
+      "data_scope": "City and each interest become POI searches requesting five results. Returned POIs supply local map fields and ordered route endpoints. CLI default interests and walking mode are implementation defaults, not inferred personal attributes.",
+      "recipient_or_storage": "POI requests go to restapi.amap.com/v5/place/text; derived tasks remain in process memory. POI recommendations are printed and returned to the caller.",
+      "condition": "Despite the declared route/link outcome, this function makes no route API calls and returns only pois. The CLI subsequently accesses missing result.mapTaskData for nonempty results and enters its error handler; no travel visualization disclosure is shown.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 403,
+          "end_line": 433
+        },
+        {
+          "path": "index.js",
+          "start_line": 293,
+          "end_line": 355
+        },
+        {
+          "path": "index.js",
+          "start_line": 358,
+          "end_line": 369
+        },
+        {
+          "path": "scripts/travel-planner.js",
+          "start_line": 42,
+          "end_line": 77
+        }
+      ]
+    },
+    {
+      "operation": "Exchange navigation/search commands over local IPC",
+      "source": "gaode_skill.py",
+      "data_scope": "Direction origin, destination, and mode, or joined search keywords; command name and a millisecond-timestamp requestId. A JSON response is read back.",
+      "recipient_or_storage": "Local process listening at /tmp/jsapi-electron.sock, described as the Electron application.",
+      "condition": "A socket exists and connection succeeds. This establishes local interprocess disclosure only; the receiver's remote calls, credential use, and persistence are unknown.",
+      "evidence": [
+        {
+          "path": "gaode_skill.py",
+          "start_line": 19,
+          "end_line": 21
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 39,
+          "end_line": 68
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 81,
+          "end_line": 83
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 159,
+          "end_line": 193
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 250,
+          "end_line": 252
+        }
+      ]
+    },
+    {
+      "operation": "Print Python command results and diagnostic response contents",
+      "source": "Python formatters and exception handlers",
+      "data_scope": "Input command details; returned endpoint names/coordinates or POI names, addresses, types, and locations. A JSON parsing failure embeds the complete response_buffer in the printed connection error.",
+      "recipient_or_storage": "Standard output to the invoking caller; no persistent logging or onward remote recipient is specified.",
+      "condition": "Normal responses use selected display fields. Malformed JSON follows the raw-buffer error path.",
+      "evidence": [
+        {
+          "path": "gaode_skill.py",
+          "start_line": 75,
+          "end_line": 78
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 86,
+          "end_line": 143
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 169,
+          "end_line": 193
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 266,
+          "end_line": 268
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "An invocation event and feature category in a separate telemetry request.",
+      "recipient_or_storage": "https://restapi.amap.com/v3/log/init",
+      "condition": "An agent follows a scenario's telemetry instruction.",
+      "purpose_basis": "Usage counting is explicitly declared and instructed, but the separate request does not produce the requested mapping result. This is an additional action, not extra user content inside a necessary map request.",
+      "necessary_behavior": "Perform the requested search, route, or link-generation operation.",
+      "proposed_reduction": "Make ancillary counting optional and omit the separate request when disabled.",
+      "preservation_conditions": "Mapping outcomes can be preserved. Removing the request does not preserve mandatory usage counting; that explicit requirement must be changed or counting must remain enabled.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 87,
+          "end_line": 94
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 125,
+          "end_line": 130
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 254,
+          "end_line": 263
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 309,
+          "end_line": 315
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 373,
+          "end_line": 379
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 409,
+          "end_line": 415
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 491,
+          "end_line": 491
+        }
+      ]
+    },
+    {
+      "data_scope": "Original city and cityLimit properties alongside normalized region and city_limit, plus any unrelated enumerable properties supplied in params.",
+      "recipient_or_storage": "GET query to https://restapi.amap.com/v5/place/text",
+      "condition": "searchPOI receives those properties; unrelated or sensitive properties are forwarded only if a caller actually supplies them.",
+      "purpose_basis": "Detailed POI search requires search criteria and authentication. Spreading the entire caller object is an implementation choice.",
+      "necessary_behavior": "Transmit the key and supported search, filtering, location, and pagination fields.",
+      "proposed_reduction": "Build an allowlisted request object, translate city/cityLimit once, and omit unrelated caller properties.",
+      "preservation_conditions": "Retain all supported documented options and verify accepted API parameter names. No unrelated sensitive property is demonstrated in the packaged callers.",
+      "evidence": [
+        {
+          "path": "index.js",
+          "start_line": 83,
+          "end_line": 109
+        },
+        {
+          "path": "scripts/poi-search.js",
+          "start_line": 50,
+          "end_line": 65
+        }
+      ]
+    },
+    {
+      "data_scope": "Existing environment/configuration API key and a fixed example POI query, city, and pagination.",
+      "recipient_or_storage": "https://restapi.amap.com/v5/place/text",
+      "condition": "A user runs the documented positional-key configuration command while a usable environment/configuration key already exists.",
+      "purpose_basis": "The entry document presents node index.js with a key argument as configuration. The implementation instead runs a sample search and ignores that argument.",
+      "necessary_behavior": "Configure the supplied key without an unrelated POI lookup.",
+      "proposed_reduction": "Implement an explicit configuration command and place the example search behind a separate demo command.",
+      "preservation_conditions": "Preserve documented key setup and make demonstration searches explicitly requested. Without an existing usable key, this path throws before sending the example request.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 480,
+          "end_line": 485
+        },
+        {
+          "path": "index.js",
+          "start_line": 59,
+          "end_line": 80
+        },
+        {
+          "path": "index.js",
+          "start_line": 388,
+          "end_line": 397
+        }
+      ]
+    },
+    {
+      "data_scope": "Persisted configuration, normally including webServiceKey, during a potentially broader file-access window.",
+      "recipient_or_storage": "config.json and any local accounts allowed by its existing/default permissions before restriction",
+      "condition": "saveConfig writes under permissions permitting other readers, or chmod fails after the write. Actual permissions and access are not supplied.",
+      "purpose_basis": "Local credential persistence is explicit, with an owner-only access requirement. Writing before restricting access is an implementation choice.",
+      "necessary_behavior": "Persist configuration with owner-only access.",
+      "proposed_reduction": "Create files restrictively and enforce owner-only access on existing files before writing credential content; stop if that protection cannot be established.",
+      "preservation_conditions": "Keep durable configuration storage and use the operating system's effective permission/ACL mechanism. This finding concerns conditional access scope, not unnecessary credential storage itself.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 469,
+          "end_line": 472
+        },
+        {
+          "path": "index.js",
+          "start_line": 26,
+          "end_line": 36
+        }
+      ]
+    },
+    {
+      "data_scope": "Complete malformed Electron response_buffer, potentially containing fields beyond normal displayed results.",
+      "recipient_or_storage": "Python standard output returned to the invoking caller",
+      "condition": "The socket response fails JSON parsing. Sensitive response contents are possible but not demonstrated.",
+      "purpose_basis": "The caller needs a useful navigation/search failure report; routine error reporting does not require the complete response body.",
+      "necessary_behavior": "Report the parsing failure and enough context to identify the failed request.",
+      "proposed_reduction": "Omit raw response contents from normal errors; expose bounded, redacted diagnostics only through an explicit debug option.",
+      "preservation_conditions": "Preserve error classification and request correlation. This narrows caller-facing diagnostic output; no external logging recipient is established.",
+      "evidence": [
+        {
+          "path": "gaode_skill.py",
+          "start_line": 64,
+          "end_line": 76
+        },
+        {
+          "path": "gaode_skill.py",
+          "start_line": 266,
+          "end_line": 268
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "All packaged files were reviewed. End-to-end Electron execution and hosted heatmap/travel viewer behavior remain unresolved because their implementations are absent.",
+    "The Electron receiver's remote recipients, API credentials, geocoding, telemetry, persistence, and deletion behavior cannot be established from the local socket client.",
+    "The hosted pages' dataset fetching, onward requests, route recalculation, storage, and deletion are unknown. Availability of an HTTPS replacement for the specified HTTP heatmap URL is unverified.",
+    "Amap service-side logging, credential/query retention, telemetry correlation, and deletion are undocumented here. The telemetry anonymity claim does not establish server-side handling.",
+    "Actual config.json contents, filesystem permissions, and version-control exclusion are unverified. SKILL.md claims .gitignore protection, but no .gitignore is included.",
+    "Dependency implementations are not supplied. Network behavior beyond the visible axios GET calls cannot be established."
+  ]
+}

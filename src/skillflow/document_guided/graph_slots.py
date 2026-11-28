@@ -41,13 +41,15 @@ def _edges(block):
         return [(block["ref"], exit["target"], None)]
     if kind == "branch":
         return [(block["ref"], arm["target"], arm["condition"]) for arm in exit["arms"]]
+    if kind == "outcome_dispatch":
+        return [(block["ref"], exit["on_" + role], role) for role in ("return", "throw")]
     return []
 
 
 def _uses(block):
     exit = block["exit"]
     values = [value for op in block["operations"] for value in op["inputs"]]
-    values.extend(exit.get("values", exit.get("conditions", [])))
+    values.extend(exit.get("values", exit.get("conditions", exit.get("inputs", []))))
     return {value["result"] for value in values if "result" in value}
 
 
@@ -122,16 +124,23 @@ def _simple_slots(facts, bi, oi, suffix, *, archived):
     if oi != len(ops):
         return []
     exit_kind = block["exit"]["kind"]
-    known_fields = {"jump": ("target",), "branch": ("conditions", "arms"), "return": ("values",)}
+    known_fields = {"jump": ("target",), "branch": ("conditions", "arms"), "return": ("values",),
+                    "outcome_dispatch": ("producer", "on_return", "on_throw", "inputs")}
     path = (*path, "exit")
     if suffix and suffix[0] == "inputs":
-        field = {"branch": "conditions", "return": "values"}.get(exit_kind)
+        field = {"branch": "conditions", "return": "values", "outcome_dispatch": "inputs"}.get(exit_kind)
         if field is None:
             return []
-        valid_index = len(suffix) == 2 and suffix[1].isdecimal() and int(suffix[1]) < len(block["exit"][field])
+        valid_index = len(suffix) == 2 and suffix[1].isdecimal() and int(suffix[1]) < len(block["exit"].get(field, []))
         if len(suffix) == 1 or valid_index:
             return [field_slot(facts, (*path, field, *((int(suffix[1]),) if valid_index else ())))]
         return []
+    if exit_kind == "outcome_dispatch" and suffix[:2] == ("metadata", "outcome_dispatch"):
+        fields = ("producer", "on_return", "on_throw")
+        if len(suffix) == 2:
+            return [field_slot(facts, (*path, key)) for key in fields]
+        if len(suffix) == 3 and suffix[2] in fields:
+            return [field_slot(facts, (*path, suffix[2]))]
     return [_region_slot(facts, bi)] + [field_slot(facts, (*path, key))
         for key in (*known_fields[exit_kind], "source", "constraints")] if not suffix else []
 
@@ -189,6 +198,10 @@ def _targets(assembly, finding, files):
                            and (arm["condition"] or "").strip() == (edge["condition_text"] or "")]
                 if len(matches) == 1:
                     selected.append(field_slot(assembly.facts, (*path, "arms", matches[0])))
+            if exit["kind"] == "outcome_dispatch":
+                for field in ("on_return", "on_throw"):
+                    if ids[exit[field]] == edge["target_block_id"]:
+                        selected.append(field_slot(assembly.facts, (*path, field)))
             continue
         match = re.fullmatch(r"cfg:/blocks/([^/]+)(?:/instructions/(0|[1-9][0-9]*))?(/.*)?", target)
         if match is None:
@@ -317,6 +330,8 @@ def _context(assembly, slots):
             raw = [(ref, exit.get("target"), None)]
         elif exit.get("kind") == "branch" and isinstance(exit.get("arms"), list):
             raw = [(ref, arm.get("target"), arm.get("condition")) for arm in exit["arms"] if isinstance(arm, dict)]
+        elif exit.get("kind") == "outcome_dispatch":
+            raw = [(ref, exit.get("on_" + role), role) for role in ("return", "throw")]
         else:
             raw = []
         block_edges[ref] = [edge for edge in raw if isinstance(edge[1], str)]
@@ -690,6 +705,22 @@ def _region_changes(facts, slot, rows, files, *, archived, permissions=None):
     if dict(_returns(normalized)) != boundary["return_values"]:
         raise ValueError("A local topology update cannot add, remove or replace a returned value")
     outbound = Counter((target, guard) for _, target, guard in all_edges if target not in names)
+    # A reviewed single terminator can assign typed roles to its original
+    # two physical arms. Human-readable legacy guards need no textual match.
+    if (len(normalized) == 1 and old["exit"]["kind"] == "branch"
+            and normalized[0]["exit"]["kind"] == "outcome_dispatch"):
+        prior = old["exit"]
+        current = normalized[0]["exit"]
+        targets = [arm["target"] for arm in prior["arms"]]
+        if (len(targets) != 2 or set(targets) != {current["on_return"], current["on_throw"]}
+                or prior["conditions"] != current.get("inputs", [])):
+            raise ValueError("Preserve the reviewed branch's two successors and actual live result operands")
+        outbound = Counter(tuple(pair) for pair in boundary["outbound_control"])
+    if old["exit"]["kind"] == "outcome_dispatch":
+        for row in normalized:
+            if any(target not in names for _, target, _ in _edges(row)) and (
+                    row["exit"]["kind"] != "outcome_dispatch" or row["exit"]["producer"] != old["exit"]["producer"]):
+                raise ValueError("Preserve the protected producer of the region's outgoing outcome routes")
     if outbound != Counter(tuple(pair) for pair in boundary["outbound_control"]):
         raise ValueError("A local region cannot change its outgoing control boundary")
     defs = set().union(*(_definitions(block) for block in normalized))
@@ -742,7 +773,7 @@ def _compile_edits(assembly, edits, files):
     return assemble_graph_facts(merged, files=files, canonical_ids=ids,
                                 legacy_cfg=assembly.legacy_cfg, archived=assembly.archived,
                                 normalize_blocks=assembly.normalize_blocks, check_occurrences=assembly.check_occurrences,
-                                check_calls=assembly.check_calls)
+                                check_calls=assembly.check_calls, check_outcome_routes=assembly.check_outcome_routes)
 
 
 def _edit_components(assembly, edits):
@@ -779,7 +810,11 @@ def _edit_components(assembly, edits):
                 for edge in [terminator, *values(terminator, "arms")]:
                     if isinstance(edge, dict) and isinstance(edge.get("target"), str):
                         uses.add(("block", edge["target"]))
-                for operand in [*values(terminator, "values"), *values(terminator, "conditions")]:
+                if terminator.get("kind") == "outcome_dispatch":
+                    for key in ("on_return", "on_throw"):
+                        if isinstance(terminator.get(key), str):
+                            uses.add(("block", terminator[key]))
+                for operand in [*values(terminator, "values"), *values(terminator, "conditions"), *values(terminator, "inputs")]:
                     if isinstance(operand, dict) and isinstance(operand.get("result"), str):
                         uses.add(("result", operand["result"]))
         return defines, uses
@@ -856,7 +891,16 @@ def apply_graph_updates(assembly, plan, updates, *, files):
                              or [tuple(other_slot["path"])])):
             reject(index, "cfg_slot_conflict", "Two updates address overlapping facts.", slot["slot_id"])
             continue
-        if slot["kind"] == "call_region":
+        if slot["kind"] == "outcome_targets":
+            if (not isinstance(value, dict) or set(value) != {"on_return", "on_throw"}
+                    or not all(isinstance(item, str) for item in value.values())
+                    or set(value.values()) != set(slot["targets"])):
+                reject(index, "outcome_targets", "Assign each existing target to exactly one disposition.", slot["slot_id"])
+                continue
+            old = slot["old_value"]
+            value = {**{key: item for key, item in old.items() if key not in {"kind", "arms", "conditions"}},
+                     "kind": "outcome_dispatch", "producer": slot["producer"], "inputs": old["conditions"], **value}
+        elif slot["kind"] == "call_region":
             from .call_region import validate_call_region
             try:
                 value = validate_call_region(assembly.facts, slot, value, files)

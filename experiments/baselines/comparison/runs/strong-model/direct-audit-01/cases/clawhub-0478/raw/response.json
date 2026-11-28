@@ -1,0 +1,545 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide Lark calendar-event and task CRUD, event listing, attendee/member management, and employee-name-to-user_id resolution (SKILL.md:2-16, 74-104, 122-179). Explicit settings and rules include credential configuration, default calendar/timezone, datetime and identifier formats, and automatic Boyang attendance. Bulk directory retrieval, cached contact fields, notifications, reminders and diagnostic output are implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Request local configuration loading and read credentials",
+      "source": "lib/lark-api.mjs module initialization; dotenv and process.env",
+      "data_scope": "The .secrets.env path four levels above the library directory; FEISHU_APP_ID and FEISHU_APP_SECRET.",
+      "recipient_or_storage": "Local dotenv dependency and process memory.",
+      "condition": "On module import, before command validation or help handling. The dependency's actual file-reading behavior is not supplied.",
+      "evidence": [
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 6,
+          "end_line": 15
+        }
+      ]
+    },
+    {
+      "operation": "Authenticate, cache a bearer token, and send authenticated requests",
+      "source": "lib/lark-api.mjs getAccessToken and larkApi",
+      "data_scope": "Application credentials sent for authentication; bearer token, endpoint identifiers, query parameters and operation bodies sent on subsequent calls.",
+      "recipient_or_storage": "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal and the applicable Lark API endpoint; token and expiry retained in process memory.",
+      "condition": "An API invocation authenticates when the cached token is unavailable or near expiry. Error code 99991663 clears the token and recursively replays the request without an enforced retry limit.",
+      "evidence": [
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 17,
+          "end_line": 51
+        },
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 61,
+          "end_line": 110
+        }
+      ]
+    },
+    {
+      "operation": "Persist an employee directory in packaged source",
+      "source": "SKILL.md employee table and lib/employees.mjs FALLBACK_EMPLOYEES",
+      "data_scope": "Names, aliases and user_ids for 21 employees; documentation additionally associates employees with organizational roles.",
+      "recipient_or_storage": "Public package documentation/source and its readers; fallback records can also enter process memory.",
+      "condition": "Present on package distribution. Fallback records are used when dynamic retrieval fails. Roles are supplied assertions, not computed attributes.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 146,
+          "end_line": 172
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 18,
+          "end_line": 42
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 80,
+          "end_line": 88
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve directory pages and cache contact records",
+      "source": "lib/employees.mjs fetchEmployees and getEmployeeCache",
+      "data_scope": "Requests department_id '0', described as all employees, and follows returned pagination. Retains user_id, name, en_name, nickname, email, mobile, department_ids and open_id.",
+      "recipient_or_storage": "GET https://open.larksuite.com/open-apis/contact/v3/users; returned records enter the skill's in-memory employeeCache.",
+      "condition": "A directory helper needs an absent or stale cache. Freshness is checked after one hour on later access; TTL does not actively delete records. Lookup names are matched locally rather than sent as search parameters.",
+      "evidence": [
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 13,
+          "end_line": 16
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 48,
+          "end_line": 105
+        }
+      ]
+    },
+    {
+      "operation": "Derive identity matches and return directory information",
+      "source": "lib/employees.mjs resolution, display, listing and search helpers",
+      "data_scope": "Case-insensitive name/alias matches and whitespace-token-to-user_id associations; duplicate index keys overwrite previous mappings. Employee lookup/list/search can return complete cached records; search also examines email.",
+      "recipient_or_storage": "Local lookup maps and the invoking caller. No additional remote recipient is specified for these returns.",
+      "condition": "When the corresponding helper is invoked. Async helpers can trigger directory retrieval; getDisplayNameSync only reads existing memory.",
+      "evidence": [
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 111,
+          "end_line": 169
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 177,
+          "end_line": 200
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 218,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "operation": "Start asynchronous name resolution but fail before CLI mutations",
+      "source": "Creation and membership-management scripts",
+      "data_scope": "Supplied names enter resolveNames; its Promise is destructured without await, leaving resolved and unresolved undefined.",
+      "recipient_or_storage": "Local execution; asynchronous lookup can initiate authentication or directory work, but completion is unresolved.",
+      "condition": "Named creation branches fail before main executes. Both membership-manager scripts fail before their add/remove calls, including their direct-ID combinations. Creation with only direct-ID options bypasses this defect.",
+      "evidence": [
+        {
+          "path": "scripts/create-event.mjs",
+          "start_line": 65,
+          "end_line": 77
+        },
+        {
+          "path": "scripts/create-task.mjs",
+          "start_line": 56,
+          "end_line": 68
+        },
+        {
+          "path": "scripts/manage-attendees.mjs",
+          "start_line": 59,
+          "end_line": 98
+        },
+        {
+          "path": "scripts/manage-task-members.mjs",
+          "start_line": 56,
+          "end_line": 94
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 154,
+          "end_line": 169
+        }
+      ]
+    },
+    {
+      "operation": "Create a remote event and add attendees",
+      "source": "lib/calendar.mjs createEvent",
+      "data_scope": "Title, description, converted start/end timestamps, timezone, location and selected/default calendar. Sets private visibility and can_modify_event attendee ability. Adds supplied attendee IDs plus BOYANG_USER_ID.",
+      "recipient_or_storage": "Lark Calendar API and the selected remote calendar; attendee access and notifications are requested for the resulting membership.",
+      "condition": "Successful library invocation or creation CLI without the named-resolution failure. Boyang's inclusion is an explicit business rule. Event creation precedes a separate attendee request, with no rollback shown if that request fails.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 174,
+          "end_line": 179
+        },
+        {
+          "path": "lib/calendar.mjs",
+          "start_line": 96,
+          "end_line": 148
+        },
+        {
+          "path": "lib/calendar.mjs",
+          "start_line": 218,
+          "end_line": 231
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 207,
+          "end_line": 211
+        }
+      ]
+    },
+    {
+      "operation": "Create a remote task with assignee memberships",
+      "source": "lib/task.mjs createTask",
+      "data_scope": "Title, description, due timestamp in milliseconds and supplied assignee user_ids. Sets assignee roles and a 30-minute reminder; timezone is used locally for conversion.",
+      "recipient_or_storage": "POST https://open.larksuite.com/open-apis/task/v2/tasks and the remotely created task.",
+      "condition": "Successful library invocation or creation CLI without the named-resolution failure. Reminder delivery and content are controlled externally.",
+      "evidence": [
+        {
+          "path": "lib/task.mjs",
+          "start_line": 18,
+          "end_line": 49
+        }
+      ]
+    },
+    {
+      "operation": "Update selected event or task fields",
+      "source": "lib/calendar.mjs updateEvent and lib/task.mjs updateTask",
+      "data_scope": "Resource identifiers and supplied title/description; event location and start/end timestamps with timezone, or task due timestamp. Task update_fields enumerates the selected fields.",
+      "recipient_or_storage": "PATCH requests to the applicable Lark Calendar or Task resource; returned resource stays with the caller.",
+      "condition": "On update invocation. Unspecified content fields are omitted; the functions still issue requests when no update fields are supplied.",
+      "evidence": [
+        {
+          "path": "lib/calendar.mjs",
+          "start_line": 164,
+          "end_line": 194
+        },
+        {
+          "path": "lib/task.mjs",
+          "start_line": 62,
+          "end_line": 99
+        }
+      ]
+    },
+    {
+      "operation": "Add or remove remote membership associations",
+      "source": "Calendar attendee and task-member library functions",
+      "data_scope": "Calendar/event or task identifiers and selected user_ids; task members have assignee roles. Calendar additions/removals set need_notification to true.",
+      "recipient_or_storage": "Lark Calendar attendees or attendees/batch_delete endpoints; Lark Task add_members or remove_members endpoints. Calendar attendee notifications are requested.",
+      "condition": "Direct library calls; createEvent also invokes attendee addition. Packaged manager CLIs fail before these calls. These functions do not enforce Boyang inclusion.",
+      "evidence": [
+        {
+          "path": "lib/calendar.mjs",
+          "start_line": 218,
+          "end_line": 254
+        },
+        {
+          "path": "lib/task.mjs",
+          "start_line": 118,
+          "end_line": 147
+        }
+      ]
+    },
+    {
+      "operation": "Request remote event or task deletion",
+      "source": "deleteEvent and deleteTask, including deletion CLIs",
+      "data_scope": "Selected calendar/event or task identifiers. Event deletion includes a notification preference.",
+      "recipient_or_storage": "DELETE requests to Lark Calendar or Task resources; event-attendee notifications are requested by default.",
+      "condition": "Explicit deletion invocation. Event notifications can be disabled through the library argument or CLI --no-notify. A successful response is treated as deletion success; retention or irreversible erasure is not demonstrated.",
+      "evidence": [
+        {
+          "path": "lib/calendar.mjs",
+          "start_line": 204,
+          "end_line": 208
+        },
+        {
+          "path": "lib/task.mjs",
+          "start_line": 107,
+          "end_line": 109
+        },
+        {
+          "path": "scripts/delete-event.mjs",
+          "start_line": 42,
+          "end_line": 48
+        },
+        {
+          "path": "scripts/delete-task.mjs",
+          "start_line": 38,
+          "end_line": 44
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve remote events or tasks",
+      "source": "Calendar and task get/list functions",
+      "data_scope": "Selected resource identifiers or listing parameters; API-returned event/task records. Calendar listing defaults to today through seven days later and page_size 50. Task listing defaults to 50 with an optional page token.",
+      "recipient_or_storage": "Applicable Lark GET endpoints; returned records remain with the invoking caller.",
+      "condition": "Explicit get/list invocation. Calendar listing and task listing each make one page request; employee retrieval separately follows all offered pages.",
+      "evidence": [
+        {
+          "path": "lib/calendar.mjs",
+          "start_line": 266,
+          "end_line": 309
+        },
+        {
+          "path": "lib/task.mjs",
+          "start_line": 155,
+          "end_line": 173
+        }
+      ]
+    },
+    {
+      "operation": "Send an empty update for attempted task completion",
+      "source": "lib/task.mjs completeTask",
+      "data_scope": "Task identifier, empty task object and empty update_fields array.",
+      "recipient_or_storage": "Lark Task PATCH endpoint.",
+      "condition": "Only when completeTask is invoked directly. It supplies no completion field; whether an empty PATCH has any external effect is unresolved.",
+      "evidence": [
+        {
+          "path": "lib/task.mjs",
+          "start_line": 69,
+          "end_line": 99
+        },
+        {
+          "path": "lib/task.mjs",
+          "start_line": 181,
+          "end_line": 186
+        }
+      ]
+    },
+    {
+      "operation": "Expose optional message-send and reply operations",
+      "source": "lib/lark-api.mjs replyMessage and sendMessage",
+      "data_scope": "Caller-provided message content and messageId, or receiveId and receiveIdType.",
+      "recipient_or_storage": "Lark IM message/reply endpoints, targeting the caller-selected message, chat or user.",
+      "condition": "Only explicit invocation of these exported helpers. No supplied script invokes them; calendar/task operations do not automatically send these messages.",
+      "evidence": [
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 113,
+          "end_line": 136
+        }
+      ]
+    },
+    {
+      "operation": "Print command inputs and results to the caller",
+      "source": "CLI console output",
+      "data_scope": "Creation titles, times, timezone, attendee/assignee identifiers and event location; returned identifiers, titles, links and attendees. Event listings include location and up to 100 description characters. Selected JSON modes print complete returned objects.",
+      "recipient_or_storage": "Calling process stdout. No file persistence or additional remote recipient is specified.",
+      "condition": "On reachable command paths. Full creation JSON requires truthy JSON_OUTPUT; full listing JSON requires --json.",
+      "evidence": [
+        {
+          "path": "scripts/create-event.mjs",
+          "start_line": 79,
+          "end_line": 113
+        },
+        {
+          "path": "scripts/create-task.mjs",
+          "start_line": 70,
+          "end_line": 98
+        },
+        {
+          "path": "scripts/list-events.mjs",
+          "start_line": 45,
+          "end_line": 82
+        },
+        {
+          "path": "scripts/update-event.mjs",
+          "start_line": 53,
+          "end_line": 72
+        },
+        {
+          "path": "scripts/update-task.mjs",
+          "start_line": 48,
+          "end_line": 64
+        },
+        {
+          "path": "scripts/delete-event.mjs",
+          "start_line": 42,
+          "end_line": 48
+        },
+        {
+          "path": "scripts/delete-task.mjs",
+          "start_line": 38,
+          "end_line": 44
+        }
+      ]
+    },
+    {
+      "operation": "Serialize API failures into exceptions and diagnostics",
+      "source": "API wrapper, employee fallback handler and CLI catch handlers",
+      "data_scope": "Complete failed authentication/API response objects embedded in error messages. API failures also attach larkResponse, which CLI handlers print again. Employee diagnostics print failure messages, fallback status and cache counts.",
+      "recipient_or_storage": "Local exception caller, stderr and status/count stdout; downstream log retention is unspecified.",
+      "condition": "On the corresponding failure or cache-load path. Exact response contents are unknown.",
+      "evidence": [
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 41,
+          "end_line": 45
+        },
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 103,
+          "end_line": 107
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 80,
+          "end_line": 103
+        },
+        {
+          "path": "scripts/create-event.mjs",
+          "start_line": 115,
+          "end_line": 120
+        },
+        {
+          "path": "scripts/create-task.mjs",
+          "start_line": 100,
+          "end_line": 105
+        },
+        {
+          "path": "scripts/delete-event.mjs",
+          "start_line": 50,
+          "end_line": 55
+        },
+        {
+          "path": "scripts/delete-task.mjs",
+          "start_line": 46,
+          "end_line": 51
+        },
+        {
+          "path": "scripts/list-events.mjs",
+          "start_line": 84,
+          "end_line": 89
+        },
+        {
+          "path": "scripts/manage-attendees.mjs",
+          "start_line": 100,
+          "end_line": 105
+        },
+        {
+          "path": "scripts/manage-task-members.mjs",
+          "start_line": 96,
+          "end_line": 101
+        },
+        {
+          "path": "scripts/update-event.mjs",
+          "start_line": 74,
+          "end_line": 79
+        },
+        {
+          "path": "scripts/update-task.mjs",
+          "start_line": 66,
+          "end_line": 71
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "All accessible root-department directory pages for a request concerning one or a few employees.",
+      "recipient_or_storage": "Lark Contact API responses entering the skill process and employeeCache.",
+      "condition": "Name resolution, individual employee lookup or display-name lookup with an absent/stale cache; excludes expressly requested whole-directory listings.",
+      "purpose_basis": "Automatic name-to-user_id resolution is declared; exhaustive root-directory retrieval is an implementation choice.",
+      "necessary_behavior": "Identify the requested employees while preserving supported aliases and fallback behavior.",
+      "proposed_reduction": "Use a suitably scoped lookup if the API supports it. Otherwise retain only relevant matches after scanning, and preserve the existing creation paths that accept direct IDs without directory resolution.",
+      "preservation_conditions": "A narrower remote query must support the required matching behavior and directory coverage. Its availability is not established by the supplied source; the retrieval itself may remain necessary.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 148,
+          "end_line": 148
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 48,
+          "end_line": 77
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 95,
+          "end_line": 105
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 136,
+          "end_line": 146
+        }
+      ]
+    },
+    {
+      "data_scope": "email, mobile, department_ids and open_id retained during ordinary name resolution.",
+      "recipient_or_storage": "The in-memory employeeCache; complete records can subsequently be returned through directory helpers.",
+      "condition": "Successful dynamic directory retrieval for name resolution. Email additionally supports the separate searchEmployees helper.",
+      "purpose_basis": "The name index uses name, en_name and nickname mapped to user_id. These additional fields are not needed for that outcome.",
+      "necessary_behavior": "Retain identifiers and supported name/alias fields for resolution.",
+      "proposed_reduction": "Project name-resolution records to those fields. Load email only for explicitly needed email search, and separate any expressly requested detailed-record access. Release unused cache references rather than treating TTL as deletion.",
+      "preservation_conditions": "Keep additional fields only for callers that actually require detailed employee records or email matching; those requirements are not declared for ordinary event/task name resolution.",
+      "evidence": [
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 63,
+          "end_line": 73
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 95,
+          "end_line": 105
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 114,
+          "end_line": 128
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 228,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "data_scope": "Organizational roles linked to employee names, aliases and user_ids in the documentation.",
+      "recipient_or_storage": "Public SKILL.md distribution and its readers.",
+      "condition": "Whenever the package documentation is distributed or read.",
+      "purpose_basis": "Name resolution requires name/alias-to-ID mappings; the Role column does not participate in resolution or CRUD.",
+      "necessary_behavior": "Document supported employee identifiers and aliases, and preserve the explicit Boyang attendance rule.",
+      "proposed_reduction": "Remove the Role column while retaining the necessary mappings and business rule.",
+      "preservation_conditions": "The executable fallback directory and name index do not use organizational roles.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 146,
+          "end_line": 176
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 20,
+          "end_line": 42
+        },
+        {
+          "path": "lib/employees.mjs",
+          "start_line": 114,
+          "end_line": 128
+        }
+      ]
+    },
+    {
+      "data_scope": "Entire failed API response objects, including any returned fields beyond an actionable error code/message.",
+      "recipient_or_storage": "Exception messages and caller stderr; no persistent logging destination is established.",
+      "condition": "Authentication/API failures. For API failures handled by the CLIs, the same response is serialized in error.message and again as larkResponse.",
+      "purpose_basis": "Failure reporting supports CRUD; unrestricted response dumping and duplicate serialization are implementation choices.",
+      "necessary_behavior": "Return one actionable diagnostic identifying the failed operation and error.",
+      "proposed_reduction": "Select safe code/message fields and make redacted detailed diagnostics optional. Remove the second serialization of the same payload.",
+      "preservation_conditions": "Retain sufficient troubleshooting context. Duplicate output is a redundant action; unnecessary response fields are extra data within the required diagnostic. Actual sensitive response contents remain unknown.",
+      "evidence": [
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 43,
+          "end_line": 44
+        },
+        {
+          "path": "lib/lark-api.mjs",
+          "start_line": 103,
+          "end_line": 107
+        },
+        {
+          "path": "scripts/create-event.mjs",
+          "start_line": 115,
+          "end_line": 119
+        },
+        {
+          "path": "scripts/create-task.mjs",
+          "start_line": 100,
+          "end_line": 104
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "dotenv implementation and the external .secrets.env contents are absent. Exact dependency reads, other loaded variables and dependency side effects cannot be verified (lib/lark-api.mjs:6-15; package.json:15-17; package-lock.json:15-25). Registry/funding URLs in metadata do not establish runtime transmissions.",
+    "Lark's effective contact coverage, granted scopes, calendar access controls, notification/reminder contents and downstream recipients are not supplied. A narrower contact-query capability cannot be established.",
+    "Remote retention, backups and physical erasure after event/task deletion or membership removal are unknown. Local code establishes requests and response handling only.",
+    "Missing await blocks the packaged named-creation and membership-manager outcomes. Whether their initiated asynchronous authentication/directory work completes before termination remains unresolved.",
+    "completeTask sends no completion field; its actual external effect is unresolved (lib/task.mjs:181-186). Recursive token-expiry replay has no enforced cap; server-side idempotency and duplicate-write behavior are unknown (lib/lark-api.mjs:95-101).",
+    "External callers of optional directory and IM helpers, and any storage or forwarding of caller outputs, are not shown.",
+    "package.json:5 names index.js as the package entry, but that file is absent from the complete inventory. That entry path cannot be resolved; documented script and library paths were audited."
+  ]
+}

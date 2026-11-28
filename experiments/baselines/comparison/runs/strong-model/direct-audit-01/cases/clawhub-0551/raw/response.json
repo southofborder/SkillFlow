@@ -1,0 +1,411 @@
+{
+  "status": "completed",
+  "declared_purpose": "Fetch a requested cryptocurrency's price and period change, generate a candlestick chart, and return JSON. The entry document explicitly requires replying with text_plain and attaching the PNG when chart_path exists. Hyperliquid preference, CoinGecko fallback and 300-second local caching are declared; request sequencing and full-response caching are implementation choices (SKILL.md:3-16, 28-50).",
+  "data_operations": [
+    {
+      "operation": "Read and normalize request arguments locally",
+      "source": "Process arguments supplied by the caller",
+      "data_scope": "Token symbol or ID, optional duration and gradient flag; normalization removes common trading-pair separators and stablecoin suffixes for Hyperliquid lookup.",
+      "recipient_or_storage": "Python process memory",
+      "condition": "A nonempty symbol is supplied; duration defaults to 24 hours.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 490,
+          "end_line": 508
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 794,
+          "end_line": 807
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 828,
+          "end_line": 849
+        }
+      ]
+    },
+    {
+      "operation": "Fetch Hyperliquid metadata and select an asset locally",
+      "source": "Hyperliquid metadata endpoint",
+      "data_scope": "POST sends the constant type metaAndAssetCtxs and fixed User-Agent; the requested symbol is matched locally against returned asset names and contexts.",
+      "recipient_or_storage": "https://api.hyperliquid.xyz/info; response enters Python memory and the metadata cache",
+      "condition": "Every valid invocation attempts lookup; a fresh metadata cache avoids the request. The effective POST helper permits up to three attempts for specified transient errors. Repeated function definitions replace earlier definitions; they do not independently send requests.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 21,
+          "end_line": 21
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 126,
+          "end_line": 154
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 277,
+          "end_line": 284
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 810,
+          "end_line": 825
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 848,
+          "end_line": 856
+        }
+      ]
+    },
+    {
+      "operation": "Disclose the selected asset and requested time window to fetch candles",
+      "source": "Normalized symbol, requested duration and current time",
+      "data_scope": "POST body contains coin, interval, startTime and endTime; response supplies timestamps, OHLC prices and volume.",
+      "recipient_or_storage": "https://api.hyperliquid.xyz/info; parsed candles remain in Python memory",
+      "condition": "main's source flag is hyperliquid. This flag can remain set even if price retrieval subsequently falls back to CoinGecko. Candle responses have no script-level cache.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 336,
+          "end_line": 361
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 850,
+          "end_line": 859
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 900,
+          "end_line": 908
+        }
+      ]
+    },
+    {
+      "operation": "Disclose candidate token IDs and quote currencies for price lookup",
+      "source": "Mapped, user-supplied or search-resolved token ID",
+      "data_scope": "GET query parameters ids and vs_currencies, plus a fixed User-Agent; returned token price data.",
+      "recipient_or_storage": "https://api.coingecko.com/api/v3/simple/price; response enters memory and a local price cache",
+      "condition": "No usable Hyperliquid price and no fresh matching cache. The initial quote is normally usdt; missing prices trigger usd lookup. After successful symbol search, quote lookups repeat using the resolved ID. Request errors terminate this price path after helper retries.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 16,
+          "end_line": 16
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 65,
+          "end_line": 92
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 157,
+          "end_line": 164
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 836,
+          "end_line": 895
+        }
+      ]
+    },
+    {
+      "operation": "Disclose a symbol for search and infer its canonical token ID",
+      "source": "Uppercased requested symbol and CoinGecko search results",
+      "data_scope": "URL-encoded query symbol; returned coins are filtered by exact symbol and ranked by market_cap_rank to select an ID.",
+      "recipient_or_storage": "https://api.coingecko.com/api/v3/search; complete response cached locally; selection performed in memory",
+      "condition": "Price lookups remain unresolved and the candidate ID equals the lowercased input. A fresh search cache avoids remote search.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 18,
+          "end_line": 18
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 415,
+          "end_line": 435
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 874,
+          "end_line": 895
+        }
+      ]
+    },
+    {
+      "operation": "Fetch CoinGecko historical data for chart construction",
+      "source": "Token ID, quote currency and requested duration",
+      "data_scope": "Token ID in URL path; currency and whole-day duration in query. Market-chart prices are converted locally into candles. OHLC fallback requests one day.",
+      "recipient_or_storage": "https://api.coingecko.com/api/v3/coins/{id}/market_chart and /coins/{id}/ohlc; responses enter memory and local caches",
+      "condition": "No Hyperliquid candles, including unsupported assets or failed/empty candle responses. Market-chart days are rounded up, bounded to 1–365; OHLC is attempted if candles remain empty. These requests can occur while the result's source flag remains hyperliquid.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 17,
+          "end_line": 20
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 167,
+          "end_line": 188
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 446,
+          "end_line": 487
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 910,
+          "end_line": 931
+        }
+      ]
+    },
+    {
+      "operation": "Read, persist and overwrite API-response caches",
+      "source": "Previously cached JSON and newly fetched provider responses",
+      "data_scope": "Complete price, search, market-chart, OHLC and Hyperliquid metadata responses. Filenames encode token ID or symbol and, where applicable, quote currency and day count.",
+      "recipient_or_storage": "Local /tmp/crypto_price_{prefix}_{token_id}.json files",
+      "condition": "Cache files younger than or equal to 300 seconds are read. Successful fetches write complete responses. Expiry only prevents reuse; it does not delete files. Refresh overwrites the matching file, and write failures are ignored.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 15,
+          "end_line": 15
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 37,
+          "end_line": 62
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 157,
+          "end_line": 188
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 277,
+          "end_line": 284
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 415,
+          "end_line": 422
+        }
+      ]
+    },
+    {
+      "operation": "Conditionally load a local chart font",
+      "source": "fonts/Tomorrow.ttf relative to the package",
+      "data_scope": "Font file registered with matplotlib and its font-family name",
+      "recipient_or_storage": "Local matplotlib font manager and plotting configuration",
+      "condition": "Chart construction imports matplotlib successfully and the optional font exists. The font is absent from the supplied inventory; actual loading is unresolved.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 528,
+          "end_line": 545
+        }
+      ]
+    },
+    {
+      "operation": "Derive market indicators locally",
+      "source": "Provider prices and selected historical candles",
+      "data_scope": "Period price change and percentage, swing highs/lows, bullish/bearish candle classifications and absolute extrema; these are market attributes.",
+      "recipient_or_storage": "Python memory, generated chart and result JSON",
+      "condition": "Usable historical data exists; period change requires at least two selected candles and a nonzero starting close. The selected candle count is reduced to 80% of the computed target.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 364,
+          "end_line": 412
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 578,
+          "end_line": 623
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 702,
+          "end_line": 721
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 933,
+          "end_line": 950
+        }
+      ]
+    },
+    {
+      "operation": "Persist a chart image locally",
+      "source": "Selected candles, derived indicators, symbol, currency and duration label",
+      "data_scope": "Rendered price chart and optional volume bars; filename includes requested symbol and generation timestamp.",
+      "recipient_or_storage": "/tmp/crypto_chart_{symbol}_{timestamp}.png",
+      "condition": "Chart construction succeeds with nonempty candle data. The script saves the PNG and closes the figure; it does not delete the image.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 547,
+          "end_line": 559
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 723,
+          "end_line": 751
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 786,
+          "end_line": 791
+        }
+      ]
+    },
+    {
+      "operation": "Return results or errors to the caller",
+      "source": "Request arguments, provider data, local calculations and caught errors",
+      "data_scope": "JSON containing symbol, token ID, source flag, quote, duration, prices, changes, chart path and formatted text; errors can contain exception text or candidate token ID.",
+      "recipient_or_storage": "Standard output to the invoking caller; further storage is not shown",
+      "condition": "Successful execution returns the result object; missing input, failed price/search requests or unresolved tokens return error JSON. A normal return does not establish disclosure to another recipient.",
+      "evidence": [
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 29,
+          "end_line": 34
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 857,
+          "end_line": 898
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 963,
+          "end_line": 984
+        }
+      ]
+    },
+    {
+      "operation": "Instruct the agent to deliver text and the chart to the requesting user",
+      "source": "Returned text_plain and chart_path",
+      "data_scope": "Formatted market summary and PNG attachment; the exact local path is supplied through the MEDIA directive.",
+      "recipient_or_storage": "Clawdbot media handling and the user's reply channel",
+      "condition": "The agent follows the entry document; attachment is explicitly required whenever chart_path is present. Delivery implementation is outside the supplied source.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 28,
+          "end_line": 37
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Complete search results, Hyperliquid metadata/context fields beyond those consumed, and market-chart response fields other than prices, when such extra fields are returned.",
+      "recipient_or_storage": "Local /tmp/crypto_price_search_{SYMBOL}.json, /tmp/crypto_price_hyperliquid_meta_meta.json and /tmp/crypto_price_market_{currency}_{days}_{token_id}.json",
+      "condition": "A cache miss or expiry causes the complete provider response to be written.",
+      "purpose_basis": "Token resolution, price retrieval and 300-second caching are declared; persisting unused response content is an implementation choice.",
+      "necessary_behavior": "Resolve the requested token, retain supported-asset lookup data and needed prices, and reuse results during the cache window.",
+      "proposed_reduction": "Narrow required cache writes: store the selected search ID, asset-name-to-needed-price mappings, and market-chart prices. This removes extra cached data rather than eliminating a required request.",
+      "preservation_conditions": "Adapt cache readers; preserve exact-symbol/rank selection, unknown-token handling, Hyperliquid availability and price fallback behavior, required price samples and the 300-second reuse window.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 45,
+          "end_line": 50
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 177,
+          "end_line": 188
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 277,
+          "end_line": 284
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 415,
+          "end_line": 435
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 810,
+          "end_line": 825
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 850,
+          "end_line": 856
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 915,
+          "end_line": 917
+        }
+      ]
+    },
+    {
+      "data_scope": "Expired response caches and filenames reflecting queried assets, currencies and chart day counts.",
+      "recipient_or_storage": "Local /tmp/crypto_price_*.json files beyond their 300-second validity",
+      "condition": "Files expire without successful refresh or other cleanup. Expiry returns a cache miss while leaving the file on disk.",
+      "purpose_basis": "The declared cache purpose is five-minute reuse; the script has no use for expired content.",
+      "necessary_behavior": "Keep usable cache entries for 300 seconds and fetch fresh data afterward.",
+      "proposed_reduction": "Delete expired entries through bounded cleanup, including files for assets never requested again.",
+      "preservation_conditions": "Preserve fresh entries and coordinate cleanup with concurrent readers/writers. Actual filesystem cleanup outside the script remains unknown.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 50,
+          "end_line": 50
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 37,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "data_scope": "Generated chart PNGs, including requested asset and period, market indicators, and symbol/timestamp filenames.",
+      "recipient_or_storage": "Local /tmp/crypto_chart_{symbol}_{timestamp}.png after delivery or abandonment",
+      "condition": "Each successful chart save creates a timestamped file; no script deletion follows. External cleanup is unknown.",
+      "purpose_basis": "The PNG and accessible path are required for the requested chart attachment; retention after consumption is not specified.",
+      "necessary_behavior": "Keep the image available until Clawdbot has consumed it for attachment.",
+      "proposed_reduction": "Remove the file after confirmed media consumption and expire abandoned chart files. Narrow retention rather than removing chart generation or attachment.",
+      "preservation_conditions": "Do not delete before attachment processing completes; allow sufficient time for delayed delivery and retries.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 36,
+          "end_line": 43
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 786,
+          "end_line": 791
+        },
+        {
+          "path": "scripts/get_price_chart.py",
+          "start_line": 950,
+          "end_line": 984
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Provider logging, retention, onward disclosure and availability of narrower API responses are undocumented in the supplied source.",
+    "Clawdbot media transport, attachment consumption timing, message retention and any recipients beyond the intended user cannot be verified without its implementation.",
+    "Runtime filesystem permissions, external /tmp cleanup and concurrent execution are unspecified; actual file lifetimes cannot be determined from the script's lack of deletion.",
+    "matplotlib internals are not supplied; requirements.txt:1 only constrains its version. The optional fonts/Tomorrow.ttf is also absent, so dependency-side reads or persistence remain unresolved.",
+    "External wrapper skills referenced in ARCHITECTURE.md:25-29 are not packaged; their execution and data handling remain outside this completed audit of the supplied skill."
+  ]
+}

@@ -212,6 +212,11 @@ def callable_signature_ports(instruction, files):
         if len(matches) != 1:
             continue
         found = [i for i, name in enumerate(labels) if _tail(name) == param]
+        snapshot = instruction.get("metadata", {}).get("python_argument_snapshot")
+        if (isinstance(snapshot, dict) and snapshot.get("parameter") == param and optional
+                and snapshot.get("input_index") == matches[0] and type(snapshot.get("output_index")) is int
+                and 0 <= snapshot["output_index"] < len(labels)):
+            found = [snapshot["output_index"]]
         if not found and len(keys) == len(labels) == len(site.parameters) == 1:
             found = [0]
         if len(found) == 1:
@@ -229,7 +234,8 @@ def callable_signature_ports(instruction, files):
 
 def _uses(block):
     values = [v for op in block["operations"] for v in op["inputs"]]
-    values.extend(block["exit"].get("conditions", block["exit"].get("values", [])))
+    exit = block["exit"]
+    values.extend(exit.get("conditions", exit.get("values", exit.get("inputs", []))))
     return {v["result"] for v in values if "result" in v}
 
 
@@ -377,7 +383,7 @@ def _crossed_invocations(blocks, used, files, signatures):
                 yield bi, oi, sorted(scope), [declarations[owner], target], [span], message
 
 
-def qualify_occurrence_keys(candidate, files, inherited_refs):
+def qualify_occurrence_keys(candidate, files, inherited_refs, *, bind_defaults=True, snapshots=None):
     """Distinct physical callers cannot alias through an accidentally reused raw key."""
     owners = defaultdict(set)
     sites = []
@@ -391,10 +397,18 @@ def qualify_occurrence_keys(candidate, files, inherited_refs):
                 if current["identifier"] == old["identifier"] and old.get("semantic_name"):
                     current["semantic_name"] = old["semantic_name"]
         ir["metadata"].pop("optional_context_inputs", None)
+        if snapshots and block["block_ref"] in snapshots:
+            ir["metadata"]["python_argument_snapshot"] = snapshots[block["block_ref"]]
         ports = callable_signature_ports(ir, files)
         optional = sorted(p["input_index"] for p in ports if p["optional"])
         if optional:
             ir["metadata"]["optional_context_inputs"] = optional
+        if bind_defaults and not prior:
+            from .python_arguments import argument_defaults
+            snapshot = ir["metadata"].get("python_argument_snapshot", {})
+            defaults = argument_defaults([p for p in ports if p["output_index"] != snapshot.get("output_index")], files)
+            if defaults:
+                ir["metadata"]["python_argument_defaults"] = defaults
         for port in ports:
             operand = ir["inputs"][port["input_index"]]
             owners[operand["identifier"]].add(port["owner"])

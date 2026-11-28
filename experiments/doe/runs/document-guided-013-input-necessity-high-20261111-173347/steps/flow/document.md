@@ -1,0 +1,6 @@
+# Source Fetch With Fallback
+
+1. Read `source_id` from the user’s request and `FAST_KEY` from the environment. If `FAST_KEY` is present, call `fast.fetch(source_id, FAST_KEY)`. If it is absent, go directly to the archive step. (`skill/SKILL.md:8-9`)
+2. If the first fast call succeeds, select that response’s `body` unchanged and end fetching. If it fails, check whether the error is transient. A transient error triggers exactly one retry with the same arguments. A successful retry selects the retry response’s `body` unchanged and ends fetching. A non-transient first failure or any retry failure leads to the archive step. (`skill/SKILL.md:9-13`)
+3. Call `archive.fetch(source_id)` at most once. Its success selects its own response’s `body` unchanged. Its failure selects its error. Both outcomes end fetching. Keep `FAST_KEY` out of archive arguments and all diagnostic output. (`skill/SKILL.md:12-15`)
+4. Before returning the selected body or archive error, append the final status to local `status.txt`. The status format and append-failure behavior are unspecified. Any association between the fetched result and a saved result file, analysis, later read, or summary remains unresolved. (`skill/SKILL.md:8-16`)

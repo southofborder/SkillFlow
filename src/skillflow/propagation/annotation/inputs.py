@@ -15,6 +15,10 @@ from skillflow.propagation.material import checked_material, prepare_material
 _ARCHIVED_RUNTIMES = {
     "skillflow-document-annotation-v11": "skillflow-abstract-runtime-v12",
     "skillflow-document-annotation-v12": "skillflow-abstract-runtime-v13",
+    "skillflow-document-annotation-v13": "skillflow-abstract-runtime-v14",
+    "skillflow-document-annotation-v14": "skillflow-abstract-runtime-v14",
+    "skillflow-document-annotation-v15": "skillflow-abstract-runtime-v14",
+    "skillflow-document-annotation-v16": "skillflow-abstract-runtime-v15",
 }
 
 

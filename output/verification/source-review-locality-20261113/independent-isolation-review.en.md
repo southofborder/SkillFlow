@@ -1,0 +1,9 @@
+# Independent read-only review of partial review isolation
+
+Static inspection found three concrete corrections before acceptance. The exact inspected hashes and details are in `independent-isolation-review.json`. No root-owned file was edited and no validator, test, model, backend, replay or Skill was run for this review.
+
+1. **Partial receipt reconstruction drops fragment/stage targets.** `_isolation_material` records only `annotation_view` and `partial`, while the original target index can contain aliases derived from `fragments` and `stage_failures`. A finding valid against the delivered material can become unknown when the receipt regenerates its ledger. Preserve and verify the relevant selected context, or explicitly canonicalize aliases without losing evidence. Add a fragment-targeted partial receipt roundtrip.
+2. **Malformed context can escape as TypeError.** `annotation_view` list/dict values reach set membership before a string check. Reject them explicitly with a strict receipt error.
+3. **Some per-record hashes refer to normalized rows.** Duplicate/conflict calls pass parsed rows into `failure()`, while initial failures and successful records hash raw rows. Defaults and derived owners can make `record_sha256` differ from the candidate record it names. Hash the raw record consistently; use a separate field for any normalized digest.
+
+Inventory completeness, duplicate rejection, request/response association and blocked-ID use in downstream contract/projection access appear conservative. Partial receipts are regenerated from their candidate and bound to selected source/CFG/annotation/inventory identities. No direct unsafe acceptance bypass was found in those inspected paths. This is a bounded static review, not dynamic fuzzing or an acceptance verdict; root must verify fixes and applicable regressions.

@@ -1,0 +1,21 @@
+# Offline acceptance: CFG diagnostic aggregation and missing-CFG recovery
+
+The latest scoped receipt union contains **2,593 passed cases, one Windows symlink-privilege skip, and zero unresolved failures** (2,594 distinct identities). This is not a whole-repository run or one all-green execution. Current implementation SHA: `694561928259d08c00492843a036ad0196460f785e6bd5d2fb1e07ba8ef59445`.
+
+The broad execution collected 2,585 cases and finished with 2,580 passes, four failures and one skip in 936.77 seconds. Corrective receipts are ordered explicitly in `final-validation-plan.json`: lifecycle 104/104, CFG/compiler/IR 345/345, recovery/fatal integration 100/100, and the stable-provenance case 1/1. Overlapping receipts are not added together. Nine additional CFG barrier cases account for the increase in distinct identities.
+
+The four broad failures were resolved as follows:
+
+- A fake fixture for the frozen previous lifecycle helper imported the new CFG policy, so it stopped at policy validation before reaching its missing-pinned-CLI assertion. The fixture now supplies that helper's accepted policy. Historical helpers and production checks are unchanged.
+- Two unchanged typed-record tests exposed a real regression introduced in this turn: all compiler barriers had been treated as a reason to disable local replacement. Exact existing-record correction is restored where raw identity/index and every reported location are safe. Barriers still prohibit compiler speculation and global/causal scope inference; full post-merge validation remains mandatory. The original positive and incompatible-result assertions pass unchanged.
+- An unchanged graph-audit replay test observed that production changed while its fixture was running and correctly refused continuation. It passed after source changes stopped, with no production or assertion change to evade the protection.
+
+Earlier focused failures are also preserved: a test-count assumption about duplicate compiler diagnostics; exact-target matching and current protocol expectations; initial recovery fixtures using a private display key and treating new replay summaries as original-file mutation; peer counterexamples for unbound fatal recovery artifacts, missing transport proof, and inconsistent terminal attempt material; and admission fixtures running while their evidence schema was being hardened. Sealing verifies that every earlier failed identity has a current passing result. No failure receipt was rewritten.
+
+End-to-end injected responses exercise failure after the initial CFG correction, exact failed-stage review, the existing shared repair, successful replacement graph compilation, new dependent fragments, nonempty input-contract review, actual local propagation/DOE, and zero-call replay. They also cover absent extra CFG findings, concurrent Task revision, a second rejected graph staying unselected without another round, three fatal sibling orderings, source/owner/request/transport tampering, and rehashed admission/material tampering. Native models and Skills were not executed.
+
+Seven normal semantic requests, two workers, one correction per chain, one shared repair and the existing native request budgets remain unchanged. Full source and contracts are retained. New protocol identities and evidence bindings are explicit; old artifacts are not migrated. The source-only Task interface remains v5. The 977 protected historical files were checked unchanged by the acceptance seal.
+
+The preceding online regression is explained by a missing combined failure path, not by test counts: preflight hid compiler defects until correction was exhausted; failed graph targets were absent; shared repair required a valid CFG. Earlier whole-graph rewrites happened to repair loops, but generated inputs differed, so no controlled old/new conclusion is claimed. The causal audit and design documents contain the detailed evidence and acknowledge the integration/acceptance gap.
+
+The sole new GA4 remains a separate empirical test. Offline acceptance proves these recorded mechanisms and fixtures, not that a real model will produce an acceptable graph or establish deletable fields. Root may now prepare and dispatch exactly one fresh frozen GA4 and its sole controller-owned zero-call replay; previous runs stay closed.

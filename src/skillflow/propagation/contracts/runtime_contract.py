@@ -15,10 +15,12 @@ from typing import Any
 from .abstraction import BOUNDARY_GRANULARITY
 
 
-CONTRACT_VERSION = "skillflow-abstract-runtime-v14"
+CONTRACT_VERSION = "skillflow-abstract-runtime-v16"
 LEGACY_CONTRACT_VERSION = "skillflow-abstract-runtime-v12"
 _SELECTOR_CONTRACT = "skillflow-abstract-runtime-v13"
-_ARCHIVED = (LEGACY_CONTRACT_VERSION, _SELECTOR_CONTRACT)
+_PLACEHOLDER_CONTRACT = "skillflow-abstract-runtime-v14"
+_OUTCOME_CONTRACT = "skillflow-abstract-runtime-v15"
+_ARCHIVED = (LEGACY_CONTRACT_VERSION, _SELECTOR_CONTRACT, _PLACEHOLDER_CONTRACT, _OUTCOME_CONTRACT)
 
 # Stable evidence IDs. A revised meaning or text requires a new contract version.
 _RULES = (
@@ -109,11 +111,31 @@ def runtime_contract(*, version=CONTRACT_VERSION) -> dict[str, Any]:
             "Keep normal/exception routes, effect occurrences, and decision controls with their source evidence. "
             "An explicit branch can use the same typed selector on its actual operand; case names and prose "
             "cannot prove route compatibility.")
-    if version == CONTRACT_VERSION:
+    if version in (_PLACEHOLDER_CONTRACT, _OUTCOME_CONTRACT, CONTRACT_VERSION):
         inventory["rows"].append(["placeholder", "atomic", "possible inputs", "value or effect",
             "site, versions, member", "possible influence", "optional weak write; no implied observation or delivery"])
+    rules = dict(_RULES)
+    if version in (_OUTCOME_CONTRACT, CONTRACT_VERSION):
+        rules["EM11"] = (rules["EM11"].split("Selecting an explicit field with select_part")[0]
+            + "A typed compute expression may project the exact value of an input field, test presence, "
+              "or derive a scalar. A compute without an exact expression conveys input influence. "
+              "A protected operation may bind its CFG completion flag and separate return or exception slots. "
+              "The selected outcome carries its own state and only its available slots. The exception "
+              "refers to this invocation. Its message contents require separate evidence.")
+        rows = {row[0]: row for row in inventory["rows"]}
+        rows["compute"][3:5] = ["exact projection, typed scalar, or opaque value",
+                                 "same expression and input versions in both analysis directions"]
+        rows["cases"][3] = "local returned yield or CFG completion with case-specific return/exception"
+    if version == CONTRACT_VERSION:
+        inventory["common"]["selectors"] = (
+            "A source-backed guard tests a field of an immutable entry operand. The first matching test wins; "
+            "the last outcome covers the remainder. Known fields, scalar tags, absence and nonempty strings "
+            "have typed semantics. Unknown values retain compatible choices. For the same version and field, "
+            "combine only compatible decisions, including tests with different order or overlapping domains. "
+            "Independent versions stay separate. Retain route, effects, controls and source evidence. "
+            "Branches can share a typed selector on the same operand; names and prose do not establish compatibility.")
     return {"version": version,
-            "rules": [{"id": rule_id, "text": text} for rule_id, text in _RULES],
+            "rules": [{"id": rule_id, "text": text} for rule_id, text in rules.items()],
             "operation_contract": inventory}
 
 

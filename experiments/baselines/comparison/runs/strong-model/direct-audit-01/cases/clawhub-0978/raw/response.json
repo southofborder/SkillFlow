@@ -1,0 +1,419 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide local, persistent memory across sessions: extract important facts, preferences and interaction patterns, retain conversation context, generate semantic embeddings, and inject relevant memories into requests. Documented limits are 100 memories and seven-day retention for Free, with optional x402 payments for unlimited, permanent Pro storage and relationship mapping. Local-only storage and no external servers or telemetry are explicit claims; the embedding provider, logging payloads and returned fields are implementation choices (SKILL.md:9-34,61-90).",
+  "data_operations": [
+    {
+      "operation": "Initialize local storage and read configuration",
+      "source": "MemoryManager, MemoryStorage and setup script",
+      "data_scope": "Data-directory paths, embedding-provider selection, OPENAI_API_KEY, migration SQL and SQLite schema information. The database uses WAL mode.",
+      "recipient_or_storage": "Local process and memory.db; setup also prints paths and database configuration to stdout.",
+      "condition": "Manager construction opens the configured/default database. Explicit setup runs migrations and honors OPENCLAW_MEMORY_DIR; the manager instead uses options.dataDir or its default directory.",
+      "evidence": [
+        {"path": "src/index.js", "start_line": 24, "end_line": 40},
+        {"path": "src/storage.js", "start_line": 13, "end_line": 35},
+        {"path": "src/setup.js", "start_line": 18, "end_line": 45},
+        {"path": "src/setup.js", "start_line": 49, "end_line": 67}
+      ]
+    },
+    {
+      "operation": "Read interactions and infer memory attributes locally",
+      "source": "Registered request-after hook and MemoryAnalyzer",
+      "data_scope": "Prompt and response text; selected preference/fact sentences, response code-block prefixes and list items; inferred memory types, importance, entities, keywords and tags. Pattern detection uses current-prompt wording rather than historical repetition.",
+      "recipient_or_storage": "Local analyzer; resulting candidate memories proceed to embedding and storage.",
+      "condition": "The registered hook requires agentWallet and nonempty prompt or response text. Candidates must pass the implemented substring, sentence and entity heuristics.",
+      "evidence": [
+        {"path": "hooks/request-after.js", "start_line": 12, "end_line": 40},
+        {"path": "src/analyzer.js", "start_line": 56, "end_line": 82},
+        {"path": "src/analyzer.js", "start_line": 94, "end_line": 125},
+        {"path": "src/analyzer.js", "start_line": 136, "end_line": 188},
+        {"path": "src/analyzer.js", "start_line": 249, "end_line": 265},
+        {"path": "src/analyzer.js", "start_line": 343, "end_line": 380}
+      ]
+    },
+    {
+      "operation": "Disclose text to the OpenAI embedding API",
+      "source": "OpenAIEmbeddingProvider, analyzer, retriever and manual storage path",
+      "data_scope": "Up to 8,000 characters per search query/current prompt, candidate memory or manually supplied memory; model and dimension settings; OPENAI_API_KEY as a Bearer credential. Candidates later discarded by semantic deduplication can already have been submitted.",
+      "recipient_or_storage": "https://api.openai.com/v1/embeddings",
+      "condition": "OpenAI is the default provider. Requests require a credential and valid text. Search generates its query embedding before reading candidate memories; manual storage generates an embedding before its insert attempt.",
+      "evidence": [
+        {"path": "src/index.js", "start_line": 31, "end_line": 34},
+        {"path": "src/index.js", "start_line": 127, "end_line": 141},
+        {"path": "src/embeddings.js", "start_line": 17, "end_line": 50},
+        {"path": "src/retriever.js", "start_line": 43, "end_line": 53},
+        {"path": "src/analyzer.js", "start_line": 437, "end_line": 458}
+      ]
+    },
+    {
+      "operation": "Generate embeddings through a local model",
+      "source": "LocalEmbeddingProvider",
+      "data_scope": "Up to 5,000 characters per embedding input and the Xenova/all-MiniLM-L6-v2 model identifier.",
+      "recipient_or_storage": "Local model invocation through @xenova/transformers. Dependency downloads, caching and other external behavior are unresolved.",
+      "condition": "The local provider is selected; model initialization is lazy.",
+      "evidence": [
+        {"path": "src/embeddings.js", "start_line": 96, "end_line": 146},
+        {"path": "src/embeddings.js", "start_line": 189, "end_line": 194}
+      ]
+    },
+    {
+      "operation": "Persist automatically extracted memories and wallet quotas",
+      "source": "Registered request-after hook, exported manager method and MemoryStorage",
+      "data_scope": "Generated memory ID, wallet, session/request ID, selected content, type, importance, embedding and metadata. SQLite supplies timestamps. These callers supply no expires_at, so it is stored as null. getQuota can create a wallet-linked Free quota row.",
+      "recipient_or_storage": "Local memory.db: memories and agent_memory_quotas.",
+      "condition": "Analysis returns candidates and database inserts succeed. The registered hook invokes components directly; it does not call MemoryManager.afterRequest.",
+      "evidence": [
+        {"path": "package.json", "start_line": 31, "end_line": 37},
+        {"path": "hooks/request-after.js", "start_line": 46, "end_line": 80},
+        {"path": "src/index.js", "start_line": 66, "end_line": 94},
+        {"path": "src/storage.js", "start_line": 45, "end_line": 63},
+        {"path": "src/storage.js", "start_line": 406, "end_line": 430},
+        {"path": "migrations/001-init.sql", "start_line": 5, "end_line": 18}
+      ]
+    },
+    {
+      "operation": "Attempt manual memory persistence; successful completion is blocked",
+      "source": "CLI add, POST /api/memories and MemoryManager.storeMemory",
+      "data_scope": "Caller-supplied content, wallet, type, importance and optional session ID; generated embedding and metadata.",
+      "recipient_or_storage": "Embedding provider, then attempted insertion into local memories.",
+      "condition": "Manual add builds no memory_id, although the supplied schema requires it. The insert therefore cannot complete against that schema. Independently, recordMemory returns SQL execution metadata while CLI/API callers expect a memory object.",
+      "evidence": [
+        {"path": "src/cli.js", "start_line": 48, "end_line": 59},
+        {"path": "src/dashboard.js", "start_line": 65, "end_line": 82},
+        {"path": "src/index.js", "start_line": 120, "end_line": 145},
+        {"path": "src/storage.js", "start_line": 45, "end_line": 64},
+        {"path": "migrations/001-init.sql", "start_line": 5, "end_line": 12}
+      ]
+    },
+    {
+      "operation": "Read, rank and return stored memories",
+      "source": "MemoryStorage, MemoryRetriever and CLI search/list",
+      "data_scope": "Full matching memory rows, embeddings and metadata; computed similarity and rank. Wallet/type filters apply when supplied. Session and related-memory helpers have no wallet argument. Related-memory reads also retrieve relationship metadata.",
+      "recipient_or_storage": "Local caller; CLI search/list prints selected contents and metadata to stdout. A library return alone establishes no additional external recipient.",
+      "condition": "Semantic search, recent/type listing, or direct library calls. Tier/timeframe checks run only when timeframeDays is supplied. retrieveRelevant reads minScore, while CLI/API callers supply min_score.",
+      "evidence": [
+        {"path": "src/storage.js", "start_line": 86, "end_line": 132},
+        {"path": "src/storage.js", "start_line": 210, "end_line": 252},
+        {"path": "src/retriever.js", "start_line": 29, "end_line": 100},
+        {"path": "src/retriever.js", "start_line": 179, "end_line": 246},
+        {"path": "src/retriever.js", "start_line": 255, "end_line": 309},
+        {"path": "src/cli.js", "start_line": 84, "end_line": 102},
+        {"path": "src/cli.js", "start_line": 124, "end_line": 149}
+      ]
+    },
+    {
+      "operation": "Persist explicitly supplied memory relationships",
+      "source": "MemoryStorage relationship helpers",
+      "data_scope": "From/to memory IDs, relation type, strength and creation time.",
+      "recipient_or_storage": "Local memory_relations table; relationship reads return to their caller.",
+      "condition": "A caller invokes the storage helpers. Packaged hooks do not establish automatic relationship inference or creation.",
+      "evidence": [
+        {"path": "src/storage.js", "start_line": 291, "end_line": 344},
+        {"path": "migrations/001-init.sql", "start_line": 21, "end_line": 31}
+      ]
+    },
+    {
+      "operation": "Persist retrieval history and access counters",
+      "source": "MemoryRetriever and MemoryStorage.recordAccess",
+      "data_scope": "Memory ID, access timestamp/type and the full semantic-search query for every returned result; other retrieval helpers record operation/type/session/relationship context. Access count and last-access time are also updated.",
+      "recipient_or_storage": "Local memory_access_log and memories tables.",
+      "condition": "Semantic, recent, type, related or session retrieval returns records. Unlike embedding input, the logged query has no truncation.",
+      "evidence": [
+        {"path": "src/retriever.js", "start_line": 64, "end_line": 69},
+        {"path": "src/retriever.js", "start_line": 201, "end_line": 204},
+        {"path": "src/retriever.js", "start_line": 241, "end_line": 244},
+        {"path": "src/retriever.js", "start_line": 279, "end_line": 307},
+        {"path": "src/storage.js", "start_line": 353, "end_line": 369},
+        {"path": "migrations/001-init.sql", "start_line": 34, "end_line": 41}
+      ]
+    },
+    {
+      "operation": "Inject recalled memories into request context",
+      "source": "Registered request-before hook versus exported MemoryManager.beforeRequest",
+      "data_scope": "The registered hook adds up to five memories as type/content/importance/timestamp and repeats type/content in memory_text. The exported manager method instead attaches full retrieved memory objects, including storage fields and computed ranking.",
+      "recipient_or_storage": "OpenClaw requestData.context in the calling process. Subsequent model/provider disclosure is not shown.",
+      "condition": "The registered hook requires a wallet and nonempty string query. The exported manager method is a separate callable path.",
+      "evidence": [
+        {"path": "package.json", "start_line": 31, "end_line": 37},
+        {"path": "hooks/request-before.js", "start_line": 12, "end_line": 54},
+        {"path": "src/index.js", "start_line": 45, "end_line": 59}
+      ]
+    },
+    {
+      "operation": "Receive API inputs and return memories, statistics and license information",
+      "source": "Express dashboard",
+      "data_scope": "Caller-supplied wallets, queries, content and identifiers. Search/recent responses project memory fields; recent includes session_id. Statistics read up to 10,000 full rows and return five full most-accessed records. License responses include wallet and license details.",
+      "recipient_or_storage": "The requesting HTTP client; actual local or remote reachability depends on deployment.",
+      "condition": "Dashboard endpoints are invoked. The packaged application validates required wallet strings but contains no authentication middleware, and listen supplies no hostname.",
+      "evidence": [
+        {"path": "src/dashboard.js", "start_line": 15, "end_line": 23},
+        {"path": "src/dashboard.js", "start_line": 52, "end_line": 82},
+        {"path": "src/dashboard.js", "start_line": 102, "end_line": 132},
+        {"path": "src/dashboard.js", "start_line": 151, "end_line": 183},
+        {"path": "src/dashboard.js", "start_line": 236, "end_line": 250},
+        {"path": "src/dashboard.js", "start_line": 349, "end_line": 372},
+        {"path": "src/dashboard.js", "start_line": 409, "end_line": 428},
+        {"path": "src/index.js", "start_line": 173, "end_line": 192}
+      ]
+    },
+    {
+      "operation": "Delete memories and optionally clean supporting records",
+      "source": "Manager deletion API, pruner and storage utilities",
+      "data_scope": "Memory rows selected by ID, expiry, quota score, age or similarity. Pruning reports can contain IDs, content previews and wallet-linked details; these return to the caller. Schema declarations provide cascading deletion for relationships/access logs.",
+      "recipient_or_storage": "Logical deletion from local SQLite; pruning results remain with their caller unless that caller forwards them.",
+      "condition": "Manual deletion compares the row wallet with the supplied wallet. Session end prunes all expired rows. Age-based Free pruning and comprehensive cleanup require explicit calls. Default manager construction gives the pruner no embedding provider, so configured session deduplication returns without deleting. Access-log cleanup is a separate callable utility.",
+      "evidence": [
+        {"path": "src/index.js", "start_line": 159, "end_line": 167},
+        {"path": "src/index.js", "start_line": 36, "end_line": 40},
+        {"path": "hooks/session-end.js", "start_line": 21, "end_line": 25},
+        {"path": "hooks/session-end.js", "start_line": 63, "end_line": 66},
+        {"path": "src/pruner.js", "start_line": 96, "end_line": 138},
+        {"path": "src/pruner.js", "start_line": 188, "end_line": 249},
+        {"path": "src/pruner.js", "start_line": 321, "end_line": 349},
+        {"path": "src/pruner.js", "start_line": 358, "end_line": 430},
+        {"path": "src/pruner.js", "start_line": 475, "end_line": 505},
+        {"path": "src/storage.js", "start_line": 183, "end_line": 197},
+        {"path": "src/storage.js", "start_line": 760, "end_line": 784},
+        {"path": "migrations/001-init.sql", "start_line": 21, "end_line": 41}
+      ]
+    },
+    {
+      "operation": "Attempt quota enforcement without enforcing the documented normal-path limit",
+      "source": "Hooks, manager and pruner",
+      "data_scope": "Wallet quota/count and automatically extracted memories.",
+      "recipient_or_storage": "Local quota and memory tables.",
+      "condition": "checkQuotaAvailable returns an object, but hook/manager callers test the object itself, which is truthy. Their normal pruning branches are therefore bypassed. Even explicit enforceQuota acts only after count exceeds the limit and does not reserve capacity for incoming batches.",
+      "evidence": [
+        {"path": "src/storage.js", "start_line": 483, "end_line": 503},
+        {"path": "hooks/request-after.js", "start_line": 46, "end_line": 69},
+        {"path": "src/index.js", "start_line": 80, "end_line": 94},
+        {"path": "src/index.js", "start_line": 120, "end_line": 125},
+        {"path": "src/pruner.js", "start_line": 23, "end_line": 49}
+      ]
+    },
+    {
+      "operation": "Emit operational identifiers and errors",
+      "source": "Hooks, analyzer, dashboard and payment verifier",
+      "data_scope": "Request/session IDs, a wallet prefix, counts, tier/license status, transaction hash and error objects/messages. Dashboard error responses include messages and development-only stacks.",
+      "recipient_or_storage": "Process stdout/stderr and the requesting HTTP client for error responses. No log-file destination or collector is established.",
+      "condition": "Successful hook activity, session end, payment verification or errors; stacks are returned when NODE_ENV is development.",
+      "evidence": [
+        {"path": "hooks/request-before.js", "start_line": 56, "end_line": 60},
+        {"path": "hooks/request-after.js", "start_line": 65, "end_line": 84},
+        {"path": "hooks/session-end.js", "start_line": 33, "end_line": 59},
+        {"path": "src/analyzer.js", "start_line": 83, "end_line": 85},
+        {"path": "src/dashboard.js", "start_line": 83, "end_line": 88},
+        {"path": "src/dashboard.js", "start_line": 395, "end_line": 402},
+        {"path": "src/x402.js", "start_line": 201, "end_line": 215}
+      ]
+    },
+    {
+      "operation": "Persist and return payment requests, transactions and licenses",
+      "source": "X402PaymentHandler and dashboard payment endpoints",
+      "data_scope": "Wallet, request ID, amount/token, status/timestamps, transaction hash, chain, granted tier and license expiry. PAYMENT_WALLET and PAYMENT_CALLBACK_URL populate returned payment instructions; the returned request has a 24-hour expiry.",
+      "recipient_or_storage": "Local payment_requests, payment_transactions and agent_memory_quotas; responses return to the invoking caller/HTTP client.",
+      "condition": "Optional subscription and verification calls. Verification checks request existence/status and transaction-hash length, then records payment and grants a license using the submitted wallet. It performs no RPC verification, request-wallet ownership check or request-expiry enforcement.",
+      "evidence": [
+        {"path": "src/x402.js", "start_line": 35, "end_line": 65},
+        {"path": "src/x402.js", "start_line": 71, "end_line": 153},
+        {"path": "src/x402.js", "start_line": 158, "end_line": 195},
+        {"path": "src/x402.js", "start_line": 201, "end_line": 240},
+        {"path": "src/dashboard.js", "start_line": 273, "end_line": 297},
+        {"path": "src/dashboard.js", "start_line": 318, "end_line": 335},
+        {"path": "migrations/002-x402-payments.sql", "start_line": 5, "end_line": 29}
+      ]
+    },
+    {
+      "operation": "Delegate an optional payment in the documented integration example",
+      "source": "AGENT-PAYMENTS.md example, not an automatic transfer implemented by the packaged CLI/server",
+      "data_scope": "Wallet address sent to subscription API; recipient, amount, token and chain passed to myWallet.sendPayment; request ID, returned transaction hash and wallet sent to verification API.",
+      "recipient_or_storage": "Example localhost:9091 API and the external wallet implementation. Further wallet/network disclosures are unresolved.",
+      "condition": "An operator or agent adopts and executes the example's subscribeToPro function.",
+      "evidence": [
+        {"path": "AGENT-PAYMENTS.md", "start_line": 155, "end_line": 182},
+        {"path": "src/cli.js", "start_line": 292, "end_line": 321}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Query/prompt text and extracted or manually supplied memory content, plus the API credential used for embedding.",
+      "recipient_or_storage": "https://api.openai.com/v1/embeddings",
+      "condition": "Default OpenAI provider with a configured credential.",
+      "purpose_basis": "Semantic embeddings are required; external processing is an implementation choice that contradicts the entry document's local-only claim.",
+      "necessary_behavior": "Generate compatible embeddings for memory search.",
+      "proposed_reduction": "Default to local embeddings and require an explicit provider choice before external processing. Skip query embedding when no eligible stored vectors exist; that avoids a redundant remote action.",
+      "preservation_conditions": "Use compatible models/dimensions for queries and stored vectors; migrate or regenerate existing vectors when changing providers.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 63, "end_line": 66},
+        {"path": "SKILL.md", "start_line": 86, "end_line": 90},
+        {"path": "src/index.js", "start_line": 31, "end_line": 34},
+        {"path": "src/embeddings.js", "start_line": 39, "end_line": 50},
+        {"path": "src/embeddings.js", "start_line": 128, "end_line": 146},
+        {"path": "src/retriever.js", "start_line": 43, "end_line": 53}
+      ]
+    },
+    {
+      "data_scope": "Repeated identical candidate-memory text.",
+      "recipient_or_storage": "OpenAI embedding endpoint on the OpenAI path.",
+      "condition": "One cleaned sentence produces multiple candidate types, such as preference and pattern. Batch deduplication embeds each candidate before comparing it.",
+      "purpose_basis": "Semantic deduplication needs vectors, but repeated submission of identical input is a redundant action.",
+      "necessary_behavior": "Obtain a vector for each distinct input and preserve the existing candidate-selection behavior.",
+      "proposed_reduction": "Reuse embeddings for identical text within the analysis batch.",
+      "preservation_conditions": "Scope reuse to the same provider/model settings and retain candidate type, score and ordering semantics.",
+      "evidence": [
+        {"path": "src/analyzer.js", "start_line": 103, "end_line": 125},
+        {"path": "src/analyzer.js", "start_line": 173, "end_line": 183},
+        {"path": "src/analyzer.js", "start_line": 437, "end_line": 458},
+        {"path": "src/embeddings.js", "start_line": 39, "end_line": 50}
+      ]
+    },
+    {
+      "data_scope": "Full search queries/current prompts, copied once per returned memory into access-event context.",
+      "recipient_or_storage": "Local memory_access_log.context.",
+      "condition": "Successful semantic retrieval, including automatic before-request recall.",
+      "purpose_basis": "Ranking and pruning use access counts/recency; retaining complete query text is extra data in the access-recording action.",
+      "necessary_behavior": "Track access frequency and time, with bounded event history if needed for access statistics.",
+      "proposed_reduction": "Omit raw queries from access context, keep a generic operation label, and invoke bounded access-log cleanup.",
+      "preservation_conditions": "Preserve counters, last-access timestamps and any explicitly needed aggregate statistics.",
+      "evidence": [
+        {"path": "src/retriever.js", "start_line": 64, "end_line": 67},
+        {"path": "src/retriever.js", "start_line": 150, "end_line": 168},
+        {"path": "src/pruner.js", "start_line": 148, "end_line": 171},
+        {"path": "src/storage.js", "start_line": 353, "end_line": 369},
+        {"path": "src/storage.js", "start_line": 772, "end_line": 778}
+      ]
+    },
+    {
+      "data_scope": "Free-tier memory content, embeddings and linked metadata older than seven days.",
+      "recipient_or_storage": "Local memories table, with possible subsequent recall into request context.",
+      "condition": "Normal extraction supplies no expiry; session cleanup deletes only rows with a non-null expired expires_at. Age-based pruning is a separate, unwired method, and default retrieval supplies no timeframe.",
+      "purpose_basis": "Seven-day Free retention is explicit; permanent retention is a Pro feature.",
+      "necessary_behavior": "Retain and retrieve Free memories within the documented window while preserving Pro retention.",
+      "proposed_reduction": "Assign and enforce tier-aware expiry, wire age cleanup into normal execution, and exclude expired records during retrieval.",
+      "preservation_conditions": "Handle upgrades, downgrades and existing rows consistently; deleting data must implement retention rather than merely hiding old rows.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 25, "end_line": 34},
+        {"path": "hooks/request-after.js", "start_line": 52, "end_line": 57},
+        {"path": "hooks/session-end.js", "start_line": 21, "end_line": 25},
+        {"path": "src/storage.js", "start_line": 45, "end_line": 63},
+        {"path": "src/storage.js", "start_line": 556, "end_line": 563},
+        {"path": "src/pruner.js", "start_line": 358, "end_line": 382},
+        {"path": "src/pruner.js", "start_line": 475, "end_line": 505},
+        {"path": "src/retriever.js", "start_line": 29, "end_line": 56}
+      ]
+    },
+    {
+      "data_scope": "Free-tier memory records beyond the declared 100-record maximum.",
+      "recipient_or_storage": "Local memories table.",
+      "condition": "Normal automatic storage treats the quota-result object as a Boolean; insertion batches are not capacity-limited. Explicit enforcement only removes an existing overage.",
+      "purpose_basis": "The Free maximum is an explicit requirement; retaining additional records is excess persistence.",
+      "necessary_behavior": "Store selected memories within the quota and prune according to the documented strategy.",
+      "proposed_reduction": "Read quotaAvailable.available, reserve capacity for the incoming batch, and enforce the final limit transactionally.",
+      "preservation_conditions": "Keep Pro unlimited behavior and accurate counts; select retained records using the existing importance/access/age policy.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 25, "end_line": 32},
+        {"path": "hooks/request-after.js", "start_line": 46, "end_line": 63},
+        {"path": "src/index.js", "start_line": 80, "end_line": 94},
+        {"path": "src/storage.js", "start_line": 483, "end_line": 503},
+        {"path": "src/pruner.js", "start_line": 23, "end_line": 49}
+      ]
+    },
+    {
+      "data_scope": "Full most-accessed memory rows, including content, embedding vectors, wallet/session identifiers and metadata.",
+      "recipient_or_storage": "GET /api/memories/stats response to the requesting HTTP client.",
+      "condition": "The statistics endpoint spreads the manager result, whose most_accessed array contains five full rows.",
+      "purpose_basis": "Quota/type statistics and access summaries do not require complete stored records. These are extra fields in a required response.",
+      "necessary_behavior": "Return counts, tier, quota, type totals and a minimal most-accessed summary.",
+      "proposed_reduction": "Project explicit summary fields and omit vectors, contextual metadata and wallet/session identifiers; make content previews optional. Aggregate locally without loading unnecessary full rows.",
+      "preservation_conditions": "Preserve the dashboard's required statistics and use the dedicated browse/search endpoints for full memory content.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 93, "end_line": 99},
+        {"path": "src/index.js", "start_line": 173, "end_line": 192},
+        {"path": "src/storage.js", "start_line": 86, "end_line": 132},
+        {"path": "src/dashboard.js", "start_line": 236, "end_line": 250}
+      ]
+    },
+    {
+      "data_scope": "Embedding vectors, wallet/session identifiers, access bookkeeping and other full-row fields accompanying recalled content.",
+      "recipient_or_storage": "requestData.context.memories in exported MemoryManager.beforeRequest.",
+      "condition": "A caller invokes the exported manager method. The registered hook follows a different path and already projects fewer fields.",
+      "purpose_basis": "Relevant-memory injection needs useful recalled content, not full storage records.",
+      "necessary_behavior": "Supply relevant memory content and any metadata required for interpretation.",
+      "proposed_reduction": "Use an explicit projection comparable to the registered hook's type/content/importance/timestamp fields.",
+      "preservation_conditions": "Confirm the host's context contract. No external model transmission is established by this assignment alone.",
+      "evidence": [
+        {"path": "src/index.js", "start_line": 45, "end_line": 59},
+        {"path": "src/retriever.js", "start_line": 58, "end_line": 69},
+        {"path": "src/storage.js", "start_line": 216, "end_line": 250},
+        {"path": "hooks/request-before.js", "start_line": 38, "end_line": 54}
+      ]
+    },
+    {
+      "data_scope": "Another wallet's memories, session identifiers, usage information and license status.",
+      "recipient_or_storage": "Any HTTP client that can reach the dashboard and supply the relevant wallet string.",
+      "condition": "Deployment makes the service reachable. Packaged routes accept caller-selected wallets without authenticating ownership; server startup specifies no loopback hostname.",
+      "purpose_basis": "Memory management and external integrations require access for authorized callers, not disclosure based solely on knowledge of an identifier.",
+      "necessary_behavior": "Serve the caller's authorized wallet scope.",
+      "proposed_reduction": "Bind locally for local-only use; authenticate callers and authorize wallet scope for network integrations.",
+      "preservation_conditions": "Preserve explicitly configured external integrations. Actual network exposure and any deployment-level controls remain unknown.",
+      "evidence": [
+        {"path": "src/dashboard.js", "start_line": 15, "end_line": 23},
+        {"path": "src/dashboard.js", "start_line": 102, "end_line": 132},
+        {"path": "src/dashboard.js", "start_line": 151, "end_line": 183},
+        {"path": "src/dashboard.js", "start_line": 236, "end_line": 250},
+        {"path": "src/dashboard.js", "start_line": 349, "end_line": 372},
+        {"path": "src/dashboard.js", "start_line": 409, "end_line": 428}
+      ]
+    },
+    {
+      "data_scope": "Memories below a caller-requested similarity threshold but above the default threshold.",
+      "recipient_or_storage": "CLI search output or GET /api/memories/search response.",
+      "condition": "The caller requests a threshold greater than 0.7. CLI/API pass min_score, but the retriever reads minScore and therefore retains its default.",
+      "purpose_basis": "Search is required; returning below-threshold content is additional data in that required action.",
+      "necessary_behavior": "Return only results satisfying the requested similarity constraint.",
+      "proposed_reduction": "Normalize and validate the threshold option consistently before retrieval.",
+      "preservation_conditions": "Retain the documented default when no threshold is supplied and preserve result limits/ranking.",
+      "evidence": [
+        {"path": "src/cli.js", "start_line": 70, "end_line": 87},
+        {"path": "src/dashboard.js", "start_line": 104, "end_line": 118},
+        {"path": "src/retriever.js", "start_line": 29, "end_line": 53}
+      ]
+    },
+    {
+      "data_scope": "A completed payment's transaction hash duplicated in both request and transaction records.",
+      "recipient_or_storage": "Local payment_requests.tx_hash and payment_transactions.tx_hash.",
+      "condition": "Successful payment verification performs both writes.",
+      "purpose_basis": "Payment accounting needs a transaction record and request completion state; the second hash copy is extra data in the required status update.",
+      "necessary_behavior": "Prevent reprocessing of completed requests, maintain payment records and grant the license.",
+      "proposed_reduction": "Keep the hash in the transaction record and only completion state in the request, or reference one canonical transaction record.",
+      "preservation_conditions": "Preserve reconciliation and replay checks; add an explicit reference if request-to-transaction navigation is required.",
+      "evidence": [
+        {"path": "src/x402.js", "start_line": 73, "end_line": 108},
+        {"path": "migrations/002-x402-payments.sql", "start_line": 5, "end_line": 29}
+      ]
+    },
+    {
+      "data_scope": "Full transaction hash.",
+      "recipient_or_storage": "Process stdout in verifyTransactionOnChain.",
+      "condition": "Payment verification is attempted.",
+      "purpose_basis": "Granting and recording a subscription does not require another identifier copy in console output.",
+      "necessary_behavior": "Report verification status while retaining the canonical payment record.",
+      "proposed_reduction": "Log status without the full hash; enable narrowly scoped diagnostic identifiers only when needed.",
+      "preservation_conditions": "Keep payment records available for reconciliation. Console collection and retention are unknown.",
+      "evidence": [
+        {"path": "src/x402.js", "start_line": 93, "end_line": 108},
+        {"path": "src/x402.js", "start_line": 201, "end_line": 215}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Runtime configuration, credential presence, installed dependencies and migration state are unknown. @xenova/transformers is optional in package.json:28-30 but imported unconditionally at src/embeddings.js:9, so its absence can block either embedding path.",
+    "OpenAI's retention, secondary use and downstream processing are not supplied. The local-model dependency's downloads, network behavior and cache persistence are also unresolved.",
+    "OpenClaw's downstream handling of injected context is absent: which context representations it consumes, whether it forwards them to a model provider, and any resulting persistence cannot be determined.",
+    "Actual dashboard binding, firewall reachability, reverse proxies and deployment-level authentication are unknown. The packaged app establishes no authentication itself.",
+    "The wallet implementation used only in the payment example is absent. Its credential access, network recipients, ledger disclosures and persistence cannot be audited. Packaged verification performs no on-chain lookup.",
+    "Physical erasure from SQLite pages, WAL files or backups is not established. The schema declares cascading deletes, but runtime foreign-key enforcement is not established by the supplied constructor.",
+    "End-to-end manual storage is blocked by the missing memory_id and incompatible return shape. Automatic Free retention/quota enforcement has the source defects described above; successful enforcement must not be assumed from documentation.",
+    "Packaged source provides relationship helpers but no automatic relationship-building flow or export implementation. Additional data operations behind those advertised features are not established."
+  ]
+}

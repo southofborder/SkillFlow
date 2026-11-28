@@ -1,0 +1,273 @@
+{
+  "status": "completed",
+  "declared_purpose": "Generate podcasts, explainer videos, TTS, scripted multi-speaker audio and images from supplied topics, text, URLs and prompts. Explicit requirements include script-only execution, voice discovery, approval between requested podcast review stages, and local image saving (SKILL.md:4-13,44-60,88-119). Credential fallback, shell configuration writes, update checks, client headers and retries are implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Instruct local credential configuration",
+      "source": "User-provided LISTENHUB_API_KEY",
+      "data_scope": "API credential",
+      "recipient_or_storage": "~/.openclaw/openclaw.json under env, or the shell environment",
+      "condition": "User follows setup instructions; these are configuration instructions, not automatic writes by the shared library.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 17, "end_line": 28}
+      ]
+    },
+    {
+      "operation": "Read credential locally",
+      "source": "Environment, then ~/.zshrc and ~/.bashrc",
+      "data_scope": "LISTENHUB_API_KEY; shell files are searched for its export assignment",
+      "recipient_or_storage": "Shared-library process environment",
+      "condition": "Every script sourcing lib.sh; shell-file fallback runs only when the environment variable is unset. Loading precedes argument handling.",
+      "evidence": [
+        {"path": "scripts/lib.sh", "start_line": 59, "end_line": 98},
+        {"path": "scripts/create-podcast.sh", "start_line": 10, "end_line": 11}
+      ]
+    },
+    {
+      "operation": "Conditionally read and check package version",
+      "source": "Local VERSION file and fixed remote VERSION URL",
+      "data_scope": "Local and remote version strings; the HTTP request contains no explicit API credential or local-version parameter",
+      "recipient_or_storage": "https://raw.githubusercontent.com/marswaveai/skills/main/skills/listenhub/VERSION; comparison stays local",
+      "condition": "Shared-library startup unless LISTENHUB_SKIP_VERSION_CHECK=1, and only if a valid local VERSION exists. No VERSION file is supplied in this package, so the packaged execution stops before the request.",
+      "evidence": [
+        {"path": "scripts/lib.sh", "start_line": 7, "end_line": 33},
+        {"path": "scripts/lib.sh", "start_line": 53, "end_line": 57}
+      ]
+    },
+    {
+      "operation": "Derive workflow and presentation choices",
+      "source": "User wording and requested language",
+      "data_scope": "Generation mode, response language and language-matched voice choice; no personal profile inference is shown",
+      "recipient_or_storage": "Calling agent; selected language and voice subsequently enter applicable generation requests",
+      "condition": "Agent follows mode detection and interaction instructions.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 62, "end_line": 79},
+        {"path": "SKILL.md", "start_line": 129, "end_line": 140}
+      ]
+    },
+    {
+      "operation": "Authenticate shared API requests",
+      "source": "Process environment and packaged constant",
+      "data_scope": "Bearer LISTENHUB_API_KEY and fixed AGENT_SKILLS_CLIENT_ID, alongside each endpoint's request data",
+      "recipient_or_storage": "https://api.marswave.ai/openapi/v1",
+      "condition": "api_get or api_post is invoked. The fixed client identifier is shared package metadata; the source does not establish individual tracking.",
+      "evidence": [
+        {"path": "scripts/lib.sh", "start_line": 159, "end_line": 160},
+        {"path": "scripts/lib.sh", "start_line": 170, "end_line": 191}
+      ]
+    },
+    {
+      "operation": "Retrieve available voices",
+      "source": "Language argument, defaulting to zh",
+      "data_scope": "Language query; returned voice catalogue",
+      "recipient_or_storage": "GET https://api.marswave.ai/openapi/v1/speakers/list?language=zh or language=en; response returns to caller",
+      "condition": "get-speakers.sh runs. Entry instructions require voice discovery and direct selection of the first language match when unspecified.",
+      "evidence": [
+        {"path": "scripts/get-speakers.sh", "start_line": 8, "end_line": 33},
+        {"path": "SKILL.md", "start_line": 58, "end_line": 79}
+      ]
+    },
+    {
+      "operation": "Submit podcast generation input",
+      "source": "Command arguments",
+      "data_scope": "Query, language, mode, one or two speaker IDs, and all nonempty supplied source URLs and source texts after whitespace trimming",
+      "recipient_or_storage": "One-stage: POST https://api.marswave.ai/openapi/v1/podcast/episodes; review-stage text: POST https://api.marswave.ai/openapi/v1/podcast/episodes/text-content",
+      "condition": "Validated podcast invocation. Source arrays are optional; text-only generation is prescribed only when the user requests review before audio.",
+      "evidence": [
+        {"path": "scripts/create-podcast.sh", "start_line": 87, "end_line": 156},
+        {"path": "scripts/create-podcast-text.sh", "start_line": 87, "end_line": 156},
+        {"path": "SKILL.md", "start_line": 81, "end_line": 93}
+      ]
+    },
+    {
+      "operation": "Submit explainer content",
+      "source": "Command arguments",
+      "data_scope": "Full supplied text, one speaker ID, language and info/story mode",
+      "recipient_or_storage": "POST https://api.marswave.ai/openapi/v1/storybook/episodes",
+      "condition": "Required arguments and supported language, mode and speaker count pass validation.",
+      "evidence": [
+        {"path": "scripts/create-explainer.sh", "start_line": 52, "end_line": 92}
+      ]
+    },
+    {
+      "operation": "Submit TTS input",
+      "source": "Command arguments",
+      "data_scope": "Supplied text or URL, source type, one speaker ID, language and smart/direct mode",
+      "recipient_or_storage": "POST https://api.marswave.ai/openapi/v1/flow-speech/episodes",
+      "condition": "Validated invocation; text is limited to 10,000 characters. Direct mode is default; smart mode's grammar correction is described but implemented externally.",
+      "evidence": [
+        {"path": "scripts/create-tts.sh", "start_line": 65, "end_line": 119},
+        {"path": "SKILL.md", "start_line": 101, "end_line": 106}
+      ]
+    },
+    {
+      "operation": "Read and submit scripted speech JSON",
+      "source": "Explicitly selected local file or stdin",
+      "data_scope": "Entire JSON document, including any fields beyond scripts[].content and scripts[].speakerId",
+      "recipient_or_storage": "Local BODY variable, then POST https://api.marswave.ai/openapi/v1/speech",
+      "condition": "create-speech.sh requires valid JSON and a nonempty scripts array with content and speaker IDs; it does not project only those fields.",
+      "evidence": [
+        {"path": "scripts/create-speech.sh", "start_line": 65, "end_line": 92}
+      ]
+    },
+    {
+      "operation": "Generate audio from a reviewed podcast",
+      "source": "Episode argument and optional selected local file or stdin",
+      "data_scope": "Episode ID in URL; entire supplied JSON body, or an empty object when no replacement script is supplied",
+      "recipient_or_storage": "POST https://api.marswave.ai/openapi/v1/podcast/episodes/{episode-id}/audio",
+      "condition": "Episode ID passes validation. Optional body receives syntax checking only when jq exists. Entry instructions require user approval before this stage.",
+      "evidence": [
+        {"path": "scripts/create-podcast-audio.sh", "start_line": 72, "end_line": 103},
+        {"path": "SKILL.md", "start_line": 88, "end_line": 93}
+      ]
+    },
+    {
+      "operation": "Request explainer video rendering",
+      "source": "Episode argument",
+      "data_scope": "Validated episode ID and empty JSON object; source content is not resent by this script",
+      "recipient_or_storage": "POST https://api.marswave.ai/openapi/v1/storybook/episodes/{episode-id}/video",
+      "condition": "generate-video.sh runs with an episode ID.",
+      "evidence": [
+        {"path": "scripts/generate-video.sh", "start_line": 32, "end_line": 40}
+      ]
+    },
+    {
+      "operation": "Retrieve episode status and return results",
+      "source": "Episode ID, type and API response",
+      "data_scope": "Episode ID in request URL; full response in single-shot mode or terminal polling results; progress status and timing in diagnostics",
+      "recipient_or_storage": "GET under https://api.marswave.ai/openapi/v1/podcast/episodes/, storybook/episodes/ or flow-speech/episodes/; responses go to caller stdout or stderr",
+      "condition": "Single request by default. --wait repeats requests within poll and timeout limits, retries network failures and exits on reported rate limits. No response file is written.",
+      "evidence": [
+        {"path": "scripts/check-status.sh", "start_line": 84, "end_line": 162}
+      ]
+    },
+    {
+      "operation": "Require draft persistence during requested review",
+      "source": "Generated podcast draft obtained through status polling",
+      "data_scope": "Draft script",
+      "recipient_or_storage": "Unspecified save destination controlled by the calling workflow",
+      "condition": "User requests two-stage script review; instructions say to save the draft and wait for approval. No packaged save implementation specifies location or retention.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 88, "end_line": 93}
+      ]
+    },
+    {
+      "operation": "Read and persist image configuration locally",
+      "source": "OS identification, environment, shell configuration files and interactive input",
+      "data_scope": "Platform class, LISTENHUB_API_KEY and LISTENHUB_OUTPUT_DIR",
+      "recipient_or_storage": "Image process environment; selected shell startup file for missing values; configured output directory",
+      "condition": "generate-image.sh independently probes the platform and searches ~/.zshrc, ~/.bashrc, ~/.bash_profile and ~/.profile for missing variables. If either remains missing, setup prompts, writes missing configuration and creates the output directory before generation parameter validation.",
+      "evidence": [
+        {"path": "scripts/generate-image.sh", "start_line": 68, "end_line": 77},
+        {"path": "scripts/generate-image.sh", "start_line": 157, "end_line": 192},
+        {"path": "scripts/generate-image.sh", "start_line": 210, "end_line": 242},
+        {"path": "scripts/generate-image.sh", "start_line": 333, "end_line": 435}
+      ]
+    },
+    {
+      "operation": "Conditionally invoke dependency installation",
+      "source": "Local tool and package-manager availability",
+      "data_scope": "Missing jq/curl package names and platform-dependent installation requests; further transmitted data is unspecified",
+      "recipient_or_storage": "Selected external package manager and its configured repositories; local software installation",
+      "condition": "Image setup runs and required tools are missing. Repository recipients, package-manager telemetry and installation side effects are outside the supplied source.",
+      "evidence": [
+        {"path": "scripts/generate-image.sh", "start_line": 248, "end_line": 327},
+        {"path": "scripts/generate-image.sh", "start_line": 333, "end_line": 342},
+        {"path": "SKILL.md", "start_line": 42, "end_line": 42}
+      ]
+    },
+    {
+      "operation": "Submit image generation request with conditional retries",
+      "source": "Prompt, size, ratio, optional reference URLs, environment credential and packaged client identifier",
+      "data_scope": "Full prompt; image settings; up to 14 trimmed reference URLs with MIME types inferred from URL extensions; provider set to google; Bearer LISTENHUB_API_KEY and fixed AGENT_SKILLS_CLIENT_ID",
+      "recipient_or_storage": "POST https://api.labnana.com/openapi/v1/images/generation",
+      "condition": "Valid image request. Up to three attempts resend the payload after retryable failures. No local reference-image file reading or direct Google request is shown; downstream forwarding is unknown.",
+      "evidence": [
+        {"path": "scripts/generate-image.sh", "start_line": 55, "end_line": 59},
+        {"path": "scripts/generate-image.sh", "start_line": 441, "end_line": 555},
+        {"path": "scripts/generate-image.sh", "start_line": 561, "end_line": 647}
+      ]
+    },
+    {
+      "operation": "Persist generated image and delete failed temporary output",
+      "source": "Image API response",
+      "data_scope": "Decoded generated image; filename containing timestamp and random suffix; local output path and size",
+      "recipient_or_storage": "$LISTENHUB_OUTPUT_DIR, with ~/Downloads offered as setup default; path and size return to caller",
+      "condition": "Successful image data extraction writes a uniquely named .jpg and retains it. Tracked incomplete files are removed on cleanup; empty outputs are deleted. Successful files are unmarked for cleanup. Extraction failure can print a response preview to caller diagnostics.",
+      "evidence": [
+        {"path": "scripts/generate-image.sh", "start_line": 83, "end_line": 89},
+        {"path": "scripts/generate-image.sh", "start_line": 369, "end_line": 394},
+        {"path": "scripts/generate-image.sh", "start_line": 681, "end_line": 751},
+        {"path": "SKILL.md", "start_line": 114, "end_line": 119}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Language, API credential and fixed client identifier in an unnecessary voice-list request",
+      "recipient_or_storage": "GET https://api.marswave.ai/openapi/v1/speakers/list?language={language}",
+      "condition": "Calling agent applies the blanket 'If no speaker specified' interaction step to image-only generation. generate-image.sh itself does not call get-speakers.sh.",
+      "purpose_basis": "Image generation requires a prompt and image settings, with optional references; its payload has no speaker field.",
+      "necessary_behavior": "Submit the image request to the image endpoint.",
+      "proposed_reduction": "Restrict voice discovery to audio and explainer modes that consume speaker IDs. This removes a redundant action, rather than narrowing the required image request.",
+      "preservation_conditions": "Continue voice discovery whenever a voice-dependent mode needs speaker IDs.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 114, "end_line": 119},
+        {"path": "SKILL.md", "start_line": 129, "end_line": 136},
+        {"path": "scripts/get-speakers.sh", "start_line": 28, "end_line": 33},
+        {"path": "scripts/lib.sh", "start_line": 185, "end_line": 191},
+        {"path": "scripts/generate-image.sh", "start_line": 512, "end_line": 555}
+      ]
+    },
+    {
+      "data_scope": "Additional top-level or nested fields in supplied script JSON, if present",
+      "recipient_or_storage": "POST https://api.marswave.ai/openapi/v1/speech and POST https://api.marswave.ai/openapi/v1/podcast/episodes/{episode-id}/audio",
+      "condition": "Selected file or stdin includes data beyond the generation fields. Speech validates required structure but sends the original document; podcast audio sends the complete optional document.",
+      "purpose_basis": "The supplied formats describe scripts containing content and speakerId. Arbitrary additional fields are not established as necessary.",
+      "necessary_behavior": "Read the selected script input and submit the approved speech content and voice assignments.",
+      "proposed_reduction": "Construct a body from required fields and explicitly supported generation options. This narrows data in necessary requests; it does not remove the requests.",
+      "preservation_conditions": "Confirm the accepted API schema and preserve legitimate options and script ordering; do not shorten approved spoken content.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 93, "end_line": 112},
+        {"path": "scripts/create-speech.sh", "start_line": 67, "end_line": 92},
+        {"path": "scripts/create-podcast-audio.sh", "start_line": 80, "end_line": 103}
+      ]
+    },
+    {
+      "data_scope": "API credential and output-directory preference",
+      "recipient_or_storage": "Selected shell startup file: platform-dependent ~/.zshrc, ~/.bash_profile, ~/.bashrc or ~/.profile",
+      "condition": "Image setup obtains a missing credential or output-directory value and automatically appends or replaces its export assignment.",
+      "purpose_basis": "Generation needs a credential in the current process and a usable image destination. Long-term shell-file persistence is an implementation choice; the entry document permits environment configuration.",
+      "necessary_behavior": "Authenticate the current image request and save the generated image to the required destination.",
+      "proposed_reduction": "Use entered values for the current process, offer persistent configuration separately, and use the documented output default without requiring a persistent export.",
+      "preservation_conditions": "Retain explicitly requested configuration persistence and successful local image saving.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 17, "end_line": 32},
+        {"path": "SKILL.md", "start_line": 119, "end_line": 119},
+        {"path": "scripts/generate-image.sh", "start_line": 157, "end_line": 192},
+        {"path": "scripts/generate-image.sh", "start_line": 344, "end_line": 394}
+      ]
+    },
+    {
+      "data_scope": "Credential/configuration input, shell-file writes and possible dependency installation",
+      "recipient_or_storage": "Image process, selected shell startup file, output directory and external package manager",
+      "condition": "Image configuration is missing and the invocation subsequently fails prompt, size or ratio validation. Setup executes before these checks.",
+      "purpose_basis": "An invalid image invocation cannot produce the requested image, so configuration and installation actions are redundant for that invocation.",
+      "necessary_behavior": "Validate generation arguments and report invalid input.",
+      "proposed_reduction": "Validate prompt, size and ratio before environment fallback, interactive configuration and dependency installation.",
+      "preservation_conditions": "Run necessary setup after argument validation for valid generation requests.",
+      "evidence": [
+        {"path": "scripts/generate-image.sh", "start_line": 241, "end_line": 242},
+        {"path": "scripts/generate-image.sh", "start_line": 333, "end_line": 435}
+      ]
+    }
+  ],
+  "unknowns": [
+    "The supplied source does not establish API-side storage, retention, deletion, training use, subprocessors, URL fetching or downstream disclosure. The image provider field does not prove a direct disclosure to Google.",
+    "API contracts are absent. Whether the fixed client header or additional script JSON options are required remains unresolved; schema narrowing must preserve supported options.",
+    "The review instruction does not specify how or where drafts are saved, their retention, or deletion. No packaged draft-saving implementation resolves that boundary.",
+    "Package-manager repository recipients, request contents, telemetry and installation behavior depend on external configuration and implementation.",
+    "Caller-side retention of ordinary responses, diagnostics, local paths and generated links is unspecified. Returning them does not establish disclosure to another recipient.",
+    "No supplied implementation deletes successful images, saved drafts or configured credentials, or requests remote deletion. Their eventual retention and deletion remain unresolved."
+  ]
+}

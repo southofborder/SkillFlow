@@ -64,6 +64,8 @@ def accepted_stage_value(owner, manifest, *, source):
     from .online import _bind_strategy, _step_context
     context = {"source": source, "files": {"skill/" + row["path"]: row["content"] for row in source["files"]}}
     if current:
+        from .graph_steps import has_outcome_contract
+        context["check_outcome_routes"] = has_outcome_contract(manifest)
         context["archived_graph"] = identity in {"skillflow-document-step-v15", "skillflow-document-step-v16", "skillflow-document-step-v17"}
         context["normalize_blocks"] = identity in {"skillflow-document-step-v19", "skillflow-document-step-v20", "skillflow-document-step-v21"}
         context["check_occurrences"] = identity in {"skillflow-document-step-v20", "skillflow-document-step-v21"}

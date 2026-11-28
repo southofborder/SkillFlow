@@ -1,0 +1,281 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide ElevenLabs API speech synthesis with voice personas, languages, streaming, batches, sound effects, voice design and pronunciation rules; offer local setup, usage/cost monitoring, an optional budget setting and separate OpenClaw integration. Setup explicitly requires API-key input. Session retention limits and origin labels are implementation choices (SKILL.md:4, 23-41, 47-57, 327-365; scripts/setup.py:120-131, 181-197).",
+  "data_operations": [
+    {
+      "operation": "Collect and persist setup configuration locally",
+      "source": "scripts/setup.py interactive wizard",
+      "data_scope": "Required API key; selected voice, language, quality and tracking preference; optional monthly budget; configuration metadata. The key is stored as plaintext JSON.",
+      "recipient_or_storage": "Skill-root config.json; setup caller receives preferences and the API-key suffix in the summary.",
+      "condition": "First setup or accepted reconfiguration. Existing configuration is overwritten after collection. The wizard makes no network request. None of the supplied generators loads this configuration.",
+      "evidence": [
+        {"path": "scripts/setup.py", "start_line": 125, "end_line": 128},
+        {"path": "scripts/setup.py", "start_line": 146, "end_line": 222},
+        {"path": "scripts/setup.py", "start_line": 245, "end_line": 264},
+        {"path": "scripts/tts.py", "start_line": 207, "end_line": 226},
+        {"path": "scripts/sfx.py", "start_line": 32, "end_line": 46},
+        {"path": "scripts/voice-design.py", "start_line": 48, "end_line": 61}
+      ]
+    },
+    {
+      "operation": "Read runtime credentials locally",
+      "source": "Each generator's get_api_key function",
+      "data_scope": "ELEVEN_API_KEY, falling back to ELEVENLABS_API_KEY. If neither exists, the complete skill-local .env is read to locate the first ELEVEN_API_KEY entry; other entries are not included in requests.",
+      "recipient_or_storage": "Generator memory and its immediate caller; subsequent authenticated API requests are listed separately.",
+      "condition": "When credential loading is reached. Missing credentials cause exit. These functions do not read config.json or OpenClaw configuration.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 207, "end_line": 226},
+        {"path": "scripts/sfx.py", "start_line": 32, "end_line": 46},
+        {"path": "scripts/voice-design.py", "start_line": 48, "end_line": 61}
+      ]
+    },
+    {
+      "operation": "Read voice definitions and transform text locally",
+      "source": "scripts/tts.py; voices.json; pronunciations.json",
+      "data_scope": "Voice definitions, presets and pronunciation file contents. Matching words in synthesis text are replaced case-insensitively. Voice demographic/persona labels describe configured voices rather than inferred user attributes.",
+      "recipient_or_storage": "TTS process memory; voice listings can return to the caller. Requests contain selected settings and transformed text, rather than the entire configuration files.",
+      "condition": "Voice definitions load before every TTS command. Pronunciations load for ordinary single/batch synthesis unless --no-pronunciations is set; --test bypasses that loading.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 87, "end_line": 115},
+        {"path": "scripts/tts.py", "start_line": 229, "end_line": 241},
+        {"path": "scripts/tts.py", "start_line": 276, "end_line": 318},
+        {"path": "scripts/tts.py", "start_line": 502, "end_line": 529},
+        {"path": "voices.json", "start_line": 1, "end_line": 12},
+        {"path": "pronunciations.json", "start_line": 4, "end_line": 13}
+      ]
+    },
+    {
+      "operation": "Read explicitly selected content files locally",
+      "source": "TTS/SFX batch handlers and documented shell example",
+      "data_scope": "Entire selected batch file; selected text/prompt, voice, output name and SFX duration fields. A documented streaming example separately reads chapter1.txt through shell substitution.",
+      "recipient_or_storage": "Local process memory; selected content then enters the applicable generation request.",
+      "condition": "User selects --batch or follows the shell-reading example. The batch handlers do not upload the complete JSON document as a document.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 368, "end_line": 413},
+        {"path": "scripts/sfx.py", "start_line": 167, "end_line": 212},
+        {"path": "examples.md", "start_line": 114, "end_line": 122}
+      ]
+    },
+    {
+      "operation": "Disclose synthesis inputs for required remote TTS generation",
+      "source": "scripts/tts.py synthesize",
+      "data_scope": "Runtime API key in xi-api-key; synthesis text after applicable pronunciation replacement; selected voice ID, model, voice settings and optional language code.",
+      "recipient_or_storage": "ElevenLabs: https://api.elevenlabs.io/v1/text-to-speech/{voice_id}, with /stream appended in streaming mode.",
+      "condition": "Valid voice and credential on single, batch or --test generation. Batch generates one request per item; --test uses packaged sample sentences for every configured voice. Streaming changes response handling rather than reducing submitted text.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 39, "end_line": 40},
+        {"path": "scripts/tts.py", "start_line": 253, "end_line": 318},
+        {"path": "scripts/tts.py", "start_line": 320, "end_line": 346},
+        {"path": "scripts/tts.py", "start_line": 426, "end_line": 451}
+      ]
+    },
+    {
+      "operation": "Disclose sound-effect inputs for required remote generation",
+      "source": "scripts/sfx.py generate_sfx",
+      "data_scope": "Runtime API key in xi-api-key; complete prompt, prompt influence and optional duration clamped to 0.5–22 seconds.",
+      "recipient_or_storage": "ElevenLabs: https://api.elevenlabs.io/v1/sound-generation.",
+      "condition": "Single generation or each selected batch item.",
+      "evidence": [
+        {"path": "scripts/sfx.py", "start_line": 29, "end_line": 29},
+        {"path": "scripts/sfx.py", "start_line": 107, "end_line": 132},
+        {"path": "scripts/sfx.py", "start_line": 201, "end_line": 212}
+      ]
+    },
+    {
+      "operation": "Disclose explicitly selected synthetic voice characteristics and preview text",
+      "source": "scripts/voice-design.py generate_voice_preview",
+      "data_scope": "Runtime API key; selected/default gender, age, accent and clamped accent strength; custom/default preview text. A supplied description is prepended to the text. These characteristics are design inputs, not inferred user demographics.",
+      "recipient_or_storage": "ElevenLabs: https://api.elevenlabs.io/v1/voice-generation/generate-voice.",
+      "condition": "Voice-design invocation after validation, except --options. Generation precedes optional library saving.",
+      "evidence": [
+        {"path": "scripts/voice-design.py", "start_line": 28, "end_line": 28},
+        {"path": "scripts/voice-design.py", "start_line": 79, "end_line": 123},
+        {"path": "scripts/voice-design.py", "start_line": 291, "end_line": 310}
+      ]
+    },
+    {
+      "operation": "Request remote persistence of a designed voice",
+      "source": "scripts/voice-design.py save_voice_to_library",
+      "data_scope": "Runtime API key, generated voice ID, requested name, supplied or fallback description, and labels identifying a designed voice and openclaw-skill origin.",
+      "recipient_or_storage": "ElevenLabs: https://api.elevenlabs.io/v1/voice-generation/create-voice; intended persistence in the user's ElevenLabs voice library.",
+      "condition": "--save is explicitly requested and preview generation returns a usable voice ID. The response ID and a suggested voices.json entry return to the caller; the script does not edit voices.json.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 237, "end_line": 255},
+        {"path": "scripts/voice-design.py", "start_line": 158, "end_line": 200},
+        {"path": "scripts/voice-design.py", "start_line": 315, "end_line": 327}
+      ]
+    },
+    {
+      "operation": "Persist generated audio locally",
+      "source": "TTS, SFX and voice-design response handlers",
+      "data_scope": "Returned audio bytes; voice-design responses may supply base64 audio. TTS test mode creates per-voice samples.",
+      "recipient_or_storage": "Selected/default local output files, batch destinations, or skill-root samples directory.",
+      "condition": "Audio is received. Streaming writes progressively and can leave an incomplete file on failure. Voice-design JSON responses only produce an audio file when audio_base64 is present.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 320, "end_line": 343},
+        {"path": "scripts/tts.py", "start_line": 426, "end_line": 451},
+        {"path": "scripts/sfx.py", "start_line": 131, "end_line": 138},
+        {"path": "scripts/voice-design.py", "start_line": 123, "end_line": 147}
+      ]
+    },
+    {
+      "operation": "Read and persist TTS usage history",
+      "source": "scripts/tts.py load_usage and track_usage",
+      "data_scope": "Cumulative character/request counts, reset timestamp, and up to 1,000 sessions containing exact timestamps, transformed-text character counts and resolved voice names. Raw synthesis text is not recorded here.",
+      "recipient_or_storage": "Skill-root .usage.json.",
+      "condition": "Every successful audio write attempts tracking, including --test, without consulting the setup tracking preference. Existing usage files lacking expected TTS keys can prevent the update.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 36, "end_line": 36},
+        {"path": "scripts/tts.py", "start_line": 118, "end_line": 161},
+        {"path": "scripts/tts.py", "start_line": 345, "end_line": 347},
+        {"path": "scripts/setup.py", "start_line": 181, "end_line": 186},
+        {"path": "scripts/sfx.py", "start_line": 49, "end_line": 56}
+      ]
+    },
+    {
+      "operation": "Read and persist SFX usage history",
+      "source": "scripts/sfx.py track_sfx_usage",
+      "data_scope": "Cumulative request/second totals and up to 100 sessions containing timestamps, duration and the first 100 prompt characters. Unspecified duration is estimated as five seconds rather than measured from audio.",
+      "recipient_or_storage": "The same skill-root .usage.json used by TTS.",
+      "condition": "After successful SFX audio writing, without consulting the setup tracking preference.",
+      "evidence": [
+        {"path": "scripts/sfx.py", "start_line": 26, "end_line": 26},
+        {"path": "scripts/sfx.py", "start_line": 49, "end_line": 84},
+        {"path": "scripts/sfx.py", "start_line": 140, "end_line": 142},
+        {"path": "scripts/setup.py", "start_line": 181, "end_line": 186}
+      ]
+    },
+    {
+      "operation": "Derive and display local usage/cost estimates",
+      "source": "scripts/tts.py show_stats",
+      "data_scope": "Stored TTS totals, reset date and latest ten sessions; estimated costs computed from character counts and packaged plan rates. These are estimates rather than retrieved billing records.",
+      "recipient_or_storage": "Local stdout and immediate caller; no statistics API request.",
+      "condition": "--stats; this branch returns before credential loading.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 79, "end_line": 84},
+        {"path": "scripts/tts.py", "start_line": 164, "end_line": 192},
+        {"path": "scripts/tts.py", "start_line": 513, "end_line": 522}
+      ]
+    },
+    {
+      "operation": "Return content-bearing progress and error output to the caller",
+      "source": "Generator console output",
+      "data_scope": "Full SFX prompts, first 50 batch text/prompt characters, selected design characteristics and description prefix, saved voice metadata, and truncated provider error bodies. Error-body contents depend on the provider.",
+      "recipient_or_storage": "Local stdout/immediate caller. Additional logging or forwarding by the host is not established.",
+      "condition": "Applicable generation, batch progress, library-save or error path.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 349, "end_line": 355},
+        {"path": "scripts/tts.py", "start_line": 399, "end_line": 413},
+        {"path": "scripts/sfx.py", "start_line": 127, "end_line": 152},
+        {"path": "scripts/sfx.py", "start_line": 205, "end_line": 212},
+        {"path": "scripts/voice-design.py", "start_line": 115, "end_line": 155},
+        {"path": "scripts/voice-design.py", "start_line": 185, "end_line": 208}
+      ]
+    },
+    {
+      "operation": "Prune or overwrite local tracking data",
+      "source": "Session retention limits and scripts/tts.py reset_stats",
+      "data_scope": "Old TTS/SFX session entries; --reset-stats replaces the shared file with empty TTS counters/history, also dropping existing SFX fields.",
+      "recipient_or_storage": "Skill-root .usage.json.",
+      "condition": "History exceeds 1,000 TTS or 100 SFX entries, or --reset-stats is requested. Reset performs a local overwrite, without requesting provider deletion or deleting generated audio/configuration.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 157, "end_line": 161},
+        {"path": "scripts/tts.py", "start_line": 195, "end_line": 204},
+        {"path": "scripts/tts.py", "start_line": 517, "end_line": 519},
+        {"path": "scripts/sfx.py", "start_line": 80, "end_line": 84}
+      ]
+    },
+    {
+      "operation": "Document a separate OpenClaw configuration and execution path",
+      "source": "SKILL.md integration instructions",
+      "data_scope": "Provider configuration with an environment credential reference or plain-string API key; conversational speech selected through automatic or one-off TTS triggers.",
+      "recipient_or_storage": "Documented local ~/.openclaw/openclaw.json and OpenClaw's built-in TTS component. Its actual request payload and persistence are unresolved.",
+      "condition": "User follows the integration instructions. This component is explicitly separate from the packaged Python generators.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 327, "end_line": 365}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "All TTS/SFX usage recording when config.costTracking is false.",
+      "recipient_or_storage": "Skill-root .usage.json.",
+      "condition": "Setup tracking is disabled, followed by successful TTS or SFX generation.",
+      "purpose_basis": "Setup explicitly offers a tracking choice; unconditional recording is an implementation choice and a redundant action for users who disable it.",
+      "necessary_behavior": "Generate and save requested audio; preserve statistics for users who enable tracking.",
+      "proposed_reduction": "Read and honor the tracking preference, skipping tracking-file reads/writes when disabled.",
+      "preservation_conditions": "Keep generation, authentication, audio output and explicitly requested statistics reset functional.",
+      "evidence": [
+        {"path": "scripts/setup.py", "start_line": 181, "end_line": 186},
+        {"path": "scripts/tts.py", "start_line": 143, "end_line": 161},
+        {"path": "scripts/tts.py", "start_line": 345, "end_line": 347},
+        {"path": "scripts/sfx.py", "start_line": 64, "end_line": 84},
+        {"path": "scripts/sfx.py", "start_line": 140, "end_line": 142}
+      ]
+    },
+    {
+      "data_scope": "First 100 characters of each successful SFX prompt, retained across up to 100 sessions.",
+      "recipient_or_storage": "prompt fields in skill-root .usage.json.",
+      "condition": "Successful SFX generation, including when tracking is otherwise desired.",
+      "purpose_basis": "Usage/cost monitoring needs counts and durations; prompt excerpts add content to that persistence action without contributing to those calculations.",
+      "necessary_behavior": "Submit the full requested prompt to ElevenLabs and maintain opted-in usage totals.",
+      "proposed_reduction": "Omit stored prompt excerpts while retaining necessary request/second totals and any required duration records.",
+      "preservation_conditions": "Keep remote generation input, generated audio and usage totals unchanged.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 38, "end_line": 39},
+        {"path": "scripts/sfx.py", "start_line": 64, "end_line": 84},
+        {"path": "scripts/sfx.py", "start_line": 113, "end_line": 124},
+        {"path": "scripts/tts.py", "start_line": 164, "end_line": 192}
+      ]
+    },
+    {
+      "data_scope": "TTS session timestamps, character counts and voice names older than the latest ten entries, up to the 1,000-entry limit.",
+      "recipient_or_storage": "sessions array in skill-root .usage.json.",
+      "condition": "Tracking is enabled and more than ten TTS sessions accumulate.",
+      "purpose_basis": "The supplied statistics interface displays ten recent sessions; cumulative totals are maintained separately. Retaining the additional historical rows is an implementation choice.",
+      "necessary_behavior": "Display cumulative usage/cost estimates and the latest ten sessions.",
+      "proposed_reduction": "Cap persisted TTS history at ten entries unless a larger history is explicitly requested.",
+      "preservation_conditions": "Preserve cumulative counters, reset metadata and the existing recent-session display.",
+      "evidence": [
+        {"path": "scripts/tts.py", "start_line": 143, "end_line": 161},
+        {"path": "scripts/tts.py", "start_line": 164, "end_line": 192}
+      ]
+    },
+    {
+      "data_scope": "The labels.source value identifying openclaw-skill origin.",
+      "recipient_or_storage": "ElevenLabs create-voice request at https://api.elevenlabs.io/v1/voice-generation/create-voice; intended voice-library metadata.",
+      "condition": "--save with a usable generated voice ID.",
+      "purpose_basis": "Saving the requested voice is explicit. Disclosing its originating integration adds metadata to that required request; the preview/save sequence itself serves the requested outcome.",
+      "necessary_behavior": "Create the requested library voice using its generated ID, requested name and appropriate description.",
+      "proposed_reduction": "Omit the origin label if the provider accepts its omission.",
+      "preservation_conditions": "Confirm the provider schema permits omission; preserve required fields and successful library saving.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 250, "end_line": 252},
+        {"path": "scripts/voice-design.py", "start_line": 164, "end_line": 183},
+        {"path": "scripts/voice-design.py", "start_line": 315, "end_line": 324}
+      ]
+    },
+    {
+      "data_scope": "Final four characters of the configured API key.",
+      "recipient_or_storage": "Setup summary on local stdout/immediate caller.",
+      "condition": "Setup completes and prints its summary.",
+      "purpose_basis": "Confirming accepted credential configuration does not require returning credential characters. This is extra data in a status message, not an established remote disclosure.",
+      "necessary_behavior": "Confirm that the key was accepted and configuration saved.",
+      "proposed_reduction": "Display a fully masked credential status.",
+      "preservation_conditions": "Retain validation, saved configuration and useful non-secret setup preferences.",
+      "evidence": [
+        {"path": "scripts/setup.py", "start_line": 125, "end_line": 129},
+        {"path": "scripts/setup.py", "start_line": 205, "end_line": 222},
+        {"path": "scripts/setup.py", "start_line": 260, "end_line": 264}
+      ]
+    }
+  ],
+  "unknowns": [
+    "ElevenLabs backend retention, training use, onward disclosure and deletion are not established by the supplied source. A library-save request does not establish its internal storage policy.",
+    "Provider schemas are not supplied, so voice-design payload acceptance and whether labels.source can be omitted remain unresolved.",
+    "OpenClaw implementation is absent. Its actual speech selection, requests, credential handling and retention cannot be verified. The older example configuration also differs from the corrected entry instructions (examples.md:425-438; SKILL.md:334-358; CHANGELOG.md:5-8).",
+    "The advertised setup-to-runtime connection is unresolved: the generators never load config.json, so saved credentials/preferences do not configure them and no supplied consumer enforces the monthly budget warning (scripts/setup.py:181-208; scripts/tts.py:207-226, 502-559; scripts/sfx.py:32-46, 297-320; scripts/voice-design.py:48-61, 289-324).",
+    "The claimed .gitignore exclusion cannot be verified: no .gitignore is present in the supplied inventory. Actual file permissions, backups and host capture of stdout are also unknown (README.md:12; SKILL.md:41).",
+    "The wizard's locally stored key is not the credential source used by the generators. The entry's 'never leaves your machine' assurance must therefore be distinguished from runtime environment/.env credentials, which are sent in authentication headers (SKILL.md:41; scripts/tts.py:207-219, 296-318; scripts/sfx.py:107-124; scripts/voice-design.py:95-113)."
+  ]
+}

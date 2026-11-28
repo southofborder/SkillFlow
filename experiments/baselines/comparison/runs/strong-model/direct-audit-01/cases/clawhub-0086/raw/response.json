@@ -1,0 +1,181 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide persistent agent memory across sessions: remember important or durable facts, learn lessons, track entities, and retrieve relevant context. The entry document proposes session-start retrieval and session-end updates; SQLite storage, indexing, metadata and CLI output are implementation choices (SKILL.md:1–3,37–66).",
+  "data_operations": [
+    {
+      "operation": "Propose conversation-derived memory updates and contextual retrieval",
+      "source": "Conversations, experience and current-task context available to the integrating agent",
+      "data_scope": "Important or durable facts, lessons and entity information; the packaged library does not itself extract these from conversations.",
+      "recipient_or_storage": "Integrating agent; local database when memory methods are called",
+      "condition": "The host adopts the suggested session protocol. Automatic execution is not implemented in the supplied package.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 37, "end_line": 59}
+      ]
+    },
+    {
+      "operation": "Initialize local storage",
+      "source": "Default home directory or caller-supplied db_path",
+      "data_scope": "SQLite tables for facts, lessons and entities, plus a full-text index",
+      "recipient_or_storage": "~/.agent-memory/memory.db by default, or the configured SQLite database",
+      "condition": "AgentMemory construction, including CLI invocation. README advertises :memory:, but initialization closes its connection and methods open separate connections; this does not provide a working shared volatile database.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 95, "end_line": 165},
+        {"path": "src/memory.py", "start_line": 203, "end_line": 204},
+        {"path": "README.md", "start_line": 162, "end_line": 172}
+      ]
+    },
+    {
+      "operation": "Persist facts and searchable copies",
+      "source": "Caller-supplied content, tags, source, confidence and optional lifetime",
+      "data_scope": "Fact content and metadata; content-derived timestamped hash ID, creation/access timestamps, access count and optional expiry; duplicated content and tags in FTS. An inference source label records caller-provided information rather than performing inference.",
+      "recipient_or_storage": "Configured SQLite facts and facts_fts tables; generated ID returned to caller",
+      "condition": "remember() is called. Lifetime defaults to no expiry; expiry is calculated only for a truthy expires_in_days value.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 167, "end_line": 175},
+        {"path": "src/memory.py", "start_line": 179, "end_line": 222}
+      ]
+    },
+    {
+      "operation": "Read facts and record recall usage",
+      "source": "Local facts and FTS index; caller query and filters",
+      "data_scope": "Matching fact content and metadata. recall() excludes expired and superseded facts and updates access timestamps/counts for returned matches. get_fact() permits either status; list_facts() excludes superseded facts by default but does not exclude expired facts.",
+      "recipient_or_storage": "Fact objects returned to caller; usage metadata written to the same facts table",
+      "condition": "Corresponding retrieval method is invoked. Tags are checked after fetching limited results.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 224, "end_line": 331}
+      ]
+    },
+    {
+      "operation": "Create a replacement while retaining fact history",
+      "source": "Caller-supplied old fact ID and replacement content",
+      "data_scope": "New fact and FTS copy; original content retained with superseded_by reference",
+      "recipient_or_storage": "Configured SQLite database; replacement ID returned to caller",
+      "condition": "supersede() is called. Historical retention is explicitly documented. The CLI persists this change before attempting new_fact.id on the returned string, so its success message fails after the write.",
+      "evidence": [
+        {"path": "README.md", "start_line": 102, "end_line": 103},
+        {"path": "src/memory.py", "start_line": 333, "end_line": 349},
+        {"path": "cli/fact.py", "start_line": 73, "end_line": 78}
+      ]
+    },
+    {
+      "operation": "Delete selected base fact rows",
+      "source": "Caller-selected fact ID or age/access thresholds",
+      "data_scope": "forget() deletes a facts row; forget_stale() deletes only sufficiently old, low-access, nonsuperseded facts. Neither removes FTS copies or entity fact references, and stale cleanup does not use expires_at.",
+      "recipient_or_storage": "Configured SQLite facts table",
+      "condition": "Explicit method invocation; CLI forget invokes stale cleanup. No automatic cleanup scheduler is supplied.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 351, "end_line": 379},
+        {"path": "src/memory.py", "start_line": 538, "end_line": 556},
+        {"path": "cli/fact.py", "start_line": 80, "end_line": 82}
+      ]
+    },
+    {
+      "operation": "Store, retrieve and mark lessons",
+      "source": "Caller-supplied action, context, outcome and insight",
+      "data_scope": "Lesson text, generated ID, creation timestamp and application count; retrieval optionally filters context/outcome and limits results",
+      "recipient_or_storage": "Configured SQLite lessons table; lesson objects returned to caller",
+      "condition": "learn(), get_lessons() or apply_lesson() is called. No lesson expiry or deletion method is supplied.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 383, "end_line": 460}
+      ]
+    },
+    {
+      "operation": "Store and retrieve entity attributes and relationships",
+      "source": "Caller-supplied names, types, arbitrary attributes and fact IDs",
+      "data_scope": "Entity identity, attributes, first-seen/update timestamps and linked fact IDs. track_entity() replaces existing attributes; update_entity() merges them. Attribute inference is delegated to the caller.",
+      "recipient_or_storage": "Configured SQLite entities table; entity objects or IDs returned to caller",
+      "condition": "Entity methods are invoked. Listing optionally filters type but has no result limit. No entity expiry or deletion method is supplied.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 464, "end_line": 610}
+      ]
+    },
+    {
+      "operation": "Return statistics or a complete memory export",
+      "source": "Local facts, lessons and entities tables",
+      "data_scope": "stats() returns counts; export_json() returns all stored records and metadata, including expired and superseded facts, plus export time",
+      "recipient_or_storage": "Calling process; export_json() does not itself write an export file or send data remotely",
+      "condition": "Explicit utility invocation. Complete export is a documented feature.",
+      "evidence": [
+        {"path": "README.md", "start_line": 151, "end_line": 160},
+        {"path": "src/memory.py", "start_line": 614, "end_line": 681}
+      ]
+    },
+    {
+      "operation": "Accept command arguments and print memory results",
+      "source": "CLI arguments and database results",
+      "data_scope": "Fact text/tags, lesson action/context/insight, entity names/attributes and identifiers. Mutation confirmations also echo portions of supplied content or attributes.",
+      "recipient_or_storage": "Process arguments and stdout of the invoking CLI; subsequent logging or forwarding is not shown",
+      "condition": "The corresponding CLI command is run. These are caller-facing outputs, with no demonstrated remote recipient.",
+      "evidence": [
+        {"path": "cli/fact.py", "start_line": 14, "end_line": 82},
+        {"path": "cli/learn.py", "start_line": 13, "end_line": 58},
+        {"path": "cli/entity.py", "start_line": 14, "end_line": 87}
+      ]
+    },
+    {
+      "operation": "Persist and display demonstration records",
+      "source": "Hard-coded example facts, lessons and entity attributes",
+      "data_scope": "Sample preferences, scheduling information, experience, personal/project attributes and a project URL stored as text",
+      "recipient_or_storage": "/tmp/agent-memory-example.db and example-process stdout",
+      "condition": "examples/basic_usage.py is executed. The script does not remove its database or fetch the stored URL.",
+      "evidence": [
+        {"path": "examples/basic_usage.py", "start_line": 11, "end_line": 67},
+        {"path": "examples/basic_usage.py", "start_line": 69, "end_line": 104}
+      ]
+    },
+    {
+      "operation": "Create temporary test databases and unlink them",
+      "source": "Hard-coded test fixtures",
+      "data_scope": "Synthetic facts, lessons, entities and exported records",
+      "recipient_or_storage": "Named temporary .db files; test results printed locally",
+      "condition": "Tests execute; each test uses finally to unlink its database. The fact-deletion test checks the base-row lookup, not removal of FTS copies.",
+      "evidence": [
+        {"path": "tests/test_memory.py", "start_line": 14, "end_line": 44},
+        {"path": "tests/test_memory.py", "start_line": 47, "end_line": 79},
+        {"path": "tests/test_memory.py", "start_line": 82, "end_line": 111},
+        {"path": "tests/test_memory.py", "start_line": 114, "end_line": 140},
+        {"path": "tests/test_memory.py", "start_line": 143, "end_line": 163},
+        {"path": "tests/test_memory.py", "start_line": 166, "end_line": 197}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Deleted fact content/tags remaining in FTS, and dangling entity-to-fact identifiers",
+      "recipient_or_storage": "facts_fts and entities.fact_ids in the same configured SQLite database",
+      "condition": "forget() or forget_stale() deletes matching facts rows after indexing or linking",
+      "purpose_basis": "Fact forgetting is documented as deletion; the index supports retrieval and entity links support existing facts.",
+      "necessary_behavior": "Retain searchable copies and links for live facts. Copies of deleted facts are redundant persistence, rather than necessary extra fields in a live-memory operation.",
+      "proposed_reduction": "Delete matching FTS entries and remove deleted IDs from entity links in the same transaction as base-row deletion; reconcile existing orphan entries.",
+      "preservation_conditions": "Preserve unrelated facts, valid relationships and deliberately retained superseded history. Logical cleanup alone does not establish physical erasure.",
+      "evidence": [
+        {"path": "src/memory.py", "start_line": 213, "end_line": 220},
+        {"path": "src/memory.py", "start_line": 351, "end_line": 379},
+        {"path": "src/memory.py", "start_line": 538, "end_line": 556}
+      ]
+    },
+    {
+      "data_scope": "Expired fact content, tags and metadata",
+      "recipient_or_storage": "facts and facts_fts in the configured SQLite database",
+      "condition": "An expires_in_days deadline passes. Only recall() checks that deadline; stale cleanup uses separate age/access criteria and must be invoked.",
+      "purpose_basis": "The API advertises optional auto-expiry and the package advertises automatic forgetting of stale information. Whether expiry promises deletion or only search exclusion is unresolved.",
+      "necessary_behavior": "Keep useful durable memories and exclude expired facts from ordinary recall; full export and historical access have separately documented purposes.",
+      "proposed_reduction": "If expiry is intended to bound retention, add invoked expiry cleanup that removes expired base rows, index copies and links. Otherwise explicitly define expiry as search exclusion and provide a separate retention policy.",
+      "preservation_conditions": "Respect explicit history/export needs and any separately chosen retention policy; do not impose expiry on facts intentionally stored without a deadline.",
+      "evidence": [
+        {"path": "README.md", "start_line": 15, "end_line": 20},
+        {"path": "README.md", "start_line": 85, "end_line": 109},
+        {"path": "src/memory.py", "start_line": 179, "end_line": 201},
+        {"path": "src/memory.py", "start_line": 242, "end_line": 251},
+        {"path": "src/memory.py", "start_line": 281, "end_line": 331},
+        {"path": "src/memory.py", "start_line": 359, "end_line": 379}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Host integration is absent: actual conversation selection, inference, redaction and scheduling of memory or cleanup calls remain unresolved.",
+    "No remote disclosure is demonstrated by the supplied Python source. Later handling of caller returns/stdout, installation behavior and external platform behavior are undocumented.",
+    "Expiry semantics do not establish a physical-deletion requirement; this blocks a categorical conclusion that all post-expiry storage violates the declared purpose.",
+    "Database permissions, shared/custom storage deployment, backups and recovery of deleted SQLite or unlinked-file contents are not established by the supplied source."
+  ]
+}

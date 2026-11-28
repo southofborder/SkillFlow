@@ -13,7 +13,7 @@ from skillflow.propagation.contracts.boundaries import SinkBoundary, classify_si
 from skillflow.propagation.contracts.compatibility import INTERACTION_EFFECTS, validate_event_operations, validate_operation_boundary
 from skillflow.propagation.contracts.specs import LocationSpec
 from skillflow.propagation.models import FlowLocation, IRFlowRecord, ForEachRecord, AtomicOpRecord
-from skillflow.propagation.models import validate_placeholder_record
+from skillflow.propagation.models import validate_placeholder_record, validate_public_outputs
 from skillflow.propagation.conditions import payload_inputs, validate_record_consumption, record_consumption_shape
 from skillflow.propagation.coverage import RECORDED_COVERAGE
 
@@ -171,14 +171,14 @@ def _validate_records(records, instructions, data, declared, annotation):
 
     from skillflow.propagation.selectors import compatible_bindings, consistent_bindings
     from skillflow.propagation.selectors import selector_outcomes
+    from skillflow.propagation.outcome_validation import validate_route_evidence
 
     for ir_id, record in records.items():
+        validate_route_evidence(instructions[ir_id], record, annotation["ir_semantics"], records)
         spec_events = annotation["ir_semantics"][ir_id]["events"]
         if len(record.events) != len(spec_events):
             raise ValueError("evaluated event coverage differs from the instruction")
-        if any(record.exit_state.get(FlowLocation(kind="result", name=operand["identifier"])) is None
-               for operand in instructions[ir_id]["outputs"]):
-            raise ValueError("processed IR is missing a public output binding in its exit state")
+        validate_public_outputs(instructions[ir_id], annotation["ir_semantics"][ir_id], record, data_index)
         for state in (record.entry_state, record.exit_state):
             for binding in state.bindings:
                 location(binding.location)

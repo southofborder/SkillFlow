@@ -1,0 +1,835 @@
+{
+  "request_sha256": "fd975d8a2131ea469612967dc01a922bebfed3aea2af4871b4329da78c10e1dd",
+  "answer_sha256": "e9efb2648bb556686000ad254f23932c3aba305b07f4cd0e2ad80431b6764b39",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from the supplied static source only. Implemented behavior includes model-catalog requests, literal \"Hi\" health probes, local caching, configuration updates, optional auth-profile updates, and watcher state management. OpenClaw command implementations and runtime inference routing are external to the supplied source.",
+    "claim": "FreeRide claims to manage and rank OpenRouter free models for OpenClaw, configure a primary model and fallbacks, preserve configuration outside the declared model keys, and provide a background watcher that rebuilds failing model chains.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "description: Manages free AI models from OpenRouter for OpenClaw. Automatically ranks models by quality, configures fallbacks for rate-limit handling, and updates openclaw.json. Use when the user mentions free AI, OpenRouter, model switching, rate limits, or wants to reduce AI costs."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 22,
+        "end_line": 22,
+        "quote": "Configures OpenClaw to use **free** AI models from OpenRouter. Sets the best free model as primary, adds ranked fallbacks so rate limits don't interrupt the user, and preserves existing config."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 77,
+        "end_line": 85,
+        "quote": "FreeRide updates only these keys in `~/.openclaw/openclaw.json`:\n\n- `agents.defaults.model.primary` — e.g. `openrouter/qwen/qwen3-coder:free`\n- `agents.defaults.model.fallbacks` — e.g. `[\"openrouter/free\", \"nvidia/nemotron:free\", ...]`\n- `agents.defaults.models` — allowlist so `/model` command shows the free models\n\nEverything else (gateway, channels, plugins, env, customInstructions, named agents) is preserved.\n\nThe first fallback is always `openrouter/free` — OpenRouter's smart router that auto-picks the best available model based on the request."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 108,
+        "end_line": 110,
+        "quote": "The daemon probes the current primary every 60s; if it fails, it rebuilds the\nchain with live-verified models. Recommend this whenever the user is leaving\nan unattended OpenClaw setup running."
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "OPENROUTER_API_KEY, accepted as a single key, JSON array string, or list; strings are stripped and empty entries removed.",
+        "source": "Process environment variable OPENROUTER_API_KEY",
+        "recipient": "FreeRide process memory",
+        "condition": "A truthy environment value is parsed and returned before consulting configuration.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 81,
+            "end_line": 95,
+            "quote": "def _parse_api_keys(raw) -> list:\n    \"\"\"Parse a single key string, a JSON array literal, or a real list of keys.\"\"\"\n    if isinstance(raw, list):\n        return [k.strip() for k in raw if isinstance(k, str) and k.strip()]\n    if not isinstance(raw, str):\n        return []\n    raw = raw.strip()\n    if raw.startswith(\"[\"):\n        try:\n            keys = json.loads(raw)\n            if isinstance(keys, list):\n                return [k.strip() for k in keys if isinstance(k, str) and k.strip()]\n        except (json.JSONDecodeError, ValueError):\n            pass\n    return [raw] if raw else []"
+          },
+          {
+            "path": "main.py",
+            "start_line": 98,
+            "end_line": 106,
+            "quote": "def get_api_keys() -> list:\n    \"\"\"Get all OpenRouter API keys. Accepts a single key or a JSON array.\n\n    Single key:  export OPENROUTER_API_KEY=\"sk-or-v1-...\"\n    Multiple:    export OPENROUTER_API_KEY='[\"sk-or-v1-key1\", \"sk-or-v1-key2\"]'\n    \"\"\"\n    raw = os.environ.get(\"OPENROUTER_API_KEY\")\n    if raw:\n        return _parse_api_keys(raw)"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Read",
+        "data": "Entire OpenClaw JSON configuration, including current primary/fallback models and, when used as the credential fallback, env.OPENROUTER_API_KEY.",
+        "source": "~/.openclaw/openclaw.json under the executing account's home directory",
+        "recipient": "FreeRide process memory",
+        "condition": "Configuration loading reads an existing file and returns an empty object on JSON decoding failure. Credential lookup consults this file only when no truthy environment key value was returned.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "OPENCLAW_CONFIG_PATH = Path.home() / \".openclaw\" / \"openclaw.json\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 108,
+            "end_line": 117,
+            "quote": "    if OPENCLAW_CONFIG_PATH.exists():\n        try:\n            config = json.loads(OPENCLAW_CONFIG_PATH.read_text())\n            raw = config.get(\"env\", {}).get(\"OPENROUTER_API_KEY\")\n            if raw:\n                return _parse_api_keys(raw)\n        except (json.JSONDecodeError, KeyError):\n            pass\n\n    return []"
+          },
+          {
+            "path": "main.py",
+            "start_line": 298,
+            "end_line": 306,
+            "quote": "def load_openclaw_config() -> dict:\n    \"\"\"Load OpenClaw configuration.\"\"\"\n    if not OPENCLAW_CONFIG_PATH.exists():\n        return {}\n\n    try:\n        return json.loads(OPENCLAW_CONFIG_PATH.read_text())\n    except json.JSONDecodeError:\n        return {}"
+          },
+          {
+            "path": "main.py",
+            "start_line": 354,
+            "end_line": 365,
+            "quote": "def get_current_model(config: dict = None) -> Optional[str]:\n    \"\"\"Get currently configured model in OpenClaw.\"\"\"\n    if config is None:\n        config = load_openclaw_config()\n    return config.get(\"agents\", {}).get(\"defaults\", {}).get(\"model\", {}).get(\"primary\")\n\n\ndef get_current_fallbacks(config: dict = None) -> list:\n    \"\"\"Get currently configured fallback models.\"\"\"\n    if config is None:\n        config = load_openclaw_config()\n    return config.get(\"agents\", {}).get(\"defaults\", {}).get(\"model\", {}).get(\"fallbacks\", [])"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Send",
+        "data": "Unmasked value of OPENROUTER_API_KEY through the instructed echo command.",
+        "source": "Shell environment variable OPENROUTER_API_KEY",
+        "recipient": "Shell standard output",
+        "condition": "The skill instructs this prerequisite check before any FreeRide command; whether its output is captured depends on the execution context.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 26,
+            "end_line": 28,
+            "quote": "Before running any FreeRide command, ensure:\n\n1. **OPENROUTER_API_KEY is set.** Check with `echo $OPENROUTER_API_KEY`. If empty, the user must get a free key at https://openrouter.ai/keys and set it:"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Save",
+        "data": "User-provided OpenRouter API key in the instructed persistent configuration field env.OPENROUTER_API_KEY.",
+        "source": "Key supplied in the command argument",
+        "recipient": "OpenClaw configuration through the external openclaw config set command",
+        "condition": "Optional persistence alternative in the setup instructions. The external command's implementation is not supplied.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 28,
+            "end_line": 33,
+            "quote": "1. **OPENROUTER_API_KEY is set.** Check with `echo $OPENROUTER_API_KEY`. If empty, the user must get a free key at https://openrouter.ai/keys and set it:\n   ```bash\n   export OPENROUTER_API_KEY=\"sk-or-v1-...\"\n   # Or persist it:\n   openclaw config set env.OPENROUTER_API_KEY \"sk-or-v1-...\"\n   ```"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Send",
+        "data": "Model-catalog GET request carrying an OpenRouter API key as Bearer authorization, Content-Type application/json, HTTP-Referer https://github.com/Shaivpidadi/FreeRide, and X-Title FreeRide Health Check.",
+        "source": "Keys returned by get_api_keys and hard-coded attribution headers",
+        "recipient": "https://openrouter.ai/api/v1/models",
+        "condition": "When fetching models with configured keys; keys in cooldown are skipped and 401/429 responses cause another key to be tried. The GitHub URL is a header value, not a request destination.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 25,
+            "end_line": 25,
+            "quote": "OPENROUTER_API_URL = \"https://openrouter.ai/api/v1/models\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 34,
+            "end_line": 44,
+            "quote": "OPENROUTER_REFERER = \"https://github.com/Shaivpidadi/FreeRide\"\nOPENROUTER_APP_TITLE = \"FreeRide Health Check\"\n\n\ndef _openrouter_headers(api_key: str) -> dict:\n    return {\n        \"Authorization\": f\"Bearer {api_key}\",\n        \"Content-Type\": \"application/json\",\n        \"HTTP-Referer\": OPENROUTER_REFERER,\n        \"X-Title\": OPENROUTER_APP_TITLE,\n    }"
+          },
+          {
+            "path": "main.py",
+            "start_line": 126,
+            "end_line": 149,
+            "quote": "def fetch_all_models() -> list:\n    \"\"\"Fetch all models from OpenRouter, rotating through API keys on 429/401.\"\"\"\n    keys = get_api_keys()\n    if not keys:\n        return []\n\n    last_status = None\n    for i, key in enumerate(keys, 1):\n        if _is_key_in_cooldown(key):\n            continue\n        try:\n            response = requests.get(OPENROUTER_API_URL, headers=_openrouter_headers(key), timeout=30)\n        except requests.RequestException as e:\n            print(f\"  Key {i}: network error ({e})\")\n            continue\n\n        if response.status_code == 200:\n            return response.json().get(\"data\", [])\n        if response.status_code in (401, 429):\n            label = \"invalid\" if response.status_code == 401 else \"rate-limited\"\n            print(f\"  Key {i}: {label}, trying next...\")\n            _mark_key_rate_limited(key)\n            last_status = response.status_code\n            continue"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "OpenRouter model-catalog response JSON's data array and HTTP status.",
+        "source": "Response from https://openrouter.ai/api/v1/models",
+        "recipient": "FreeRide process memory",
+        "condition": "The data array is returned on HTTP 200; absent data defaults to an empty list.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 25,
+            "end_line": 25,
+            "quote": "OPENROUTER_API_URL = \"https://openrouter.ai/api/v1/models\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 137,
+            "end_line": 144,
+            "quote": "            response = requests.get(OPENROUTER_API_URL, headers=_openrouter_headers(key), timeout=30)\n        except requests.RequestException as e:\n            print(f\"  Key {i}: network error ({e})\")\n            continue\n\n        if response.status_code == 200:\n            return response.json().get(\"data\", [])\n        if response.status_code in (401, 429):"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Infer",
+        "data": "Deduplicated set of models classified as free and suitable for text chat, using model ID, prompt pricing, output modalities, and modality string.",
+        "source": "Fetched model metadata",
+        "recipient": "In-process free-model list",
+        "condition": "Explicit text-only output is accepted; unknown output shape is retained. A zero prompt price or an ID containing :free qualifies a model as free.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 165,
+            "end_line": 179,
+            "quote": "    arch = model.get(\"architecture\") or {}\n\n    # Preferred: explicit output_modalities array\n    out_mods = arch.get(\"output_modalities\")\n    if isinstance(out_mods, list) and out_mods:\n        return out_mods == [\"text\"]\n\n    # Fallback: parse modality string like \"text+image->text\" or \"text->text+audio\"\n    modality = arch.get(\"modality\", \"\")\n    if isinstance(modality, str) and \"->\" in modality:\n        output_part = modality.split(\"->\", 1)[1].strip()\n        return output_part == \"text\"\n\n    # Unknown shape — keep it; rotate's live probe will catch false positives.\n    return True"
+          },
+          {
+            "path": "main.py",
+            "start_line": 182,
+            "end_line": 208,
+            "quote": "def filter_free_models(models: list) -> list:\n    \"\"\"Filter models to free, text-output (chat-shaped) models only.\"\"\"\n    free_models = []\n    seen_ids = set()\n\n    for model in models:\n        model_id = model.get(\"id\", \"\")\n        if model_id in seen_ids:\n            continue\n        if not _is_chat_model(model):\n            continue\n\n        is_free = False\n        prompt_cost = model.get(\"pricing\", {}).get(\"prompt\")\n        if prompt_cost is not None:\n            try:\n                is_free = float(prompt_cost) == 0\n            except (ValueError, TypeError):\n                pass\n        if not is_free and \":free\" in model_id:\n            is_free = True\n\n        if is_free:\n            free_models.append(model)\n            seen_ids.add(model_id)\n\n    return free_models"
+          },
+          {
+            "path": "main.py",
+            "start_line": 289,
+            "end_line": 291,
+            "quote": "    all_models = fetch_all_models()\n    free_models = filter_free_models(all_models)\n    ranked_models = rank_free_models(free_models)"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Infer",
+        "data": "Per-model _score and descending quality ranking from context length, supported-parameter count, creation timestamp, and provider ID.",
+        "source": "Free-model metadata, current time, ranking weights, and hard-coded provider preference list",
+        "recipient": "In-process ranked model records",
+        "condition": "When a fresh free-model list is ranked.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 67,
+            "end_line": 78,
+            "quote": "RANKING_WEIGHTS = {\n    \"context_length\": 0.4,      # Prefer longer context\n    \"capabilities\": 0.3,        # Prefer more capabilities\n    \"recency\": 0.2,            # Prefer newer models\n    \"provider_trust\": 0.1       # Prefer trusted providers\n}\n\n# Trusted providers (in order of preference)\nTRUSTED_PROVIDERS = [\n    \"google\", \"meta-llama\", \"mistralai\", \"deepseek\",\n    \"nvidia\", \"qwen\", \"microsoft\", \"allenai\", \"arcee-ai\"\n]"
+          },
+          {
+            "path": "main.py",
+            "start_line": 211,
+            "end_line": 253,
+            "quote": "def calculate_model_score(model: dict) -> float:\n    \"\"\"Calculate a ranking score for a model based on multiple criteria.\"\"\"\n    score = 0.0\n\n    # Context length score (normalized to 0-1, max 1M tokens)\n    context_length = model.get(\"context_length\", 0)\n    context_score = min(context_length / 1_000_000, 1.0)\n    score += context_score * RANKING_WEIGHTS[\"context_length\"]\n\n    # Capabilities score\n    capabilities = model.get(\"supported_parameters\", [])\n    capability_count = len(capabilities) if capabilities else 0\n    capability_score = min(capability_count / 10, 1.0)  # Normalize to max 10 capabilities\n    score += capability_score * RANKING_WEIGHTS[\"capabilities\"]\n\n    # Recency score (based on creation date)\n    created = model.get(\"created\", 0)\n    if created:\n        days_old = (time.time() - created) / 86400\n        recency_score = max(0, 1 - (days_old / 365))  # Newer models score higher\n        score += recency_score * RANKING_WEIGHTS[\"recency\"]\n\n    # Provider trust score\n    model_id = model.get(\"id\", \"\")\n    provider = model_id.split(\"/\")[0] if \"/\" in model_id else \"\"\n    if provider in TRUSTED_PROVIDERS:\n        trust_index = TRUSTED_PROVIDERS.index(provider)\n        trust_score = 1 - (trust_index / len(TRUSTED_PROVIDERS))\n        score += trust_score * RANKING_WEIGHTS[\"provider_trust\"]\n\n    return score\n\n\ndef rank_free_models(models: list) -> list:\n    \"\"\"Rank free models by quality score.\"\"\"\n    scored_models = []\n    for model in models:\n        score = calculate_model_score(model)\n        scored_models.append({**model, \"_score\": score})\n\n    # Sort by score descending\n    scored_models.sort(key=lambda x: x[\"_score\"], reverse=True)\n    return scored_models"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Read",
+        "data": "Cached model records, scores, and cached_at timestamp; status additionally derives model count and cache age.",
+        "source": "~/.openclaw/.freeride-cache.json",
+        "recipient": "FreeRide process memory",
+        "condition": "Normal reuse requires a cache younger than six hours and a truthy cached model list. Force refresh bypasses reuse. Status reads cache metadata without the reuse age restriction; expiry does not delete the file.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 28,
+            "end_line": 29,
+            "quote": "CACHE_FILE = Path.home() / \".openclaw\" / \".freeride-cache.json\"\nCACHE_DURATION_HOURS = 6"
+          },
+          {
+            "path": "main.py",
+            "start_line": 256,
+            "end_line": 269,
+            "quote": "def get_cached_models() -> Optional[list]:\n    \"\"\"Get cached model list if still valid.\"\"\"\n    if not CACHE_FILE.exists():\n        return None\n\n    try:\n        cache = json.loads(CACHE_FILE.read_text())\n        cached_at = datetime.fromisoformat(cache.get(\"cached_at\", \"\"))\n        if datetime.now() - cached_at < timedelta(hours=CACHE_DURATION_HOURS):\n            return cache.get(\"models\", [])\n    except (json.JSONDecodeError, ValueError):\n        pass\n\n    return None"
+          },
+          {
+            "path": "main.py",
+            "start_line": 282,
+            "end_line": 287,
+            "quote": "def get_free_models(force_refresh: bool = False) -> list:\n    \"\"\"Get ranked free models (from cache or API).\"\"\"\n    if not force_refresh:\n        cached = get_cached_models()\n        if cached:\n            return cached"
+          },
+          {
+            "path": "main.py",
+            "start_line": 709,
+            "end_line": 717,
+            "quote": "    if CACHE_FILE.exists():\n        try:\n            cache = json.loads(CACHE_FILE.read_text())\n            cached_at = datetime.fromisoformat(cache.get(\"cached_at\", \"\"))\n            models_count = len(cache.get(\"models\", []))\n            age = datetime.now() - cached_at\n            hours = age.seconds // 3600\n            mins = (age.seconds % 3600) // 60\n            print(f\"\\nModel Cache: {models_count} models (updated {hours}h {mins}m ago)\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Save",
+        "data": "Complete ranked free-model records, including retained metadata and _score, together with a new local ISO cached_at timestamp.",
+        "source": "Freshly fetched, filtered, and ranked model records",
+        "recipient": "~/.openclaw/.freeride-cache.json",
+        "condition": "Written only when the fresh ranked list is nonempty; overwrites the cache. Six hours is a reuse-validity period, with no automatic file deletion shown.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 28,
+            "end_line": 29,
+            "quote": "CACHE_FILE = Path.home() / \".openclaw\" / \".freeride-cache.json\"\nCACHE_DURATION_HOURS = 6"
+          },
+          {
+            "path": "main.py",
+            "start_line": 272,
+            "end_line": 295,
+            "quote": "def save_models_cache(models: list):\n    \"\"\"Save models to cache file.\"\"\"\n    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)\n    cache = {\n        \"cached_at\": datetime.now().isoformat(),\n        \"models\": models\n    }\n    CACHE_FILE.write_text(json.dumps(cache, indent=2))\n\n\ndef get_free_models(force_refresh: bool = False) -> list:\n    \"\"\"Get ranked free models (from cache or API).\"\"\"\n    if not force_refresh:\n        cached = get_cached_models()\n        if cached:\n            return cached\n\n    all_models = fetch_all_models()\n    free_models = filter_free_models(all_models)\n    ranked_models = rank_free_models(free_models)\n\n    if ranked_models:\n        save_models_cache(ranked_models)\n    return ranked_models"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Read",
+        "data": "Requested model identifier supplied to the switch command.",
+        "source": "Command-line argument freeride switch <model>",
+        "recipient": "FreeRide switch handler",
+        "condition": "When the switch subcommand is selected.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 956,
+            "end_line": 957,
+            "quote": "    switch_parser = subparsers.add_parser(\"switch\", help=\"Switch to a specific model\")\n    switch_parser.add_argument(\"model\", help=\"Model ID to switch to\")"
+          },
+          {
+            "path": "main.py",
+            "start_line": 993,
+            "end_line": 998,
+            "quote": "    args = parser.parse_args()\n\n    if args.command == \"list\":\n        cmd_list(args)\n    elif args.command == \"switch\":\n        cmd_switch(args)"
+          },
+          {
+            "path": "main.py",
+            "start_line": 532,
+            "end_line": 537,
+            "quote": "    model_id = args.model\n    as_fallback = args.fallback_only\n\n    # Validate model exists and is free\n    models = get_free_models()\n    model_ids = [m[\"id\"] for m in models]"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Infer",
+        "data": "Selected model ID: an exact or first case-insensitive substring match for switch, or the first ranked non-router model for auto, falling back to the first ranked entry.",
+        "source": "Requested switch identifier and available ranked model records",
+        "recipient": "In-process model selection used for configuration",
+        "condition": "Switch requires a matching available ID. Auto forces a fresh model list and exits if it is empty.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 532,
+            "end_line": 548,
+            "quote": "    model_id = args.model\n    as_fallback = args.fallback_only\n\n    # Validate model exists and is free\n    models = get_free_models()\n    model_ids = [m[\"id\"] for m in models]\n\n    # Check for exact match or partial match\n    matched_model = None\n    if model_id in model_ids:\n        matched_model = model_id\n    else:\n        # Try partial match\n        for m_id in model_ids:\n            if model_id.lower() in m_id.lower():\n                matched_model = m_id\n                break"
+          },
+          {
+            "path": "main.py",
+            "start_line": 600,
+            "end_line": 620,
+            "quote": "    models = get_free_models(force_refresh=True)\n\n    if not models:\n        print(\"Error: No free models available.\")\n        sys.exit(1)\n\n    # Find best SPECIFIC model (skip openrouter/free router)\n    # openrouter/free is a router, not a specific model - use it as fallback only\n    best_model = None\n    for m in models:\n        if \"openrouter/free\" not in m[\"id\"]:\n            best_model = m\n            break\n\n    if not best_model:\n        # Fallback to first model if all are routers (unlikely)\n        best_model = models[0]\n\n    model_id = best_model[\"id\"]\n    context = best_model.get(\"context_length\", 0)\n    score = best_model.get(\"_score\", 0)"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Save",
+        "data": "Re-serialized OpenClaw configuration with selected primary and/or replacement fallback chain, plus model-allowlist entries assigned empty objects. Model IDs receive an openrouter/ routing prefix and, where enabled, a :free suffix.",
+        "source": "Loaded configuration, selected model ID, ranked model records, and fallback options",
+        "recipient": "~/.openclaw/openclaw.json",
+        "condition": "Used by auto/switch and the fallbacks handler. Primary changes depend on as_primary; fallback rebuilding in update_model_config requires add_fallbacks and keys. Existing unrelated loaded fields and unremoved allowlist entries remain in the serialized object; the entire file is written.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "OPENCLAW_CONFIG_PATH = Path.home() / \".openclaw\" / \"openclaw.json\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 309,
+            "end_line": 312,
+            "quote": "def save_openclaw_config(config: dict):\n    \"\"\"Save OpenClaw configuration.\"\"\"\n    OPENCLAW_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)\n    OPENCLAW_CONFIG_PATH.write_text(json.dumps(config, indent=2))"
+          },
+          {
+            "path": "main.py",
+            "start_line": 335,
+            "end_line": 339,
+            "quote": "    is_native = model_id.startswith(\"openrouter/\")\n    base_id = model_id\n    if append_free and not is_native and \":free\" not in base_id:\n        base_id = f\"{base_id}:free\"\n    return f\"openrouter/{base_id}\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 415,
+            "end_line": 464,
+            "quote": "    config = load_openclaw_config()\n    config = ensure_config_structure(config)\n\n    if setup_auth:\n        config = setup_openrouter_auth(config)\n\n    formatted = format_model_for_openclaw(model_id, append_free=append_free)\n\n    if as_primary:\n        config[\"agents\"][\"defaults\"][\"model\"][\"primary\"] = formatted\n        config[\"agents\"][\"defaults\"][\"models\"][formatted] = {}\n\n    if add_fallbacks and get_api_keys():\n        free_models = get_free_models()\n        new_fallbacks = []\n\n        # openrouter/free smart router is always the first fallback unless the\n        # user is making it the primary.\n        smart_router = format_model_for_openclaw(\"openrouter/free\")\n        if formatted != smart_router:\n            new_fallbacks.append(smart_router)\n            config[\"agents\"][\"defaults\"][\"models\"][smart_router] = {}\n\n        for m in free_models:\n            if len(new_fallbacks) >= fallback_count:\n                break\n\n            m_formatted = format_model_for_openclaw(m[\"id\"])\n\n            if \"openrouter/free\" in m[\"id\"]:\n                continue\n            if as_primary and m_formatted == formatted:\n                continue\n            current_primary = config[\"agents\"][\"defaults\"][\"model\"].get(\"primary\", \"\")\n            if not as_primary and m_formatted == current_primary:\n                continue\n\n            new_fallbacks.append(m_formatted)\n            config[\"agents\"][\"defaults\"][\"models\"][m_formatted] = {}\n\n        if not as_primary:\n            if formatted not in new_fallbacks:\n                insert_pos = 1 if smart_router in new_fallbacks else 0\n                new_fallbacks.insert(insert_pos, formatted)\n            config[\"agents\"][\"defaults\"][\"models\"][formatted] = {}\n\n        config[\"agents\"][\"defaults\"][\"model\"][\"fallbacks\"] = new_fallbacks\n\n    save_openclaw_config(config)\n    return True"
+          },
+          {
+            "path": "main.py",
+            "start_line": 746,
+            "end_line": 747,
+            "quote": "    config = load_openclaw_config()\n    current = get_current_model(config)"
+          },
+          {
+            "path": "main.py",
+            "start_line": 756,
+            "end_line": 781,
+            "quote": "    models = get_free_models()\n    config = ensure_config_structure(config)\n\n    fallbacks = []\n\n    # openrouter/free smart router always leads.\n    smart_router = format_model_for_openclaw(\"openrouter/free\")\n    if not current or current != smart_router:\n        fallbacks.append(smart_router)\n        config[\"agents\"][\"defaults\"][\"models\"][smart_router] = {}\n\n    for m in models:\n        formatted = format_model_for_openclaw(m[\"id\"])\n\n        if current and formatted == current:\n            continue\n        if \"openrouter/free\" in m[\"id\"]:\n            continue\n        if len(fallbacks) >= args.count:\n            break\n\n        fallbacks.append(formatted)\n        config[\"agents\"][\"defaults\"][\"models\"][formatted] = {}\n\n    config[\"agents\"][\"defaults\"][\"model\"][\"fallbacks\"] = fallbacks\n    save_openclaw_config(config)"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Save",
+        "data": "auth.profiles.openrouter:default containing provider openrouter and mode api_key; this profile object contains no API key value.",
+        "source": "Hard-coded auth-profile metadata and loaded configuration",
+        "recipient": "~/.openclaw/openclaw.json",
+        "condition": "When setup_auth is enabled and the profile is absent. This is an additional configuration location beyond the declared model keys.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "OPENCLAW_CONFIG_PATH = Path.home() / \".openclaw\" / \"openclaw.json\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 381,
+            "end_line": 395,
+            "quote": "def setup_openrouter_auth(config: dict) -> dict:\n    \"\"\"Set up OpenRouter auth profile if not exists.\"\"\"\n    if \"auth\" not in config:\n        config[\"auth\"] = {}\n    if \"profiles\" not in config[\"auth\"]:\n        config[\"auth\"][\"profiles\"] = {}\n\n    if \"openrouter:default\" not in config[\"auth\"][\"profiles\"]:\n        config[\"auth\"][\"profiles\"][\"openrouter:default\"] = {\n            \"provider\": \"openrouter\",\n            \"mode\": \"api_key\"\n        }\n        print(\"Added OpenRouter auth profile.\")\n\n    return config"
+          },
+          {
+            "path": "main.py",
+            "start_line": 415,
+            "end_line": 419,
+            "quote": "    config = load_openclaw_config()\n    config = ensure_config_structure(config)\n\n    if setup_auth:\n        config = setup_openrouter_auth(config)"
+          },
+          {
+            "path": "main.py",
+            "start_line": 463,
+            "end_line": 463,
+            "quote": "    save_openclaw_config(config)"
+          },
+          {
+            "path": "main.py",
+            "start_line": 309,
+            "end_line": 312,
+            "quote": "def save_openclaw_config(config: dict):\n    \"\"\"Save OpenClaw configuration.\"\"\"\n    OPENCLAW_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)\n    OPENCLAW_CONFIG_PATH.write_text(json.dumps(config, indent=2))"
+          },
+          {
+            "path": "main.py",
+            "start_line": 962,
+            "end_line": 963,
+            "quote": "    switch_parser.add_argument(\"--setup-auth\", action=\"store_true\",\n                              help=\"Also set up OpenRouter auth profile\")"
+          },
+          {
+            "path": "main.py",
+            "start_line": 971,
+            "end_line": 972,
+            "quote": "    auto_parser.add_argument(\"--setup-auth\", action=\"store_true\",\n                            help=\"Also set up OpenRouter auth profile\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Send",
+        "data": "Health-probe POST containing a configured or candidate model ID, the fixed user message \"Hi\", max_tokens 5, stream false, an API key as Bearer authorization, and the app-attribution headers.",
+        "source": "Configured primary or candidate catalog model ID, configured API keys, and hard-coded probe payload/header values",
+        "recipient": "https://openrouter.ai/api/v1/chat/completions",
+        "condition": "Called during rotation and watcher checks; keys in cooldown are excluded and 401/429 causes the next available key to be tried. The watcher uses a default 60-second sleep interval, clamped to at least 15 seconds, or runs once when requested.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 26,
+            "end_line": 26,
+            "quote": "OPENROUTER_CHAT_URL = \"https://openrouter.ai/api/v1/chat/completions\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 34,
+            "end_line": 44,
+            "quote": "OPENROUTER_REFERER = \"https://github.com/Shaivpidadi/FreeRide\"\nOPENROUTER_APP_TITLE = \"FreeRide Health Check\"\n\n\ndef _openrouter_headers(api_key: str) -> dict:\n    return {\n        \"Authorization\": f\"Bearer {api_key}\",\n        \"Content-Type\": \"application/json\",\n        \"HTTP-Referer\": OPENROUTER_REFERER,\n        \"X-Title\": OPENROUTER_APP_TITLE,\n    }"
+          },
+          {
+            "path": "main.py",
+            "start_line": 798,
+            "end_line": 811,
+            "quote": "    available = [k for k in get_api_keys() if not _is_key_in_cooldown(k)]\n    if not available:\n        return False, \"all_keys_exhausted\"\n\n    payload = {\n        \"model\": model_id,\n        \"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}],\n        \"max_tokens\": 5,\n        \"stream\": False\n    }\n\n    for key in available:\n        try:\n            response = requests.post(OPENROUTER_CHAT_URL, headers=_openrouter_headers(key), json=payload, timeout=30)"
+          },
+          {
+            "path": "main.py",
+            "start_line": 350,
+            "end_line": 351,
+            "quote": "    prefix = \"openrouter/\"\n    return stored_id[len(prefix):] if stored_id.startswith(prefix) else stored_id"
+          },
+          {
+            "path": "main.py",
+            "start_line": 852,
+            "end_line": 859,
+            "quote": "    config = load_openclaw_config()\n    config = ensure_config_structure(config)\n    current = get_current_model(config)\n    current_base = _config_primary_to_api_id(current) if current else None\n\n    if current_base and not force:\n        print(f\"Testing current primary: {current_base}\")\n        ok, err = _test_model(current_base)"
+          },
+          {
+            "path": "main.py",
+            "start_line": 866,
+            "end_line": 882,
+            "quote": "    models = get_free_models(force_refresh=True)\n    if not models:\n        return False, \"fetch_failed\"\n\n    # openrouter/free is always fallback #0, so we need (count - 1) verified extras.\n    fallback_target = max(0, fallback_count - 1)\n    new_primary = None\n    verified_fallbacks = []\n\n    for m in models:\n        model_id = m[\"id\"]\n        if \"openrouter/free\" in model_id:\n            continue\n        if model_id == current_base:\n            continue\n\n        ok, err = _test_model(model_id)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 80,
+            "end_line": 81,
+            "quote": "    current_base = _config_primary_to_api_id(current)\n    ok, err = _test_model(current_base)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 34,
+            "end_line": 35,
+            "quote": "DEFAULT_INTERVAL_SECONDS = 60\nMIN_INTERVAL_SECONDS = 15"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 100,
+            "end_line": 102,
+            "quote": "    interval = max(interval, MIN_INTERVAL_SECONDS)\n    key_count = len(get_api_keys())\n    print(f\"FreeRide Watcher started ({key_count} API key{'s' if key_count != 1 else ''}, interval {interval}s)\")"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 116,
+            "end_line": 127,
+            "quote": "    state = load_state()\n    while running:\n        try:\n            check_and_rotate(state)\n        except Exception as e:\n            print(f\"[{datetime.now().isoformat()}] Watcher error: {e}\")\n\n        # Interruptible sleep so SIGTERM isn't held up by a long interval.\n        for _ in range(interval):\n            if not running:\n                break\n            time.sleep(1)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 132,
+            "end_line": 137,
+            "quote": "def run_once():\n    if not get_api_keys():\n        print(\"Error: OPENROUTER_API_KEY not set\")\n        sys.exit(1)\n    state = load_state()\n    check_and_rotate(state)"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Read",
+        "data": "Health-probe HTTP status and, on remaining error paths, response JSON error.code and error.message. Successful generated message content is not inspected by this code.",
+        "source": "Response from the OpenRouter chat-completions endpoint",
+        "recipient": "FreeRide probe function",
+        "condition": "HTTP 200, 401/429, and 503 take earlier status branches; other responses are examined for model-not-found information.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 811,
+            "end_line": 835,
+            "quote": "            response = requests.post(OPENROUTER_CHAT_URL, headers=_openrouter_headers(key), json=payload, timeout=30)\n        except requests.Timeout:\n            return False, \"timeout\"\n        except requests.RequestException:\n            return False, \"request_error\"\n\n        if response.status_code == 200:\n            return True, None\n        if response.status_code in (401, 429):\n            _mark_key_rate_limited(key)\n            continue  # try next key — this one is dead for now\n        if response.status_code == 503:\n            return False, \"unavailable\"\n\n        # OpenRouter returns model_not_found in the body on 4xx — check the body\n        # regardless of status code.\n        try:\n            body = response.json()\n            err_code = body.get(\"error\", {}).get(\"code\", \"\")\n            err_msg = str(body.get(\"error\", {}).get(\"message\", \"\"))\n            if err_code == \"model_not_found\" or \"Unknown model\" in err_msg:\n                return False, \"model_not_found\"\n        except (ValueError, KeyError):\n            pass\n        return False, f\"error_{response.status_code}\""
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Save",
+        "data": "API key associated with the time it returned HTTP 401 or 429.",
+        "source": "Key used for a catalog or health-probe request and current process time",
+        "recipient": "In-memory _RATE_LIMITED_KEYS dictionary",
+        "condition": "Per-process tracking only; the soft cooldown is 120 seconds, with removal performed on a later cooldown lookup.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 46,
+            "end_line": 50,
+            "quote": "# Per-process tracking of keys that recently returned 429/401, with a soft\n# cooldown so keys come back into rotation automatically. Short-lived CLI runs\n# never reach the cooldown; the watcher daemon does.\n_KEY_COOLDOWN_SECONDS = 120\n_RATE_LIMITED_KEYS: dict = {}  # key -> timestamp when marked"
+          },
+          {
+            "path": "main.py",
+            "start_line": 63,
+            "end_line": 64,
+            "quote": "def _mark_key_rate_limited(key: str):\n    _RATE_LIMITED_KEYS[key] = time.time()"
+          },
+          {
+            "path": "main.py",
+            "start_line": 144,
+            "end_line": 149,
+            "quote": "        if response.status_code in (401, 429):\n            label = \"invalid\" if response.status_code == 401 else \"rate-limited\"\n            print(f\"  Key {i}: {label}, trying next...\")\n            _mark_key_rate_limited(key)\n            last_status = response.status_code\n            continue"
+          },
+          {
+            "path": "main.py",
+            "start_line": 819,
+            "end_line": 821,
+            "quote": "        if response.status_code in (401, 429):\n            _mark_key_rate_limited(key)\n            continue  # try next key — this one is dead for now"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Delete",
+        "data": "API key's in-memory cooldown entry and associated timestamp.",
+        "source": "_RATE_LIMITED_KEYS dictionary",
+        "recipient": null,
+        "condition": "During a cooldown lookup when more than 120 seconds have elapsed since the recorded timestamp. This does not delete the configured credential.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 49,
+            "end_line": 60,
+            "quote": "_KEY_COOLDOWN_SECONDS = 120\n_RATE_LIMITED_KEYS: dict = {}  # key -> timestamp when marked\n\n\ndef _is_key_in_cooldown(key: str) -> bool:\n    ts = _RATE_LIMITED_KEYS.get(key)\n    if ts is None:\n        return False\n    if time.time() - ts > _KEY_COOLDOWN_SECONDS:\n        _RATE_LIMITED_KEYS.pop(key, None)\n        return False\n    return True"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Infer",
+        "data": "Probe success/error classification and replacement model selection: keep a successful current primary unless forced; otherwise choose the first successful candidate as primary and subsequent successful candidates as additional fallbacks.",
+        "source": "Probe HTTP statuses/error fields, request exceptions, current primary, ranked candidates, and fallback_count",
+        "recipient": "In-process rotation decision and verified model lists",
+        "condition": "Router IDs and the current primary are skipped in candidate selection; candidate testing stops after enough successes or all keys are exhausted. No replacement is selected when none succeeds.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 812,
+            "end_line": 837,
+            "quote": "        except requests.Timeout:\n            return False, \"timeout\"\n        except requests.RequestException:\n            return False, \"request_error\"\n\n        if response.status_code == 200:\n            return True, None\n        if response.status_code in (401, 429):\n            _mark_key_rate_limited(key)\n            continue  # try next key — this one is dead for now\n        if response.status_code == 503:\n            return False, \"unavailable\"\n\n        # OpenRouter returns model_not_found in the body on 4xx — check the body\n        # regardless of status code.\n        try:\n            body = response.json()\n            err_code = body.get(\"error\", {}).get(\"code\", \"\")\n            err_msg = str(body.get(\"error\", {}).get(\"message\", \"\"))\n            if err_code == \"model_not_found\" or \"Unknown model\" in err_msg:\n                return False, \"model_not_found\"\n        except (ValueError, KeyError):\n            pass\n        return False, f\"error_{response.status_code}\"\n\n    return False, \"all_keys_exhausted\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 852,
+            "end_line": 898,
+            "quote": "    config = load_openclaw_config()\n    config = ensure_config_structure(config)\n    current = get_current_model(config)\n    current_base = _config_primary_to_api_id(current) if current else None\n\n    if current_base and not force:\n        print(f\"Testing current primary: {current_base}\")\n        ok, err = _test_model(current_base)\n        if ok:\n            print(\"  Status: OK — no rotation needed.\")\n            return False, None\n        print(f\"  Status: {err}\")\n\n    print(\"Finding a working free model...\")\n    models = get_free_models(force_refresh=True)\n    if not models:\n        return False, \"fetch_failed\"\n\n    # openrouter/free is always fallback #0, so we need (count - 1) verified extras.\n    fallback_target = max(0, fallback_count - 1)\n    new_primary = None\n    verified_fallbacks = []\n\n    for m in models:\n        model_id = m[\"id\"]\n        if \"openrouter/free\" in model_id:\n            continue\n        if model_id == current_base:\n            continue\n\n        ok, err = _test_model(model_id)\n        if ok:\n            if new_primary is None:\n                new_primary = model_id\n                print(f\"  Verified primary: {model_id}\")\n            else:\n                verified_fallbacks.append(model_id)\n                print(f\"  Verified fallback: {model_id}\")\n            if len(verified_fallbacks) >= fallback_target:\n                break\n        elif err == \"all_keys_exhausted\":\n            print(\"  Stopped: all API keys are rate-limited or invalid.\")\n            break\n        # Silent on per-model failures (model_not_found, etc.) — try next.\n\n    if not new_primary:\n        return False, \"no_working_models\""
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Save",
+        "data": "Re-serialized configuration containing a successful replacement primary, an openrouter/free smart-router fallback, successful additional fallback IDs, and empty allowlist entries for these models.",
+        "source": "Loaded configuration and rotation's successful probe selections",
+        "recipient": "~/.openclaw/openclaw.json",
+        "condition": "Only after a new primary is found. The smart router is inserted separately from the tested candidates; the candidate loop skips router IDs. Called by CLI rotation or watcher recovery.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "OPENCLAW_CONFIG_PATH = Path.home() / \".openclaw\" / \"openclaw.json\""
+          },
+          {
+            "path": "main.py",
+            "start_line": 309,
+            "end_line": 312,
+            "quote": "def save_openclaw_config(config: dict):\n    \"\"\"Save OpenClaw configuration.\"\"\"\n    OPENCLAW_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)\n    OPENCLAW_CONFIG_PATH.write_text(json.dumps(config, indent=2))"
+          },
+          {
+            "path": "main.py",
+            "start_line": 852,
+            "end_line": 855,
+            "quote": "    config = load_openclaw_config()\n    config = ensure_config_structure(config)\n    current = get_current_model(config)\n    current_base = _config_primary_to_api_id(current) if current else None"
+          },
+          {
+            "path": "main.py",
+            "start_line": 875,
+            "end_line": 913,
+            "quote": "    for m in models:\n        model_id = m[\"id\"]\n        if \"openrouter/free\" in model_id:\n            continue\n        if model_id == current_base:\n            continue\n\n        ok, err = _test_model(model_id)\n        if ok:\n            if new_primary is None:\n                new_primary = model_id\n                print(f\"  Verified primary: {model_id}\")\n            else:\n                verified_fallbacks.append(model_id)\n                print(f\"  Verified fallback: {model_id}\")\n            if len(verified_fallbacks) >= fallback_target:\n                break\n        elif err == \"all_keys_exhausted\":\n            print(\"  Stopped: all API keys are rate-limited or invalid.\")\n            break\n        # Silent on per-model failures (model_not_found, etc.) — try next.\n\n    if not new_primary:\n        return False, \"no_working_models\"\n\n    formatted = format_model_for_openclaw(new_primary)\n    config[\"agents\"][\"defaults\"][\"model\"][\"primary\"] = formatted\n    config[\"agents\"][\"defaults\"][\"models\"][formatted] = {}\n\n    smart_router = format_model_for_openclaw(\"openrouter/free\")\n    fallbacks = [smart_router]\n    config[\"agents\"][\"defaults\"][\"models\"][smart_router] = {}\n    for fb_id in verified_fallbacks:\n        fb_fmt = format_model_for_openclaw(fb_id)\n        fallbacks.append(fb_fmt)\n        config[\"agents\"][\"defaults\"][\"models\"][fb_fmt] = {}\n\n    config[\"agents\"][\"defaults\"][\"model\"][\"fallbacks\"] = fallbacks\n    save_openclaw_config(config)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 68,
+            "end_line": 89,
+            "quote": "    config = load_openclaw_config()\n    current = get_current_model(config)\n\n    if not current:\n        print(f\"[{datetime.now().isoformat()}] No primary configured — bootstrapping.\")\n        changed, err = rotate(force=True)\n        if changed:\n            _record_rotation(state, \"bootstrap\")\n        elif err:\n            print(f\"  Bootstrap failed: {err}\")\n        return changed\n\n    current_base = _config_primary_to_api_id(current)\n    ok, err = _test_model(current_base)\n    if ok:\n        print(f\"[{datetime.now().isoformat()}] {current_base} OK\")\n        return False\n\n    print(f\"[{datetime.now().isoformat()}] {current_base} failed ({err}) — rotating.\")\n    changed, rot_err = rotate(force=True)\n    if changed:\n        _record_rotation(state, err or \"unknown\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Send",
+        "data": "API-key count and masked key representations: first eight and last four characters when length exceeds twelve, otherwise ***.",
+        "source": "Keys returned by get_api_keys",
+        "recipient": "Standard output",
+        "condition": "When freeride status is run and keys are configured.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 664,
+            "end_line": 684,
+            "quote": "def cmd_status(args):\n    \"\"\"Show current configuration status.\"\"\"\n    keys = get_api_keys()\n    config = load_openclaw_config()\n    current = get_current_model(config)\n    fallbacks = get_current_fallbacks(config)\n\n    print(\"FreeRide Status\")\n    print(\"=\" * 50)\n\n    # API Key status\n    if keys:\n        if len(keys) == 1:\n            k = keys[0]\n            masked = k[:8] + \"...\" + k[-4:] if len(k) > 12 else \"***\"\n            print(f\"OpenRouter API Key: {masked}\")\n        else:\n            print(f\"OpenRouter API Keys: {len(keys)} configured\")\n            for i, k in enumerate(keys, 1):\n                masked = k[:8] + \"...\" + k[-4:] if len(k) > 12 else \"***\"\n                print(f\"  {i}. {masked}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Send",
+        "data": "Operational output including model IDs, context lengths, scores, primary/fallback labels, auth-profile presence, cache count/age, configuration path/existence, probe timestamps/results, key ordinals, HTTP statuses, and network exception text.",
+        "source": "Model records, loaded configuration/cache, request results, exceptions, and watcher checks",
+        "recipient": "Standard output; its ultimate consumer depends on invocation and redirection",
+        "condition": "Emitted by listing, status, fetch, and watcher operations. Output is not assigned an external network destination by this source.",
+        "evidence": [
+          {
+            "path": "main.py",
+            "start_line": 137,
+            "end_line": 156,
+            "quote": "            response = requests.get(OPENROUTER_API_URL, headers=_openrouter_headers(key), timeout=30)\n        except requests.RequestException as e:\n            print(f\"  Key {i}: network error ({e})\")\n            continue\n\n        if response.status_code == 200:\n            return response.json().get(\"data\", [])\n        if response.status_code in (401, 429):\n            label = \"invalid\" if response.status_code == 401 else \"rate-limited\"\n            print(f\"  Key {i}: {label}, trying next...\")\n            _mark_key_rate_limited(key)\n            last_status = response.status_code\n            continue\n        print(f\"Error fetching models: HTTP {response.status_code}\")\n        return []\n\n    if last_status:\n        print(f\"Error: all API keys exhausted (last status: {last_status}).\")\n    else:\n        print(\"Error: no usable API keys.\")"
+          },
+          {
+            "path": "main.py",
+            "start_line": 477,
+            "end_line": 514,
+            "quote": "    print(\"Fetching free models from OpenRouter...\")\n    models = get_free_models(force_refresh=args.refresh)\n\n    if not models:\n        print(\"No free models available.\")\n        return\n\n    current = get_current_model()\n    fallbacks = get_current_fallbacks()\n    limit = args.limit if args.limit else 15\n\n    print(f\"\\nTop {min(limit, len(models))} Free AI Models (ranked by quality):\\n\")\n    print(f\"{'#':<3} {'Model ID':<50} {'Context':<12} {'Score':<8} {'Status'}\")\n    print(\"-\" * 90)\n\n    for i, model in enumerate(models[:limit], 1):\n        model_id = model.get(\"id\", \"unknown\")\n        context = model.get(\"context_length\", 0)\n        score = model.get(\"_score\", 0)\n\n        # Format context length\n        if context >= 1_000_000:\n            context_str = f\"{context // 1_000_000}M tokens\"\n        elif context >= 1_000:\n            context_str = f\"{context // 1_000}K tokens\"\n        else:\n            context_str = f\"{context} tokens\"\n\n        formatted = format_model_for_openclaw(model_id)\n\n        if current and formatted == current:\n            status = \"[PRIMARY]\"\n        elif formatted in fallbacks:\n            status = \"[FALLBACK]\"\n        else:\n            status = \"\"\n\n        print(f\"{i:<3} {model_id:<50} {context_str:<12} {score:.3f}    {status}\")"
+          },
+          {
+            "path": "main.py",
+            "start_line": 691,
+            "end_line": 725,
+            "quote": "    auth_profiles = config.get(\"auth\", {}).get(\"profiles\", {})\n    if \"openrouter:default\" in auth_profiles:\n        print(\"OpenRouter Auth Profile: Configured\")\n    else:\n        print(\"OpenRouter Auth Profile: Not set (use --setup-auth to add)\")\n\n    # Current model\n    print(f\"\\nPrimary Model: {current or 'Not configured'}\")\n\n    # Fallbacks\n    if fallbacks:\n        print(f\"Fallback Models ({len(fallbacks)}):\")\n        for fb in fallbacks:\n            print(f\"  - {fb}\")\n    else:\n        print(\"Fallback Models: None configured\")\n\n    # Cache status\n    if CACHE_FILE.exists():\n        try:\n            cache = json.loads(CACHE_FILE.read_text())\n            cached_at = datetime.fromisoformat(cache.get(\"cached_at\", \"\"))\n            models_count = len(cache.get(\"models\", []))\n            age = datetime.now() - cached_at\n            hours = age.seconds // 3600\n            mins = (age.seconds % 3600) // 60\n            print(f\"\\nModel Cache: {models_count} models (updated {hours}h {mins}m ago)\")\n        except (json.JSONDecodeError, ValueError, KeyError):\n            print(\"\\nModel Cache: Invalid\")\n    else:\n        print(\"\\nModel Cache: Not created yet\")\n\n    # OpenClaw config path\n    print(f\"\\nOpenClaw Config: {OPENCLAW_CONFIG_PATH}\")\n    print(f\"  Exists: {'Yes' if OPENCLAW_CONFIG_PATH.exists() else 'No'}\")"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 68,
+            "end_line": 91,
+            "quote": "    config = load_openclaw_config()\n    current = get_current_model(config)\n\n    if not current:\n        print(f\"[{datetime.now().isoformat()}] No primary configured — bootstrapping.\")\n        changed, err = rotate(force=True)\n        if changed:\n            _record_rotation(state, \"bootstrap\")\n        elif err:\n            print(f\"  Bootstrap failed: {err}\")\n        return changed\n\n    current_base = _config_primary_to_api_id(current)\n    ok, err = _test_model(current_base)\n    if ok:\n        print(f\"[{datetime.now().isoformat()}] {current_base} OK\")\n        return False\n\n    print(f\"[{datetime.now().isoformat()}] {current_base} failed ({err}) — rotating.\")\n    changed, rot_err = rotate(force=True)\n    if changed:\n        _record_rotation(state, err or \"unknown\")\n    elif rot_err:\n        print(f\"  Rotation failed: {rot_err}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Read",
+        "data": "Watcher state JSON, used for rotation count, last rotation timestamp, and last reason.",
+        "source": "~/.openclaw/.freeride-watcher-state.json",
+        "recipient": "Watcher process memory",
+        "condition": "Loaded for daemon operation, one-shot operation, or status. Missing, unreadable, or invalid state defaults to rotation_count zero.",
+        "evidence": [
+          {
+            "path": "watcher.py",
+            "start_line": 33,
+            "end_line": 33,
+            "quote": "STATE_FILE = Path.home() / \".openclaw\" / \".freeride-watcher-state.json\""
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 46,
+            "end_line": 52,
+            "quote": "def load_state() -> dict:\n    if not STATE_FILE.exists():\n        return {\"rotation_count\": 0}\n    try:\n        return json.loads(STATE_FILE.read_text())\n    except (json.JSONDecodeError, OSError):\n        return {\"rotation_count\": 0}"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 116,
+            "end_line": 119,
+            "quote": "    state = load_state()\n    while running:\n        try:\n            check_and_rotate(state)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 136,
+            "end_line": 141,
+            "quote": "    state = load_state()\n    check_and_rotate(state)\n\n\ndef show_status():\n    state = load_state()"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Save",
+        "data": "Watcher state with incremented rotation_count, current ISO last_rotation_at, and last_rotation_reason set to bootstrap, the failed probe's error label, or unknown.",
+        "source": "Loaded watcher state, successful configuration-change result, probe error, and local clock",
+        "recipient": "~/.openclaw/.freeride-watcher-state.json, written first to .freeride-watcher-state.json.tmp and then replaced into place",
+        "condition": "Recorded only when bootstrap or recovery reports a changed configuration. Existing state is replaced; no time-based expiry is shown.",
+        "evidence": [
+          {
+            "path": "watcher.py",
+            "start_line": 33,
+            "end_line": 33,
+            "quote": "STATE_FILE = Path.home() / \".openclaw\" / \".freeride-watcher-state.json\""
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 38,
+            "end_line": 43,
+            "quote": "def _atomic_write(path: Path, content: str):\n    \"\"\"Write atomically via tmp + rename so a crash mid-write can't corrupt state.\"\"\"\n    path.parent.mkdir(parents=True, exist_ok=True)\n    tmp = path.with_suffix(path.suffix + \".tmp\")\n    tmp.write_text(content)\n    os.replace(tmp, path)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 55,
+            "end_line": 63,
+            "quote": "def save_state(state: dict):\n    _atomic_write(STATE_FILE, json.dumps(state, indent=2))\n\n\ndef _record_rotation(state: dict, reason: str):\n    state[\"rotation_count\"] = state.get(\"rotation_count\", 0) + 1\n    state[\"last_rotation_at\"] = datetime.now().isoformat()\n    state[\"last_rotation_reason\"] = reason\n    save_state(state)"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 68,
+            "end_line": 89,
+            "quote": "    config = load_openclaw_config()\n    current = get_current_model(config)\n\n    if not current:\n        print(f\"[{datetime.now().isoformat()}] No primary configured — bootstrapping.\")\n        changed, err = rotate(force=True)\n        if changed:\n            _record_rotation(state, \"bootstrap\")\n        elif err:\n            print(f\"  Bootstrap failed: {err}\")\n        return changed\n\n    current_base = _config_primary_to_api_id(current)\n    ok, err = _test_model(current_base)\n    if ok:\n        print(f\"[{datetime.now().isoformat()}] {current_base} OK\")\n        return False\n\n    print(f\"[{datetime.now().isoformat()}] {current_base} failed ({err}) — rotating.\")\n    changed, rot_err = rotate(force=True)\n    if changed:\n        _record_rotation(state, err or \"unknown\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Send",
+        "data": "Watcher state-file path, total rotation count, last rotation timestamp, and last reason.",
+        "source": "Loaded watcher state and STATE_FILE constant",
+        "recipient": "Standard output",
+        "condition": "When freeride-watcher --status is selected.",
+        "evidence": [
+          {
+            "path": "watcher.py",
+            "start_line": 33,
+            "end_line": 33,
+            "quote": "STATE_FILE = Path.home() / \".openclaw\" / \".freeride-watcher-state.json\""
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 140,
+            "end_line": 147,
+            "quote": "def show_status():\n    state = load_state()\n    print(\"FreeRide Watcher Status\")\n    print(\"=\" * 40)\n    print(f\"State file: {STATE_FILE}\")\n    print(f\"Total rotations: {state.get('rotation_count', 0)}\")\n    print(f\"Last rotation: {state.get('last_rotation_at', 'never')}\")\n    print(f\"Last reason: {state.get('last_rotation_reason', 'n/a')}\")"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 173,
+            "end_line": 174,
+            "quote": "    if args.status:\n        show_status()"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Delete",
+        "data": "Persistent watcher state file, including saved rotation count, timestamp, and reason.",
+        "source": "~/.openclaw/.freeride-watcher-state.json",
+        "recipient": null,
+        "condition": "When --clear is selected, --status has not taken precedence, and the state file exists.",
+        "evidence": [
+          {
+            "path": "watcher.py",
+            "start_line": 33,
+            "end_line": 33,
+            "quote": "STATE_FILE = Path.home() / \".openclaw\" / \".freeride-watcher-state.json\""
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 150,
+            "end_line": 155,
+            "quote": "def clear_state():\n    if STATE_FILE.exists():\n        STATE_FILE.unlink()\n        print(f\"Cleared {STATE_FILE}\")\n    else:\n        print(\"No state file to clear.\")"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 169,
+            "end_line": 176,
+            "quote": "    parser.add_argument(\"--clear\", action=\"store_true\",\n                        help=\"Delete the watcher state file\")\n    args = parser.parse_args()\n\n    if args.status:\n        show_status()\n    elif args.clear:\n        clear_state()"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Save",
+        "data": "Watcher standard output and standard error, including emitted model IDs, probe timestamps/results, rotation diagnostics, and exception text.",
+        "source": "freeride-watcher stdout and stderr",
+        "recipient": "~/.openclaw/freeride-watcher.log",
+        "condition": "Only if the supplied persistent-background shell command is used. The > redirection replaces the log on invocation; no log retention or rotation policy is supplied.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 98,
+            "end_line": 99,
+            "quote": "# Persistent background\nnohup freeride-watcher > ~/.openclaw/freeride-watcher.log 2>&1 &"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 80,
+            "end_line": 91,
+            "quote": "    current_base = _config_primary_to_api_id(current)\n    ok, err = _test_model(current_base)\n    if ok:\n        print(f\"[{datetime.now().isoformat()}] {current_base} OK\")\n        return False\n\n    print(f\"[{datetime.now().isoformat()}] {current_base} failed ({err}) — rotating.\")\n    changed, rot_err = rotate(force=True)\n    if changed:\n        _record_rotation(state, err or \"unknown\")\n    elif rot_err:\n        print(f\"  Rotation failed: {rot_err}\")"
+          },
+          {
+            "path": "watcher.py",
+            "start_line": 118,
+            "end_line": 121,
+            "quote": "        try:\n            check_and_rotate(state)\n        except Exception as e:\n            print(f\"[{datetime.now().isoformat()}] Watcher error: {e}\")"
+          }
+        ]
+      }
+    ]
+  }
+}

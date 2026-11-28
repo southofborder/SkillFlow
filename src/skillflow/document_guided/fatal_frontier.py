@@ -223,7 +223,11 @@ def replay_fatal_frontier(run, saved, config, *, renderer=None):
     owners, outcomes, graphs, tasks, fragments, reviews = _owners(run), {}, {}, {}, {}, {}
     failures, stage_values = {}, {}
     from .accepted_upstream import load_accepted_upstream
+    from .shared_repair import DOWNSTREAM_REQUESTS, repair_decision
     inherited = load_accepted_upstream(run)
+    fixed_upstream = "revalidated_upstream" in read(run / "manifest.json")
+    if fixed_upstream and owners.keys() - DOWNSTREAM_REQUESTS:
+        raise ValueError("Fatal frontier has a request outside the downstream-only run scope")
     if inherited:
         graphs["initial"] = inherited["graph"]["value"]
         tasks["task"] = inherited["task"]["value"]
@@ -330,7 +334,6 @@ def replay_fatal_frontier(run, saved, config, *, renderer=None):
         reviews[name] = reviewed
         outcomes[name] = {"status": reviewed["status"], "reason": reviewed.get("reason")}
     if "review" in reviews:
-        from .shared_repair import repair_decision
         values = {key: {"value": value} for key, value in stage_values.items()
                   if not key.startswith("revision")}
         if "task" in tasks:
@@ -339,8 +342,11 @@ def replay_fatal_frontier(run, saved, config, *, renderer=None):
             values["graph"] = {"value": graphs["initial"]}
         errors = {key: value for key, value in failures.items()
                   if not key.startswith("revision") and state["stages"].get(key, {}).get("status") == value["status"]}
+        processing_gaps = (read(owners["processing"] / "result.json").get("validation_gaps", [])
+                           if "processing" in values else [])
         decision = repair_decision(files=files, values=values, errors=errors, reviewed=reviews["review"],
-                                   selected=None, graph_facts_only=True)
+                                   selected=None, graph_facts_only=True, processing_gaps=processing_gaps,
+                                   fixed_upstream=fixed_upstream)
         relative = "audit/shared-repair-decision.json"
         if relative not in receipt["recovery"] or read(resolve_file(run, receipt["recovery"][relative])) != decision:
             raise ValueError("Fatal frontier shared-repair admission differs from verified source review and failures")
@@ -362,7 +368,7 @@ def replay_fatal_frontier(run, saved, config, *, renderer=None):
         raise ValueError("Fatal frontier primary request failure was not independently reproduced")
     for name, row in state["stages"].items():
         if name in inherited:
-            if row != {"status":"complete", "origin":"accepted_upstream"}:
+            if row != {"status": "complete", "origin": inherited[name].get("origin", "accepted_upstream")}:
                 raise ValueError("Fatal frontier inherited-stage origin or status differs")
             continue
         if name not in _SEMANTIC_NAMES | {"review", "revision/review"} or not isinstance(row, dict) or set(row) - {"status", "reason"}:

@@ -7,12 +7,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, StrictStr, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, StrictStr, TypeAdapter, ValidationError, field_validator, model_serializer, model_validator
 
 from skillflow.common.source_evidence import _json_object, _require_json, extract_source_lines
-from skillflow.propagation.contracts.values import ValueRef, InputRef, LocalRef, LiteralRef, AlternativesRef, Text
+from skillflow.propagation.contracts.values import ValueRef, InputRef, LocalRef, LiteralRef, AlternativesRef, Text, Index
 from skillflow.propagation.contracts.task import Task, TaskEvidence
-from skillflow.propagation.contracts.references import (CFGTarget, DemandTarget, SelfTarget, InputTarget, OutputTarget, target_key)
+from skillflow.propagation.contracts.references import (CFGTarget, DemandTarget, OperationTarget, SelfTarget, InputTarget, OutputTarget, target_key)
 from skillflow.propagation.data.models import _check_json_value, _require_list
 from skillflow.common.validation import StructuralValidationError, structural_error, validation_at, schema_error
 
@@ -173,8 +173,7 @@ class DemandGoal(RawDemandGoal):
     target: DemandTarget
 
 
-class DemandSupplement(_Strict):
-    target: DemandTarget
+class _ExpressionSupplement(_Strict):
     expression: DemandExpression
     evidences: Annotated[list[TaskEvidence], Field(min_length=1)]
 
@@ -191,7 +190,39 @@ class DemandSupplement(_Strict):
         return self
 
 
-class RawDemandSupplement(DemandSupplement):
+class ExpressionPosition(_Strict):
+    event_index: Index
+    body_event_index: Index | None = None
+    op_index: Index
+
+    @model_serializer(mode="wrap")
+    def omit_outer_body_index(self, handler):
+        result = handler(self)
+        if self.body_event_index is None:
+            result.pop("body_event_index")
+        return result
+
+
+class DemandSupplement(_ExpressionSupplement):
+    target: DemandTarget
+    operation_position: ExpressionPosition | None = None
+
+    @model_validator(mode="after")
+    def position_for_operation(self):
+        if self.operation_position is not None and (not isinstance(self.target, OperationTarget)
+                or self.target.slot.kind != "self" or self.target.phase is not None):
+            raise ValueError("compiled expression position requires its original atomic operation target")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_uncompiled_position(self, handler):
+        result = handler(self)
+        if self.operation_position is None:
+            result.pop("operation_position")
+        return result
+
+
+class RawDemandSupplement(_ExpressionSupplement):
     """Top-level model expressions can only address the pre-existing CFG."""
     target: CFGTarget
 

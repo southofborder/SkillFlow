@@ -1,0 +1,307 @@
+{
+  "status": "completed",
+  "declared_purpose": "Handle explicit Juejin requests for categories and hot rankings, browser login with reusable local credentials, Markdown drafts, explicitly approved public publishing, and article downloads with metadata and optional images. The entry document requires bounded file access, restricted network destinations, and confirmed bulk downloads capped at 50. Cookie persistence and article metadata preservation are declared features; cookie selection and redundant requests are implementation choices (SKILL.md:5,12-74,95-115,164-172,195-216).",
+  "data_operations": [
+    {
+      "operation": "Query public categories, tags and article rankings",
+      "source": "User-selected category, sort, pagination and limit; Juejin API responses",
+      "data_scope": "Query parameters; returned category/tag identifiers, article titles, author names and identifiers, engagement counts, summaries, covers and timestamps",
+      "recipient_or_storage": "api.juejin.cn; simplified results return to the caller without package-level persistence",
+      "condition": "When HotArticles methods are called. Its cookie defaults to empty; a supplied cookie accompanies requests.",
+      "evidence": [
+        {"path": "juejin_skill/hot_articles.py", "start_line": 25, "end_line": 82},
+        {"path": "juejin_skill/hot_articles.py", "start_line": 114, "end_line": 171},
+        {"path": "juejin_skill/config.py", "start_line": 38, "end_line": 41}
+      ]
+    },
+    {
+      "operation": "Open login page and capture browser cookies",
+      "source": "A newly created Chromium context and manual user login",
+      "data_scope": "Cookies returned for the entire context; sessionid or sessionid_ss presence is used to infer successful login",
+      "recipient_or_storage": "juejin.cn/login receives browser interaction; cookie dictionaries and the combined cookie string enter local process memory and return to the caller",
+      "condition": "Only login_with_browser starts this flow. It polls for up to five minutes and saves cookies after detecting a session-cookie name.",
+      "evidence": [
+        {"path": "juejin_skill/auth.py", "start_line": 55, "end_line": 99},
+        {"path": "juejin_skill/auth.py", "start_line": 144, "end_line": 147}
+      ]
+    },
+    {
+      "operation": "Persist and reload credentials",
+      "source": "Captured browser cookie dictionaries or an existing cookie JSON file",
+      "data_scope": "The complete supplied cookie list, including each dictionary's fields; reloaded names and values are combined into a Cookie header string",
+      "recipient_or_storage": "~/.juejin_cookie.json by default; JuejinAuth accepts a caller-selected cookie_path",
+      "condition": "Successful login automatically writes plain-text JSON. chmod(0600) occurs after writing and failures are ignored. load_cookie reads the configured file.",
+      "evidence": [
+        {"path": "juejin_skill/auth.py", "start_line": 25, "end_line": 27},
+        {"path": "juejin_skill/auth.py", "start_line": 93, "end_line": 110},
+        {"path": "juejin_skill/auth.py", "start_line": 128, "end_line": 147},
+        {"path": "juejin_skill/utils.py", "start_line": 56, "end_line": 69},
+        {"path": "juejin_skill/config.py", "start_line": 47, "end_line": 48}
+      ]
+    },
+    {
+      "operation": "Delete local credentials",
+      "source": "The configured cookie file and JuejinAuth object's cookie string",
+      "data_scope": "Saved cookie file and that object's in-memory credential",
+      "recipient_or_storage": "Local filesystem and JuejinAuth instance",
+      "condition": "clear_cookie must be called explicitly. It removes the file and clears this instance's string; it makes no server revocation request and does not clear other API instances.",
+      "evidence": [
+        {"path": "juejin_skill/auth.py", "start_line": 117, "end_line": 122},
+        {"path": "juejin_skill/api.py", "start_line": 18, "end_line": 20}
+      ]
+    },
+    {
+      "operation": "Send HTTP requests and return responses",
+      "source": "JuejinAPI constructor credentials and method arguments",
+      "data_scope": "JSON body, query parameters, optional extra headers, configured Cookie, and static browser-style headers",
+      "recipient_or_storage": "The supplied URL's recipient; packaged higher-level methods use configured Juejin endpoints. Parsed JSON returns to the caller.",
+      "condition": "Cookie is attached whenever nonempty. The exported low-level client accepts arbitrary URLs without a destination check.",
+      "evidence": [
+        {"path": "juejin_skill/__init__.py", "start_line": 3, "end_line": 15},
+        {"path": "juejin_skill/api.py", "start_line": 18, "end_line": 64},
+        {"path": "juejin_skill/config.py", "start_line": 38, "end_line": 60}
+      ]
+    },
+    {
+      "operation": "Validate saved authentication",
+      "source": "A nonempty saved cookie and the user/get API response",
+      "data_scope": "Cookie disclosure; returned user data is checked for presence alongside err_no to derive a Boolean",
+      "recipient_or_storage": "https://api.juejin.cn/user_api/v1/user/get; response remains in local processing",
+      "condition": "is_authenticated performs this request. publish_article.py uses it before deciding whether browser login is necessary.",
+      "evidence": [
+        {"path": "juejin_skill/api.py", "start_line": 74, "end_line": 82},
+        {"path": "publish_article.py", "start_line": 25, "end_line": 45}
+      ]
+    },
+    {
+      "operation": "Read Markdown and derive article fields",
+      "source": "Caller-provided filepath or Markdown content",
+      "data_scope": "A complete permitted file; title from its first level-one heading and subsequent body; an absent summary is derived from the first 100 characters after simple markup removal",
+      "recipient_or_storage": "Local publisher memory before any draft request",
+      "condition": "File paths must resolve under cwd or JUEJIN_MD_ROOT, avoid denied prefixes, have an allowed Markdown extension, and be regular files no larger than 2 MiB. Direct content avoids file reads.",
+      "evidence": [
+        {"path": "juejin_skill/publisher.py", "start_line": 44, "end_line": 122},
+        {"path": "juejin_skill/publisher.py", "start_line": 205, "end_line": 220},
+        {"path": "juejin_skill/publisher.py", "start_line": 394, "end_line": 411}
+      ]
+    },
+    {
+      "operation": "Disclose article content to create a remote draft",
+      "source": "Prepared title, Markdown body, category, tags, summary and cover URL",
+      "data_scope": "Full article body and publishing metadata, authenticated with the configured cookie",
+      "recipient_or_storage": "https://api.juejin.cn/content_api/v1/article_draft/create; a successful response identifies a draft stored in the Juejin account",
+      "condition": "Default publishing behavior creates a draft. The mismatched flags save_draft_only=False and allow_public_publish=False reject before creation. run_publish.py supplies a fixed demo; publish_article.py can substitute demo content for absent or nonexistent files.",
+      "evidence": [
+        {"path": "juejin_skill/publisher.py", "start_line": 226, "end_line": 257},
+        {"path": "juejin_skill/publisher.py", "start_line": 326, "end_line": 347},
+        {"path": "run_publish.py", "start_line": 79, "end_line": 114},
+        {"path": "publish_article.py", "start_line": 114, "end_line": 156},
+        {"path": "publish_article.py", "start_line": 197, "end_line": 205}
+      ]
+    },
+    {
+      "operation": "Request public article publication",
+      "source": "Created draft identifier and category, tag, summary and cover metadata",
+      "data_scope": "Draft identifier and publication settings; the referenced article is intended for public access",
+      "recipient_or_storage": "https://api.juejin.cn/content_api/v1/article/publish and, upon successful publication, Juejin readers",
+      "condition": "API requires save_draft_only=False and allow_public_publish=True. Interactive publishing additionally requires mode p and yes. run_publish.py requires --publish, JUEJIN_CONFIRM_PUBLISH=1 and yes; its confirmed branch creates another draft before publishing.",
+      "evidence": [
+        {"path": "juejin_skill/publisher.py", "start_line": 226, "end_line": 276},
+        {"path": "juejin_skill/publisher.py", "start_line": 349, "end_line": 368},
+        {"path": "publish_article.py", "start_line": 121, "end_line": 144},
+        {"path": "publish_article.py", "start_line": 182, "end_line": 205},
+        {"path": "run_publish.py", "start_line": 28, "end_line": 42},
+        {"path": "run_publish.py", "start_line": 125, "end_line": 142}
+      ]
+    },
+    {
+      "operation": "Retrieve article details and bounded author article lists",
+      "source": "Extracted numeric article/user identifiers and Juejin API responses",
+      "data_scope": "Article identifier; for lists, user identifier, newest-first sorting, cursor and limit. Full detail responses or article identifiers/titles are processed locally.",
+      "recipient_or_storage": "api.juejin.cn/content_api/v1/article/detail and /article/query_list; get_article_detail returns detail to its caller without saving",
+      "condition": "Single downloads try the API first. The public bulk method requires confirm_bulk, defaults to 20 articles and caps downloads at 50. A constructor-supplied cookie accompanies these requests.",
+      "evidence": [
+        {"path": "juejin_skill/downloader.py", "start_line": 92, "end_line": 148},
+        {"path": "juejin_skill/downloader.py", "start_line": 484, "end_line": 546},
+        {"path": "juejin_skill/downloader.py", "start_line": 552, "end_line": 613},
+        {"path": "juejin_skill/utils.py", "start_line": 12, "end_line": 36}
+      ]
+    },
+    {
+      "operation": "Retrieve and parse a rendered article page",
+      "source": "juejin.cn/post/<article_id> rendered in headless Chromium",
+      "data_scope": "Whole-page HTML, subsequently narrowed to article title, author and body and converted to Markdown",
+      "recipient_or_storage": "juejin.cn for the initial navigation; HTML enters local memory. Additional browser-request recipients are not specified.",
+      "condition": "Used only when the article-detail API yields no usable detail. It creates a fresh context without loading the saved cookie. This browser use extends beyond the entry document's login-only browser declaration.",
+      "evidence": [
+        {"path": "juejin_skill/downloader.py", "start_line": 140, "end_line": 148},
+        {"path": "juejin_skill/downloader.py", "start_line": 198, "end_line": 274},
+        {"path": "juejin_skill/downloader.py", "start_line": 309, "end_line": 350},
+        {"path": "SKILL.md", "start_line": 48, "end_line": 48}
+      ]
+    },
+    {
+      "operation": "Persist downloaded Markdown",
+      "source": "API article data or extracted page content",
+      "data_scope": "Article body, title, author, source URL, and available publication time and tags",
+      "recipient_or_storage": "./output or JUEJIN_OUTPUT_ROOT, using a sanitized title filename; bulk downloads add user_<user_id>",
+      "condition": "Download output directories are checked against the canonical output root. Successful writes retain the declared article metadata; a preexisting leaf-file symlink remains an unresolved boundary in the implementation.",
+      "evidence": [
+        {"path": "juejin_skill/downloader.py", "start_line": 35, "end_line": 81},
+        {"path": "juejin_skill/downloader.py", "start_line": 162, "end_line": 192},
+        {"path": "juejin_skill/downloader.py", "start_line": 374, "end_line": 429},
+        {"path": "juejin_skill/downloader.py", "start_line": 524, "end_line": 541},
+        {"path": "SKILL.md", "start_line": 212, "end_line": 216}
+      ]
+    },
+    {
+      "operation": "Download embedded images and rewrite references",
+      "source": "HTTP(S) image URLs appearing in article Markdown",
+      "data_scope": "Image URL including its query, returned image bytes, and rewritten local references",
+      "recipient_or_storage": "Initially an allowed image host or its subdomain; redirects are followed. Files go under output/images/<article_id>/.",
+      "condition": "Only when download_images=True. Initial hosts are checked against configured domains. The image request does not explicitly attach the API cookie.",
+      "evidence": [
+        {"path": "juejin_skill/config.py", "start_line": 9, "end_line": 16},
+        {"path": "juejin_skill/downloader.py", "start_line": 412, "end_line": 414},
+        {"path": "juejin_skill/downloader.py", "start_line": 615, "end_line": 687}
+      ]
+    },
+    {
+      "operation": "Return results and print operational information",
+      "source": "API results, download progress and local error handling",
+      "data_scope": "Article titles, draft/article identifiers, local paths, error messages, full image URLs on skip/failure, and raw draft/publish responses on failure",
+      "recipient_or_storage": "Method callers and local stdout; no separate telemetry destination is implemented",
+      "condition": "API failure responses can include raw bodies. CLI scripts print those results; image skip/failure branches print URLs. Downstream logging or caller retention is unspecified.",
+      "evidence": [
+        {"path": "juejin_skill/publisher.py", "start_line": 248, "end_line": 276},
+        {"path": "juejin_skill/downloader.py", "start_line": 532, "end_line": 545},
+        {"path": "juejin_skill/downloader.py", "start_line": 644, "end_line": 663},
+        {"path": "publish_article.py", "start_line": 210, "end_line": 223},
+        {"path": "run_publish.py", "start_line": 115, "end_line": 143}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "The entire browser-context cookie collection, potentially including cookies unnecessary for Juejin authentication",
+      "recipient_or_storage": "Configured cookie JSON file; subsequently the Cookie header sent to api.juejin.cn",
+      "condition": "Successful browser login captures cookies without URL filtering and serializes every cookie into the header, discarding domain/path scoping during header construction.",
+      "purpose_basis": "Reusable authenticated access and local credential persistence are declared; retaining and forwarding every context cookie is an implementation choice.",
+      "necessary_behavior": "Retain and send the cookies actually required for authorized Juejin operations.",
+      "proposed_reduction": "Select a verified authentication subset for approved destinations before persistence and header construction; preserve scope and expiry checks.",
+      "preservation_conditions": "Verify the necessary cookie set against supported authenticated endpoints. The source does not establish which cookies beyond the detected session-cookie names are required.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 12, "end_line": 18},
+        {"path": "juejin_skill/auth.py", "start_line": 73, "end_line": 99},
+        {"path": "juejin_skill/auth.py", "start_line": 128, "end_line": 147},
+        {"path": "juejin_skill/api.py", "start_line": 26, "end_line": 32}
+      ]
+    },
+    {
+      "data_scope": "Session credentials attached to public category, tag and ranking requests",
+      "recipient_or_storage": "api.juejin.cn public browsing endpoints",
+      "condition": "ArticlePublisher category/tag helpers always share its authenticated client; HotArticles and ArticleDownloader also attach cookies whenever callers supply them.",
+      "purpose_basis": "Public browsing needs query parameters and results; the source supports constructing browsing clients with no cookie.",
+      "necessary_behavior": "Keep the requested lookup. The potential excess is authentication data within that request, rather than the lookup itself.",
+      "proposed_reduction": "Use an anonymous client for public lookups and attach credentials only to operations that need authorized account access.",
+      "preservation_conditions": "Retain authenticated requests for drafting, publishing, validation and explicitly authorized nonpublic retrieval; verify public routes work anonymously.",
+      "evidence": [
+        {"path": "juejin_skill/api.py", "start_line": 26, "end_line": 32},
+        {"path": "juejin_skill/hot_articles.py", "start_line": 25, "end_line": 38},
+        {"path": "juejin_skill/publisher.py", "start_line": 137, "end_line": 140},
+        {"path": "juejin_skill/publisher.py", "start_line": 282, "end_line": 308},
+        {"path": "juejin_skill/downloader.py", "start_line": 92, "end_line": 93}
+      ]
+    },
+    {
+      "data_scope": "Configured session cookie and caller-supplied request data",
+      "recipient_or_storage": "A caller-supplied JuejinAPI URL outside the declared Juejin hosts",
+      "condition": "A direct user of the exported low-level client supplies an external URL while a cookie is configured. Packaged higher-level endpoint calls do not demonstrate this disclosure.",
+      "purpose_basis": "The entry document restricts ordinary API access to juejin.cn and api.juejin.cn.",
+      "necessary_behavior": "Send authorized requests to the declared service destinations.",
+      "proposed_reduction": "Validate URL scheme and hostname before constructing or sending credential-bearing requests.",
+      "preservation_conditions": "Permit all configured Juejin API routes. Keep optional image handling under its separate destination policy.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 25, "end_line": 29},
+        {"path": "juejin_skill/__init__.py", "start_line": 3, "end_line": 15},
+        {"path": "juejin_skill/api.py", "start_line": 26, "end_line": 64}
+      ]
+    },
+    {
+      "data_scope": "A second copy of the demo article body and publishing metadata",
+      "recipient_or_storage": "api.juejin.cn/content_api/v1/article_draft/create and the Juejin account's draft storage",
+      "condition": "run_publish.py creates a draft, then after successful public-publish confirmation calls publish_markdown again, which creates another draft and publishes that new identifier.",
+      "purpose_basis": "The helper promises creation and review of a draft followed by confirmed publication.",
+      "necessary_behavior": "One initial draft and one confirmed publish request suffice. The second draft-create action is redundant; this is not merely extra fields in a required request.",
+      "proposed_reduction": "Publish the already-created draft_id after the existing confirmation gates.",
+      "preservation_conditions": "Preserve default draft-only behavior and all public-publish gates. Keep the initial draft when publication is cancelled.",
+      "evidence": [
+        {"path": "run_publish.py", "start_line": 107, "end_line": 142},
+        {"path": "juejin_skill/publisher.py", "start_line": 238, "end_line": 266}
+      ]
+    },
+    {
+      "data_scope": "Image retrieval requests reaching destinations outside the permitted image-host set",
+      "recipient_or_storage": "An out-of-allowlist HTTP redirect destination; its actual hostname is unavailable in source",
+      "condition": "An initially permitted image URL redirects elsewhere. Only the initial URL is checked, while follow_redirects=True enables subsequent requests.",
+      "purpose_basis": "Optional image downloads are expressly restricted to official image hosts.",
+      "necessary_behavior": "Fetch permitted embedded images; following an unapproved redirect is not required by that restriction.",
+      "proposed_reduction": "Disable automatic redirects and validate every redirect target before following it.",
+      "preservation_conditions": "Continue downloads through permitted redirects and skip images whose redirect chain leaves the allowed host set.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 25, "end_line": 29},
+        {"path": "juejin_skill/downloader.py", "start_line": 644, "end_line": 659},
+        {"path": "juejin_skill/downloader.py", "start_line": 668, "end_line": 687}
+      ]
+    },
+    {
+      "data_scope": "Downloaded article text, metadata or image bytes",
+      "recipient_or_storage": "A preexisting leaf-file symlink's target outside ./output or JUEJIN_OUTPUT_ROOT",
+      "condition": "The generated Markdown filename or image filename is already a symlink to an external target. Markdown checks only the containing directory; image checks stop at the image directory before opening the leaf file.",
+      "purpose_basis": "Article and image persistence is required, but writes outside the declared output root are prohibited.",
+      "necessary_behavior": "Write the requested content within the approved output tree.",
+      "proposed_reduction": "Validate the final destination and use symlink-resistant file creation/opening.",
+      "preservation_conditions": "Preserve ordinary downloads, filenames and root relocation while rejecting destinations that escape through existing leaf symlinks.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 39, "end_line": 47},
+        {"path": "juejin_skill/downloader.py", "start_line": 417, "end_line": 427},
+        {"path": "juejin_skill/downloader.py", "start_line": 631, "end_line": 659}
+      ]
+    },
+    {
+      "data_scope": "Repeated requests and redundant local copies of the same embedded image",
+      "recipient_or_storage": "The image URL's recipient and output/images/<article_id>/img_<index> files",
+      "condition": "Identical image URLs occur repeatedly. The loop uses the original match list even after the first replacement rewrites all matching references.",
+      "purpose_basis": "Saving embedded images requires one usable local copy per distinct resource.",
+      "necessary_behavior": "Retain the image and rewrite every corresponding Markdown reference. Repeated retrieval and unused duplicate files are redundant actions.",
+      "proposed_reduction": "Cache each downloaded URL's local path and reuse it for subsequent occurrences.",
+      "preservation_conditions": "Preserve all image references and existing handling of distinct URLs and failures.",
+      "evidence": [
+        {"path": "juejin_skill/downloader.py", "start_line": 640, "end_line": 665}
+      ]
+    },
+    {
+      "data_scope": "Returned public tag records beyond the CLI's displayed selection set",
+      "recipient_or_storage": "Local CLI memory after the tag-list response from api.juejin.cn",
+      "condition": "search_tags defaults to limit=50, but publish_article.py exposes only the first 20 and run_publish.py displays only 10 and automatically selects the first.",
+      "purpose_basis": "These paths retrieve tags to display or select them for the article.",
+      "necessary_behavior": "Keep the tag request; additional records beyond the usable set are extra response data in that request.",
+      "proposed_reduction": "Pass limit=20 in the interactive workflow and limit=10 in the demo helper.",
+      "preservation_conditions": "Verify the endpoint returns the same leading tags for smaller limits. Leave the general search_tags API available for callers needing larger lists.",
+      "evidence": [
+        {"path": "juejin_skill/publisher.py", "start_line": 290, "end_line": 320},
+        {"path": "publish_article.py", "start_line": 84, "end_line": 100},
+        {"path": "run_publish.py", "start_line": 70, "end_line": 77}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Actual login cookies and the minimum sufficient authentication subset are unavailable. Unrelated cookies are possible, not demonstrated.",
+    "Website and dependency implementations are not supplied. Browser subresources, script-generated requests, login-form destinations and tracking behavior remain unknown. Neither browser path installs a request-domain filter (juejin_skill/auth.py:55-82; juejin_skill/downloader.py:323-346; requirements.txt:1-5).",
+    "Actual image redirects, caller-supplied external API URLs and preexisting output symlinks are unavailable; the conditional boundary failures are supported, but their occurrence is not established.",
+    "Juejin server retention, logging, profiling, draft cleanup after publication and credential revocation are undocumented. Local cookie deletion does not establish server-side session revocation (juejin_skill/auth.py:117-122).",
+    "Effective credential-file protection depends on filesystem and platform behavior. JSON is written before chmod, and permission-setting failures are ignored (juejin_skill/utils.py:65-69; juejin_skill/auth.py:128-136).",
+    "Raw error-response contents and downstream retention of caller returns or stdout are unspecified; sensitive fields or additional recipients cannot be established.",
+    "The package claims .gitignore/.clawhubignore credential exclusions, but neither file is in the supplied inventory, so those exclusions cannot be verified (SKILL.md:23,87)."
+  ]
+}

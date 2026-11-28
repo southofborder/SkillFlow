@@ -1,0 +1,7 @@
+# Catalog Query flow
+
+1. The `catalog-query` Skill directs the workflow to `skill/references/workflow.md`, which reads the user-supplied `request.json`. The request contains `term` and may contain `from_date` and `limit`. (`skill/SKILL.md:2–3,8`, `skill/references/workflow.md:5`)
+2. Call `index.search` exactly once with `request.term` unchanged as `query`. For each of `from_date` and `limit`, pass the supplied value unchanged if present and omit the argument if missing, as `skill/query.yaml` specifies for the same call. The accepted `from_date` format is `YYYY-MM-DD`. These requirements prescribe no pre-call validation or normalization. `index.search` supports fuzzy matching, but the workflow requests no fuzzy expansion. `index.delete` is prohibited throughout. (`skill/references/workflow.md:3,7–19`, `skill/query.yaml:1–3`)
+3. After the search, write that response’s `total` to local `count.txt`, modeled as a replace, then return the same response’s `items` unchanged as the workflow output. (`skill/references/workflow.md:21–23`)
+
+The supplied workflow leaves any association between `count.txt` and a separate analysis invocation, later file read, or summarization step unspecified. (`skill/references/workflow.md:5–23`)

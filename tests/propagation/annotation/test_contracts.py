@@ -295,7 +295,7 @@ def test_prompt_explicitly_distinguishes_critical_semantic_boundaries():
         assert phrase in authoritative
     assert not re.search(r"[\u4e00-\u9fff]", INSTRUCTIONS)
     assert all(not re.search(r"[\u4e00-\u9fff]", rule["text"]) for rule in runtime_contract()["rules"])
-    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v14"
+    assert runtime_contract()["version"] == "skillflow-abstract-runtime-v16"
 
 
 def test_source_and_execution_references_are_checked_at_their_location():

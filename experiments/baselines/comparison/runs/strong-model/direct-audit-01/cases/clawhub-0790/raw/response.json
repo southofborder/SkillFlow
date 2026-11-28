@@ -1,0 +1,399 @@
+{
+  "status": "completed",
+  "declared_purpose": "Extract events and action deadlines from unread or forwarded Gmail, present them for current-conversation confirmation, and create or update Google Calendar entries. Supporting purposes include duplicate detection, configured attendees, pending reminders, activity history, 24-hour undo, optional deadline emails, and configured email disposition. Wrapper use and confirmation are explicit requirements; search breadth, onboarding heuristics, stored fields, and retention limits are implementation choices (SKILL.md:4-18,30-45).",
+  "data_operations": [
+    {
+      "operation": "Documented onboarding discovery, inference, and configuration persistence",
+      "source": "Account/calendar discovery tools and user choices.",
+      "data_scope": "Account identities, available calendars, attendee addresses, rules, notification recipient, and preferences. Email-address patterns are used to infer personal versus service-account mode.",
+      "recipient_or_storage": "Caller/user; accepted settings in ~/.config/email-to-calendar/config.json.",
+      "condition": "First use. Suggestions require user acceptance. No onboarding implementation is packaged, so discovery output handling remains unresolved.",
+      "evidence": [
+        {"path": "SETUP.md", "start_line": 12, "end_line": 41},
+        {"path": "SETUP.md", "start_line": 45, "end_line": 101},
+        {"path": "SETUP.md", "start_line": 103, "end_line": 111}
+      ]
+    },
+    {
+      "operation": "Read local configuration, preferences, processing index, and tracking",
+      "source": "config.json, MEMORY.md, email-extractions/index.json, and events.json.",
+      "data_scope": "Configured accounts, calendar, recipients, rules, prior preferences, processed email identifiers, and tracked event metadata.",
+      "recipient_or_storage": "Invoking agent and local utility processes.",
+      "condition": "Pre-processing reads are explicitly required. Tracking lookup precedes remote duplicate search. The supplied files do not reveal actual preference or index contents.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 9, "end_line": 18},
+        {"path": "SKILL.md", "start_line": 65, "end_line": 88},
+        {"path": "scripts/utils/event_tracking.py", "start_line": 122, "end_line": 138}
+      ]
+    },
+    {
+      "operation": "Documented bootstrap persistence for recurring processing",
+      "source": "Existing HEARTBEAT.md and bootstrap templates.",
+      "data_scope": "Instructions for unread-email scanning, notification disposition, pending-invite presentation, and silent logging; an initially empty pending-invites file.",
+      "recipient_or_storage": "~/.openclaw/workspace/HEARTBEAT.md and memory directories.",
+      "condition": "Bootstrap instructions call for adding missing sections and initializing state. This enables subsequent heartbeat processing; no independent scheduler implementation is supplied.",
+      "evidence": [
+        {"path": "BOOT.md", "start_line": 37, "end_line": 74},
+        {"path": "BOOT.md", "start_line": 79, "end_line": 99}
+      ]
+    },
+    {
+      "operation": "Search and read Gmail",
+      "source": "Gmail through email_search.sh/email_read.sh and email_ops.py.",
+      "data_scope": "Search query, account identifier, result limit, message identifiers, and returned email content. Bodies are requested by single-message reads or optional --include-body searches.",
+      "recipient_or_storage": "Gmail receives request parameters; returned content and raw command output go to the wrapper caller. No additional persistence or recipient is shown by these functions.",
+      "condition": "Agent instructions distinguish direct and forwarded modes, exclude calendar notifications, and avoid age filtering for stale forwards. These filters are not enforced by the generic read/search helpers.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 49, "end_line": 61},
+        {"path": "SKILL.md", "start_line": 90, "end_line": 111},
+        {"path": "scripts/utils/email_ops.py", "start_line": 36, "end_line": 64},
+        {"path": "scripts/utils/email_ops.py", "start_line": 78, "end_line": 119}
+      ]
+    },
+    {
+      "operation": "Extract and infer event attributes",
+      "source": "Email content interpreted directly by the agent.",
+      "data_scope": "Title, dates, weekday, times, recurrence, confidence, relevant URLs, deadline date, required action, and action URL; semantic duplicate judgments.",
+      "recipient_or_storage": "User review through the agent; selected attributes subsequently enter pending state and calendar operations.",
+      "condition": "Extraction and presentation precede creation. Confidence, interpreted deadlines, and semantic matches are inferred attributes. The agent's processing location and retention are unspecified.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 96, "end_line": 111},
+        {"path": "SKILL.md", "start_line": 127, "end_line": 155},
+        {"path": "SKILL.md", "start_line": 158, "end_line": 180}
+      ]
+    },
+    {
+      "operation": "Read calendar events for duplicate detection",
+      "source": "Google Calendar through calendar_search.sh and calendar_ops.py.",
+      "data_scope": "Calendar identifier, date range, and returned event records. The main workflow searches the target day; check_duplicate.sh requests a wider range and then matches only the target date.",
+      "recipient_or_storage": "Google Calendar receives range parameters; event records return to the local matcher or invoking agent.",
+      "condition": "Duplicate checking is mandatory. The main workflow first checks local tracking; the standalone duplicate helper directly searches the calendar.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 158, "end_line": 180},
+        {"path": "scripts/check_duplicate.sh", "start_line": 43, "end_line": 54},
+        {"path": "scripts/check_duplicate.sh", "start_line": 71, "end_line": 97},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 108, "end_line": 119}
+      ]
+    },
+    {
+      "operation": "Validate tracked events remotely and delete orphaned local entries",
+      "source": "Matching records in events.json and same-day Google Calendar search results.",
+      "data_scope": "Each tracked event's calendar, identifier, and start date; returned same-day event records.",
+      "recipient_or_storage": "Google Calendar and the local validator; orphan removal affects events.json only.",
+      "condition": "Only with --validate. Each matching record with a start date triggers a search. A successful search lacking the identifier causes local removal when script_dir is supplied; errors retain the record. This does not delete a remote event.",
+      "evidence": [
+        {"path": "scripts/lookup_event.sh", "start_line": 64, "end_line": 69},
+        {"path": "scripts/utils/event_tracking.py", "start_line": 141, "end_line": 184},
+        {"path": "scripts/utils/event_tracking.py", "start_line": 91, "end_line": 106}
+      ]
+    },
+    {
+      "operation": "Create or update calendar entries and associate attendees",
+      "source": "Agent-supplied event fields, attendee arguments, and configured agent_name.",
+      "data_scope": "Calendar/event identifiers, title, times, description, relevant links, attribution, and supplied attendee addresses.",
+      "recipient_or_storage": "Selected Google Calendar. Attendee addresses are associated with the event; --send-updates all requests notifications when supported and attendee arguments are present.",
+      "condition": "Current-conversation confirmation and configured attendees are procedural requirements. The wrapper itself has no confirmation gate. Existing identifiers select updates; not-found-like output causes local untracking and replacement creation. Exact invitation payloads and visibility are external unknowns.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 11, "end_line": 18},
+        {"path": "scripts/create_event.sh", "start_line": 43, "end_line": 58},
+        {"path": "scripts/create_event.sh", "start_line": 99, "end_line": 155},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 150, "end_line": 176},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 207, "end_line": 227}
+      ]
+    },
+    {
+      "operation": "Documented separate deadline event and reminders",
+      "source": "Extracted action-required deadline and main-event details.",
+      "data_scope": "Action, deadline date, event name, action URL, and reference to the main event.",
+      "recipient_or_storage": "Selected Google Calendar; documented email and popup reminder channels.",
+      "condition": "The agent is instructed to create a second event for qualifying deadlines. This is an explicit purpose, not a redundant calendar action. The example supplies no attendees. The recommended wrapper does not forward reminder options, leaving actual reminder delivery unresolved.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 282, "end_line": 329},
+        {"path": "scripts/create_event.sh", "start_line": 99, "end_line": 117},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 169, "end_line": 174}
+      ]
+    },
+    {
+      "operation": "Send optional deadline notification email",
+      "source": "Extracted event/deadline details and notification configuration.",
+      "data_scope": "Recipient address, subject, event name/date, deadline, action, link, and created-event references.",
+      "recipient_or_storage": "Gmail sending service and deadline_notifications.email_recipient, falling back to gmail_account.",
+      "condition": "The documented agent path checks enabled=true and an action-required deadline. The generic send helper does not enforce either condition. The configured address is not verified as belonging to the user.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 335, "end_line": 367},
+        {"path": "scripts/utils/email_ops.py", "start_line": 176, "end_line": 185},
+        {"path": "scripts/email_send.sh", "start_line": 39, "end_line": 49}
+      ]
+    },
+    {
+      "operation": "Modify Gmail labels and disposition processed mail",
+      "source": "Message identifier, configured account, and disposition settings.",
+      "data_scope": "Message/account identifiers and labels. Disposition removes UNREAD and/or INBOX; this marks read or archives rather than deleting the message.",
+      "recipient_or_storage": "Gmail mailbox state.",
+      "condition": "Defaults enable both actions; explicit overrides are supported. create_event.sh invokes disposition whenever EVENT_ID and EMAIL_ID are nonempty. A failed non-not_found update still assigns the existing identifier, so this path is not strictly success-gated. Generic modification also permits adding labels.",
+      "evidence": [
+        {"path": "scripts/utils/disposition_ops.py", "start_line": 32, "end_line": 40},
+        {"path": "scripts/utils/disposition_ops.py", "start_line": 63, "end_line": 105},
+        {"path": "scripts/utils/email_ops.py", "start_line": 140, "end_line": 155},
+        {"path": "scripts/create_event.sh", "start_line": 121, "end_line": 150},
+        {"path": "scripts/create_event.sh", "start_line": 200, "end_line": 209}
+      ]
+    },
+    {
+      "operation": "Search and disposition calendar-notification replies",
+      "source": "Unread Gmail messages from calendar-notification@google.com.",
+      "data_scope": "Up to 50 search results, identifiers, subjects, and matching reply labels; bodies are not explicitly requested. Identifiers and subjects appear in stderr diagnostics.",
+      "recipient_or_storage": "Search results and diagnostics to the caller; label changes to Gmail.",
+      "condition": "Subjects must match the listed reply prefixes. Dry-run still searches and prints previews but skips mutation. The jq expression replaces boolean false with true, so auto_dispose_calendar_replies=false does not disable this path.",
+      "evidence": [
+        {"path": "scripts/process_calendar_replies.sh", "start_line": 41, "end_line": 56},
+        {"path": "scripts/process_calendar_replies.sh", "start_line": 85, "end_line": 123}
+      ]
+    },
+    {
+      "operation": "Persist and retrieve event tracking metadata",
+      "source": "Event identifiers and fields passed by creation/tracking wrappers.",
+      "data_scope": "Event/calendar identifiers, source email identifier, summary, start, and creation/update timestamps.",
+      "recipient_or_storage": "~/.openclaw/workspace/memory/email-to-calendar/events.json; matching records return to callers.",
+      "condition": "New records are appended and existing identifiers updated. Manual deletion, orphan validation, undo, and replacement paths can remove tracking. No general expiry is implemented.",
+      "evidence": [
+        {"path": "scripts/utils/event_tracking.py", "start_line": 18, "end_line": 61},
+        {"path": "scripts/utils/event_tracking.py", "start_line": 64, "end_line": 106},
+        {"path": "scripts/utils/event_tracking.py", "start_line": 122, "end_line": 138},
+        {"path": "scripts/create_event.sh", "start_line": 160, "end_line": 167}
+      ]
+    },
+    {
+      "operation": "Persist pending invites, decision status, and reminder history",
+      "source": "Email identifier/subject, supplied events JSON, user decisions, and reminder invocations.",
+      "data_scope": "Entire supplied event dictionaries, source identifiers/subject, timestamps, reminder counts, last_reminded, statuses, and associated calendar identifiers.",
+      "recipient_or_storage": "~/.openclaw/workspace/memory/email-to-calendar/pending_invites.json; pending summaries or JSON return to the caller/user.",
+      "condition": "Recorded after presentation, before creation approval. Reminder counts increase only with --update-reminded. --auto-dismiss changes pending status after three reminders. Past and closed events are filtered or relabeled, not deleted.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 147, "end_line": 155},
+        {"path": "scripts/utils/pending_ops.py", "start_line": 25, "end_line": 63},
+        {"path": "scripts/utils/pending_ops.py", "start_line": 78, "end_line": 121},
+        {"path": "scripts/utils/pending_ops.py", "start_line": 152, "end_line": 199},
+        {"path": "scripts/utils/invite_ops.py", "start_line": 29, "end_line": 59}
+      ]
+    },
+    {
+      "operation": "Persist silent activity history and remove completed session scratch state",
+      "source": "Agent logging calls during email processing.",
+      "data_scope": "Session timestamp/counts, skipped email identifiers, full subjects and reasons, extracted event identifiers/titles/actions, and optional reasons.",
+      "recipient_or_storage": ".current_session.json and activity.json under ~/.openclaw/workspace/memory/email-to-calendar/; requested displays return to the caller.",
+      "condition": "Logging calls write the current session. End-session retains the last 50 sessions, then removes the scratch file. This is a count limit, not an age limit; displayed skipped subjects are limited to 50 characters.",
+      "evidence": [
+        {"path": "scripts/utils/activity_ops.py", "start_line": 18, "end_line": 36},
+        {"path": "scripts/utils/activity_ops.py", "start_line": 40, "end_line": 84},
+        {"path": "scripts/utils/activity_ops.py", "start_line": 87, "end_line": 110},
+        {"path": "scripts/utils/activity_ops.py", "start_line": 138, "end_line": 156}
+      ]
+    },
+    {
+      "operation": "Persist change history and undo before-images",
+      "source": "Creation metadata and supplied before/after JSON.",
+      "data_scope": "Change/event/calendar/email identifiers, timestamps, action, snapshots, and undo status. The recommended update wrapper captures only prior summary/start and a null end, rather than a full event.",
+      "recipient_or_storage": "~/.openclaw/workspace/memory/email-to-calendar/changelog.json; list/get results return to callers.",
+      "condition": "Logging retains the latest 100 changes. The 24-hour rule controls undo eligibility, not deletion. Marking undone adds a timestamp and disables undo without erasing snapshots.",
+      "evidence": [
+        {"path": "scripts/utils/changelog_ops.py", "start_line": 19, "end_line": 57},
+        {"path": "scripts/utils/changelog_ops.py", "start_line": 62, "end_line": 133},
+        {"path": "scripts/utils/changelog_ops.py", "start_line": 215, "end_line": 239},
+        {"path": "scripts/create_event.sh", "start_line": 88, "end_line": 97},
+        {"path": "scripts/utils/undo_ops.py", "start_line": 101, "end_line": 111}
+      ]
+    },
+    {
+      "operation": "Undo calendar changes with limited restoration",
+      "source": "Stored changelog action and before-image.",
+      "data_scope": "Target event/calendar identifiers and stored summary/start/end.",
+      "recipient_or_storage": "Google Calendar; events.json and changelog undo status locally.",
+      "condition": "An eligible undo request deletes a created event, restores selected update fields, or recreates a deleted event. Update undo sends no description or attendee reversal. Creation undo removes tracking even when deletion reports failure. Other local history and delivered notifications are not erased by these paths.",
+      "evidence": [
+        {"path": "scripts/undo.sh", "start_line": 98, "end_line": 166},
+        {"path": "scripts/undo.sh", "start_line": 169, "end_line": 212},
+        {"path": "scripts/utils/undo_ops.py", "start_line": 101, "end_line": 111}
+      ]
+    },
+    {
+      "operation": "Delete an event through the cancellation/manual path",
+      "source": "Cancellation interpretation and an existing event identifier.",
+      "data_scope": "Calendar and event identifiers.",
+      "recipient_or_storage": "Google Calendar.",
+      "condition": "Cancellation guidance permits deletion or a CANCELLED title update. calendar_delete.sh delegates deletion without tracking cleanup or changelog capture. This path conflicts with the entry document's claim that deletion occurs only on undo.",
+      "evidence": [
+        {"path": "references/extraction-patterns.md", "start_line": 112, "end_line": 120},
+        {"path": "scripts/calendar_delete.sh", "start_line": 34, "end_line": 46},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 248, "end_line": 255},
+        {"path": "SKILL.md", "start_line": 38, "end_line": 45}
+      ]
+    },
+    {
+      "operation": "Declared extraction persistence with unresolved writer",
+      "source": "Agent-extracted email data and processing decisions.",
+      "data_scope": "An extraction directory and processing index are declared, and index entries are read by email identifier. Their complete stored schema is unspecified.",
+      "recipient_or_storage": "~/.openclaw/workspace/memory/email-extractions/ and index.json.",
+      "condition": "Bootstrap creates the directory and the workflow consults the index. No packaged writer or retention/deletion implementation establishes what extraction content is actually saved.",
+      "evidence": [
+        {"path": "BOOT.md", "start_line": 95, "end_line": 99},
+        {"path": "SKILL.md", "start_line": 65, "end_line": 88},
+        {"path": "SKILL.md", "start_line": 446, "end_line": 458}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Bodies of already-processed messages or excluded calendar notifications returned by a bulk --include-body search.",
+      "recipient_or_storage": "Gmail-to-wrapper-caller read boundary; no separate disclosure or persistence is established.",
+      "condition": "The documented body-inclusive unread search retrieves such messages before identifier/sender exclusions.",
+      "purpose_basis": "Bodies are needed for eligible event extraction; the skill explicitly excludes notifications and previously processed messages.",
+      "necessary_behavior": "Find all eligible unread messages, including stale forwards, and read their content.",
+      "proposed_reduction": "Search metadata first, apply identifier/sender/mode exclusions, then fetch candidate bodies. This narrows data in a required read workflow.",
+      "preservation_conditions": "Retain full candidate-body access and avoid an age cutoff that would miss stale forwards.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 10, "end_line": 12},
+        {"path": "SKILL.md", "start_line": 49, "end_line": 61},
+        {"path": "scripts/utils/email_ops.py", "start_line": 108, "end_line": 117}
+      ]
+    },
+    {
+      "data_scope": "Neighboring-day calendar events that cannot pass the helper's same-date test.",
+      "recipient_or_storage": "Google Calendar-to-check_duplicate.sh read boundary.",
+      "condition": "Standalone duplicate helper requests from the preceding day's midnight through the second following day's midnight.",
+      "purpose_basis": "Its duplicate predicate requires the target date.",
+      "necessary_behavior": "Retrieve all events relevant to target-day duplicate matching.",
+      "proposed_reduction": "Request the target calendar day's appropriate boundaries. This removes extra records from a required search, rather than removing duplicate checking.",
+      "preservation_conditions": "Normalize timezone boundaries and preserve relevant all-day/recurring occurrences.",
+      "evidence": [
+        {"path": "scripts/check_duplicate.sh", "start_line": 43, "end_line": 54},
+        {"path": "scripts/check_duplicate.sh", "start_line": 71, "end_line": 97}
+      ]
+    },
+    {
+      "data_scope": "Repeated retrieval of the same calendar/day event list.",
+      "recipient_or_storage": "Repeated Google Calendar queries and repeated local validator reads.",
+      "condition": "--validate matches multiple tracked records on the same calendar and day.",
+      "purpose_basis": "Every tracked identifier must be checked, but identical range searches need not be repeated within one validation pass.",
+      "necessary_behavior": "Validate every matching identifier and remove genuine orphan records.",
+      "proposed_reduction": "Cache one successful search per provider/calendar/day during the invocation. This removes redundant actions.",
+      "preservation_conditions": "Check all identifiers against the cached result and retain records on search errors as currently intended.",
+      "evidence": [
+        {"path": "scripts/utils/event_tracking.py", "start_line": 141, "end_line": 176}
+      ]
+    },
+    {
+      "data_scope": "Calendar-notification search results and subsequent mailbox label changes despite a disabled setting.",
+      "recipient_or_storage": "Gmail read and mailbox-state boundaries; caller receives subjects and identifiers.",
+      "condition": "auto_dispose_calendar_replies is explicitly false, but jq's // true expression substitutes true.",
+      "purpose_basis": "Automatic notification housekeeping is configurable and should stop when disabled.",
+      "necessary_behavior": "Run the configured housekeeping path only when enabled.",
+      "proposed_reduction": "Preserve explicit boolean false and exit before the Gmail search. This removes unwanted operations, not extra fields from an authorized operation.",
+      "preservation_conditions": "Keep enabled-mode subject matching, configured read/archive choices, and dry-run behavior.",
+      "evidence": [
+        {"path": "scripts/utils/disposition_ops.py", "start_line": 32, "end_line": 40},
+        {"path": "scripts/process_calendar_replies.sh", "start_line": 41, "end_line": 56},
+        {"path": "scripts/process_calendar_replies.sh", "start_line": 108, "end_line": 121}
+      ]
+    },
+    {
+      "data_scope": "Unwarranted or repeated UNREAD/INBOX removals for a source email.",
+      "recipient_or_storage": "Gmail mailbox-state boundary.",
+      "condition": "A non-not_found update fails but retains EVENT_ID, or successful main/deadline wrapper calls both use the same EMAIL_ID.",
+      "purpose_basis": "Disposition is described as post-success email handling. Two required calendar entries do not require two identical mailbox mutations.",
+      "necessary_behavior": "Apply configured disposition once after successful processing of the source email.",
+      "proposed_reduction": "Require a successful result before post-processing and coordinate disposition once per email. These are unnecessary mutations, not excessive label payloads.",
+      "preservation_conditions": "Preserve both deadline-related calendar entries and successful configured disposition; leave failed processing available for retry.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 214, "end_line": 216},
+        {"path": "SKILL.md", "start_line": 286, "end_line": 321},
+        {"path": "scripts/create_event.sh", "start_line": 140, "end_line": 150},
+        {"path": "scripts/create_event.sh", "start_line": 160, "end_line": 209},
+        {"path": "scripts/utils/disposition_ops.py", "start_line": 78, "end_line": 91}
+      ]
+    },
+    {
+      "data_scope": "Original sender name and email address copied into the calendar description.",
+      "recipient_or_storage": "Selected Google Calendar event, associated configured attendees, and requested attendee-notification channel; exact external visibility/payload is unknown.",
+      "condition": "Following the documented workflow example, which includes a From line in the description.",
+      "purpose_basis": "Scheduling and action extraction require relevant event details; copying originator identity is an example choice, while extraction guidance says to ignore headers.",
+      "necessary_behavior": "Create the confirmed meeting with useful scheduling and action information.",
+      "proposed_reduction": "Omit the From line unless contact identity is needed or requested. Narrow the description while retaining the event and intended attendees.",
+      "preservation_conditions": "Keep organizer/contact details when necessary for attendance or explicitly selected by the user.",
+      "evidence": [
+        {"path": "references/workflow-example.md", "start_line": 103, "end_line": 125},
+        {"path": "references/extraction-patterns.md", "start_line": 86, "end_line": 95},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 160, "end_line": 167}
+      ]
+    },
+    {
+      "data_scope": "Complete skipped-email subjects, although the activity display uses only the first 50 characters.",
+      "recipient_or_storage": ".current_session.json and activity.json under the local email-to-calendar memory directory.",
+      "condition": "log-skip receives a subject and the session is persisted.",
+      "purpose_basis": "The declared audit trail needs to explain skipped messages; its implemented display does not use the remaining subject text.",
+      "necessary_behavior": "Identify skipped messages and show their reasons.",
+      "proposed_reduction": "Persist the same 50-character subject preview used by the display, retaining the identifier and reason.",
+      "preservation_conditions": "Preserve existing displayed output and identifier-based correlation; allow longer subjects only for an explicit history requirement.",
+      "evidence": [
+        {"path": "scripts/utils/activity_ops.py", "start_line": 40, "end_line": 53},
+        {"path": "scripts/utils/activity_ops.py", "start_line": 95, "end_line": 108},
+        {"path": "scripts/utils/activity_ops.py", "start_line": 138, "end_line": 145}
+      ]
+    },
+    {
+      "data_scope": "Full source subjects, event dictionaries, and reminder history for past or closed pending invites.",
+      "recipient_or_storage": "~/.openclaw/workspace/memory/email-to-calendar/pending_invites.json.",
+      "condition": "Events become past, created, dismissed, expired, or auto_dismissed. The supplied paths filter or change status without purging records.",
+      "purpose_basis": "Pending-invite storage supports future decisions and reminders; indefinite full closed-invite history is an implementation choice.",
+      "necessary_behavior": "Retain actionable future invites and enough status information to avoid repeated reminders.",
+      "proposed_reduction": "Expire closed/past payloads after a defined grace period, retaining only minimal identifiers/status markers where needed.",
+      "preservation_conditions": "Preserve active future invites, multi-event decisions, required duplicate markers, and any explicitly requested history.",
+      "evidence": [
+        {"path": "scripts/utils/pending_ops.py", "start_line": 44, "end_line": 63},
+        {"path": "scripts/utils/pending_ops.py", "start_line": 78, "end_line": 121},
+        {"path": "scripts/utils/pending_ops.py", "start_line": 152, "end_line": 199},
+        {"path": "scripts/utils/invite_ops.py", "start_line": 40, "end_line": 59}
+      ]
+    },
+    {
+      "data_scope": "Before/after snapshots and source-email links beyond undo eligibility or after undo.",
+      "recipient_or_storage": "~/.openclaw/workspace/memory/email-to-calendar/changelog.json.",
+      "condition": "A change is older than 24 hours or marked undone but remains among the last 100 entries.",
+      "purpose_basis": "Undo requires snapshots during its window. The additional change-history purpose may justify a smaller retained audit summary.",
+      "necessary_behavior": "Support eligible undo and useful, intentionally retained change history.",
+      "proposed_reduction": "Apply time-based retention and discard expired before-images or unnecessary email links, retaining an approved minimal action summary.",
+      "preservation_conditions": "Keep all fields needed for still-eligible undo and any explicitly requested longer detailed history.",
+      "evidence": [
+        {"path": "scripts/utils/changelog_ops.py", "start_line": 19, "end_line": 57},
+        {"path": "scripts/utils/changelog_ops.py", "start_line": 85, "end_line": 99},
+        {"path": "scripts/utils/changelog_ops.py", "start_line": 215, "end_line": 236},
+        {"path": "scripts/utils/undo_ops.py", "start_line": 101, "end_line": 111}
+      ]
+    },
+    {
+      "data_scope": "Email-derived descriptions and attendee additions that update undo does not explicitly reverse.",
+      "recipient_or_storage": "The updated Google Calendar event and its attendee association/access boundary.",
+      "condition": "An update changes description or attendees and the user subsequently requests undo. Supplied undo commands restore only summary/start/end.",
+      "purpose_basis": "Undo is declared to reverse changes; continued retention or access from an undone update is not required for that outcome.",
+      "necessary_behavior": "Restore changed fields and attendee associations to the required prior state.",
+      "proposed_reduction": "Capture minimum prior values for changed fields during the undo window and implement provider-supported restoration/removal, then expire the before-images.",
+      "preservation_conditions": "Preserve prior descriptions and pre-existing attendees. Provider restoration semantics require verification; previously delivered notifications cannot be shown to be recalled.",
+      "evidence": [
+        {"path": "scripts/create_event.sh", "start_line": 88, "end_line": 97},
+        {"path": "scripts/create_event.sh", "start_line": 128, "end_line": 140},
+        {"path": "scripts/undo.sh", "start_line": 132, "end_line": 166},
+        {"path": "scripts/utils/calendar_ops.py", "start_line": 213, "end_line": 227}
+      ]
+    }
+  ],
+  "unknowns": [
+    "The gog implementation, authentication credential handling, Google server retention/logging, notification payloads, and attendee visibility are not supplied. The entry document's no-telemetry claim cannot establish external dependency behavior.",
+    "The agent host/model's processing location, message retention, and additional recipients are unspecified. Ordinary wrapper output is attributed only to its caller.",
+    "Actual configuration, user preferences, mailbox/calendar contents, sharing settings, and heartbeat cadence are absent; active recipients, volumes, and execution paths cannot be determined.",
+    "Onboarding implementation and extraction/index writers are absent. Discovery output handling, saved extraction fields, index completeness, and retention remain unresolved.",
+    "Confirmation, mode filtering, exclusion rules, extraction, and optional notification gating depend on agent orchestration. Generic helpers do not enforce the complete workflow.",
+    "The recommended creation wrapper forwards neither recurrence nor reminder options, although the underlying calendar utility supports them. Required reminder delivery and recurrence behavior through that path remain unresolved.",
+    "The deletion-only-on-undo statement conflicts with cancellation guidance. The intended authorization and history handling for cancellation deletion are unresolved.",
+    "Full undo restoration and remote erasure cannot be established: snapshots omit changed fields, update undo omits description/attendee reversal, and a failed creation-undo deletion can still remove local tracking."
+  ]
+}

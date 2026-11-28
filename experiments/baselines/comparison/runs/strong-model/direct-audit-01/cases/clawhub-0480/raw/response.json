@@ -1,0 +1,325 @@
+{
+  "status": "completed",
+  "declared_purpose": "Generate and email a daily report of popular Bilibili videos, including statistics and optional subtitle-based AI summaries, commentary and popularity analysis. The entry explicitly offers disabling AI; credential collection and storage are prescribed workflow choices, not inherent requirements of reporting or delivery (SKILL.md:1-7, 32-107, 129-137; README.md:31-39).",
+  "data_operations": [
+    {
+      "operation": "Collect credentials and delivery settings through the agent conversation",
+      "source": "User replies during first-use setup",
+      "data_scope": "Full Bilibili Cookie string; optional OpenRouter API key and model; Gmail sender address, application password and recipient addresses",
+      "recipient_or_storage": "The executing agent's conversation and named workflow variables",
+      "condition": "Configuration is absent; OpenRouter credentials are requested only when AI is selected. Email settings are requested unconditionally in this setup path.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 18, "end_line": 26},
+        {"path": "SKILL.md", "start_line": 32, "end_line": 84}
+      ]
+    },
+    {
+      "operation": "Persist setup credentials and settings",
+      "source": "Collected workflow variables",
+      "data_scope": "Bilibili cookies, OpenRouter key, model, SMTP address and password, recipients and video count",
+      "recipient_or_storage": "{baseDir}/bilibili-monitor.json as plaintext JSON",
+      "condition": "First-use setup reaches configuration creation. A Git ignore rule excludes this filename; it does not encrypt or delete it.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 86, "end_line": 107},
+        {"path": ".gitignore", "start_line": 15, "end_line": 19}
+      ]
+    },
+    {
+      "operation": "Read local configuration, credentials and email inputs",
+      "source": "CLI arguments, environment variables, configuration JSON and optional subject/body files",
+      "data_scope": "The report generator loads the entire shared configuration, including email settings; the sender also loads the entire configuration, including Bilibili and AI settings. Each component then selects its relevant values. The sender reads the complete selected body file.",
+      "recipient_or_storage": "Local process memory in generate_report.py and send_email.py",
+      "condition": "Corresponding inputs are supplied. Credential precedence is CLI, environment, then configuration. No remote forwarding of the complete configuration is shown.",
+      "evidence": [
+        {"path": "generate_report.py", "start_line": 666, "end_line": 732},
+        {"path": "send_email.py", "start_line": 252, "end_line": 256},
+        {"path": "send_email.py", "start_line": 275, "end_line": 315}
+      ]
+    },
+    {
+      "operation": "Retrieve popular videos and conditional video details",
+      "source": "Parsed Bilibili cookies and report settings",
+      "data_scope": "All supplied cookies, or selected individual cookie fields; page number and requested video count; BV identifier when details are needed. Responses provide video metadata and statistics to the local caller.",
+      "recipient_or_storage": "api.bilibili.com at /x/web-interface/popular and conditionally /x/web-interface/view; cookies are scoped to .bilibili.com in the session",
+      "condition": "Normal report generation requires SESSDATA in main(). Details are fetched when subtitle lookup lacks aid or cid. CLI defaults request 20 videos and override a configured count when --num-videos is omitted.",
+      "evidence": [
+        {"path": "bilibili_api.py", "start_line": 49, "end_line": 68},
+        {"path": "bilibili_api.py", "start_line": 118, "end_line": 159},
+        {"path": "bilibili_api.py", "start_line": 215, "end_line": 222},
+        {"path": "generate_report.py", "start_line": 398, "end_line": 400},
+        {"path": "generate_report.py", "start_line": 679, "end_line": 684},
+        {"path": "generate_report.py", "start_line": 701, "end_line": 718},
+        {"path": "generate_report.py", "start_line": 734, "end_line": 746}
+      ]
+    },
+    {
+      "operation": "Retrieve subtitle metadata and download one subtitle",
+      "source": "Popular-video identifiers and Bilibili's subtitle metadata response",
+      "data_scope": "aid and cid, session cookies for matching Bilibili domains, then the selected subtitle URL; downloaded timestamped text is converted into complete plain text in memory",
+      "recipient_or_storage": "api.bilibili.com/x/player/wbi/v2, then the host named by subtitle_url; results remain with the local caller",
+      "condition": "Attempted for every returned video, including when AI is disabled. Chinese subtitles are preferred, otherwise the first subtitle is selected. Cookies on the session download remain domain-scoped; disclosure to an arbitrary nonmatching subtitle host is not established.",
+      "evidence": [
+        {"path": "generate_report.py", "start_line": 443, "end_line": 470},
+        {"path": "bilibili_api.py", "start_line": 203, "end_line": 238},
+        {"path": "bilibili_api.py", "start_line": 240, "end_line": 299}
+      ]
+    },
+    {
+      "operation": "Disclose subtitle content for AI summarization",
+      "source": "Video title and locally downloaded subtitle text",
+      "data_scope": "Title and up to 8,000 subtitle characters, with an ellipsis after truncation; selected model and OpenRouter API key for authentication",
+      "recipient_or_storage": "https://openrouter.ai/api/v1/chat/completions; downstream provider handling is undocumented in the supplied source",
+      "condition": "A subtitle and OpenRouter key are both present. Handled failures can cause up to three attempts. Returned summary and outline are processed locally.",
+      "evidence": [
+        {"path": "generate_report.py", "start_line": 31, "end_line": 90},
+        {"path": "generate_report.py", "start_line": 121, "end_line": 177},
+        {"path": "generate_report.py", "start_line": 457, "end_line": 470}
+      ]
+    },
+    {
+      "operation": "Disclose video metrics and a generated summary for AI commentary",
+      "source": "Collected video statistics and optional generated summary",
+      "data_scope": "Title, views, likes, favorites, coins, comment and danmaku counts, shares, calculated like rate and summary; model and authentication key",
+      "recipient_or_storage": "OpenRouter chat-completions endpoint",
+      "condition": "An OpenRouter key is present, even if no subtitle summary was available. This separate call produces the requested commentary and popularity analysis.",
+      "evidence": [
+        {"path": "generate_report.py", "start_line": 235, "end_line": 267},
+        {"path": "generate_report.py", "start_line": 506, "end_line": 516},
+        {"path": "generate_report.py", "start_line": 47, "end_line": 65}
+      ]
+    },
+    {
+      "operation": "Derive analysis and assemble report content",
+      "source": "Video metadata, aggregate engagement statistics and model responses",
+      "data_scope": "Calculated engagement ratios, popularity labels and content tags; AI summaries and inferred popularity factors; creator display names, publication times, statistics, links and descriptions limited to 500 characters",
+      "recipient_or_storage": "Local report string returned to its caller",
+      "condition": "Report generation. These are content and engagement analyses; the source does not establish profiling of the authenticated user's interests.",
+      "evidence": [
+        {"path": "generate_report.py", "start_line": 304, "end_line": 364},
+        {"path": "generate_report.py", "start_line": 472, "end_line": 504},
+        {"path": "generate_report.py", "start_line": 559, "end_line": 649}
+      ]
+    },
+    {
+      "operation": "Write or display the report and processing logs",
+      "source": "Generated report and execution state",
+      "data_scope": "Complete Markdown report; progress can include shortened video titles, configuration/output paths and model name",
+      "recipient_or_storage": "Specified local output file, or stdout if no output is supplied; the entry workflow uses /tmp/bilibili_report.md and directs the agent to forward actual progress output",
+      "condition": "Successful generation. No report deletion step is shown in the generation-and-email workflow.",
+      "evidence": [
+        {"path": "generate_report.py", "start_line": 379, "end_line": 391},
+        {"path": "generate_report.py", "start_line": 425, "end_line": 426},
+        {"path": "generate_report.py", "start_line": 697, "end_line": 699},
+        {"path": "generate_report.py", "start_line": 751, "end_line": 763},
+        {"path": "SKILL.md", "start_line": 123, "end_line": 137}
+      ]
+    },
+    {
+      "operation": "Authenticate and transmit the report by email",
+      "source": "Sender credentials, selected recipients, subject and supplied report body",
+      "data_scope": "SMTP address and application password for login; sender, all recipient addresses, subject and complete text or converted HTML body for delivery",
+      "recipient_or_storage": "Selected SMTP server, defaulting to smtp.gmail.com:587 in the CLI, followed by the selected mail recipients. Every recipient appears in the shared To header.",
+      "condition": "Email sending is invoked and credentials are available. The implementation starts TLS before authentication and submission. SMTP/provider mailbox retention is unspecified.",
+      "evidence": [
+        {"path": "send_email.py", "start_line": 15, "end_line": 60},
+        {"path": "send_email.py", "start_line": 270, "end_line": 271},
+        {"path": "send_email.py", "start_line": 282, "end_line": 326},
+        {"path": "SKILL.md", "start_line": 134, "end_line": 137}
+      ]
+    },
+    {
+      "operation": "Display delivery addresses and status",
+      "source": "Resolved recipient list and SMTP execution",
+      "data_scope": "Full recipient addresses, SMTP host/port, success counts and exception text",
+      "recipient_or_storage": "stdout of send_email.py and its caller; further log storage or forwarding is not specified",
+      "condition": "The CLI prints recipients before sending; the helper prints each address during delivery.",
+      "evidence": [
+        {"path": "send_email.py", "start_line": 46, "end_line": 59},
+        {"path": "send_email.py", "start_line": 282, "end_line": 290}
+      ]
+    },
+    {
+      "operation": "Run standalone Bilibili API utility paths",
+      "source": "Utility CLI cookie arguments, action and BV identifier",
+      "data_scope": "Configured cookies and video identifiers; the legacy summary action additionally sends cid, uploader mid, web_location, timestamp and WBI signature, fetching and caching signing keys first. Selected results are printed.",
+      "recipient_or_storage": "Bilibili popular, view, nav and /x/web-interface/view/conclusion/get endpoints; local stdout and in-memory signing-key cache",
+      "condition": "bilibili_api.py is invoked directly with the relevant action. The current report generator uses the subtitle/OpenRouter path and does not call this official-summary method.",
+      "evidence": [
+        {"path": "bilibili_api.py", "start_line": 70, "end_line": 116},
+        {"path": "bilibili_api.py", "start_line": 161, "end_line": 201},
+        {"path": "bilibili_api.py", "start_line": 325, "end_line": 397},
+        {"path": "generate_report.py", "start_line": 443, "end_line": 470}
+      ]
+    },
+    {
+      "operation": "Run the separate subtitle utility",
+      "source": "Provided or default video URL and optional SESSDATA argument",
+      "data_scope": "BV identifier for an unauthenticated video-info request; aid, cid and optional SESSDATA for subtitle metadata; selected subtitle download without an explicit cookie argument. URL, identifiers, title and complete timestamped/plain subtitles are printed.",
+      "recipient_or_storage": "Bilibili view/player endpoints, the returned subtitle URL host, stdout and the function's caller",
+      "condition": "bilibili_subtitle.py is invoked directly or its functions are called. It is separate from the report generator's BilibiliAPI subtitle implementation.",
+      "evidence": [
+        {"path": "bilibili_subtitle.py", "start_line": 40, "end_line": 94},
+        {"path": "bilibili_subtitle.py", "start_line": 105, "end_line": 180},
+        {"path": "bilibili_subtitle.py", "start_line": 207, "end_line": 241}
+      ]
+    },
+    {
+      "operation": "Distribute a static example report with the package",
+      "source": "Packaged example_report.md",
+      "data_scope": "Creator handles, video links, statistics, descriptions and attributed AI analyses; one linked creator's example includes financial, family and health-related assertions",
+      "recipient_or_storage": "Public package readers through example_report.md",
+      "condition": "Static sample distribution, independent of executing the skill. Its historical official-summary and Claude labels do not prove use of those paths by the current generator or establish the assertions' accuracy.",
+      "evidence": [
+        {"path": "example_report.md", "start_line": 33, "end_line": 61},
+        {"path": "example_report.md", "start_line": 192, "end_line": 220},
+        {"path": ".gitignore", "start_line": 11, "end_line": 13}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Bilibili cookies, OpenRouter API key and SMTP application password",
+      "recipient_or_storage": "Agent conversation during first-use setup",
+      "condition": "The entry asks users to reply with credentials.",
+      "purpose_basis": "The entry explicitly prescribes these prompts, but reporting and email delivery require usable credentials rather than their inclusion in conversation.",
+      "necessary_behavior": "Make the required credentials available to the appropriate local components.",
+      "proposed_reduction": "Have users configure credentials locally through supported environment variables; collect model and recipient preferences separately.",
+      "preservation_conditions": "Validate credential availability without displaying values; retain optional AI and authenticated email behavior.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 32, "end_line": 78},
+        {"path": "README.md", "start_line": 73, "end_line": 82},
+        {"path": "generate_report.py", "start_line": 701, "end_line": 723},
+        {"path": "send_email.py", "start_line": 313, "end_line": 315}
+      ]
+    },
+    {
+      "data_scope": "Bilibili cookies, OpenRouter key and SMTP password stored together",
+      "recipient_or_storage": "Plaintext bilibili-monitor.json; both scripts subsequently load the entire file into local memory",
+      "condition": "First-use configuration follows SKILL.md.",
+      "purpose_basis": "The entry explicitly requires this file creation, while the implementation also supports credentials from the environment. Persistent plaintext secrets are a workflow choice.",
+      "necessary_behavior": "Retain reporting preferences and provide each component its own credentials.",
+      "proposed_reduction": "Keep secrets outside the JSON configuration and separate component-specific inputs; retain model, recipient and report preferences as needed.",
+      "preservation_conditions": "Supply credentials through supported local mechanisms on each run. Git exclusion alone is insufficient to provide confidentiality.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 86, "end_line": 107},
+        {"path": ".gitignore", "start_line": 15, "end_line": 19},
+        {"path": "generate_report.py", "start_line": 666, "end_line": 669},
+        {"path": "generate_report.py", "start_line": 695, "end_line": 723},
+        {"path": "send_email.py", "start_line": 252, "end_line": 256},
+        {"path": "send_email.py", "start_line": 313, "end_line": 315}
+      ]
+    },
+    {
+      "data_scope": "Every cookie in the copied browser Cookie header",
+      "recipient_or_storage": "BilibiliAPI's .bilibili.com cookie jar and matching Bilibili request destinations",
+      "condition": "Full-cookie input is used. All parsed fields are installed, rather than only selected authentication fields.",
+      "purpose_basis": "Popular-video and subtitle access may require authentication; the supplied source does not establish that every browser cookie is necessary.",
+      "necessary_behavior": "Authenticate only requests that need it and retain successful subtitle access.",
+      "proposed_reduction": "Validate a minimal cookie allowlist and scope credentials to the endpoints that require them. This narrows data in required requests rather than removing those requests.",
+      "preservation_conditions": "Endpoint authentication requirements remain unresolved. The separate utility demonstrates SESSDATA-only subtitle metadata requests, but does not prove compatibility for every report request.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 32, "end_line": 37},
+        {"path": "generate_report.py", "start_line": 652, "end_line": 663},
+        {"path": "generate_report.py", "start_line": 701, "end_line": 714},
+        {"path": "bilibili_api.py", "start_line": 49, "end_line": 68},
+        {"path": "bilibili_subtitle.py", "start_line": 57, "end_line": 77}
+      ]
+    },
+    {
+      "data_scope": "Subtitle metadata and complete subtitle downloads, plus conditional video-detail lookups",
+      "recipient_or_storage": "Bilibili API and selected subtitle hosts; downloaded content in report-process memory",
+      "condition": "No OpenRouter key is available, including the user-selected AI-disabled path.",
+      "purpose_basis": "Subtitles support AI summaries. Without a key, the retrieved subtitle text is not used to produce the report.",
+      "necessary_behavior": "Generate the metadata/statistics report without AI summaries or commentary.",
+      "proposed_reduction": "Skip subtitle retrieval when AI summarization is disabled. These are redundant actions on that path, rather than extra fields in a necessary action.",
+      "preservation_conditions": "Continue fetching subtitles when summaries are enabled; keep metadata-only reporting functional.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 39, "end_line": 49},
+        {"path": "generate_report.py", "start_line": 443, "end_line": 470},
+        {"path": "generate_report.py", "start_line": 474, "end_line": 486},
+        {"path": "bilibili_api.py", "start_line": 215, "end_line": 238}
+      ]
+    },
+    {
+      "data_scope": "Videos beyond the configured count, with their metadata, subtitles, AI inputs and report entries",
+      "recipient_or_storage": "Bilibili list/subtitle endpoints, OpenRouter when enabled, local report output and email recipients",
+      "condition": "--num-videos is omitted while configuration specifies 10: argparse supplies 20, so the configuration fallback is bypassed.",
+      "purpose_basis": "The entry and example configure a 10-video report. The CLI default changes that scope.",
+      "necessary_behavior": "Process the configured number unless the user explicitly overrides it.",
+      "proposed_reduction": "Use an unset CLI default, then resolve the explicit argument, configured count and final default in order.",
+      "preservation_conditions": "Preserve explicit CLI overrides. This reduces records in the list request and subsequent per-video actions, rather than removing the required list request.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 104, "end_line": 104},
+        {"path": "SKILL.md", "start_line": 129, "end_line": 132},
+        {"path": "bilibili-monitor.example.json", "start_line": 8, "end_line": 10},
+        {"path": "generate_report.py", "start_line": 684, "end_line": 684},
+        {"path": "generate_report.py", "start_line": 734, "end_line": 746},
+        {"path": "generate_report.py", "start_line": 398, "end_line": 400},
+        {"path": "generate_report.py", "start_line": 416, "end_line": 470},
+        {"path": "generate_report.py", "start_line": 506, "end_line": 516}
+      ]
+    },
+    {
+      "data_scope": "The complete list of recipient email addresses",
+      "recipient_or_storage": "Each recipient's copy of the shared To header",
+      "condition": "More than one recipient is configured.",
+      "purpose_basis": "Multi-recipient report delivery requires addressing each recipient, but does not require revealing the other addresses to them.",
+      "necessary_behavior": "Deliver the same report to every selected recipient.",
+      "proposed_reduction": "Use separate messages or an envelope-only/Bcc recipient list.",
+      "preservation_conditions": "Maintain delivery to every intended address and retain sender identity and report content.",
+      "evidence": [
+        {"path": "send_email.py", "start_line": 35, "end_line": 53},
+        {"path": "send_email.py", "start_line": 282, "end_line": 288}
+      ]
+    },
+    {
+      "data_scope": "Full recipient addresses in routine delivery logs",
+      "recipient_or_storage": "send_email.py stdout and its caller",
+      "condition": "CLI recipient resolution and per-recipient sending logs",
+      "purpose_basis": "Delivery status can be reported using counts without repeating contact details. Further log persistence or remote forwarding is unknown.",
+      "necessary_behavior": "Report delivery progress, success and actionable errors.",
+      "proposed_reduction": "Log recipient counts by default; expose masked or full addresses only for a deliberate diagnostic need.",
+      "preservation_conditions": "Keep enough information to diagnose failed delivery without assuming stdout is itself an external disclosure.",
+      "evidence": [
+        {"path": "send_email.py", "start_line": 51, "end_line": 55},
+        {"path": "send_email.py", "start_line": 290, "end_line": 290}
+      ]
+    },
+    {
+      "data_scope": "The generated Markdown report after email delivery",
+      "recipient_or_storage": "/tmp/bilibili_report.md in the entry workflow",
+      "condition": "The report is written for file-based email handoff; no cleanup step follows delivery in the supplied workflow.",
+      "purpose_basis": "The temporary file supports report generation and sending. Continued retention after successful delivery is not stated as a requirement.",
+      "necessary_behavior": "Make the report available until delivery and any requested local retrieval are complete.",
+      "proposed_reduction": "Delete the temporary handoff file after successful delivery unless the user requests an archive.",
+      "preservation_conditions": "Preserve files needed for failed-send retries or explicitly requested saved reports. Actual filesystem retention is unknown.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 129, "end_line": 137},
+        {"path": "generate_report.py", "start_line": 751, "end_line": 758},
+        {"path": "send_email.py", "start_line": 301, "end_line": 328}
+      ]
+    },
+    {
+      "data_scope": "A linked creator's financial, family and health-related assertions in the example",
+      "recipient_or_storage": "Publicly packaged example_report.md",
+      "condition": "Distribution of the static example report",
+      "purpose_basis": "A report example demonstrates structure and analysis; identifiable sensitive narratives are unnecessary for that demonstration.",
+      "necessary_behavior": "Show representative report sections, statistics and formatting.",
+      "proposed_reduction": "Use synthetic creators, links and narratives, or replace the sensitive example with neutral content.",
+      "preservation_conditions": "Preserve the report format and distinguish illustrative assertions from verified facts. This finding concerns the packaged sample, not an inference that the current workflow retrieved these details.",
+      "evidence": [
+        {"path": "example_report.md", "start_line": 192, "end_line": 220},
+        {"path": ".gitignore", "start_line": 11, "end_line": 13}
+      ]
+    }
+  ],
+  "unknowns": [
+    "The minimum cookies and authentication required by each Bilibili endpoint are not established; this blocks confirming the exact cookie reduction that preserves access.",
+    "Subtitle hosts are selected from runtime API responses. Their identities, access controls and retention practices are unresolved.",
+    "Bilibili, OpenRouter, downstream model providers, SMTP servers and recipient mail systems have undocumented retention, training, logging and deletion behavior. The source establishes requests and submissions, not those external practices.",
+    "The supplied package does not establish agent-conversation retention, credential-variable lifetime, stdout logging policy, configuration permissions or temporary-file cleanup by the host.",
+    "HTML conversion inserts source/model text without general HTML escaping (send_email.py:78-80, 135-148, 202-204). Mail-client rendering and external-resource fetching are unknown; no additional renderer-originated disclosure can be confirmed.",
+    "The static example's sensitive assertions are not independently verified, and its historical generation path cannot be reconstructed from its labels.",
+    "Only requests>=2.28.0 is specified (requirements.txt:1); dependency internals and the installed version were not supplied. No runtime or external behavior was verified in this source-only audit."
+  ]
+}

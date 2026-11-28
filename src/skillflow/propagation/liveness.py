@@ -111,6 +111,13 @@ def calculate_liveness(cfg, annotation, interpreter, successors):
                     operand = ir["outputs"][binding.output_index]
                     if operand["type"] == "result":
                         defined.add(FlowLocation(kind="result", name=operand["identifier"]))
+                for group in spec.outcome_bindings:
+                    for index in (group.completion_index, group.return_index, group.exception_index):
+                        if index is not None:
+                            defined.update(_operand_locations(ir, "output", index, interpreter))
+                    for case in group.cases:
+                        if case.value is not None:
+                            read.update(_ref_locations(case.value, ir, interpreter))
                 for event in spec.events:
                     if getattr(event, "kind", None) == "for_each":
                         read.update(_ref_locations(event.collection, ir, interpreter))

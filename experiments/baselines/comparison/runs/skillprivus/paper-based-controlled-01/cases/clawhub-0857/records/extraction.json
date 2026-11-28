@@ -1,0 +1,1235 @@
+{
+  "request_sha256": "8bcc539e3a9d9190a2ccbab733dcd790eb1d952eddebc57db5f715fead06f3b6",
+  "answer_sha256": "7ec8c559af9b33f72aa4c00a7ce43ed26ce13d12d7a50b8a548cd14daa439548",
+  "result": {
+    "status": "complete",
+    "reason": "Complete static extraction of the supplied files. The code loads settings, credentials, cache and monitoring state; queries ESPN and optional Brave/Serper services; derives and prints sports reports; and saves configuration, cache, state and cron JSON. Automation creation and Telegram delivery depend on a consuming agent/platform following generated instructions. The supplied monitor stores no quiet-hours queue and does not parse the event/league/sport flags generated for it. Runtime files, credentials, platform grants and external execution remain unknown. No deletion operation is implemented.",
+    "claim": "Sports Ticker claims to provide free multi-sport team tracking, live scoring and event alerts, final results, upcoming fixtures and automatic match-day scheduling using ESPN without API keys. Its onboarding offers team selection, alert styles, reminders and quiet hours.",
+    "claim_evidence": [
+      {
+        "path": "README.md",
+        "start_line": 9,
+        "end_line": 20,
+        "quote": "## ✨ Features\n\n- 🎯 **Multi-sport support** — Soccer, NFL, NBA, NHL, MLB, F1, and more!\n- ⚽ **Live scoring alerts** with player names and times\n- 🟥 **Key events** — cards, touchdowns, home runs, goals\n- ⏸ **Period updates** — Halftime, quarters, intermissions\n- 🏁 **Final results** with WIN/LOSS/DRAW\n- 📊 **Multi-team support** — track as many teams as you want\n- 📅 **Schedule/Fixtures** — view upcoming matches for next 30 days (NEW in v3!)\n- 🤖 **Auto-cron generation** — never miss a match, set up alerts automatically (NEW in v3!)\n- 🔄 **Auto-scheduling** — cron jobs for match days (OpenClaw)\n- 💰 **100% FREE** — no API keys, no subscriptions!"
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 4,
+        "end_line": 9,
+        "quote": "description: Live sports alerts for Soccer, NFL, NBA, NHL, MLB, F1 and more. Real-time scoring with the free ESPN API. Track any team from any major league worldwide.\nmetadata:\n  openclaw:\n    requires:\n      bins: [\"python3\"]\n    note: \"No API keys needed. Uses the free ESPN scoreboard API.\""
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 26,
+        "end_line": 31,
+        "quote": "**The wizard asks:**\n1. 📺 **Which sports?** — Pick from Soccer, NFL, NBA, NHL, MLB, F1\n2. 🏆 **Which teams?** — Choose from popular teams or search for any team\n3. 🔔 **Alert style?** — Live scores, final only, or daily digest\n4. ⏰ **Game-day reminders?** — Get a heads-up 30 mins before kick-off\n5. 🌙 **Quiet hours?** — Pause alerts while you sleep"
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "Configured team names, short names, sports, identifiers, leagues, enabled flags, alert settings and any other configuration fields.",
+        "source": "Skill-root config.json; config.example.json if config.json does not exist.",
+        "recipient": "Configuration handler and callers.",
+        "condition": "Uses the example only when the primary file is absent. Missing files or invalid JSON produce empty teams and alerts. Team access filters out explicitly disabled entries.",
+        "evidence": [
+          {
+            "path": "scripts/config.py",
+            "start_line": 8,
+            "end_line": 24,
+            "quote": "SKILL_DIR = Path(__file__).parent.parent\nCONFIG_FILE = SKILL_DIR / \"config.json\"\nCONFIG_EXAMPLE = SKILL_DIR / \"config.example.json\"\n\ndef load_config() -> dict:\n    \"\"\"Load configuration from config.json.\"\"\"\n    try:\n        if CONFIG_FILE.exists():\n            return json.loads(CONFIG_FILE.read_text())\n        elif CONFIG_EXAMPLE.exists():\n            print(f\"⚠️  No config.json found. Copy config.example.json to config.json and customize it.\")\n            return json.loads(CONFIG_EXAMPLE.read_text())\n        else:\n            return {\"teams\": [], \"alerts\": {}}\n    except json.JSONDecodeError as e:\n        print(f\"⚠️  Invalid JSON in config file: {e}\")\n        return {\"teams\": [], \"alerts\": {}}"
+          },
+          {
+            "path": "scripts/config.py",
+            "start_line": 30,
+            "end_line": 33,
+            "quote": "def get_teams() -> list:\n    \"\"\"Get list of enabled teams.\"\"\"\n    config = load_config()\n    return [t for t in config.get(\"teams\", []) if t.get(\"enabled\", True)]"
+          },
+          {
+            "path": "scripts/config.py",
+            "start_line": 43,
+            "end_line": 52,
+            "quote": "def get_alert_settings() -> dict:\n    \"\"\"Get alert configuration.\"\"\"\n    config = load_config()\n    return config.get(\"alerts\", {\n        \"goals\": True,\n        \"red_cards\": True,\n        \"halftime\": True,\n        \"fulltime\": True,\n        \"kickoff\": True\n    })"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Read",
+        "data": "Interactive sports and team selections, custom team search text, selected search result, custom emoji, alert style, reminder preference and quiet-hours times.",
+        "source": "Terminal standard input.",
+        "recipient": "Setup wizard.",
+        "condition": "During interactive onboarding; custom search and quiet-hours questions depend on prior choices.",
+        "evidence": [
+          {
+            "path": "scripts/setup.py",
+            "start_line": 238,
+            "end_line": 248,
+            "quote": "    response = input(\"Your choices: \").strip().lower()\n    \n    if response in (\"all\", \"*\", \"a\"):\n        return [key for key, _ in options]\n    \n    selected = []\n    try:\n        nums = [int(x.strip()) for x in response.split(\",\") if x.strip()]\n        for n in nums:\n            if 1 <= n <= len(options):\n                selected.append(options[n-1][0])"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 281,
+            "end_line": 282,
+            "quote": "    options = [(k, f\"{v['emoji']} {v['name']}\") for k, v in SPORTS.items()]\n    selected = select_multiple(\"\", options, show_numbers=True)"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 313,
+            "end_line": 324,
+            "quote": "        response = input(\"Your choices (comma-separated numbers): \").strip()\n        \n        selected_ids = []\n        search_requested = False\n        \n        try:\n            nums = [int(x.strip()) for x in response.split(\",\") if x.strip()]\n            for n in nums:\n                if n == len(options) + 1:\n                    search_requested = True\n                elif 1 <= n <= len(options):\n                    selected_ids.append(n - 1)"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 345,
+            "end_line": 350,
+            "quote": "                team_name = input(\"🔍 Enter team name to search (or 'done'): \").strip()\n                if team_name.lower() in (\"done\", \"d\", \"\"):\n                    break\n                \n                print(f\"\\nSearching for '{team_name}'...\\n\")\n                results = search_team(team_name, sport[\"espn_sport\"])"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 364,
+            "end_line": 369,
+            "quote": "                    pick = input(\"\\nSelect team number (or skip): \").strip()\n                    try:\n                        idx = int(pick) - 1\n                        if 0 <= idx < len(unique_results):\n                            r = unique_results[idx]\n                            emoji = input(f\"Emoji for {r['name']} [{sport['emoji']}]: \").strip() or sport['emoji']"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 406,
+            "end_line": 412,
+            "quote": "    choice = input(\"Your choice (1-3) [1]: \").strip() or \"1\"\n    \n    try:\n        idx = int(choice) - 1\n        alert_style = list(ALERT_TYPES.keys())[idx]\n    except:\n        alert_style = \"live\""
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 200,
+            "end_line": 214,
+            "quote": "def get_yes_no(prompt: str, default: bool = True) -> bool:\n    \"\"\"Get yes/no input.\"\"\"\n    default_str = \"Y/n\" if default else \"y/N\"\n    response = input(f\"{prompt} ({default_str}): \").strip().lower()\n    \n    if not response:\n        return default\n    return response in (\"y\", \"yes\", \"yeah\", \"yep\", \"si\", \"ja\")\n\ndef get_time(prompt: str) -> str:\n    \"\"\"Get time input in HH:MM format.\"\"\"\n    while True:\n        response = input(f\"{prompt} (HH:MM, e.g. 22:00): \").strip()\n        if not response:\n            return None"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 460,
+            "end_line": 460,
+            "quote": "    enabled = get_yes_no(\"Enable game-day reminders?\", default=True)"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 477,
+            "end_line": 489,
+            "quote": "    if not get_yes_no(\"Set up quiet hours?\", default=False):\n        print(\"\\n👍 No quiet hours - you'll get alerts 24/7!\")\n        input(\"\\nPress ENTER to continue...\")\n        return None\n    \n    print()\n    start = get_time(\"Quiet hours START\")\n    end = get_time(\"Quiet hours END\")\n    \n    if start and end:\n        print(f\"\\n✅ 🌙 Quiet hours: {start} to {end}\")\n        input(\"\\nPress ENTER to continue...\")\n        return {\"start\": start, \"end\": end}"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Infer",
+        "data": "Team configuration records and alert-enable flags derived from onboarding selections, predefined teams or selected ESPN search results.",
+        "source": "User selections, built-in team records and ESPN team-search results.",
+        "recipient": "In-memory onboarding configuration.",
+        "condition": "Popular teams and search results use different short-name derivations. Alert style maps to live, final-only or digest flags.",
+        "evidence": [
+          {
+            "path": "scripts/setup.py",
+            "start_line": 329,
+            "end_line": 339,
+            "quote": "        for idx in selected_ids:\n            name, espn_id, leagues, emoji = sport[\"popular_teams\"][idx]\n            all_teams.append({\n                \"name\": name,\n                \"short_name\": name.split()[-1] if len(name.split()) > 1 else name,\n                \"emoji\": emoji,\n                \"sport\": sport[\"espn_sport\"],\n                \"espn_id\": espn_id,\n                \"espn_leagues\": leagues,\n                \"enabled\": True\n            })"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 371,
+            "end_line": 379,
+            "quote": "                            all_teams.append({\n                                \"name\": r['name'],\n                                \"short_name\": r['name'].split()[-1],\n                                \"emoji\": emoji,\n                                \"sport\": sport[\"espn_sport\"],\n                                \"espn_id\": r['id'],\n                                \"espn_leagues\": [r['league']],\n                                \"enabled\": True\n                            })"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 418,
+            "end_line": 447,
+            "quote": "    if alert_style == \"live\":\n        alerts = {\n            \"goals\": True,\n            \"touchdowns\": True,\n            \"red_cards\": True,\n            \"halftime\": True,\n            \"fulltime\": True,\n            \"kickoff\": True,\n            \"mode\": \"live\"\n        }\n    elif alert_style == \"final\":\n        alerts = {\n            \"goals\": False,\n            \"touchdowns\": False,\n            \"red_cards\": False,\n            \"halftime\": False,\n            \"fulltime\": True,\n            \"kickoff\": False,\n            \"mode\": \"final\"\n        }\n    else:  # digest\n        alerts = {\n            \"goals\": False,\n            \"touchdowns\": False,\n            \"red_cards\": False,\n            \"halftime\": False,\n            \"fulltime\": False,\n            \"kickoff\": False,\n            \"mode\": \"digest\"\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Save",
+        "data": "Teams, alert flags/mode, game-reminder preference, quiet-hours start/end and setup-completion timestamp.",
+        "source": "Completed onboarding steps.",
+        "recipient": "Skill-root config.json.",
+        "condition": "Saved after at least one team is selected. Opening with mode w replaces existing contents. No retention limit is specified.",
+        "evidence": [
+          {
+            "path": "scripts/setup.py",
+            "start_line": 23,
+            "end_line": 26,
+            "quote": "SCRIPT_DIR = Path(__file__).parent\nSKILL_DIR = SCRIPT_DIR.parent\nCONFIG_FILE = SKILL_DIR / \"config.json\"\nCONFIG_EXAMPLE = SKILL_DIR / \"config.example.json\""
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 558,
+            "end_line": 587,
+            "quote": "        # Step 2: Select teams for each sport\n        teams = step_select_teams(selected_sports)\n        \n        if not teams:\n            print(\"\\n❌ No teams configured. Please run setup again.\")\n            return\n        \n        # Step 3: Alert preferences\n        alerts = step_alert_preferences()\n        \n        # Step 4: Game-day reminders\n        game_reminders = step_game_reminders()\n        \n        # Step 5: Quiet hours\n        quiet_hours = step_quiet_hours()\n        \n        # Build final config\n        config = {\n            \"teams\": teams,\n            \"alerts\": alerts,\n            \"preferences\": {\n                \"game_reminders\": game_reminders,\n                \"quiet_hours\": quiet_hours\n            },\n            \"_setup_completed\": datetime.now().isoformat()\n        }\n        \n        # Save config\n        with open(CONFIG_FILE, \"w\") as f:\n            json.dump(config, f, indent=2)"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Save",
+        "data": "An appended team record containing name, derived or supplied short name, emoji, sport, enabled status, optional ESPN/TheSportsDB identifiers and supplied or default leagues.",
+        "source": "add_team arguments and previously loaded configuration.",
+        "recipient": "Skill-root config.json.",
+        "condition": "When add_team is called; the supplied files do not establish an invocation of this helper. Rewrites the full configuration with no expiry specified.",
+        "evidence": [
+          {
+            "path": "scripts/config.py",
+            "start_line": 26,
+            "end_line": 28,
+            "quote": "def save_config(config: dict):\n    \"\"\"Save configuration to config.json.\"\"\"\n    CONFIG_FILE.write_text(json.dumps(config, indent=2))"
+          },
+          {
+            "path": "scripts/config.py",
+            "start_line": 54,
+            "end_line": 85,
+            "quote": "def add_team(name: str, espn_id: str = None, thesportsdb_id: str = None, \n             leagues: list = None, emoji: str = \"⚽\", short_name: str = None, sport: str = \"soccer\"):\n    \"\"\"Add a team to config.\"\"\"\n    config = load_config()\n    \n    team = {\n        \"name\": name,\n        \"short_name\": short_name or name.split()[0],\n        \"emoji\": emoji,\n        \"sport\": sport,\n        \"enabled\": True\n    }\n    \n    if espn_id:\n        team[\"espn_id\"] = espn_id\n        # Default leagues based on sport\n        if leagues:\n            team[\"espn_leagues\"] = leagues\n        elif sport == \"soccer\":\n            team[\"espn_leagues\"] = [\"eng.1\", \"uefa.champions\"]\n        elif sport == \"football\":\n            team[\"espn_leagues\"] = [\"nfl\"]\n        elif sport == \"basketball\":\n            team[\"espn_leagues\"] = [\"nba\"]\n        elif sport == \"hockey\":\n            team[\"espn_leagues\"] = [\"nhl\"]\n        elif sport == \"baseball\":\n            team[\"espn_leagues\"] = [\"mlb\"]\n        elif sport == \"racing\":\n            team[\"espn_leagues\"] = [\"f1\"]\n        else:\n            team[\"espn_leagues\"] = []"
+          },
+          {
+            "path": "scripts/config.py",
+            "start_line": 87,
+            "end_line": 92,
+            "quote": "    if thesportsdb_id:\n        team[\"thesportsdb_id\"] = thesportsdb_id\n    \n    config.setdefault(\"teams\", []).append(team)\n    save_config(config)\n    print(f\"✅ Added {name} to config.json\")"
+          },
+          {
+            "path": "scripts/config.py",
+            "start_line": 8,
+            "end_line": 9,
+            "quote": "SKILL_DIR = Path(__file__).parent.parent\nCONFIG_FILE = SKILL_DIR / \"config.json\""
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "Brave and Serper API credentials; HOME value used to locate a fallback credential file.",
+        "source": "Runtime environment variables BRAVE_SEARCH_API_KEY, SERPER_API_KEY and HOME.",
+        "recipient": "Ticker and live-monitor web-search functions.",
+        "condition": "When web fallback is attempted. Brave uses only its environment key. Serper checks files when its environment key is absent. HOME defaults to /root.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 21,
+            "end_line": 28,
+            "quote": "def _load_key(env_var: str, env_file_key: str) -> str:\n    \"\"\"Load API key from env or web-search-plus .env file.\"\"\"\n    key = os.environ.get(env_var, \"\")\n    if not key:\n        env_paths = [\n            Path(__file__).parent.parent.parent / \"web-search-plus\" / \".env\",\n            Path(os.environ.get(\"HOME\", \"/root\")) / \"clawd/skills/web-search-plus/.env\",\n        ]"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 49,
+            "end_line": 50,
+            "quote": "    brave_key = os.environ.get(\"BRAVE_SEARCH_API_KEY\", \"\")\n    if brave_key:"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 72,
+            "end_line": 73,
+            "quote": "    serper_key = _load_key(\"SERPER_API_KEY\", \"SERPER_API_KEY\")\n    if serper_key:"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 42,
+            "end_line": 45,
+            "quote": "    def _try_brave(query: str) -> str:\n        brave_key = os.environ.get(\"BRAVE_SEARCH_API_KEY\", \"\")\n        if not brave_key:\n            return \"\""
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 63,
+            "end_line": 70,
+            "quote": "    def _try_serper(query: str) -> str:\n        # Load key from env or web-search-plus .env\n        serper_key = os.environ.get(\"SERPER_API_KEY\", \"\")\n        if not serper_key:\n            env_paths = [\n                Path(__file__).parent.parent.parent / \"web-search-plus\" / \".env\",\n                Path(os.environ.get(\"HOME\", \"/root\")) / \"clawd/skills/web-search-plus/.env\",\n            ]"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Read",
+        "data": "Credential-file text, scanning lines containing SERPER_API_KEY and an equals sign to obtain a Serper credential.",
+        "source": "web-search-plus/.env in the directory containing the skill; HOME/clawd/skills/web-search-plus/.env, with HOME defaulting to /root.",
+        "recipient": "Ticker and live-monitor Serper fallback functions.",
+        "condition": "Only when the Serper environment credential is absent and a candidate file exists. Both candidate files can be examined; the outer loop does not stop after a match. Actual file contents are not supplied.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 21,
+            "end_line": 35,
+            "quote": "def _load_key(env_var: str, env_file_key: str) -> str:\n    \"\"\"Load API key from env or web-search-plus .env file.\"\"\"\n    key = os.environ.get(env_var, \"\")\n    if not key:\n        env_paths = [\n            Path(__file__).parent.parent.parent / \"web-search-plus\" / \".env\",\n            Path(os.environ.get(\"HOME\", \"/root\")) / \"clawd/skills/web-search-plus/.env\",\n        ]\n        for ep in env_paths:\n            if ep.exists():\n                for line in ep.read_text().splitlines():\n                    if env_file_key in line and \"=\" in line:\n                        key = line.split(\"=\", 1)[-1].strip().strip(\"'\\\"\").lstrip(\"export \")\n                        break\n    return key"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 72,
+            "end_line": 72,
+            "quote": "    serper_key = _load_key(\"SERPER_API_KEY\", \"SERPER_API_KEY\")"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 65,
+            "end_line": 78,
+            "quote": "        serper_key = os.environ.get(\"SERPER_API_KEY\", \"\")\n        if not serper_key:\n            env_paths = [\n                Path(__file__).parent.parent.parent / \"web-search-plus\" / \".env\",\n                Path(os.environ.get(\"HOME\", \"/root\")) / \"clawd/skills/web-search-plus/.env\",\n            ]\n            for ep in env_paths:\n                if ep.exists():\n                    for line in ep.read_text().splitlines():\n                        if \"SERPER_API_KEY\" in line and \"=\" in line:\n                            serper_key = line.split(\"=\", 1)[-1].strip().strip(\"'\\\"\")\n                            break\n        if not serper_key:\n            return \"\""
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Send",
+        "data": "Sport and league selectors in a scoreboard request, optionally including a YYYYMMDD date; a fixed Mozilla/5.0 User-Agent.",
+        "source": "Function arguments supplied by configured teams, league commands or fixture-date iteration.",
+        "recipient": "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard",
+        "condition": "On scoreboard or fixture lookup; dated fixture requests use the dates query parameter. Endpoint characters are validated before opening the request.",
+        "evidence": [
+          {
+            "path": "scripts/espn.py",
+            "start_line": 20,
+            "end_line": 20,
+            "quote": "BASE_URL = \"https://site.api.espn.com/apis/site/v2/sports\""
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 81,
+            "end_line": 93,
+            "quote": "def api_request(endpoint: str) -> dict:\n    \"\"\"Make request to ESPN API (no auth needed!).\"\"\"\n    import re\n    # Validate endpoint contains only safe characters (alphanumeric, slashes, dots, hyphens, query params)\n    if not re.match(r'^[a-zA-Z0-9/_.\\-?&=]+$', endpoint):\n        raise ValueError(f\"Invalid endpoint: {endpoint}\")\n    url = f\"{BASE_URL}/{endpoint}\"\n    req = urllib.request.Request(url, headers={\"User-Agent\": \"Mozilla/5.0\"})\n    return json.loads(urllib.request.urlopen(req, timeout=15).read())\n\ndef get_scoreboard(sport: str = \"soccer\", league: str = \"eng.1\") -> dict:\n    \"\"\"Get current scoreboard for a league.\"\"\"\n    return api_request(f\"{sport}/{league}/scoreboard\")"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 301,
+            "end_line": 308,
+            "quote": "def get_fixtures_for_date(date_str: str, sport: str = \"soccer\", league: str = \"eng.1\") -> list:\n    \"\"\"Get fixtures for a specific date (YYYYMMDD format).\n    \n    Returns list of events for that date.\n    \"\"\"\n    try:\n        data = api_request(f\"{sport}/{league}/scoreboard?dates={date_str}\")\n        return data.get(\"events\", [])"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 134,
+            "end_line": 135,
+            "quote": "    leagues = team.get(\"espn_leagues\", [\"eng.1\", \"uefa.champions\"])\n    match = find_team_match(espn_id, leagues, sport)"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 160,
+            "end_line": 163,
+            "quote": "    for league in leagues:\n        try:\n            data = get_scoreboard(sport, league)\n            for event in data.get(\"events\", []):"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 350,
+            "end_line": 360,
+            "quote": "    for day_offset in range(days + 1):  # Include today\n        date = now + timedelta(days=day_offset)\n        date_str = date.strftime(\"%Y%m%d\")\n        \n        for league in leagues:\n            cache_key = f\"{date_str}_{league}\"\n            if cache_key in checked_dates:\n                continue\n            checked_dates.add(cache_key)\n            \n            events = get_fixtures_for_date(date_str, sport, league)"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Send",
+        "data": "Event identifier, sport and league selectors, and fixed Mozilla/5.0 User-Agent in a match-summary request.",
+        "source": "Event returned by a scoreboard lookup or supplied to the match command.",
+        "recipient": "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}",
+        "condition": "When requesting detailed match events or match details.",
+        "evidence": [
+          {
+            "path": "scripts/espn.py",
+            "start_line": 20,
+            "end_line": 20,
+            "quote": "BASE_URL = \"https://site.api.espn.com/apis/site/v2/sports\""
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 87,
+            "end_line": 97,
+            "quote": "    url = f\"{BASE_URL}/{endpoint}\"\n    req = urllib.request.Request(url, headers={\"User-Agent\": \"Mozilla/5.0\"})\n    return json.loads(urllib.request.urlopen(req, timeout=15).read())\n\ndef get_scoreboard(sport: str = \"soccer\", league: str = \"eng.1\") -> dict:\n    \"\"\"Get current scoreboard for a league.\"\"\"\n    return api_request(f\"{sport}/{league}/scoreboard\")\n\ndef get_match_details(event_id: str, sport: str = \"soccer\", league: str = \"eng.1\") -> dict:\n    \"\"\"Get detailed match info including events.\"\"\"\n    return api_request(f\"{sport}/{league}/summary?event={event_id}\")"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 183,
+            "end_line": 186,
+            "quote": "def get_match_events(event_id: str, sport: str = \"soccer\", league: str = \"eng.1\") -> list:\n    \"\"\"Get key events (goals, cards) from a match.\"\"\"\n    details = get_match_details(event_id, sport, league)\n    return details.get(\"keyEvents\", [])"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 140,
+            "end_line": 142,
+            "quote": "    event = match[\"event\"]\n    event_id = str(match[\"event_id\"])\n    league = match[\"league\"]"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 193,
+            "end_line": 196,
+            "quote": "    try:\n        key_events = get_match_events(event_id, sport, league)\n    except:\n        key_events = []"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 508,
+            "end_line": 511,
+            "quote": "        event_id = sys.argv[2]\n        league = sys.argv[3] if len(sys.argv) > 3 else \"eng.1\"\n        sport = sys.argv[4] if len(sys.argv) > 4 else \"soccer\"\n        details = get_match_details(event_id, sport, league)"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Send",
+        "data": "Sport and league selectors and fixed Mozilla/5.0 User-Agent in a league-team listing request. The team-name search text is used locally rather than placed in this request.",
+        "source": "search_team sport/leagues arguments or sport-specific defaults.",
+        "recipient": "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams",
+        "condition": "For each league checked during team search; failures are skipped.",
+        "evidence": [
+          {
+            "path": "scripts/espn.py",
+            "start_line": 20,
+            "end_line": 20,
+            "quote": "BASE_URL = \"https://site.api.espn.com/apis/site/v2/sports\""
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 87,
+            "end_line": 89,
+            "quote": "    url = f\"{BASE_URL}/{endpoint}\"\n    req = urllib.request.Request(url, headers={\"User-Agent\": \"Mozilla/5.0\"})\n    return json.loads(urllib.request.urlopen(req, timeout=15).read())"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 99,
+            "end_line": 104,
+            "quote": "def get_all_teams(league: str = \"eng.1\", sport: str = \"soccer\") -> list:\n    \"\"\"Get ALL teams in a league (not just today's matches).\"\"\"\n    sport_url = SPORT_MAPPING.get(sport, sport)\n    data = api_request(f\"{sport_url}/{league}/teams\")\n    teams = data.get(\"sports\", [{}])[0].get(\"leagues\", [{}])[0].get(\"teams\", [])\n    return [t.get(\"team\", {}) for t in teams]"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 125,
+            "end_line": 145,
+            "quote": "    team_lower = team_name.lower()\n    results = []\n    sport_leagues = LEAGUES.get(sport, {})\n    \n    for league in leagues:\n        try:\n            teams = get_all_teams(league, sport)\n            for team in teams:\n                if team_lower in team.get(\"displayName\", \"\").lower() or \\\n                   team_lower in team.get(\"shortDisplayName\", \"\").lower() or \\\n                   team_lower in team.get(\"nickname\", \"\").lower():\n                    results.append({\n                        \"id\": team.get(\"id\"),\n                        \"name\": team.get(\"displayName\"),\n                        \"short\": team.get(\"shortDisplayName\"),\n                        \"sport\": sport,\n                        \"league\": league,\n                        \"league_name\": sport_leagues.get(league, league)\n                    })\n        except Exception:\n            continue"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Read",
+        "data": "ESPN JSON responses containing scoreboard events, match details/key events and league-team records.",
+        "source": "ESPN API HTTP responses.",
+        "recipient": "ESPN helpers and ticker, monitor, schedule or setup callers.",
+        "condition": "Following an ESPN request; response bytes are read and JSON-decoded.",
+        "evidence": [
+          {
+            "path": "scripts/espn.py",
+            "start_line": 81,
+            "end_line": 104,
+            "quote": "def api_request(endpoint: str) -> dict:\n    \"\"\"Make request to ESPN API (no auth needed!).\"\"\"\n    import re\n    # Validate endpoint contains only safe characters (alphanumeric, slashes, dots, hyphens, query params)\n    if not re.match(r'^[a-zA-Z0-9/_.\\-?&=]+$', endpoint):\n        raise ValueError(f\"Invalid endpoint: {endpoint}\")\n    url = f\"{BASE_URL}/{endpoint}\"\n    req = urllib.request.Request(url, headers={\"User-Agent\": \"Mozilla/5.0\"})\n    return json.loads(urllib.request.urlopen(req, timeout=15).read())\n\ndef get_scoreboard(sport: str = \"soccer\", league: str = \"eng.1\") -> dict:\n    \"\"\"Get current scoreboard for a league.\"\"\"\n    return api_request(f\"{sport}/{league}/scoreboard\")\n\ndef get_match_details(event_id: str, sport: str = \"soccer\", league: str = \"eng.1\") -> dict:\n    \"\"\"Get detailed match info including events.\"\"\"\n    return api_request(f\"{sport}/{league}/summary?event={event_id}\")\n\ndef get_all_teams(league: str = \"eng.1\", sport: str = \"soccer\") -> list:\n    \"\"\"Get ALL teams in a league (not just today's matches).\"\"\"\n    sport_url = SPORT_MAPPING.get(sport, sport)\n    data = api_request(f\"{sport_url}/{league}/teams\")\n    teams = data.get(\"sports\", [{}])[0].get(\"leagues\", [{}])[0].get(\"teams\", [])\n    return [t.get(\"team\", {}) for t in teams]"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 183,
+            "end_line": 186,
+            "quote": "def get_match_events(event_id: str, sport: str = \"soccer\", league: str = \"eng.1\") -> list:\n    \"\"\"Get key events (goals, cards) from a match.\"\"\"\n    details = get_match_details(event_id, sport, league)\n    return details.get(\"keyEvents\", [])"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Infer",
+        "data": "Team search matches and a tracked team's current match, including event identifier, league and sport.",
+        "source": "Search text or tracked team identifier, ESPN team/scoreboard responses, and current UTC date.",
+        "recipient": "Local search results and match-selection callers.",
+        "condition": "Team names are matched by case-insensitive substring. Current-match lookup defaults to today's UTC date and returns the first matching team identifier.",
+        "evidence": [
+          {
+            "path": "scripts/espn.py",
+            "start_line": 125,
+            "end_line": 143,
+            "quote": "    team_lower = team_name.lower()\n    results = []\n    sport_leagues = LEAGUES.get(sport, {})\n    \n    for league in leagues:\n        try:\n            teams = get_all_teams(league, sport)\n            for team in teams:\n                if team_lower in team.get(\"displayName\", \"\").lower() or \\\n                   team_lower in team.get(\"shortDisplayName\", \"\").lower() or \\\n                   team_lower in team.get(\"nickname\", \"\").lower():\n                    results.append({\n                        \"id\": team.get(\"id\"),\n                        \"name\": team.get(\"displayName\"),\n                        \"short\": team.get(\"shortDisplayName\"),\n                        \"sport\": sport,\n                        \"league\": league,\n                        \"league_name\": sport_leagues.get(league, league)\n                    })"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 149,
+            "end_line": 181,
+            "quote": "def find_team_match(team_id: str, leagues: list = None, sport: str = \"soccer\", today_only: bool = True) -> Optional[dict]:\n    \"\"\"Find a match for a specific team.\n    \n    If today_only=True (default), only returns matches scheduled for today (UTC).\n    \"\"\"\n    from datetime import datetime, timezone\n    if leagues is None:\n        leagues = [\"eng.1\", \"uefa.champions\"]\n    \n    today_str = datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n    \n    for league in leagues:\n        try:\n            data = get_scoreboard(sport, league)\n            for event in data.get(\"events\", []):\n                # Check date if today_only\n                if today_only:\n                    event_date = event.get(\"date\", \"\")[:10]  # \"2026-03-10T...\"[:10] = \"2026-03-10\"\n                    if event_date != today_str:\n                        continue\n                for comp in event.get(\"competitions\", []):\n                    for competitor in comp.get(\"competitors\", []):\n                        if str(competitor.get(\"team\", {}).get(\"id\")) == str(team_id):\n                            return {\n                                \"event\": event,\n                                \"league\": league,\n                                \"event_id\": event.get(\"id\"),\n                                \"sport\": sport\n                            }\n        except Exception:\n            continue\n    \n    return None"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Infer",
+        "data": "A date-sorted, event-deduplicated fixture list with opponent name/identifier, home-away status, competition, venue, event date/status, league and sport; optionally enriched with configured team attributes.",
+        "source": "Configured ESPN team identifier, leagues and sport, requested look-ahead days, current UTC time and ESPN dated scoreboards.",
+        "recipient": "Schedule output and automatic cron generator.",
+        "condition": "Checks today through the requested day offset inclusively. Teams without ESPN identifiers are skipped. Optional team-name filter applies locally.",
+        "evidence": [
+          {
+            "path": "scripts/schedule.py",
+            "start_line": 23,
+            "end_line": 32,
+            "quote": "def get_team_schedule(team: dict, days: int = 14) -> list:\n    \"\"\"Get schedule for a single team.\"\"\"\n    espn_id = team.get(\"espn_id\")\n    if not espn_id:\n        return []\n    \n    leagues = team.get(\"espn_leagues\", [\"eng.1\"])\n    sport = team.get(\"sport\", \"soccer\")\n    \n    return get_team_fixtures(espn_id, days=days, sport=sport, leagues=leagues)"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 344,
+            "end_line": 410,
+            "quote": "    fixtures = []\n    team_id_str = str(team_id)\n    now = datetime.now(timezone.utc)\n    \n    # Check each day for the next N days\n    checked_dates = set()\n    for day_offset in range(days + 1):  # Include today\n        date = now + timedelta(days=day_offset)\n        date_str = date.strftime(\"%Y%m%d\")\n        \n        for league in leagues:\n            cache_key = f\"{date_str}_{league}\"\n            if cache_key in checked_dates:\n                continue\n            checked_dates.add(cache_key)\n            \n            events = get_fixtures_for_date(date_str, sport, league)\n            for event in events:\n                # Check if this team is in the match\n                for comp in event.get(\"competitions\", []):\n                    competitors = comp.get(\"competitors\", [])\n                    team_in_match = False\n                    home_team = away_team = None\n                    \n                    for c in competitors:\n                        team = c.get(\"team\", {})\n                        if c.get(\"homeAway\") == \"home\":\n                            home_team = team\n                        else:\n                            away_team = team\n                        if str(team.get(\"id\")) == team_id_str:\n                            team_in_match = True\n                    \n                    if team_in_match and home_team and away_team:\n                        # Determine opponent\n                        if str(home_team.get(\"id\")) == team_id_str:\n                            opponent = away_team\n                            is_home = True\n                        else:\n                            opponent = home_team\n                            is_home = False\n                        \n                        sport_leagues = LEAGUES.get(sport, {})\n                        fixtures.append({\n                            \"event_id\": event.get(\"id\"),\n                            \"date\": event.get(\"date\"),\n                            \"date_str\": event.get(\"date\", \"\")[:10],\n                            \"opponent\": opponent.get(\"displayName\"),\n                            \"opponent_short\": opponent.get(\"shortDisplayName\", opponent.get(\"displayName\")),\n                            \"opponent_id\": opponent.get(\"id\"),\n                            \"is_home\": is_home,\n                            \"competition\": sport_leagues.get(league, league),\n                            \"league\": league,\n                            \"venue\": comp.get(\"venue\", {}).get(\"fullName\", \"TBD\"),\n                            \"sport\": sport,\n                            \"status\": event.get(\"status\", {}).get(\"type\", {}).get(\"name\", \"scheduled\")\n                        })\n    \n    # Sort by date and remove duplicates (same event in multiple leagues)\n    seen_ids = set()\n    unique_fixtures = []\n    for f in sorted(fixtures, key=lambda x: x[\"date\"]):\n        if f[\"event_id\"] not in seen_ids:\n            seen_ids.add(f[\"event_id\"])\n            unique_fixtures.append(f)\n    \n    return unique_fixtures"
+          },
+          {
+            "path": "scripts/schedule.py",
+            "start_line": 85,
+            "end_line": 112,
+            "quote": "def get_all_fixtures_json(days: int = 14, team_name: str = None) -> list:\n    \"\"\"Get all fixtures as JSON-serializable list.\"\"\"\n    teams = get_teams()\n    all_fixtures = []\n    \n    for team in teams:\n        if not team.get(\"espn_id\"):\n            continue\n        \n        # Filter by team name if specified\n        if team_name:\n            name_lower = team_name.lower()\n            if name_lower not in team.get(\"name\", \"\").lower() and \\\n               name_lower not in team.get(\"short_name\", \"\").lower():\n                continue\n        \n        fixtures = get_team_schedule(team, days)\n        for f in fixtures:\n            f[\"team_name\"] = team.get(\"name\")\n            f[\"team_short\"] = team.get(\"short_name\")\n            f[\"team_emoji\"] = team.get(\"emoji\", \"⚽\")\n            f[\"team_espn_id\"] = team.get(\"espn_id\")\n            all_fixtures.append(f)\n    \n    # Sort all fixtures by date\n    all_fixtures.sort(key=lambda x: x.get(\"date\", \"\"))\n    \n    return all_fixtures"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Send",
+        "data": "Tracked team name embedded in a search query, result count 3, and Brave credential in X-Subscription-Token. Ticker adds the current UTC date; monitor uses English and German live-score phrases.",
+        "source": "Configured team name, current UTC date for ticker, and BRAVE_SEARCH_API_KEY.",
+        "recipient": "https://api.search.brave.com/res/v1/web/search",
+        "condition": "Requires a Brave key. Ticker falls back to web search when there is no ESPN identifier or no ESPN match; monitor does so only for teams without an ESPN identifier.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 44,
+            "end_line": 57,
+            "quote": "    today = datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n    query = f\"{team_name} match result {today}\"\n    _cache_key = team_key or team_name\n\n    # 1. Try Brave Search (OpenClaw default) — only if key is set\n    brave_key = os.environ.get(\"BRAVE_SEARCH_API_KEY\", \"\")\n    if brave_key:\n        try:\n            params = urllib.parse.urlencode({\"q\": query, \"count\": 3})\n            req = urllib.request.Request(\n                f\"https://api.search.brave.com/res/v1/web/search?{params}\",\n                headers={\"Accept\": \"application/json\", \"X-Subscription-Token\": brave_key},\n            )\n            data = json.loads(urllib.request.urlopen(req, timeout=10).read())"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 103,
+            "end_line": 125,
+            "quote": "def team_ticker(team: dict) -> str:\n    \"\"\"Generate ticker for a single team.\"\"\"\n    lines = []\n    name = team.get(\"name\", \"Unknown\")\n    emoji = team.get(\"emoji\", \"⚽\")\n    espn_id = team.get(\"espn_id\")\n    leagues = team.get(\"espn_leagues\", [\"eng.1\"])\n    sport = team.get(\"sport\", \"soccer\")\n    team_key = team.get(\"short_name\", name)\n\n    lines.append(f\"{emoji} **{name}**\\n\")\n\n    if espn_id:\n        match = find_team_match(espn_id, leagues, sport)\n        if match:\n            result = format_match(match[\"event\"], include_events=True,\n                                  sport=sport, league=match[\"league\"])\n            lines.append(result)\n            # Cache the formatted result as well\n            write_to_cache(team_key, result, source=\"espn\")\n        else:\n            # ESPN found nothing — web search fallback, then cache fallback\n            web_result = web_search_match(name, team_key)"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 132,
+            "end_line": 135,
+            "quote": "    else:\n        # No ESPN ID — web search fallback, with cache backup\n        web_result = web_search_match(name, team_key)\n        lines.append(web_result)"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 37,
+            "end_line": 52,
+            "quote": "    queries = [\n        f\"{team_name} live score today\",\n        f\"{team_name} Ergebnis heute live\",\n    ]\n\n    def _try_brave(query: str) -> str:\n        brave_key = os.environ.get(\"BRAVE_SEARCH_API_KEY\", \"\")\n        if not brave_key:\n            return \"\"\n        try:\n            params = urllib.parse.urlencode({\"q\": query, \"count\": 3})\n            req = urllib.request.Request(\n                f\"https://api.search.brave.com/res/v1/web/search?{params}\",\n                headers={\"Accept\": \"application/json\", \"X-Subscription-Token\": brave_key},\n            )\n            data = json.loads(urllib.request.urlopen(req, timeout=10).read())"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 123,
+            "end_line": 132,
+            "quote": "    team_name = team.get(\"name\", \"Unknown\")\n    team_emoji = team.get(\"emoji\", \"⚽\")\n    espn_id = team.get(\"espn_id\")\n    sport = team.get(\"sport\", \"soccer\")  # Default to soccer for backward compatibility\n    \n    if not espn_id:\n        # No ESPN ID — fall back to web search for live score\n        team_key = team.get(\"short_name\", team_name)\n        web_alerts = _web_search_live(team_name, team_key)\n        return web_alerts, state"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Read",
+        "data": "Brave JSON search response, especially up to three web-result titles and descriptions.",
+        "source": "Brave Search HTTP response.",
+        "recipient": "Ticker or live-monitor web fallback.",
+        "condition": "After a keyed Brave request succeeds; descriptions must be nonempty to contribute snippets.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 53,
+            "end_line": 63,
+            "quote": "            req = urllib.request.Request(\n                f\"https://api.search.brave.com/res/v1/web/search?{params}\",\n                headers={\"Accept\": \"application/json\", \"X-Subscription-Token\": brave_key},\n            )\n            data = json.loads(urllib.request.urlopen(req, timeout=10).read())\n            snippets = []\n            for r in data.get(\"web\", {}).get(\"results\", [])[:3]:\n                snippet = r.get(\"description\", \"\")\n                title = r.get(\"title\", \"\")\n                if snippet:\n                    snippets.append(f\"• {title}: {snippet[:120]}\")"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 48,
+            "end_line": 59,
+            "quote": "            req = urllib.request.Request(\n                f\"https://api.search.brave.com/res/v1/web/search?{params}\",\n                headers={\"Accept\": \"application/json\", \"X-Subscription-Token\": brave_key},\n            )\n            data = json.loads(urllib.request.urlopen(req, timeout=10).read())\n            snippets = []\n            for r in data.get(\"web\", {}).get(\"results\", [])[:3]:\n                snippet = r.get(\"description\", \"\")\n                title = r.get(\"title\", \"\")\n                if snippet:\n                    snippets.append(f\"{title}: {snippet[:120]}\")\n            return \"\\n\".join(snippets)"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Send",
+        "data": "Team-name search query and num=3 in a JSON request body; Serper credential in X-API-KEY.",
+        "source": "Configured team name, current UTC date for ticker, and Serper credential loaded from environment or fallback .env files.",
+        "recipient": "https://google.serper.dev/search",
+        "condition": "Requires a Serper key and is attempted after Brave is unavailable, fails or returns no usable result. Ticker and monitor use their respective date/result or live-score query forms.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 44,
+            "end_line": 46,
+            "quote": "    today = datetime.now(timezone.utc).strftime(\"%Y-%m-%d\")\n    query = f\"{team_name} match result {today}\"\n    _cache_key = team_key or team_name"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 64,
+            "end_line": 81,
+            "quote": "            if snippets:\n                result_text = \"🔍 Web:\\n\" + \"\\n\".join(snippets)\n                write_to_cache(_cache_key, snippets[0], source=\"brave_search\")\n                return result_text\n        except Exception:\n            pass  # Fall through to Serper\n\n    # 2. Serper fallback\n    serper_key = _load_key(\"SERPER_API_KEY\", \"SERPER_API_KEY\")\n    if serper_key:\n        try:\n            payload = json.dumps({\"q\": query, \"num\": 3}).encode()\n            req = urllib.request.Request(\n                \"https://google.serper.dev/search\",\n                data=payload,\n                headers={\"X-API-KEY\": serper_key, \"Content-Type\": \"application/json\"},\n            )\n            data = json.loads(urllib.request.urlopen(req, timeout=10).read())"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 37,
+            "end_line": 40,
+            "quote": "    queries = [\n        f\"{team_name} live score today\",\n        f\"{team_name} Ergebnis heute live\",\n    ]"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 77,
+            "end_line": 87,
+            "quote": "        if not serper_key:\n            return \"\"\n        try:\n            import json as _json\n            payload = _json.dumps({\"q\": query, \"num\": 3}).encode()\n            req = urllib.request.Request(\n                \"https://google.serper.dev/search\",\n                data=payload,\n                headers={\"X-API-KEY\": serper_key, \"Content-Type\": \"application/json\"},\n            )\n            data = _json.loads(urllib.request.urlopen(req, timeout=10).read())"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 98,
+            "end_line": 108,
+            "quote": "    alerts = []\n    for query in queries:\n        result = _try_brave(query) or _try_serper(query)\n        if result:\n            # Check if result changed from cache\n            cached = read_from_cache(team_key)\n            cached_result = cached.get(\"last_result\", \"\") if cached else \"\"\n            if result != cached_result:\n                write_to_cache(team_key, result, source=\"web_search\")\n                alerts.append(f\"🔍 **{team_name}** (web)\\n{result}\")\n            break  # Found something — stop trying queries"
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Read",
+        "data": "Serper JSON response, especially up to three organic-result titles and snippets.",
+        "source": "Serper HTTP response.",
+        "recipient": "Ticker or live-monitor web fallback.",
+        "condition": "After a keyed Serper request succeeds; only nonempty snippets contribute results.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 76,
+            "end_line": 87,
+            "quote": "            req = urllib.request.Request(\n                \"https://google.serper.dev/search\",\n                data=payload,\n                headers={\"X-API-KEY\": serper_key, \"Content-Type\": \"application/json\"},\n            )\n            data = json.loads(urllib.request.urlopen(req, timeout=10).read())\n            snippets = []\n            for r in data.get(\"organic\", [])[:3]:\n                snippet = r.get(\"snippet\", \"\")\n                title = r.get(\"title\", \"\")\n                if snippet:\n                    snippets.append(f\"• {title}: {snippet[:120]}\")"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 82,
+            "end_line": 94,
+            "quote": "            req = urllib.request.Request(\n                \"https://google.serper.dev/search\",\n                data=payload,\n                headers={\"X-API-KEY\": serper_key, \"Content-Type\": \"application/json\"},\n            )\n            data = _json.loads(urllib.request.urlopen(req, timeout=10).read())\n            snippets = []\n            for r in data.get(\"organic\", [])[:3]:\n                snippet = r.get(\"snippet\", \"\")\n                title = r.get(\"title\", \"\")\n                if snippet:\n                    snippets.append(f\"{title}: {snippet[:120]}\")\n            return \"\\n\".join(snippets)"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Infer",
+        "data": "Formatted web-result text and, in the monitor, whether it differs from the previously cached result.",
+        "source": "Search-result titles and descriptions/snippets, team name and cached last_result.",
+        "recipient": "Ticker report, monitor alert list and cache-write callers.",
+        "condition": "Descriptions/snippets are truncated to 120 characters. Monitor stops at the first nonempty query result and emits an alert only on a text change; this is text comparison rather than independent score verification.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 58,
+            "end_line": 67,
+            "quote": "            snippets = []\n            for r in data.get(\"web\", {}).get(\"results\", [])[:3]:\n                snippet = r.get(\"description\", \"\")\n                title = r.get(\"title\", \"\")\n                if snippet:\n                    snippets.append(f\"• {title}: {snippet[:120]}\")\n            if snippets:\n                result_text = \"🔍 Web:\\n\" + \"\\n\".join(snippets)\n                write_to_cache(_cache_key, snippets[0], source=\"brave_search\")\n                return result_text"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 82,
+            "end_line": 91,
+            "quote": "            snippets = []\n            for r in data.get(\"organic\", [])[:3]:\n                snippet = r.get(\"snippet\", \"\")\n                title = r.get(\"title\", \"\")\n                if snippet:\n                    snippets.append(f\"• {title}: {snippet[:120]}\")\n            if snippets:\n                result_text = \"🔍 Web:\\n\" + \"\\n\".join(snippets)\n                write_to_cache(_cache_key, snippets[0], source=\"serper_search\")\n                return result_text"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 98,
+            "end_line": 110,
+            "quote": "    alerts = []\n    for query in queries:\n        result = _try_brave(query) or _try_serper(query)\n        if result:\n            # Check if result changed from cache\n            cached = read_from_cache(team_key)\n            cached_result = cached.get(\"last_result\", \"\") if cached else \"\"\n            if result != cached_result:\n                write_to_cache(team_key, result, source=\"web_search\")\n                alerts.append(f\"🔍 **{team_name}** (web)\\n{result}\")\n            break  # Found something — stop trying queries\n\n    return alerts"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Read",
+        "data": "Persisted per-team last result, match_date, source and cached_at; previous entries used during updates, change detection or fallback display.",
+        "source": "Skill-root .score_cache.json.",
+        "recipient": "Cache helper, ticker and live monitor.",
+        "condition": "Read when the file exists; load errors return an empty cache. No age or expiry check is implemented.",
+        "evidence": [
+          {
+            "path": "scripts/cache.py",
+            "start_line": 11,
+            "end_line": 21,
+            "quote": "CACHE_FILE = Path(__file__).parent.parent / \".score_cache.json\"\n\n\ndef load_cache() -> dict:\n    \"\"\"Load full cache from disk.\"\"\"\n    if CACHE_FILE.exists():\n        try:\n            return json.loads(CACHE_FILE.read_text())\n        except Exception:\n            return {}\n    return {}"
+          },
+          {
+            "path": "scripts/cache.py",
+            "start_line": 42,
+            "end_line": 60,
+            "quote": "def read_from_cache(team_key: str) -> dict | None:\n    \"\"\"Get cached entry for a team, or None if not cached.\"\"\"\n    return load_cache().get(team_key)\n\n\ndef format_cached_result(team_key: str) -> str:\n    \"\"\"Return a human-readable 'Last result: …' string, or empty string if no cache.\"\"\"\n    entry = read_from_cache(team_key)\n    if not entry:\n        return \"\"\n    result = entry.get(\"last_result\", \"\")\n    date_str = entry.get(\"match_date\", \"\")\n    if date_str:\n        try:\n            date_label = datetime.strptime(date_str, \"%Y-%m-%d\").strftime(\"%d.%m.\")\n        except ValueError:\n            date_label = date_str\n        return f\"Last result: {result} ({date_label})\"\n    return f\"Last result: {result}\""
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 95,
+            "end_line": 100,
+            "quote": "    # 3. No API key — fall back to cache\n    cached = format_cached_result(_cache_key)\n    if cached:\n        return f\"📦 {cached}\"\n\n    return \"🔍 No search API key — web fallback unavailable.\""
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 103,
+            "end_line": 105,
+            "quote": "            cached = read_from_cache(team_key)\n            cached_result = cached.get(\"last_result\", \"\") if cached else \"\"\n            if result != cached_result:"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Save",
+        "data": "Per-team last_result plus source, current UTC date labeled match_date and current UTC cached_at timestamp. Ticker stores a formatted ESPN summary or first web snippet; monitor stores changed web text or an eligible final score.",
+        "source": "ESPN-derived report/final score or Brave/Serper result text.",
+        "recipient": "Skill-root .score_cache.json, keyed by configured short name or team name.",
+        "condition": "Creates or replaces a team entry and rewrites the full cache. Monitor web writes require changed text; monitor ESPN writes require fulltime enabled and a transition to Final from a nonempty non-Final status. No expiry or pruning is implemented.",
+        "evidence": [
+          {
+            "path": "scripts/cache.py",
+            "start_line": 11,
+            "end_line": 11,
+            "quote": "CACHE_FILE = Path(__file__).parent.parent / \".score_cache.json\""
+          },
+          {
+            "path": "scripts/cache.py",
+            "start_line": 24,
+            "end_line": 39,
+            "quote": "def save_cache(cache: dict):\n    \"\"\"Write cache to disk.\"\"\"\n    CACHE_FILE.write_text(json.dumps(cache, indent=2))\n\n\ndef write_to_cache(team_key: str, result: str, source: str = \"web_search\"):\n    \"\"\"Store a result in the cache (creates or updates entry).\"\"\"\n    cache = load_cache()\n    now = datetime.now(timezone.utc)\n    cache[team_key] = {\n        \"last_result\": result,\n        \"match_date\": now.strftime(\"%Y-%m-%d\"),\n        \"source\": source,\n        \"cached_at\": now.isoformat(),\n    }\n    save_cache(cache)"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 64,
+            "end_line": 67,
+            "quote": "            if snippets:\n                result_text = \"🔍 Web:\\n\" + \"\\n\".join(snippets)\n                write_to_cache(_cache_key, snippets[0], source=\"brave_search\")\n                return result_text"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 88,
+            "end_line": 91,
+            "quote": "            if snippets:\n                result_text = \"🔍 Web:\\n\" + \"\\n\".join(snippets)\n                write_to_cache(_cache_key, snippets[0], source=\"serper_search\")\n                return result_text"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 111,
+            "end_line": 122,
+            "quote": "    team_key = team.get(\"short_name\", name)\n\n    lines.append(f\"{emoji} **{name}**\\n\")\n\n    if espn_id:\n        match = find_team_match(espn_id, leagues, sport)\n        if match:\n            result = format_match(match[\"event\"], include_events=True,\n                                  sport=sport, league=match[\"league\"])\n            lines.append(result)\n            # Cache the formatted result as well\n            write_to_cache(team_key, result, source=\"espn\")"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 99,
+            "end_line": 108,
+            "quote": "    for query in queries:\n        result = _try_brave(query) or _try_serper(query)\n        if result:\n            # Check if result changed from cache\n            cached = read_from_cache(team_key)\n            cached_result = cached.get(\"last_result\", \"\") if cached else \"\"\n            if result != cached_result:\n                write_to_cache(team_key, result, source=\"web_search\")\n                alerts.append(f\"🔍 **{team_name}** (web)\\n{result}\")\n            break  # Found something — stop trying queries"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 273,
+            "end_line": 276,
+            "quote": "    if alerts_config.get(\"fulltime\", True):\n        if status == \"Final\" and prev_status not in (\"Final\", \"\"):\n            our_goals = home_score if is_home else away_score\n            their_goals = away_score if is_home else home_score"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 288,
+            "end_line": 293,
+            "quote": "            final_text = \"FULL TIME\" if sport == \"soccer\" else \"FINAL\"\n            score_str = f\"{home_team} {home_score}-{away_score} {away_team}\"\n            alerts.append(f\"🏁 **{final_text} - {result}** {result_emoji} {team_emoji}\\n{score_str}\")\n            # Persist the final score to cache so ticker.py can show it later\n            team_key = team.get(\"short_name\", team_name)\n            write_to_cache(team_key, score_str, source=\"espn\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Read",
+        "data": "Previously observed per-event status, home/away scores and event identifiers.",
+        "source": "Skill-root .live_state.json.",
+        "recipient": "Live monitor.",
+        "condition": "At check_all_teams startup if the file exists; otherwise an empty state is used.",
+        "evidence": [
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "STATE_FILE = Path(__file__).parent.parent / \".live_state.json\""
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 112,
+            "end_line": 115,
+            "quote": "def load_state() -> dict:\n    if STATE_FILE.exists():\n        return json.loads(STATE_FILE.read_text())\n    return {}"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 171,
+            "end_line": 174,
+            "quote": "    # Previous state for this match\n    prev = state.get(event_id, {})\n    prev_status = prev.get(\"status\", \"\")\n    prev_events = set(prev.get(\"event_ids\", []))"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 305,
+            "end_line": 310,
+            "quote": "def check_all_teams() -> list:\n    \"\"\"Check all configured teams for updates.\"\"\"\n    all_alerts = []\n    state = load_state()\n    teams = get_teams()\n    alerts_config = get_alert_settings()"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Infer",
+        "data": "New kickoff, scoring, red-card/major-penalty, break and final-result alerts, including player/team names, clock, score and WIN/LOSS/DRAW.",
+        "source": "Tracked team configuration, alert flags, ESPN match and key-event responses, and previous live state.",
+        "recipient": "Live-monitor alert list.",
+        "condition": "Applies per-type alert flags, prior-status checks and previously seen event identifiers. Team affiliation for event emoji uses a name substring; final outcome uses home-away score comparison. Final alerts require a prior nonempty non-Final status.",
+        "evidence": [
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 134,
+            "end_line": 148,
+            "quote": "    leagues = team.get(\"espn_leagues\", [\"eng.1\", \"uefa.champions\"])\n    match = find_team_match(espn_id, leagues, sport)\n    \n    if not match:\n        return [], state\n    \n    event = match[\"event\"]\n    event_id = str(match[\"event_id\"])\n    league = match[\"league\"]\n    \n    status = event.get(\"status\", {}).get(\"type\", {}).get(\"description\", \"\")\n    \n    # Get scores\n    competitions = event.get(\"competitions\", [{}])[0]\n    competitors = competitions.get(\"competitors\", [])"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 154,
+            "end_line": 190,
+            "quote": "    for c in competitors:\n        t_name = c.get(\"team\", {}).get(\"displayName\", \"?\")\n        t_id = str(c.get(\"team\", {}).get(\"id\", \"\"))\n        # Safely parse score - ESPN returns string, empty string, or int\n        raw_score = c.get(\"score\", 0)\n        try:\n            score = int(raw_score) if raw_score not in (None, \"\", \"-\") else 0\n        except (ValueError, TypeError):\n            score = 0\n        \n        if c.get(\"homeAway\") == \"home\":\n            home_team, home_score = t_name, score\n            if t_id == espn_id:\n                is_home = True\n        else:\n            away_team, away_score = t_name, score\n    \n    # Previous state for this match\n    prev = state.get(event_id, {})\n    prev_status = prev.get(\"status\", \"\")\n    prev_events = set(prev.get(\"event_ids\", []))\n    \n    # Kick-off / Game start\n    if alerts_config.get(\"kickoff\", True):\n        # Check if game is live (covers \"In Progress\", \"First Half\", \"Second Half\", etc.)\n        is_live = status in (\"In Progress\", \"First Half\", \"Second Half\", \"1st Quarter\", \"2nd Quarter\", \n                            \"3rd Quarter\", \"4th Quarter\", \"1st Period\", \"2nd Period\", \"3rd Period\")\n        was_live = prev_status in (\"In Progress\", \"First Half\", \"Second Half\", \"1st Quarter\", \"2nd Quarter\",\n                                   \"3rd Quarter\", \"4th Quarter\", \"1st Period\", \"2nd Period\", \"3rd Period\")\n        \n        if is_live and not was_live and prev_status != \"Halftime\":\n            from espn import LEAGUES\n            sport_leagues = LEAGUES.get(sport, {})\n            opponent = away_team if is_home else home_team\n            start_emoji = \"🏟️\" if sport == \"soccer\" else \"🎮\"\n            start_text = \"KICK OFF!\" if sport == \"soccer\" else \"GAME ON!\"\n            alerts.append(f\"{start_emoji} **{start_text}** {team_emoji}\\n{home_team} vs {away_team}\\n{sport_leagues.get(league, league)}\")"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 193,
+            "end_line": 253,
+            "quote": "    try:\n        key_events = get_match_events(event_id, sport, league)\n    except:\n        key_events = []\n    \n    current_event_ids = []\n    \n    for e in key_events:\n        e_id = str(e.get(\"id\", e.get(\"clock\", {}).get(\"value\", \"\")))\n        current_event_ids.append(e_id)\n        \n        if e_id in prev_events:\n            continue  # Already seen\n        \n        event_type = e.get(\"type\", {}).get(\"text\", \"\")\n        clock = e.get(\"clock\", {}).get(\"displayValue\", \"?'\")\n        e_team = e.get(\"team\", {}).get(\"displayName\", \"\")\n        \n        participants = e.get(\"participants\", [])\n        player = participants[0].get(\"athlete\", {}).get(\"displayName\", \"Unknown\") if participants else \"Unknown\"\n        \n        is_our_team = team_name.lower() in e_team.lower()\n        \n        # Scoring events (sport-specific)\n        if alerts_config.get(\"goals\", True):\n            scored = False\n            score_line = f\"{home_team} {home_score}-{away_score} {away_team}\"\n            emoji = \"🎉\" if is_our_team else \"😬\"\n            \n            if sport == \"soccer\":\n                if \"Goal\" in event_type:\n                    scored = True\n                    if \"Own Goal\" in event_type:\n                        alerts.append(f\"{emoji} **OWN GOAL!** {clock}\\n⚽ {player} ({e_team})\\n**{score_line}**\")\n                    elif \"Penalty\" in event_type:\n                        alerts.append(f\"{emoji} **PENALTY!** {clock}\\n⚽ {player} ({e_team})\\n**{score_line}**\")\n                    else:\n                        alerts.append(f\"{emoji} **GOAL!** {clock}\\n⚽ {player} ({e_team})\\n**{score_line}**\")\n            \n            elif sport == \"football\":\n                if \"Touchdown\" in event_type:\n                    scored = True\n                    alerts.append(f\"{emoji} **TOUCHDOWN!** {clock}\\n🏈 {player} ({e_team})\\n**{score_line}**\")\n                elif \"Field Goal\" in event_type:\n                    scored = True\n                    alerts.append(f\"{emoji} **FIELD GOAL!** {clock}\\n🎯 {player} ({e_team})\\n**{score_line}**\")\n            \n            elif sport == \"basketball\":\n                if \"Three Point\" in event_type or \"3PT\" in event_type:\n                    scored = True\n                    alerts.append(f\"{emoji} **3-POINTER!** {clock}\\n🎯 {player} ({e_team})\\n**{score_line}**\")\n            \n            elif sport == \"hockey\":\n                if \"Goal\" in event_type:\n                    scored = True\n                    alerts.append(f\"{emoji} **GOAL!** {clock}\\n🏒 {player} ({e_team})\\n**{score_line}**\")\n            \n            elif sport == \"baseball\":\n                if \"Home Run\" in event_type or \"HR\" in event_type:\n                    scored = True\n                    alerts.append(f\"{emoji} **HOME RUN!** {clock}\\n⚾ {player} ({e_team})\\n**{score_line}**\")"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 255,
+            "end_line": 290,
+            "quote": "        # Red cards / Ejections (mainly for soccer and hockey)\n        if alerts_config.get(\"red_cards\", True):\n            if sport == \"soccer\" and \"Red\" in event_type:\n                emoji = \"😱\" if is_our_team else \"😈\"\n                alerts.append(f\"{emoji} 🟥 **RED CARD!** {clock}\\n{player} ({e_team})\")\n            elif sport == \"hockey\" and \"Major Penalty\" in event_type:\n                emoji = \"😱\" if is_our_team else \"😈\"\n                alerts.append(f\"{emoji} **MAJOR PENALTY!** {clock}\\n{player} ({e_team})\")\n    \n    # Halftime / Period breaks\n    if alerts_config.get(\"halftime\", True):\n        if status == \"Halftime\" and prev_status != \"Halftime\":\n            alerts.append(f\"⏸️ **HALFTIME** {team_emoji}\\n{home_team} {home_score}-{away_score} {away_team}\")\n        elif \"End of\" in status and \"End of\" not in prev_status:\n            # Basketball/Hockey period breaks\n            alerts.append(f\"⏸️ **{status.upper()}** {team_emoji}\\n{home_team} {home_score}-{away_score} {away_team}\")\n    \n    # Full time / Final\n    if alerts_config.get(\"fulltime\", True):\n        if status == \"Final\" and prev_status not in (\"Final\", \"\"):\n            our_goals = home_score if is_home else away_score\n            their_goals = away_score if is_home else home_score\n            \n            if our_goals > their_goals:\n                result_emoji = \"🎉✅\"\n                result = \"WIN!\"\n            elif our_goals < their_goals:\n                result_emoji = \"😢❌\"\n                result = \"LOSS\"\n            else:\n                result_emoji = \"🤝\"\n                result = \"DRAW\"\n            \n            final_text = \"FULL TIME\" if sport == \"soccer\" else \"FINAL\"\n            score_str = f\"{home_team} {home_score}-{away_score} {away_team}\"\n            alerts.append(f\"🏁 **{final_text} - {result}** {result_emoji} {team_emoji}\\n{score_str}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Save",
+        "data": "Per-event latest status, home_score, away_score and observed key-event identifiers.",
+        "source": "Current ESPN match data and existing live state.",
+        "recipient": "Skill-root .live_state.json.",
+        "condition": "After checking all enabled teams. Rewrites the state file; existing event entries are retained unless replaced, with no age-based cleanup shown.",
+        "evidence": [
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 27,
+            "end_line": 27,
+            "quote": "STATE_FILE = Path(__file__).parent.parent / \".live_state.json\""
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 117,
+            "end_line": 118,
+            "quote": "def save_state(state: dict):\n    STATE_FILE.write_text(json.dumps(state, indent=2))"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 198,
+            "end_line": 202,
+            "quote": "    current_event_ids = []\n    \n    for e in key_events:\n        e_id = str(e.get(\"id\", e.get(\"clock\", {}).get(\"value\", \"\")))\n        current_event_ids.append(e_id)"
+          },
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 295,
+            "end_line": 317,
+            "quote": "    # Update state\n    state[event_id] = {\n        \"status\": status,\n        \"home_score\": home_score,\n        \"away_score\": away_score,\n        \"event_ids\": current_event_ids\n    }\n    \n    return alerts, state\n\ndef check_all_teams() -> list:\n    \"\"\"Check all configured teams for updates.\"\"\"\n    all_alerts = []\n    state = load_state()\n    teams = get_teams()\n    alerts_config = get_alert_settings()\n    \n    for team in teams:\n        alerts, state = check_team(team, state, alerts_config)\n        all_alerts.extend(alerts)\n    \n    save_state(state)\n    return all_alerts"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Infer",
+        "data": "Human-readable match report containing status, home/away team names and scores, with up to the last eight formatted key events when requested.",
+        "source": "ESPN event data and optionally fetched match key events.",
+        "recipient": "Ticker result and ESPN report callers.",
+        "condition": "Detailed events are fetched only when include_events is true and an event identifier exists. League ticker disables event inclusion.",
+        "evidence": [
+          {
+            "path": "scripts/espn.py",
+            "start_line": 243,
+            "end_line": 299,
+            "quote": "def format_match(event: dict, include_events: bool = True, sport: str = \"soccer\", league: str = \"eng.1\") -> str:\n    \"\"\"Format a full match/game summary.\"\"\"\n    lines = []\n    \n    status = event.get(\"status\", {})\n    status_desc = status.get(\"type\", {}).get(\"description\", \"Unknown\")\n    clock = status.get(\"displayClock\", \"\")\n    \n    # Status header (sport-specific terminology)\n    if status_desc == \"In Progress\":\n        lines.append(f\"🔴 LIVE {clock}\")\n    elif status_desc == \"Halftime\":\n        if sport in [\"football\", \"basketball\"]:\n            lines.append(\"⏸️ HALFTIME\")\n        else:\n            lines.append(\"⏸️ HALFTIME\")\n    elif \"End of\" in status_desc:  # Basketball/Hockey periods\n        lines.append(f\"⏸️ {status_desc}\")\n    elif status_desc == \"Final\":\n        if sport == \"soccer\":\n            lines.append(\"🏁 FULL TIME\")\n        else:\n            lines.append(\"🏁 FINAL\")\n    else:\n        lines.append(f\"📅 {status_desc}\")\n    \n    # Teams and score\n    competitions = event.get(\"competitions\", [{}])[0]\n    competitors = competitions.get(\"competitors\", [])\n    \n    home = away = \"\"\n    home_score = away_score = \"0\"\n    \n    for c in competitors:\n        team_name = c.get(\"team\", {}).get(\"displayName\", \"?\")\n        score = c.get(\"score\", \"0\")\n        if c.get(\"homeAway\") == \"home\":\n            home, home_score = team_name, score\n        else:\n            away, away_score = team_name, score\n    \n    lines.append(f\"**{home} {home_score} - {away_score} {away}**\")\n    \n    # Events\n    if include_events:\n        event_id = event.get(\"id\")\n        if event_id:\n            try:\n                events = get_match_events(event_id, sport, league)\n                if events:\n                    lines.append(\"\")\n                    for e in events[-8:]:\n                        lines.append(format_event(e, sport))\n            except Exception:\n                pass\n    \n    return \"\\n\".join(lines)"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 188,
+            "end_line": 211,
+            "quote": "def format_event(event: dict, sport: str = \"soccer\") -> str:\n    \"\"\"Format a match/game event for display.\"\"\"\n    event_type = event.get(\"type\", {}).get(\"text\", \"\")\n    clock = event.get(\"clock\", {}).get(\"displayValue\", \"?'\")\n    team = event.get(\"team\", {}).get(\"displayName\", \"\")\n    \n    participants = event.get(\"participants\", [])\n    player = participants[0].get(\"athlete\", {}).get(\"displayName\", \"\") if participants else \"\"\n    \n    # Soccer events\n    if sport == \"soccer\":\n        if \"Goal\" in event_type:\n            detail = \"\"\n            if \"Own Goal\" in event_type:\n                detail = \" (OG)\"\n            elif \"Penalty\" in event_type:\n                detail = \" (pen)\"\n            return f\"⚽ {clock} {player}{detail} ({team})\"\n        elif \"Yellow\" in event_type:\n            return f\"🟨 {clock} {player} ({team})\"\n        elif \"Red\" in event_type:\n            return f\"🟥 {clock} {player} ({team})\"\n        elif \"Substitution\" in event_type:\n            return f\"🔄 {clock} {player} ({team})\""
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Send",
+        "data": "New live-monitor alerts containing sports events or changed web-search results.",
+        "source": "check_all_teams alert list.",
+        "recipient": "Standard output; any downstream reader is unspecified by this script.",
+        "condition": "Printed only when the alert list is nonempty. With --verbose and no alerts, prints a status message instead.",
+        "evidence": [
+          {
+            "path": "scripts/live_monitor.py",
+            "start_line": 305,
+            "end_line": 327,
+            "quote": "def check_all_teams() -> list:\n    \"\"\"Check all configured teams for updates.\"\"\"\n    all_alerts = []\n    state = load_state()\n    teams = get_teams()\n    alerts_config = get_alert_settings()\n    \n    for team in teams:\n        alerts, state = check_team(team, state, alerts_config)\n        all_alerts.extend(alerts)\n    \n    save_state(state)\n    return all_alerts\n\nif __name__ == \"__main__\":\n    alerts = check_all_teams()\n    \n    if alerts:\n        for alert in alerts:\n            print(alert)\n            print(\"---\")\n    elif \"--verbose\" in sys.argv:\n        print(\"No live updates.\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Send",
+        "data": "Team ticker reports, league scoreboards, web snippets or cached last-result text.",
+        "source": "Configured enabled teams and ESPN/web/cache-derived ticker functions.",
+        "recipient": "Standard output.",
+        "condition": "Default or all command prints all teams; league command prints a selected league; another command selects a team by name/short-name substring.",
+        "evidence": [
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 144,
+            "end_line": 158,
+            "quote": "def all_teams_ticker() -> str:\n    \"\"\"Generate ticker for all configured teams.\"\"\"\n    teams = get_teams()\n\n    if not teams:\n        return \"No teams configured. Copy config.example.json to config.json and add your teams!\"\n\n    parts = []\n    for team in teams:\n        parts.append(team_ticker(team))\n\n    if not parts:\n        return \"No teams configured.\"\n\n    return (\"\\n\" + \"─\" * 30 + \"\\n\").join(parts)"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 166,
+            "end_line": 176,
+            "quote": "    data = get_scoreboard(sport, league)\n    events = data.get(\"events\", [])\n\n    if not events:\n        lines.append(\"No matches in scoreboard.\")\n    else:\n        for event in events:\n            lines.append(format_match(event, include_events=False, sport=sport, league=league))\n            lines.append(\"\")\n\n    return \"\\n\".join(lines)"
+          },
+          {
+            "path": "scripts/ticker.py",
+            "start_line": 178,
+            "end_line": 198,
+            "quote": "if __name__ == \"__main__\":\n    if len(sys.argv) < 2:\n        print(all_teams_ticker())\n    else:\n        cmd = sys.argv[1]\n\n        if cmd == \"league\":\n            league = sys.argv[2] if len(sys.argv) > 2 else \"eng.1\"\n            sport = sys.argv[3] if len(sys.argv) > 3 else \"soccer\"\n            print(league_ticker(league, sport))\n        elif cmd == \"all\":\n            print(all_teams_ticker())\n        else:\n            teams = get_teams()\n            team_lower = cmd.lower()\n            for team in teams:\n                if team_lower in team.get(\"name\", \"\").lower() or team_lower in team.get(\"short_name\", \"\").lower():\n                    print(team_ticker(team))\n                    break\n            else:\n                print(f\"Team '{cmd}' not found in config.\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Send",
+        "data": "Upcoming fixtures as JSON or formatted schedules, including configured team attributes in JSON and opponent/date/competition/venue in reports.",
+        "source": "Schedule functions using configured teams and ESPN fixtures.",
+        "recipient": "Standard output.",
+        "condition": "Controlled by --json, --team, --compact and --days; defaults to all configured eligible teams over 14 days.",
+        "evidence": [
+          {
+            "path": "scripts/schedule.py",
+            "start_line": 128,
+            "end_line": 140,
+            "quote": "    if args.json:\n        fixtures = get_all_fixtures_json(days=args.days, team_name=args.team)\n        print(json.dumps(fixtures, indent=2))\n    elif args.team:\n        team = get_team_by_name(args.team)\n        if team:\n            fixtures = get_team_schedule(team, days=args.days)\n            print(format_team_schedule(team, fixtures, compact=args.compact))\n        else:\n            print(f\"Team '{args.team}' not found in config.\")\n            sys.exit(1)\n    else:\n        print(all_teams_schedule(days=args.days, compact=args.compact))"
+          },
+          {
+            "path": "scripts/schedule.py",
+            "start_line": 101,
+            "end_line": 110,
+            "quote": "        fixtures = get_team_schedule(team, days)\n        for f in fixtures:\n            f[\"team_name\"] = team.get(\"name\")\n            f[\"team_short\"] = team.get(\"short_name\")\n            f[\"team_emoji\"] = team.get(\"emoji\", \"⚽\")\n            f[\"team_espn_id\"] = team.get(\"espn_id\")\n            all_fixtures.append(f)\n    \n    # Sort all fixtures by date\n    all_fixtures.sort(key=lambda x: x.get(\"date\", \"\"))"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 416,
+            "end_line": 438,
+            "quote": "    date_str = fixture.get(\"date\", \"\")\n    opponent = fixture.get(\"opponent_short\", fixture.get(\"opponent\", \"?\"))\n    comp = fixture.get(\"competition\", \"\")\n    is_home = fixture.get(\"is_home\", True)\n    venue = fixture.get(\"venue\", \"\")\n    \n    # Parse date\n    try:\n        dt = datetime.fromisoformat(date_str.replace(\"Z\", \"+00:00\"))\n        date_fmt = dt.strftime(\"%a %d %b\")\n        time_fmt = dt.strftime(\"%H:%M\")\n    except:\n        date_fmt = date_str[:10]\n        time_fmt = \"TBD\"\n    \n    # Home/Away indicator\n    location = \"vs\" if is_home else \"@\"\n    \n    result = f\"📅 {date_fmt} {time_fmt} UTC | {location} {opponent} ({comp})\"\n    if include_venue and venue:\n        result += f\"\\n   📍 {venue}\"\n    \n    return result"
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Send",
+        "data": "Configuration contents or configured team names/identifiers; onboarding summary of teams, alert mode, reminder setting, quiet hours and configuration path.",
+        "source": "Loaded configuration or newly created onboarding configuration.",
+        "recipient": "Standard output.",
+        "condition": "Configuration manager show/teams commands or successful onboarding summary.",
+        "evidence": [
+          {
+            "path": "scripts/config.py",
+            "start_line": 106,
+            "end_line": 116,
+            "quote": "    if cmd == \"show\":\n        print(json.dumps(load_config(), indent=2))\n    elif cmd == \"teams\":\n        teams = get_teams()\n        print(f\"Configured teams ({len(teams)}):\\n\")\n        for t in teams:\n            emoji = t.get(\"emoji\", \"⚽\")\n            name = t.get(\"name\")\n            espn = t.get(\"espn_id\", \"-\")\n            tsdb = t.get(\"thesportsdb_id\", \"-\")\n            print(f\"  {emoji} {name:25} ESPN:{espn:6} TSDB:{tsdb}\")"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 509,
+            "end_line": 534,
+            "quote": "    for sport, teams in teams_by_sport.items():\n        sport_emoji = {\"soccer\": \"⚽\", \"football\": \"🏈\", \"basketball\": \"🏀\", \n                       \"hockey\": \"🏒\", \"baseball\": \"⚾\", \"racing\": \"🏎️\"}.get(sport, \"🏆\")\n        print(f\"  {sport_emoji} {sport.upper()}\")\n        for t in teams:\n            print(f\"     {t.get('emoji', '')} {t['name']}\")\n        print()\n    \n    # Alert style\n    mode = config.get(\"alerts\", {}).get(\"mode\", \"live\")\n    mode_display = {\"live\": \"⚡ Live Scores\", \"final\": \"🏁 Final Only\", \"digest\": \"📰 Daily Digest\"}\n    print(f\"  🔔 Alerts: {mode_display.get(mode, mode)}\")\n    \n    # Reminders\n    if config.get(\"preferences\", {}).get(\"game_reminders\"):\n        print(\"  ⏰ Game-day reminders: ON\")\n    \n    # Quiet hours\n    quiet = config.get(\"preferences\", {}).get(\"quiet_hours\")\n    if quiet:\n        print(f\"  🌙 Quiet hours: {quiet['start']} - {quiet['end']}\")\n    \n    print()\n    print(\"═\" * 50)\n    print()\n    print(f\"Config saved to: {CONFIG_FILE}\")"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 589,
+            "end_line": 590,
+            "quote": "        # Show summary\n        step_summary(config)"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Send",
+        "data": "Team search text and matching team names, ESPN identifiers and league names; direct ESPN scoreboard reports or match-identifier status text.",
+        "source": "CLI/user search text and ESPN search/scoreboard results.",
+        "recipient": "Standard output.",
+        "condition": "During setup team search, setup find, or ESPN scoreboard/search/match commands.",
+        "evidence": [
+          {
+            "path": "scripts/setup.py",
+            "start_line": 349,
+            "end_line": 362,
+            "quote": "                print(f\"\\nSearching for '{team_name}'...\\n\")\n                results = search_team(team_name, sport[\"espn_sport\"])\n                \n                if results:\n                    seen = set()\n                    unique_results = []\n                    for r in results[:10]:  # Limit to 10\n                        key = (r['id'], r['name'])\n                        if key not in seen:\n                            seen.add(key)\n                            unique_results.append(r)\n                    \n                    for i, r in enumerate(unique_results, 1):\n                        print(f\"  [{i}] {r['name']} ({r['league_name']})\")"
+          },
+          {
+            "path": "scripts/setup.py",
+            "start_line": 596,
+            "end_line": 609,
+            "quote": "def find_team_id(team_name: str, sport: str = \"soccer\"):\n    \"\"\"Search for a team's ESPN ID.\"\"\"\n    print(f\"🔍 Searching for '{team_name}' in {sport}...\\n\")\n    \n    results = search_team(team_name, sport)\n    \n    if results:\n        seen = set()\n        print(\"Found:\\n\")\n        for r in results:\n            key = (r['id'], r['name'])\n            if key not in seen:\n                seen.add(key)\n                print(f\"  ESPN ID: {r['id']:6} | {r['name']:30} | {r['league_name']}\")"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 473,
+            "end_line": 481,
+            "quote": "    elif cmd == \"scoreboard\":\n        league = sys.argv[2] if len(sys.argv) > 2 else \"eng.1\"\n        sport = sys.argv[3] if len(sys.argv) > 3 else \"soccer\"\n        data = get_scoreboard(sport, league)\n        sport_leagues = LEAGUES.get(sport, {})\n        print(f\"=== {sport_leagues.get(league, league)} ===\\n\")\n        for event in data.get(\"events\", []):\n            print(format_match(event, include_events=False, sport=sport, league=league))\n            print()"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 496,
+            "end_line": 502,
+            "quote": "        results = search_team(team, sport)\n        if results:\n            print(f\"Found teams matching '{team}' in {sport}:\\n\")\n            for r in results:\n                print(f\"  ID: {r['id']:6} | {r['name']:30} | {r['league_name']}\")\n        else:\n            print(f\"No teams found matching '{team}' in {sport}\")"
+          },
+          {
+            "path": "scripts/espn.py",
+            "start_line": 508,
+            "end_line": 514,
+            "quote": "        event_id = sys.argv[2]\n        league = sys.argv[3] if len(sys.argv) > 3 else \"eng.1\"\n        sport = sys.argv[4] if len(sys.argv) > 4 else \"soccer\"\n        details = get_match_details(event_id, sport, league)\n        event = details.get(\"header\", {}).get(\"competitions\", [{}])[0]\n        # Reconstruct event format\n        print(f\"Match details for event {event_id}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Infer",
+        "data": "Fixture-specific reminder, ticker-start and repeating ticker job configurations containing team/opponent descriptions, venue, event identifier, league, sport, kickoff and monitoring window.",
+        "source": "Upcoming fixtures enriched with configured team attributes; reminder and ticker timing parameters.",
+        "recipient": "In-memory cron configuration list.",
+        "condition": "Skips missing/invalid dates and past kickoffs. Reminder defaults to 30 minutes before kickoff; ticker starts 5 minutes before and has a 180-minute post-kickoff window. Repeating job is disabled by default. These are generated configurations, not created jobs.",
+        "evidence": [
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 30,
+            "end_line": 31,
+            "quote": "def fixture_to_crons(fixture: dict, reminder_mins: int = 30, \n                     ticker_before_mins: int = 5, ticker_duration_mins: int = 180) -> list:"
+          },
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 45,
+            "end_line": 92,
+            "quote": "    date_str = fixture.get(\"date\", \"\")\n    if not date_str:\n        return []\n    \n    try:\n        kickoff = datetime.fromisoformat(date_str.replace(\"Z\", \"+00:00\"))\n    except:\n        return []\n    \n    # Skip if already in the past\n    now = datetime.now(timezone.utc)\n    if kickoff <= now:\n        return []\n    \n    team_name = fixture.get(\"team_name\", \"Team\")\n    team_short = fixture.get(\"team_short\", team_name.split()[0])\n    opponent = fixture.get(\"opponent_short\", fixture.get(\"opponent\", \"Opponent\"))\n    comp = fixture.get(\"competition\", \"Match\")\n    is_home = fixture.get(\"is_home\", True)\n    event_id = fixture.get(\"event_id\", \"\")\n    league = fixture.get(\"league\", \"eng.1\")\n    sport = fixture.get(\"sport\", \"soccer\")\n    \n    # Match description\n    home_away = \"vs\" if is_home else \"@\"\n    match_desc = f\"{team_short} {home_away} {opponent} ({comp})\"\n    \n    # Date parts for cron expression\n    kickoff_date = kickoff.strftime(\"%Y-%m-%d\")\n    \n    # 1. Pre-match reminder\n    reminder_time = kickoff - timedelta(minutes=reminder_mins)\n    if reminder_time > now:\n        reminder_cron = f\"{reminder_time.minute} {reminder_time.hour} {reminder_time.day} {reminder_time.month} *\"\n        crons.append({\n            \"name\": f\"{team_short.lower()}-reminder-{kickoff_date}\",\n            \"description\": f\"Pre-match reminder: {match_desc}\",\n            \"schedule\": reminder_cron,\n            \"oneshot\": True,\n            \"enabled\": True,\n            \"message\": f\"⏰ **Match Reminder!**\\n\\n{fixture.get('team_emoji', '⚽')} {match_desc}\\n\\n🕐 Kickoff in {reminder_mins} minutes!\\n📍 {fixture.get('venue', 'TBD')}\",\n            \"metadata\": {\n                \"type\": \"reminder\",\n                \"fixture_id\": event_id,\n                \"kickoff\": date_str,\n                \"team\": team_short\n            }\n        })"
+          },
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 94,
+            "end_line": 144,
+            "quote": "    # 2. Live ticker start (one-shot to enable the monitoring)\n    ticker_start = kickoff - timedelta(minutes=ticker_before_mins)\n    if ticker_start > now:\n        ticker_start_cron = f\"{ticker_start.minute} {ticker_start.hour} {ticker_start.day} {ticker_start.month} *\"\n        \n        # End time for ticker (kickoff + duration)\n        ticker_end = kickoff + timedelta(minutes=ticker_duration_mins)\n        \n        crons.append({\n            \"name\": f\"{team_short.lower()}-ticker-start-{kickoff_date}\",\n            \"description\": f\"Start live ticker: {match_desc}\",\n            \"schedule\": ticker_start_cron,\n            \"oneshot\": True,\n            \"enabled\": True,\n            \"message\": f\"Start live monitoring for {match_desc}. Run `python3 scripts/live_monitor.py` every 2 minutes until match ends. Event ID: {event_id}, League: {league}, Sport: {sport}\",\n            \"metadata\": {\n                \"type\": \"ticker_start\",\n                \"fixture_id\": event_id,\n                \"league\": league,\n                \"sport\": sport,\n                \"kickoff\": date_str,\n                \"end_time\": ticker_end.isoformat(),\n                \"team\": team_short\n            }\n        })\n    \n    # 3. Live ticker (repeating during match)\n    # This runs every 2 minutes for the duration of the match\n    # Uses a different approach: window-based cron\n    crons.append({\n        \"name\": f\"{team_short.lower()}-ticker-{kickoff_date}\",\n        \"description\": f\"Live updates: {match_desc}\",\n        \"schedule\": \"*/2 * * * *\",  # Every 2 minutes\n        \"oneshot\": False,\n        \"enabled\": False,  # Disabled by default, enabled by ticker_start\n        \"window\": {\n            \"start\": (kickoff - timedelta(minutes=ticker_before_mins)).isoformat(),\n            \"end\": (kickoff + timedelta(minutes=ticker_duration_mins)).isoformat()\n        },\n        \"message\": f\"Check for updates on {match_desc}. Run `python3 scripts/live_monitor.py --event {event_id} --league {league} --sport {sport}`. Only report new events.\",\n        \"metadata\": {\n            \"type\": \"ticker\",\n            \"fixture_id\": event_id,\n            \"league\": league,\n            \"sport\": sport,\n            \"kickoff\": date_str,\n            \"team\": team_short\n        }\n    })\n    \n    return crons"
+          },
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 235,
+            "end_line": 243,
+            "quote": "    # Get fixtures\n    fixtures = get_all_fixtures_json(days=args.days, team_name=args.team)\n    \n    if not fixtures:\n        print(\"No upcoming fixtures found.\")\n        sys.exit(0)\n    \n    # Generate cron configs\n    crons = generate_cron_configs(fixtures, reminder_mins=args.reminder)"
+          },
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 147,
+            "end_line": 155,
+            "quote": "def generate_cron_configs(fixtures: list, reminder_mins: int = 30) -> list:\n    \"\"\"Generate cron configs for a list of fixtures.\"\"\"\n    all_crons = []\n    \n    for fixture in fixtures:\n        crons = fixture_to_crons(fixture, reminder_mins=reminder_mins)\n        all_crons.extend(crons)\n    \n    return all_crons"
+          }
+        ]
+      },
+      {
+        "move_id": "m31",
+        "operation": "Save",
+        "data": "Generated fixture-specific cron configurations and embedded match details/instructions.",
+        "source": "generate_cron_configs output.",
+        "recipient": "File path supplied through --output or -o.",
+        "condition": "Only when an output path is provided and fixtures were found. write_text replaces file contents; no expiry is specified.",
+        "evidence": [
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 224,
+            "end_line": 225,
+            "quote": "    parser.add_argument(\"--output\", \"-o\", type=str,\n                       help=\"Output JSON file path\")"
+          },
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 235,
+            "end_line": 248,
+            "quote": "    # Get fixtures\n    fixtures = get_all_fixtures_json(days=args.days, team_name=args.team)\n    \n    if not fixtures:\n        print(\"No upcoming fixtures found.\")\n        sys.exit(0)\n    \n    # Generate cron configs\n    crons = generate_cron_configs(fixtures, reminder_mins=args.reminder)\n    \n    # Output\n    if args.output:\n        Path(args.output).write_text(json.dumps(crons, indent=2))\n        print(f\"✅ Wrote {len(crons)} cron configs to {args.output}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "m32",
+        "operation": "Read",
+        "data": "Telegram recipient identifier and scheduling timezone.",
+        "source": "setup_crons.py positional command-line arguments.",
+        "recipient": "Cron configuration generator.",
+        "condition": "Normal invocation requires at least two arguments; --list instead uses YOUR_TELEGRAM_ID and Europe/London example values.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 86,
+            "end_line": 102,
+            "quote": "def main():\n    if len(sys.argv) == 2 and sys.argv[1] == \"--list\":\n        crons = get_cron_configs(\"YOUR_TELEGRAM_ID\", \"Europe/London\")\n        print(json.dumps(crons, indent=2))\n        return\n    \n    if len(sys.argv) < 3:\n        print(__doc__)\n        print(\"\\nExamples:\")\n        print(\"  python3 setup_crons.py 123456789 'Europe/London'\")\n        print(\"  python3 setup_crons.py --list\")\n        sys.exit(1)\n    \n    telegram_id = sys.argv[1]\n    timezone = sys.argv[2]\n    \n    crons = get_cron_configs(telegram_id, timezone)"
+          }
+        ]
+      },
+      {
+        "move_id": "m33",
+        "operation": "Infer",
+        "data": "Baseline daily match-check, live-ticker and reminder job configurations, incorporating supplied timezone, Telegram identifier, absolute script paths and platform session/delivery settings.",
+        "source": "Telegram identifier and timezone arguments; script location and built-in job templates.",
+        "recipient": "In-memory cron configuration list.",
+        "condition": "Daily check is enabled at 09:00; two-minute live ticker and reminder are initially disabled. These are templates returned to the caller.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 18,
+            "end_line": 45,
+            "quote": "SKILL_DIR = Path(__file__).parent.parent\nSCRIPT_DIR = SKILL_DIR / \"scripts\"\n\n\ndef get_cron_configs(telegram_id: str, timezone: str) -> list[dict]:\n    \"\"\"Generate cron job configurations for the agent to create.\"\"\"\n    \n    return [\n        {\n            \"name\": \"football-match-check\",\n            \"description\": \"Daily morning check for team matches. Auto-updates live-ticker schedule when matches found.\",\n            \"schedule\": {\n                \"kind\": \"cron\",\n                \"expr\": \"0 9 * * *\",\n                \"tz\": timezone\n            },\n            \"sessionTarget\": \"isolated\",\n            \"payload\": {\n                \"kind\": \"agentTurn\",\n                \"message\": f\"Check if any configured teams play today.\\n\\nRun: python3 {SCRIPT_DIR}/ticker.py\\n\\nIf a match is found today:\\n1. Send match info to Telegram\\n2. Update the live-ticker cron schedule to run every 2 mins during match hours\\n3. Set a reminder 5 mins before kickoff\\n\\nIf no match today, reply NO_REPLY\"\n            },\n            \"delivery\": {\n                \"mode\": \"announce\",\n                \"channel\": \"telegram\",\n                \"to\": telegram_id,\n                \"bestEffort\": True\n            },\n            \"enabled\": True"
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 47,
+            "end_line": 83,
+            "quote": "        {\n            \"name\": \"sports-live-ticker\",\n            \"description\": \"Live match monitoring - runs every 2 mins during matches. Auto-scheduled by match-check.\",\n            \"schedule\": {\n                \"kind\": \"cron\",\n                \"expr\": \"*/2 * * * *\",\n                \"tz\": timezone\n            },\n            \"sessionTarget\": \"isolated\",\n            \"payload\": {\n                \"kind\": \"agentTurn\",\n                \"message\": f\"Run: python3 {SCRIPT_DIR}/live_monitor.py\\n\\nIf output contains alerts (goals, kick-off, full-time, red cards), format nicely and include in response.\\nIf no alerts, reply NO_REPLY\"\n            },\n            \"delivery\": {\n                \"mode\": \"announce\",\n                \"channel\": \"telegram\",\n                \"to\": telegram_id,\n                \"bestEffort\": False\n            },\n            \"enabled\": False\n        },\n        {\n            \"name\": \"sports-reminder\",\n            \"description\": \"Pre-match reminder. Auto-scheduled by match-check.\",\n            \"schedule\": {\n                \"kind\": \"cron\",\n                \"expr\": \"0 14 * * *\",\n                \"tz\": timezone\n            },\n            \"sessionTarget\": \"main\",\n            \"payload\": {\n                \"kind\": \"systemEvent\",\n                \"text\": \"⏰ Match reminder: Your team plays soon! Check the schedule.\"\n            },\n            \"enabled\": False\n        }\n    ]"
+          }
+        ]
+      },
+      {
+        "move_id": "m34",
+        "operation": "Save",
+        "data": "Baseline cron configurations, including Telegram recipient identifier, timezone, script paths, delivery settings and agent instructions.",
+        "source": "get_cron_configs result based on command-line arguments.",
+        "recipient": "Skill-root cron_configs.json.",
+        "condition": "Normal setup_crons invocation after JSON output; --list returns before saving. Mode w replaces existing contents. No retention limit is specified.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 18,
+            "end_line": 19,
+            "quote": "SKILL_DIR = Path(__file__).parent.parent\nSCRIPT_DIR = SKILL_DIR / \"scripts\""
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 99,
+            "end_line": 113,
+            "quote": "    telegram_id = sys.argv[1]\n    timezone = sys.argv[2]\n    \n    crons = get_cron_configs(telegram_id, timezone)\n    \n    # Output JSON for the agent to use with cron tool\n    print(json.dumps({\n        \"instructions\": \"Use the cron tool to create these jobs. Do NOT use subprocess or CLI commands.\",\n        \"crons\": crons\n    }, indent=2))\n    \n    # Save configs for reference\n    config_file = SKILL_DIR / \"cron_configs.json\"\n    with open(config_file, \"w\") as f:\n        json.dump(crons, f, indent=2)"
+          }
+        ]
+      },
+      {
+        "move_id": "m35",
+        "operation": "Send",
+        "data": "Generated cron configurations, embedded match details or Telegram/timezone settings, and optional instructions for the consuming agent; alternatively a human-readable cron summary.",
+        "source": "Fixture-specific or baseline cron generators.",
+        "recipient": "Standard output.",
+        "condition": "Auto generator prints summary by default, full JSON with --json, or JSON plus agent instructions with --commands; --output takes precedence. Baseline generator prints JSON, including examples for --list.",
+        "evidence": [
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 190,
+            "end_line": 202,
+            "quote": "def output_openclaw_commands(crons: list) -> str:\n    \"\"\"Generate automation JSON configs for the agent to create.\n\n    NOTE: Does NOT execute anything. Outputs JSON the agent passes to the\n    platform automations tool, or to `openclaw automations add`.\n    \"\"\"\n    if not crons:\n        return json.dumps({\"message\": \"No crons to add\"})\n    \n    return json.dumps({\n        \"instructions\": \"Create these as automations (openclaw automations add, or the automations tool). Do NOT shell out from a script.\",\n        \"crons\": crons\n    }, indent=2)"
+          },
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 243,
+            "end_line": 256,
+            "quote": "    crons = generate_cron_configs(fixtures, reminder_mins=args.reminder)\n    \n    # Output\n    if args.output:\n        Path(args.output).write_text(json.dumps(crons, indent=2))\n        print(f\"✅ Wrote {len(crons)} cron configs to {args.output}\")\n    elif args.commands:\n        print(output_openclaw_commands(crons))\n    elif args.json:\n        print(json.dumps(crons, indent=2))\n    else:\n        # Default: summary\n        print(format_cron_summary(crons))\n        print(\"\\n💡 Use --json or --commands for machine-readable output\")"
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 87,
+            "end_line": 90,
+            "quote": "    if len(sys.argv) == 2 and sys.argv[1] == \"--list\":\n        crons = get_cron_configs(\"YOUR_TELEGRAM_ID\", \"Europe/London\")\n        print(json.dumps(crons, indent=2))\n        return"
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 99,
+            "end_line": 108,
+            "quote": "    telegram_id = sys.argv[1]\n    timezone = sys.argv[2]\n    \n    crons = get_cron_configs(telegram_id, timezone)\n    \n    # Output JSON for the agent to use with cron tool\n    print(json.dumps({\n        \"instructions\": \"Use the cron tool to create these jobs. Do NOT use subprocess or CLI commands.\",\n        \"crons\": crons\n    }, indent=2))"
+          }
+        ]
+      },
+      {
+        "move_id": "m36",
+        "operation": "Send",
+        "data": "Generated automation/cron configurations containing schedules, payloads, match metadata and, for baseline jobs, Telegram delivery settings.",
+        "source": "JSON emitted by cron-generation scripts.",
+        "recipient": "OpenClaw automations or platform cron/automations tool.",
+        "condition": "Instruction to a consuming agent, not a tool call executed by these Python scripts. Actual creation depends on the external execution context.",
+        "evidence": [
+          {
+            "path": "scripts/auto_setup_crons.py",
+            "start_line": 190,
+            "end_line": 202,
+            "quote": "def output_openclaw_commands(crons: list) -> str:\n    \"\"\"Generate automation JSON configs for the agent to create.\n\n    NOTE: Does NOT execute anything. Outputs JSON the agent passes to the\n    platform automations tool, or to `openclaw automations add`.\n    \"\"\"\n    if not crons:\n        return json.dumps({\"message\": \"No crons to add\"})\n    \n    return json.dumps({\n        \"instructions\": \"Create these as automations (openclaw automations add, or the automations tool). Do NOT shell out from a script.\",\n        \"crons\": crons\n    }, indent=2)"
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 104,
+            "end_line": 108,
+            "quote": "    # Output JSON for the agent to use with cron tool\n    print(json.dumps({\n        \"instructions\": \"Use the cron tool to create these jobs. Do NOT use subprocess or CLI commands.\",\n        \"crons\": crons\n    }, indent=2))"
+          }
+        ]
+      },
+      {
+        "move_id": "m37",
+        "operation": "Send",
+        "data": "Information about a configured team's match found today.",
+        "source": "Ticker output interpreted by the generated daily match-check agent task.",
+        "recipient": "Telegram recipient identified by the supplied telegram_id.",
+        "condition": "Configured/instructed platform behavior, not a direct Python Telegram request. Daily 09:00 check in the supplied timezone; send only if a match is found, otherwise NO_REPLY. Delivery is announce with bestEffort true.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 22,
+            "end_line": 45,
+            "quote": "def get_cron_configs(telegram_id: str, timezone: str) -> list[dict]:\n    \"\"\"Generate cron job configurations for the agent to create.\"\"\"\n    \n    return [\n        {\n            \"name\": \"football-match-check\",\n            \"description\": \"Daily morning check for team matches. Auto-updates live-ticker schedule when matches found.\",\n            \"schedule\": {\n                \"kind\": \"cron\",\n                \"expr\": \"0 9 * * *\",\n                \"tz\": timezone\n            },\n            \"sessionTarget\": \"isolated\",\n            \"payload\": {\n                \"kind\": \"agentTurn\",\n                \"message\": f\"Check if any configured teams play today.\\n\\nRun: python3 {SCRIPT_DIR}/ticker.py\\n\\nIf a match is found today:\\n1. Send match info to Telegram\\n2. Update the live-ticker cron schedule to run every 2 mins during match hours\\n3. Set a reminder 5 mins before kickoff\\n\\nIf no match today, reply NO_REPLY\"\n            },\n            \"delivery\": {\n                \"mode\": \"announce\",\n                \"channel\": \"telegram\",\n                \"to\": telegram_id,\n                \"bestEffort\": True\n            },\n            \"enabled\": True"
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 99,
+            "end_line": 102,
+            "quote": "    telegram_id = sys.argv[1]\n    timezone = sys.argv[2]\n    \n    crons = get_cron_configs(telegram_id, timezone)"
+          }
+        ]
+      },
+      {
+        "move_id": "m38",
+        "operation": "Send",
+        "data": "Formatted live-monitor alerts, including goals, kickoff, full-time and red-card updates.",
+        "source": "live_monitor.py output interpreted by the generated live-ticker agent task.",
+        "recipient": "Telegram recipient identified by the supplied telegram_id.",
+        "condition": "Configured/instructed platform behavior. Job is initially disabled and scheduled every two minutes; requires external creation/enabling and execution. No alerts produces NO_REPLY. Delivery is announce with bestEffort false.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 47,
+            "end_line": 66,
+            "quote": "        {\n            \"name\": \"sports-live-ticker\",\n            \"description\": \"Live match monitoring - runs every 2 mins during matches. Auto-scheduled by match-check.\",\n            \"schedule\": {\n                \"kind\": \"cron\",\n                \"expr\": \"*/2 * * * *\",\n                \"tz\": timezone\n            },\n            \"sessionTarget\": \"isolated\",\n            \"payload\": {\n                \"kind\": \"agentTurn\",\n                \"message\": f\"Run: python3 {SCRIPT_DIR}/live_monitor.py\\n\\nIf output contains alerts (goals, kick-off, full-time, red cards), format nicely and include in response.\\nIf no alerts, reply NO_REPLY\"\n            },\n            \"delivery\": {\n                \"mode\": \"announce\",\n                \"channel\": \"telegram\",\n                \"to\": telegram_id,\n                \"bestEffort\": False\n            },\n            \"enabled\": False"
+          },
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 99,
+            "end_line": 102,
+            "quote": "    telegram_id = sys.argv[1]\n    timezone = sys.argv[2]\n    \n    crons = get_cron_configs(telegram_id, timezone)"
+          }
+        ]
+      },
+      {
+        "move_id": "m39",
+        "operation": "Save",
+        "data": "Updated live-ticker schedule and pre-kickoff reminder timing.",
+        "source": "Today's match information interpreted by the daily match-check task.",
+        "recipient": "Platform live-ticker and reminder cron/automation configuration.",
+        "condition": "Generated instruction applies only when a match is found. It requests two-minute monitoring during match hours and a reminder five minutes before kickoff; the script does not perform the update.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 34,
+            "end_line": 38,
+            "quote": "            \"sessionTarget\": \"isolated\",\n            \"payload\": {\n                \"kind\": \"agentTurn\",\n                \"message\": f\"Check if any configured teams play today.\\n\\nRun: python3 {SCRIPT_DIR}/ticker.py\\n\\nIf a match is found today:\\n1. Send match info to Telegram\\n2. Update the live-ticker cron schedule to run every 2 mins during match hours\\n3. Set a reminder 5 mins before kickoff\\n\\nIf no match today, reply NO_REPLY\"\n            },"
+          }
+        ]
+      },
+      {
+        "move_id": "m40",
+        "operation": "Send",
+        "data": "Generic pre-match reminder text.",
+        "source": "Generated sports-reminder payload.",
+        "recipient": "Platform main session as a systemEvent.",
+        "condition": "Configuration only; initially disabled. Actual delivery depends on external job creation, scheduling and enabling. No Telegram destination is specified for this reminder.",
+        "evidence": [
+          {
+            "path": "scripts/setup_crons.py",
+            "start_line": 68,
+            "end_line": 82,
+            "quote": "        {\n            \"name\": \"sports-reminder\",\n            \"description\": \"Pre-match reminder. Auto-scheduled by match-check.\",\n            \"schedule\": {\n                \"kind\": \"cron\",\n                \"expr\": \"0 14 * * *\",\n                \"tz\": timezone\n            },\n            \"sessionTarget\": \"main\",\n            \"payload\": {\n                \"kind\": \"systemEvent\",\n                \"text\": \"⏰ Match reminder: Your team plays soon! Check the schedule.\"\n            },\n            \"enabled\": False\n        }"
+          }
+        ]
+      }
+    ]
+  }
+}

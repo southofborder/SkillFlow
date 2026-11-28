@@ -1,0 +1,228 @@
+{
+  "status": "completed",
+  "declared_purpose": "Produce a sourced, preliminary company/person qualification verdict before outreach: resolve identity, assess ICP fit and activity, identify red flags, and return concise chat output. Structured export is optional. Prismfy search, support and falsification checks, and conservative handling of uncertainty are explicit requirements; fixed query templates and full query-history retention are implementation choices. Sources: SKILL.md:22-33,111-112,137-181,198-206,222-228; README.md:3-16,40-50; _meta.json:5-7.",
+  "data_operations": [
+    {
+      "operation": "Read runtime inputs and credentials locally",
+      "source": "Command-line arguments and process environment",
+      "data_scope": "Company, domain, person, person-company, role, geo, ICP, query family, engine selections, output path, endpoint overrides, and PRISMFY_API_KEY.",
+      "recipient_or_storage": "Helper process; values are also passed to local subprocesses as needed.",
+      "condition": "Inputs depend on selected flags. Search requires a credential and at least one company, domain, or person; quota mode checks the credential separately.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 4, "end_line": 30},
+        {"path": "lead-enrich.sh", "start_line": 63, "end_line": 100},
+        {"path": "SKILL.md", "start_line": 126, "end_line": 135}
+      ]
+    },
+    {
+      "operation": "Optionally persist an API credential",
+      "source": "Documented setup commands",
+      "data_scope": "PRISMFY_API_KEY shell assignment.",
+      "recipient_or_storage": "~/.bashrc",
+      "condition": "Only when the operator follows the optional restart-persistence instructions; the helper does not perform this write.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 45, "end_line": 54}
+      ]
+    },
+    {
+      "operation": "Send an authenticated quota request",
+      "source": "PRISMFY_API_KEY and endpoint configuration",
+      "data_scope": "Bearer credential; no lead query is attached.",
+      "recipient_or_storage": "PRISMFY_ME_URL, or a /user/me endpoint derived from PRISMFY_API_ROOT or API_URL; default https://api.prismfy.io/v1/user/me.",
+      "condition": "--quota; this path exits before enrichment and temporary-report creation.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 4, "end_line": 9},
+        {"path": "lead-enrich.sh", "start_line": 84, "end_line": 97}
+      ]
+    },
+    {
+      "operation": "Return the quota response",
+      "source": "Configured quota endpoint",
+      "data_scope": "Unfiltered response body; its fields are not documented in the package.",
+      "recipient_or_storage": "Standard output to the invoking caller.",
+      "condition": "Successful --quota request. No report-file persistence is implemented on this path.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 84, "end_line": 97}
+      ]
+    },
+    {
+      "operation": "Disclose generated lead searches to a remote service",
+      "source": "Lead inputs and fixed query templates",
+      "data_scope": "Query strings containing applicable company/domain/person identifiers, company context, role and ICP text; optional geo and engine selections; PRISMFY_API_KEY as a bearer credential.",
+      "recipient_or_storage": "API_URL: https://api.prismfy.io/v1/search by default, overridden by PRISMFY_API_URL.",
+      "condition": "Non-quota enrichment. Default all generates identity, core, fit, activity and disqualifier queries, excluding contact. Exact query strings are deduplicated and sorted before execution. Failed requests may be attempted twice.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 4, "end_line": 5},
+        {"path": "lead-enrich.sh", "start_line": 122, "end_line": 249},
+        {"path": "lead-enrich.sh", "start_line": 277, "end_line": 335},
+        {"path": "lead-enrich.sh", "start_line": 338, "end_line": 342}
+      ]
+    },
+    {
+      "operation": "Run optional contact-oriented searches",
+      "source": "Company, domain, person and company-context inputs",
+      "data_scope": "Contact, team, about, press and author queries; a person without company context also produces an email query.",
+      "recipient_or_storage": "Configured API_URL, using the same authenticated search path.",
+      "condition": "Explicit --query-family contact. Instructions limit contact to useful secondary qualification, but the helper does not check prior qualification or require company context.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 167, "end_line": 173},
+        {"path": "SKILL.md", "start_line": 240, "end_line": 243},
+        {"path": "lead-enrich.sh", "start_line": 251, "end_line": 295},
+        {"path": "lead-enrich.sh", "start_line": 297, "end_line": 325}
+      ]
+    },
+    {
+      "operation": "Receive search responses and build local evidence",
+      "source": "Configured search endpoint",
+      "data_scope": "Full response bodies initially enter memory. For valid objects, results arrays are reduced to five entries locally; other response fields remain. Normalized evidence extracts query attribution, titles, URLs and snippets, then deduplicates by URL.",
+      "recipient_or_storage": "Helper memory and local working files.",
+      "condition": "Each search response. Objects without results are accepted; results, when present, must be an array. The request itself contains no result-count limit.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 300, "end_line": 325},
+        {"path": "lead-enrich.sh", "start_line": 338, "end_line": 383},
+        {"path": "lead-enrich.sh", "start_line": 440, "end_line": 462}
+      ]
+    },
+    {
+      "operation": "Persist intermediate lead data temporarily",
+      "source": "Generated queries, API responses, curl errors and constructed report",
+      "data_scope": "Query list; per-query status, response or error; entity inputs; inferred verdict; evidence; complete query_runs. Curl stderr is also briefly written to a separate temporary file.",
+      "recipient_or_storage": "mktemp files tracked as tmp_queries, tmp_runs and tmp_report; ${tmp_runs}.new during updates; per-attempt err files.",
+      "condition": "Every non-quota enrichment run, including chat-only runs. Temporary paths and access controls depend on the runtime environment.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 102, "end_line": 119},
+        {"path": "lead-enrich.sh", "start_line": 318, "end_line": 329},
+        {"path": "lead-enrich.sh", "start_line": 343, "end_line": 395},
+        {"path": "lead-enrich.sh", "start_line": 537, "end_line": 583}
+      ]
+    },
+    {
+      "operation": "Infer identity, evidence stance and fit",
+      "source": "Returned public-web titles, snippets and URLs; supplied domain and ICP",
+      "data_scope": "Canonical domain, identity status, support/falsification classifications, activity and disqualifier signals, preliminary fit verdict and failure code. Keyword tests include former-role, advisor, intern and student signals.",
+      "recipient_or_storage": "Local report, followed by the selected output path.",
+      "condition": "After query execution. These are heuristic inferences; role and current-company inputs are retained rather than independently established as confirmed facts.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 397, "end_line": 474},
+        {"path": "lead-enrich.sh", "start_line": 496, "end_line": 582},
+        {"path": "SKILL.md", "start_line": 203, "end_line": 206},
+        {"path": "SKILL.md", "start_line": 276, "end_line": 280}
+      ]
+    },
+    {
+      "operation": "Optionally save a structured report",
+      "source": "tmp_report",
+      "data_scope": "Entity identifiers, supplied role/company/ICP, inferred verdict, source URLs, up to twenty normalized evidence rows, and complete query_runs containing retained responses/errors.",
+      "recipient_or_storage": "The caller-selected --out file.",
+      "condition": "--out is supplied. Export is explicitly optional; the script implements no deletion or expiry for this file.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 145, "end_line": 160},
+        {"path": "lead-enrich.sh", "start_line": 537, "end_line": 587}
+      ]
+    },
+    {
+      "operation": "Return enrichment output to the caller",
+      "source": "tmp_report",
+      "data_scope": "Default output contains verdict, domain/identity status, evidence counts, one red flag or caution, and one source URL. --raw returns the full report.",
+      "recipient_or_storage": "Standard output to the invoking caller; no additional external recipient is specified.",
+      "condition": "Normal enrichment completion; --raw selects full JSON instead of concise text. --out can independently save the same report.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 585, "end_line": 635}
+      ]
+    },
+    {
+      "operation": "Delete temporary files",
+      "source": "Local working files",
+      "data_scope": "The three tracked temporary files and per-attempt curl stderr files.",
+      "recipient_or_storage": "Local filesystem removal.",
+      "condition": "EXIT trap removes tmp_queries, tmp_runs and tmp_report. Normal request branches remove err files; successful updates move ${tmp_runs}.new into tmp_runs. The trap does not name ${tmp_runs}.new or err.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 102, "end_line": 105},
+        {"path": "lead-enrich.sh", "start_line": 318, "end_line": 329},
+        {"path": "lead-enrich.sh", "start_line": 382, "end_line": 383}
+      ]
+    },
+    {
+      "operation": "Inject a static bootstrap reminder",
+      "source": "Packaged reminder text and bootstrap event metadata",
+      "data_scope": "Static workflow instructions and the PRISMFY_API_KEY variable name; the handler does not read its value or collect lead details.",
+      "recipient_or_storage": "event.context.bootstrapFiles as virtual LEAD_ENRICHMENT_REMINDER.md; no disk write or remote transmission is implemented by this handler.",
+      "condition": "Optional hook is installed/enabled and receives an agent:bootstrap event with an object context.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 83, "end_line": 92},
+        {"path": "hooks/lead-enrichment/HOOK.md", "start_line": 1, "end_line": 9},
+        {"path": "hooks/lead-enrichment/handler.js", "start_line": 7, "end_line": 44}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Non-identity searches carrying lead identifiers, role/company context and possibly ICP or geo after identity cannot be resolved.",
+      "recipient_or_storage": "Configured API_URL, default https://api.prismfy.io/v1/search.",
+      "condition": "--query-family all runs every generated query without an identity-resolution checkpoint; unique_by(.query) also sorts the plan rather than preserving family order.",
+      "purpose_basis": "The entry requires identity resolution first and an ambiguous verdict when identity is unclear. This is a conditional redundant-action concern, not a claim that the required qualification families are generally excessive.",
+      "necessary_behavior": "Resolve identity, perform support and falsification checks when pursuing qualification, and report ambiguity honestly.",
+      "proposed_reduction": "Execute identity first. If accepting an unresolved-identity outcome, stop before unrelated qualification searches; use targeted disambiguation when it can resolve the lead.",
+      "preservation_conditions": "Retain the required families and both support/falsification checks for a fit assessment. Do not stop while useful identity repair remains necessary.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 163, "end_line": 173},
+        {"path": "SKILL.md", "start_line": 227, "end_line": 228},
+        {"path": "SKILL.md", "start_line": 260, "end_line": 264},
+        {"path": "lead-enrich.sh", "start_line": 277, "end_line": 295},
+        {"path": "lead-enrich.sh", "start_line": 338, "end_line": 383},
+        {"path": "lead-enrich.sh", "start_line": 510, "end_line": 527}
+      ]
+    },
+    {
+      "data_scope": "Complete per-query response objects and query history, including response fields unused by normalization when present.",
+      "recipient_or_storage": "tmp_runs, ${tmp_runs}.new and tmp_report on the local filesystem.",
+      "condition": "Successful search responses are retained after only results-count trimming; the full report is built even without --out or --raw.",
+      "purpose_basis": "Chat requires a concise sourced verdict. Full provider-response retention and its duplication into query_runs are implementation choices.",
+      "necessary_behavior": "Keep sufficient titles, snippets, URLs, query attribution and failure information to score and substantiate the verdict.",
+      "proposed_reduction": "Whitelist fields used by evidence processing, retain minimal failure codes, and omit complete query_runs from the chat-only report.",
+      "preservation_conditions": "Preserve the five-result evidence cap, required scoring inputs, source citations and uncertainty handling; retain richer diagnostics only when specifically needed.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 137, "end_line": 160},
+        {"path": "SKILL.md", "start_line": 198, "end_line": 206},
+        {"path": "lead-enrich.sh", "start_line": 343, "end_line": 355},
+        {"path": "lead-enrich.sh", "start_line": 440, "end_line": 462},
+        {"path": "lead-enrich.sh", "start_line": 579, "end_line": 583},
+        {"path": "lead-enrich.sh", "start_line": 594, "end_line": 635}
+      ]
+    },
+    {
+      "data_scope": "Complete query_runs, including all retained per-query responses/errors and repeated query/evidence content.",
+      "recipient_or_storage": "Caller-selected --out report file.",
+      "condition": "--out exports the entire tmp_report, including query_runs.",
+      "purpose_basis": "A requested structured artifact is required on this path, but complete provider responses and query history are not among the entry's required artifact fields. The concern is extra data in the export, not the export action.",
+      "necessary_behavior": "Save identity status, verdict, signals, disqualifiers, ambiguities, sources and failure status.",
+      "proposed_reduction": "Default exports to the required fields plus selected normalized evidence; make complete query history a separate diagnostic option.",
+      "preservation_conditions": "Keep enough provenance to assess verdict-driving facts and preserve the requested machine-readable report.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 145, "end_line": 160},
+        {"path": "lead-enrich.sh", "start_line": 537, "end_line": 587}
+      ]
+    },
+    {
+      "data_scope": "A completed or partial per-query working dataset containing queries and responses/errors.",
+      "recipient_or_storage": "${tmp_runs}.new left on the local filesystem.",
+      "condition": "A failure occurs after this file is written but before successful mv, such as an mv failure. The EXIT trap removes tmp_runs but excludes its .new sibling.",
+      "purpose_basis": "The file supports an intermediate update; retaining it after failure is unnecessary for either chat or requested export.",
+      "necessary_behavior": "Update working state and clean up temporary lead data when execution ends.",
+      "proposed_reduction": "Include ${tmp_runs}.new in cleanup tracking.",
+      "preservation_conditions": "Keep successful updates and explicitly requested --out artifacts.",
+      "evidence": [
+        {"path": "lead-enrich.sh", "start_line": 1, "end_line": 2},
+        {"path": "lead-enrich.sh", "start_line": 102, "end_line": 105},
+        {"path": "lead-enrich.sh", "start_line": 343, "end_line": 383}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Prismfy server implementation and policies are absent. Provider logging, retention, deletion, onward disclosure, and whether selected engines receive queries cannot be determined.",
+    "No quota/search response samples or full schema are supplied. Actual account fields, additional retained response fields, and contact details returned remain unresolved.",
+    "The source does not establish an API-side result-limit option or actual response sizes; local five-result trimming does not establish a remote retrieval limit.",
+    "Actual endpoint overrides, export paths, temporary-directory permissions, hook activation and caller-side transcript retention are not supplied; deployment-specific recipients and access remain unresolved.",
+    "Runtime handling of abrupt interruption, filesystem deletion guarantees, backups, and retention of optional credential/report files is outside the supplied implementation."
+  ]
+}

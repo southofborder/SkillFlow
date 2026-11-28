@@ -285,6 +285,10 @@ def structure_issues(graph: ControlFlowGraph) -> list[CFGIssue]:
             )
             issues.append(CFGIssue(code, error))
         for instruction in block.instructions:
+            if "outcome_dispatch" in instruction.metadata and (
+                    instruction.opcode != "dispatch" or instruction is not block.instructions[-1]):
+                issues.append(CFGIssue("OUTCOME_DISPATCH_POSITION",
+                    f"block {block_id!r}: an outcome route belongs only to its dispatch terminator"))
             owner = instruction_owners.setdefault(instruction.id, block_id)
             if owner != block_id:
                 issues.append(
@@ -325,6 +329,25 @@ def structure_issues(graph: ControlFlowGraph) -> list[CFGIssue]:
             continue
         terminator = block.instructions[-1]
         edges = outgoing[block_id]
+        if terminator.opcode == "dispatch" and "outcome_dispatch" in terminator.metadata:
+            route = terminator.metadata["outcome_dispatch"]
+            if (not isinstance(route, dict) or set(route) != {"producer", "on_return", "on_throw"}
+                    or any(not isinstance(value, str) or not value for value in route.values())):
+                issues.append(CFGIssue("OUTCOME_DISPATCH_SHAPE",
+                    f"block {block_id!r}: declare one protected producer and its return and throw targets"))
+            else:
+                producer = block.instructions[-2] if len(block.instructions) >= 2 else None
+                if producer is None or producer.id != route["producer"]:
+                    issues.append(CFGIssue("OUTCOME_DISPATCH_PRODUCER",
+                        f"block {block_id!r}: the dispatch must immediately follow its declared producer"))
+                elif any(operand.type != OperandType.RESULT or operand.identifier not in {
+                        output.identifier for output in producer.outputs} for operand in terminator.inputs):
+                    issues.append(CFGIssue("OUTCOME_DISPATCH_PORT",
+                        f"block {block_id!r}: outcome dispatch operands must be existing results of its producer"))
+                if (route["on_return"] == route["on_throw"] or len(edges) != 2
+                        or {edge.target_block_id for edge in edges} != {route["on_return"], route["on_throw"]}):
+                    issues.append(CFGIssue("OUTCOME_DISPATCH_TARGETS",
+                        f"block {block_id!r}: the two outcome routes must cover exactly the two distinct successors"))
         if terminator.opcode == "return" and edges:
             issues.append(
                 CFGIssue(
@@ -343,6 +366,7 @@ def structure_issues(graph: ControlFlowGraph) -> list[CFGIssue]:
             terminator.opcode == "dispatch"
             and (len(edges) > 1 or any(edge.condition_text for edge in edges))
             and not terminator.inputs
+            and "outcome_dispatch" not in terminator.metadata
         ):
             issues.append(
                 CFGIssue(

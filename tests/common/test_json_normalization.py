@@ -53,6 +53,26 @@ def test_unicode_offsets_and_original_crlf_are_preserved():
     assert candidate.count("\r\n") == raw.count("\r\n")
 
 
+@pytest.mark.parametrize("raw, delimiter", [
+    ('{"blocks":[{"ref":"a"},\n]}', ",\n]"),
+    ('\r\n{"text":"中文,]", "nested":{"value":true,\t}}', ",\t}"),
+])
+def test_single_trailing_comma_has_exact_audit_receipt(raw, delimiter):
+    candidate, receipt = normalize_response(raw)
+    offset = raw.index(delimiter)
+    assert candidate == raw[:offset] + raw[offset + 1:]
+    assert isinstance(json.loads(candidate), dict)
+    assert receipt == {
+        "version": "skillflow-json-normalization-v1",
+        "rule": "single_trailing_container_comma",
+        "raw_sha256": canonical_sha256(raw),
+        "normalized_sha256": canonical_sha256(candidate),
+        "removed_offset": offset,
+        "removed_character": ",",
+    }
+    assert normalize_response(candidate) == (candidate, None)
+
+
 @pytest.mark.parametrize("raw", [
     "", " \t\r\n", "{", '{"a":', '{"a":"unfinished}',
     '{"a": 1,}}', '{"a":1 "b":2}}', "{'a':1}}",
@@ -63,6 +83,8 @@ def test_unicode_offsets_and_original_crlf_are_preserved():
     "[]}", "null}", "true}", "1}", '"{}"}',
     '{"a":1,"a":2}}', '{"a":1,"\\u0061":2}}',
     '{"nested":[{"a":1,"a":2}]}}',
+    '{"a":[1,],"b":[2,]}', '{"a":[1,,]}', '{"a":[,]}', '{"a":[1,]', '[1,]',
+    '{"a":[1,],"b":1,"b":2}', '{"a":[1,],"b":NaN}',
     '{"a":NaN}}', '{"a":Infinity}}', '{"a":-Infinity}}',
     '{"a":1e999}}', '{"a":-1e999}}', '{"nested":[{"a":1e999}]}}',
     '{"a":"unescaped\nnewline"}}',

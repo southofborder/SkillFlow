@@ -581,6 +581,62 @@ class OutputBinding(StrictSpec):
     evidences: Evidences
 
 
+class OutcomeCase(StrictSpec):
+    """One case's public value; __raised__ is reserved to a throwing case."""
+    case_id: Text
+    disposition: Literal["return", "throw"]
+    value: ValueRef | None = None
+    evidences: Evidences
+
+    @model_serializer(mode="wrap")
+    def omit_absent_value(self, handler):
+        result = handler(self)
+        if self.value is None:
+            result.pop("value", None)
+        return result
+
+
+class OutcomeBinding(StrictSpec):
+    """Conditional CFG output ports owned by one final protected case group."""
+    group: Text
+    completion_index: Index | None = None
+    return_index: Index | None = None
+    exception_index: Index | None = None
+    cases: list[OutcomeCase] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def distinct_ports_and_cases(self):
+        ports = [slot for slot in (self.completion_index, self.return_index, self.exception_index) if slot is not None]
+        if len(ports) != len(set(ports)):
+            raise ValueError("outcome output indexes must be distinct")
+        if len({case.case_id for case in self.cases}) != len(self.cases):
+            raise ValueError("outcome case IDs must be unique")
+        if self.return_index is not None and not any(c.disposition == "return" for c in self.cases):
+            raise ValueError("return_index cannot invent a return outcome")
+        if self.exception_index is not None and not any(c.disposition == "throw" for c in self.cases):
+            raise ValueError("exception_index cannot invent an exception outcome")
+        for case in self.cases:
+            port = self.return_index if case.disposition == "return" else self.exception_index
+            if (case.value is not None) != (port is not None):
+                raise ValueError("each outcome case must provide exactly the value required by its output port")
+            if (isinstance(case.value, LocalRef) and case.value.name == "__raised__"
+                    and case.disposition != "throw"):
+                raise ValueError("__raised__ belongs only to an outcome raise")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_absent_ports(self, handler):
+        result = handler(self)
+        for key in ("completion_index", "return_index", "exception_index"):
+            if getattr(self, key) is None:
+                result.pop(key, None)
+        return result
+
+
+class OutcomeBindings(StrictSpec):
+    outcome_bindings: list[OutcomeBinding] = Field(default_factory=list, exclude_if=lambda value: not value)
+
+
 class OperationPosition(StrictSpec):
     event_index: Index
     op_index: Index
@@ -592,7 +648,7 @@ class Precedence(StrictSpec):
     after: OperationPosition
 
 
-class IRTransferSpec(StrictSpec):
+class IRTransferSpec(OutcomeBindings):
     sensitivity: list[SensitivityDeclaration] = Field(default_factory=list)
     order: Literal["fixed", "partial"]
     precedence: list[Precedence]
@@ -600,7 +656,7 @@ class IRTransferSpec(StrictSpec):
     output_bindings: list[OutputBinding]
 
 
-class RawIRTransferSpec(StrictSpec):
+class RawIRTransferSpec(OutcomeBindings):
     sensitivity: list[SensitivityDeclaration] = Field(default_factory=list)
     order: Literal["fixed", "partial"]
     events: list[Annotated[ProcessingSpec | RawForEachSpec, Field(discriminator="kind")]]
@@ -694,7 +750,8 @@ def flatten_raw_spec(spec: RawIRTransferSpec) -> IRTransferSpec:
         return (key[0], -1 if key[1] is None else key[1], key[2])
     precedence = [Precedence(before=position_value(before), after=position_value(after))
                   for before, after in sorted(edges, key=lambda pair: (coordinate(pair[0]), coordinate(pair[1])))]
-    return IRTransferSpec(order=spec.order, precedence=precedence, events=events, output_bindings=spec.output_bindings, sensitivity=spec.sensitivity)
+    return IRTransferSpec(order=spec.order, precedence=precedence, events=events, output_bindings=spec.output_bindings,
+                          outcome_bindings=spec.outcome_bindings, sensitivity=spec.sensitivity)
 
 
 def value_refs(operation: AtomicOp) -> list[ValueRef]:
@@ -721,6 +778,8 @@ def _validate_ref(ref: ValueRef, instruction: dict, definitions: dict[str, int],
         if instruction["inputs"][ref.index]["type"] == "external_resource":
             raise structural_error("validate_ref", "", "resource identity is not a data payload; use an evidenced literal or read")
     elif isinstance(ref, LocalRef):
+        if ref.name == "__raised__":
+            raise structural_error("validate_ref", "", "__raised__ is reserved solely for an outcome raise")
         if ref.name not in definitions:
             raise structural_error("validate_ref", "", f"undefined local reference: {instruction['id']}/{ref.name}",
                                    current=ref.model_dump(mode="json"),
@@ -780,6 +839,66 @@ def _raw_event_paths(raw_spec):
     return paths
 
 
+def _outcome_errors(spec, instruction, definitions, count):
+    diagnostics = []
+    def error(path, message):
+        diagnostics.extend(structural_error("outcome_binding", path, message).diagnostics)
+    if not spec.outcome_bindings:
+        return diagnostics
+    if spec.order != "fixed" or len(spec.outcome_bindings) != 1:
+        error("/outcome_bindings", "one final top-level protected group requires fixed order")
+    local_cases = {}
+    for _, _, event in iter_scoped_events(spec):
+        for operation in event.atomic_ops:
+            name = getattr(operation, "output", None)
+            if name is not None:
+                local_cases[name] = event.case.id if event.case else None
+    for index, binding in enumerate(spec.outcome_bindings):
+        path = f"/outcome_bindings/{index}"
+        events = [(e, b, event) for e, b, event in iter_scoped_events(spec)
+                  if event.case is not None and event.case.group == binding.group]
+        labels = {event.case.id: event.case for _, _, event in events}
+        case_locals = {name: owner for name, owner in local_cases.items() if owner in labels}
+        for bi, ordinary in enumerate(spec.output_bindings):
+            if _local_names(ordinary.value) & case_locals.keys():
+                error(f"/output_bindings/{bi}/value", "case-only locals of a protected outcome require its conditional output ports")
+        for _, _, event in iter_scoped_events(spec):
+            owner = event.case.id if event.case is not None else None
+            for oi, operation in enumerate(event.atomic_ops):
+                if any(case_locals.get(name, owner) != owner
+                       for ref in value_refs(operation) for name in _local_names(ref)):
+                    error(path, "a protected case cannot consume another case's local value")
+        if (not events or any(b is not None for _, b, _ in events)
+                or max(e for e, _, _ in events) != len(spec.events) - 1
+                or any(getattr(event, "case", None) is None or event.case.group != binding.group
+                       for event in spec.events[min((e for e, _, _ in events), default=0):])):
+            error(path, "protected outcomes must own one contiguous final top-level case group")
+        if set(labels) != {case.case_id for case in binding.cases}:
+            error(path + "/cases", "outcome cases must cover exactly their actual case group")
+        for ci, case in enumerate(binding.cases):
+            cp = path + f"/cases/{ci}"
+            if case.case_id in labels and labels[case.case_id].disposition != case.disposition:
+                error(cp, "outcome disposition differs from its actual case label")
+            if case.value is None:
+                continue
+            names = _local_names(case.value)
+            intrinsic = isinstance(case.value, LocalRef) and case.value.name == "__raised__"
+            if intrinsic and case.disposition == "throw":
+                continue
+            if "__raised__" in names:
+                error(cp + "/value", "__raised__ is allowed only as the complete value of an outcome raise")
+                continue
+            if any(local_cases.get(name) not in (None, case.case_id) for name in names):
+                error(cp + "/value", "an outcome cannot export another case's local value")
+                continue
+            try:
+                with validation_at(cp + "/value"):
+                    _validate_ref(case.value, instruction, definitions, count, uncertain=False)
+            except StructuralValidationError as exc:
+                diagnostics.extend(exc.diagnostics)
+    return diagnostics
+
+
 def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
     """Validate independent IRs together; retain prerequisite scope failures."""
     if isinstance(annotation, dict):
@@ -823,7 +942,8 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
                     raise structural_error("case_identity", "/events", "one case identity must keep its condition and disposition")
                 label_ids[label.id] = label
                 case_groups.setdefault(label.group, set()).add(label.disposition)
-            if any("return" not in dispositions for dispositions in case_groups.values()):
+            protected = {binding.group for binding in spec.outcome_bindings}
+            if any("return" not in dispositions for group, dispositions in case_groups.items() if group not in protected):
                 raise structural_error("case_result", "/events", "bounded call cases require at least one return candidate")
             returning_guards = {label.guard.model_dump_json() for label in label_ids.values()
                                 if label.guard is not None and label.disposition == "return"}
@@ -843,6 +963,33 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
                             if any(item["id"] == ir_id for item in block["instructions"]))
             incoming_blocks = {edge["source_block_id"] for edge in cfg.get("edges", []) if edge["target_block_id"] == block_id}
             outgoing_blocks = {edge["target_block_id"] for edge in cfg.get("edges", []) if edge["source_block_id"] == block_id}
+            block_instructions = cfg["blocks"][block_id]["instructions"]
+            defaults = instruction.get("metadata", {}).get("python_argument_defaults", [])
+            for row in defaults:
+                if not any(binding.output_index == row["output_index"] and isinstance(binding.value, InputRef)
+                           and binding.value.index == row["input_index"] for binding in spec.output_bindings):
+                    local_errors.extend(structural_error("python_parameter_default", "/output_bindings",
+                        "A Python default binds the matching immutable invocation argument.").diagnostics)
+            if block_instructions and block_instructions[0]["opcode"] == "python_handler_merge":
+                from skillflow.propagation.python_exceptions import validate_handler_record
+                reason = validate_handler_record(cfg, block_id, ir_id, spec, specs)
+                if reason:
+                    local_errors.extend(structural_error("python_handler_admission", "/events", reason).diagnostics)
+            dispatch = block_instructions[-1].get("metadata", {}).get("outcome_dispatch")
+            if instruction.get("metadata", {}).get("python_raised_class") and spec.outcome_bindings:
+                if any(case.disposition != "throw" or (group.exception_index is not None and
+                        (not isinstance(case.value, LocalRef) or case.value.name != "__raised__"))
+                       for group in spec.outcome_bindings for case in group.cases):
+                    local_errors.extend(structural_error("python_raise_outcome", "/outcome_bindings",
+                        "An exact source raise throws this invocation's new exception.").diagnostics)
+            routed_producer = dispatch is not None and len(block_instructions) >= 2 and block_instructions[-2]["id"] == ir_id
+            if dispatch is not None and block_instructions[-1]["id"] == ir_id:
+                if spec.events:
+                    local_errors.extend(structural_error("outcome_dispatch", "/events",
+                        "A typed outcome dispatch uses its producer case; its terminator has no operations.").diagnostics)
+            if routed_producer and not spec.outcome_bindings:
+                local_errors.extend(structural_error("outcome_dispatch", "/outcome_bindings",
+                    "The producer of an outcome dispatch requires its protected return/throw case group.").diagnostics)
             for e, b, event in iter_scoped_events(spec):
                 event_path = f"/events/{e}" + (f"/body/{b}" if b is not None else "")
                 if event.case is not None and event.case.guard is not None:
@@ -866,6 +1013,10 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
                         local_errors.extend(structural_error("merge_predecessor", path + "/incoming",
                             "merge predecessor must be an actual incoming CFG block").diagnostics)
                     if isinstance(operation, BranchOp):
+                        if (operation.selector and operation.selector.tests[0].kind == "python_exception"
+                                and block_instructions[0]["opcode"] != "python_handler_merge"):
+                            local_errors.extend(structural_error("python_handler_admission", path + "/selector",
+                                "Python exception matching requires the actual thrown version at a handler admission block.").diagnostics)
                         if operation.selector is not None and not any(isinstance(item, SourceEvidence) for item in operation.evidences):
                             local_errors.extend(structural_error("selector_evidence", path + "/evidences",
                                 "A typed field discriminator requires a physical source span for the test.").diagnostics)
@@ -876,6 +1027,12 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
                             local_errors.extend(structural_error("branch_position", path,
                                 "typed branch belongs to the block terminator").diagnostics)
             bindings = [item.output_index for item in spec.output_bindings]
+            for outcome in spec.outcome_bindings:
+                if outcome.completion_index is None and not routed_producer:
+                    local_errors.extend(structural_error("outcome_dispatch", "/outcome_bindings",
+                        "A protected group without a completion port requires its typed CFG outcome dispatch.").diagnostics)
+                bindings.extend(slot for slot in (outcome.completion_index, outcome.return_index, outcome.exception_index)
+                                if slot is not None)
             if sorted(bindings) != list(range(len(instruction.get("outputs", [])))):
                 local_errors.extend(structural_error("validate_specs", "/output_bindings",
                     "output bindings must cover each actual output exactly once: " + ir_id,
@@ -886,6 +1043,7 @@ def validate_specs(cfg: dict[str, Any], annotation: Any) -> None:
             except StructuralValidationError as error:
                 local_errors.extend(error.diagnostics)
             else:
+                local_errors.extend(_outcome_errors(spec, instruction, definitions, count))
                 for index, binding in enumerate(spec.output_bindings):
                     try:
                         with validation_at(f"/output_bindings/{index}/value"):
@@ -958,6 +1116,9 @@ def _validate_scope(events, instruction, locations, *, uncertain, external=None,
                 positions.append((count, event, operation, op_path))
                 output = getattr(operation, "output", None)
                 if output is not None:
+                    if output == "__raised__":
+                        diagnostics.extend(structural_error("validate_scope", op_path + "/output",
+                            "__raised__ is a reserved outcome raise, not an operation-defined local").diagnostics)
                     if output in definitions:
                         diagnostics.extend(structural_error("validate_scope", op_path + "/output",
                             f"duplicate local definition: {instruction['id']}/{output}").diagnostics)
@@ -1091,6 +1252,9 @@ def iter_located_spec_evidence(annotation: Any):
         yield from effects(spec.events, prefix + "/events")
         for index, binding in enumerate(spec.output_bindings):
             yield from listed(binding.evidences, prefix + f"/output_bindings/{index}/evidences")
+        for index, binding in enumerate(spec.outcome_bindings):
+            for ci, case in enumerate(binding.cases):
+                yield from listed(case.evidences, prefix + f"/outcome_bindings/{index}/cases/{ci}/evidences")
 
 
 def iter_spec_evidence(annotation: Any):

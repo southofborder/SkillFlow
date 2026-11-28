@@ -1,0 +1,291 @@
+{
+  "status": "completed",
+  "declared_purpose": "Track selected sports teams and provide live scores, scoring events, player names, match status and final results using ESPN without required API keys. Supporting features include onboarding preferences, upcoming fixtures and generated automation configurations. Web-search fallbacks, credential-file discovery and local operational caches are implementation choices, not explicit entry-document requirements. Sources: SKILL.md:1-34, 78-130; scripts/ticker.py:38-100; scripts/live_monitor.py:30-110.",
+  "data_operations": [
+    {
+      "operation": "Collect and persist configuration",
+      "source": "Interactive onboarding; config.add_team arguments",
+      "data_scope": "Selected teams, sports, public team identifiers, display preferences, alert settings, reminder choice, optional quiet-hour times and an automatically generated setup timestamp. add_team also accepts an optional thesportsdb_id.",
+      "recipient_or_storage": "Local config.json; onboarding summary to its caller",
+      "condition": "Successful onboarding writes or replaces configuration. add_team appends a team and saves. Quiet hours are supplied preferences, not inferred sleep times.",
+      "evidence": [
+        {"path": "scripts/setup.py", "start_line": 293, "end_line": 394},
+        {"path": "scripts/setup.py", "start_line": 396, "end_line": 493},
+        {"path": "scripts/setup.py", "start_line": 549, "end_line": 590},
+        {"path": "scripts/config.py", "start_line": 54, "end_line": 92}
+      ]
+    },
+    {
+      "operation": "Read and optionally display local configuration",
+      "source": "config.json, falling back to config.example.json",
+      "data_scope": "The complete configuration is loaded; team-processing paths select enabled teams. The show command prints the complete configuration.",
+      "recipient_or_storage": "Local process memory; stdout to the caller when requested",
+      "condition": "Configuration-dependent commands run. These reads and normal command returns do not themselves establish remote disclosure.",
+      "evidence": [
+        {"path": "scripts/config.py", "start_line": 8, "end_line": 52},
+        {"path": "scripts/config.py", "start_line": 106, "end_line": 116}
+      ]
+    },
+    {
+      "operation": "Request ESPN data and filter it locally",
+      "source": "Configured or command-supplied sports, leagues, dates and event identifiers; ESPN responses",
+      "data_scope": "Requests disclose sport/league paths, optional fixture dates or an event identifier, with a fixed User-Agent. Responses include league rosters, scoreboards and match details. Team-name searches and tracked-team matching operate locally on returned lists; these paths do not send the searched team name or configured team ID.",
+      "recipient_or_storage": "https://site.api.espn.com/apis/site/v2/sports; returned data in caller memory",
+      "condition": "Team lookup, ticker, monitor, fixture or direct ESPN commands invoke the relevant endpoint. No ESPN credential is required.",
+      "evidence": [
+        {"path": "scripts/espn.py", "start_line": 81, "end_line": 147},
+        {"path": "scripts/espn.py", "start_line": 149, "end_line": 186},
+        {"path": "scripts/espn.py", "start_line": 301, "end_line": 308},
+        {"path": "scripts/espn.py", "start_line": 344, "end_line": 410}
+      ]
+    },
+    {
+      "operation": "Derive and return sports alerts",
+      "source": "ESPN scores, status, key events and configured team selection",
+      "data_scope": "Player names, scoring times, cards, teams and scores; derived event changes and WIN/LOSS/DRAW relative to the selected team. These are sports-result derivations, not inferred personal traits.",
+      "recipient_or_storage": "Returned alert strings and stdout to the caller",
+      "condition": "Matching events and enabled alert flags permit output. Final alerts require a transition from a previously observed nonempty, nonfinal status.",
+      "evidence": [
+        {"path": "scripts/espn.py", "start_line": 188, "end_line": 299},
+        {"path": "scripts/live_monitor.py", "start_line": 171, "end_line": 293},
+        {"path": "scripts/live_monitor.py", "start_line": 319, "end_line": 327}
+      ]
+    },
+    {
+      "operation": "Read search credentials locally",
+      "source": "BRAVE_SEARCH_API_KEY and SERPER_API_KEY environment variables; sibling web-search-plus/.env and HOME-relative clawd/skills/web-search-plus/.env",
+      "data_scope": "Selected API credentials. Serper fallback reads each existing candidate file completely before inspecting its lines, bringing unrelated file contents into local memory.",
+      "recipient_or_storage": "Ticker or monitor process memory",
+      "condition": "Brave reads its environment variable. When Serper is attempted and its environment variable is absent, the implementation searches the two credential-file locations.",
+      "evidence": [
+        {"path": "scripts/ticker.py", "start_line": 21, "end_line": 35},
+        {"path": "scripts/ticker.py", "start_line": 48, "end_line": 73},
+        {"path": "scripts/live_monitor.py", "start_line": 42, "end_line": 78}
+      ]
+    },
+    {
+      "operation": "Disclose fallback queries to Brave Search",
+      "source": "Configured team name, current UTC date or live-score query templates, BRAVE_SEARCH_API_KEY",
+      "data_scope": "Ticker sends team name plus a dated match-result query. Monitor tries English and then German live-score queries as needed. Requests include count=3 and the credential in X-Subscription-Token; returned titles and description excerpts are processed locally.",
+      "recipient_or_storage": "https://api.search.brave.com/res/v1/web/search",
+      "condition": "The key exists. Ticker falls back when ESPN finds no match or the team lacks an ESPN ID. Monitor uses search only for teams without an ESPN ID.",
+      "evidence": [
+        {"path": "scripts/ticker.py", "start_line": 38, "end_line": 69},
+        {"path": "scripts/ticker.py", "start_line": 115, "end_line": 139},
+        {"path": "scripts/live_monitor.py", "start_line": 30, "end_line": 61},
+        {"path": "scripts/live_monitor.py", "start_line": 98, "end_line": 108},
+        {"path": "scripts/live_monitor.py", "start_line": 128, "end_line": 132}
+      ]
+    },
+    {
+      "operation": "Disclose fallback queries to Serper",
+      "source": "The same team-result or live-score query; SERPER_API_KEY",
+      "data_scope": "Query and num=3 in a JSON POST; credential in X-API-KEY. Returned titles and snippet excerpts are processed locally. The source does not send whole credential files.",
+      "recipient_or_storage": "https://google.serper.dev/search",
+      "condition": "Brave produces no usable result and a Serper key is available. Monitor may try the second-language query if the first yields nothing.",
+      "evidence": [
+        {"path": "scripts/ticker.py", "start_line": 71, "end_line": 93},
+        {"path": "scripts/live_monitor.py", "start_line": 63, "end_line": 108}
+      ]
+    },
+    {
+      "operation": "Read, overwrite and retain per-team result cache",
+      "source": "Formatted ESPN results or search titles/snippets",
+      "data_scope": "Team key, last_result, source, cached_at and match_date. match_date is assigned the current write date rather than parsed from the match. Ticker caches a formatted ESPN result or its first search snippet; monitor caches changed search excerpts or an eligible final score.",
+      "recipient_or_storage": "Local .score_cache.json; cached results may be returned by ticker to its caller",
+      "condition": "A result is found and the relevant write path runs. Same-key writes replace the entry; the cache helpers contain no expiry or deletion operation.",
+      "evidence": [
+        {"path": "scripts/cache.py", "start_line": 11, "end_line": 60},
+        {"path": "scripts/ticker.py", "start_line": 58, "end_line": 98},
+        {"path": "scripts/ticker.py", "start_line": 115, "end_line": 139},
+        {"path": "scripts/live_monitor.py", "start_line": 98, "end_line": 108},
+        {"path": "scripts/live_monitor.py", "start_line": 272, "end_line": 293}
+      ]
+    },
+    {
+      "operation": "Persist live-monitor deduplication state",
+      "source": "ESPN match status, scores and key-event identifiers",
+      "data_scope": "Event-ID-keyed status, home_score, away_score and event_ids. Historical entries can reveal which matches were monitored; no separate interest profile is computed.",
+      "recipient_or_storage": "Local .live_state.json",
+      "condition": "check_all_teams loads existing state, processes enabled teams and saves the accumulated dictionary. Existing event entries are updated; obsolete entries are not pruned.",
+      "evidence": [
+        {"path": "scripts/live_monitor.py", "start_line": 27, "end_line": 27},
+        {"path": "scripts/live_monitor.py", "start_line": 112, "end_line": 118},
+        {"path": "scripts/live_monitor.py", "start_line": 295, "end_line": 317}
+      ]
+    },
+    {
+      "operation": "Return upcoming fixtures",
+      "source": "Enabled team configuration and ESPN date-scoreboard responses",
+      "data_scope": "Team names and IDs, opponents, event IDs, dates, competition, venue, sport and status. JSON output adds the configured team's name, short name, emoji and ESPN ID.",
+      "recipient_or_storage": "Function caller or stdout; no schedule-file persistence is implemented here",
+      "condition": "Schedule commands request all enabled ESPN-backed teams or a selected team, over the requested date range.",
+      "evidence": [
+        {"path": "scripts/schedule.py", "start_line": 23, "end_line": 32},
+        {"path": "scripts/schedule.py", "start_line": 85, "end_line": 112},
+        {"path": "scripts/schedule.py", "start_line": 115, "end_line": 140},
+        {"path": "scripts/espn.py", "start_line": 387, "end_line": 400}
+      ]
+    },
+    {
+      "operation": "Generate fixture-specific automation configurations",
+      "source": "Upcoming fixtures and command-line scheduling options",
+      "data_scope": "Selected teams and opponents, competition, venue in reminders, kickoff times, event identifiers, monitoring windows and executable instructions.",
+      "recipient_or_storage": "Caller via summary or JSON; a caller-selected local file when --output is supplied",
+      "condition": "Future fixtures produce reminder, activation and repeating-monitor configurations. The generator does not create automations itself.",
+      "evidence": [
+        {"path": "scripts/auto_setup_crons.py", "start_line": 45, "end_line": 144},
+        {"path": "scripts/auto_setup_crons.py", "start_line": 190, "end_line": 202},
+        {"path": "scripts/auto_setup_crons.py", "start_line": 235, "end_line": 256}
+      ]
+    },
+    {
+      "operation": "Generate and persist Telegram-oriented automation configurations",
+      "source": "Command-line telegram_id and timezone; resolved local script directory",
+      "data_scope": "Telegram destination identifier, supplied timezone, schedules, absolute script paths and agent payload instructions. Timezone is directly supplied, not inferred location.",
+      "recipient_or_storage": "JSON to the caller and an additional local cron_configs.json copy",
+      "condition": "Normal setup_crons invocation with both arguments prints and saves configurations. --list prints example configurations and returns before saving.",
+      "evidence": [
+        {"path": "scripts/setup_crons.py", "start_line": 18, "end_line": 83},
+        {"path": "scripts/setup_crons.py", "start_line": 86, "end_line": 113}
+      ]
+    },
+    {
+      "operation": "Conditionally hand configurations to OpenClaw and deliver scheduled alerts",
+      "source": "Generated configurations, agent execution and command results",
+      "data_scope": "Automation schedules, selected-match information, execution instructions and, for setup_crons jobs, timezone and telegram_id. Scheduled match information or live alerts are designated for Telegram; the generic reminder targets the main session.",
+      "recipient_or_storage": "OpenClaw automation configuration boundary if the caller creates jobs; Telegram channel addressed by telegram_id for the two announce jobs",
+      "condition": "An agent must apply the generated configurations. Disabled jobs require activation, and the entry document says automated exec requires an approval grant. The Python generators do not directly create jobs or send Telegram messages.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 111, "end_line": 118},
+        {"path": "scripts/setup_crons.py", "start_line": 25, "end_line": 83},
+        {"path": "scripts/auto_setup_crons.py", "start_line": 190, "end_line": 202}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Team name and dated match-result query following a legitimate ESPN no-match result",
+      "recipient_or_storage": "Brave Search endpoint, then Serper endpoint if needed",
+      "condition": "ticker.team_ticker finds no ESPN match and a search credential is available. find_team_match also collapses request failures into the same no-match result.",
+      "purpose_basis": "ESPN-based team status is required; an additional search-provider lookup is an implementation choice. A confirmed no-game result need not trigger another disclosure.",
+      "necessary_behavior": "Report reliable team status and preserve fallback coverage where ESPN data is unavailable or incomplete.",
+      "proposed_reduction": "Distinguish confirmed no-game results from failures or unsupported coverage; suppress automatic web queries for confirmed no-game results and make broader fallback selectable.",
+      "preservation_conditions": "Keep fallback for uncovered teams and unresolved ESPN failures. This removes a redundant lookup action, rather than trimming fields from a necessary ESPN request.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 4, "end_line": 9},
+        {"path": "scripts/espn.py", "start_line": 149, "end_line": 181},
+        {"path": "scripts/ticker.py", "start_line": 38, "end_line": 80},
+        {"path": "scripts/ticker.py", "start_line": 115, "end_line": 131}
+      ]
+    },
+    {
+      "data_scope": "Unrelated contents of another skill's .env files and potentially a second credential-file read after a key has already been found",
+      "recipient_or_storage": "Sports-ticker process memory, crossing the sibling or HOME-relative web-search-plus file boundary",
+      "condition": "Serper fallback runs without SERPER_API_KEY in the environment. Both implementations continue to the next candidate file after finding a key in the first.",
+      "purpose_basis": "Optional authenticated search needs one selected credential; automatic access to another skill's complete credential files is not required for ESPN alerts.",
+      "necessary_behavior": "Obtain a Serper credential only when the optional Serper path is configured.",
+      "proposed_reduction": "Prefer the explicitly supplied environment credential. If file import is supported, require a designated file, stream only until the exact assignment is found and stop after obtaining the key.",
+      "preservation_conditions": "Keep configured Serper authentication working. Unrelated file contents need not enter memory; no whole-file remote upload is evidenced.",
+      "evidence": [
+        {"path": "scripts/ticker.py", "start_line": 21, "end_line": 35},
+        {"path": "scripts/live_monitor.py", "start_line": 63, "end_line": 78}
+      ]
+    },
+    {
+      "data_scope": "Detailed match responses, including key-event and participant data, and retained event identifiers",
+      "recipient_or_storage": "ESPN summary endpoint; local monitor memory and .live_state.json",
+      "condition": "Every ESPN-backed match is fetched in detail even when goals and red_cards are both disabled, including wizard-generated final-only and digest settings.",
+      "purpose_basis": "Final scores and status alerts can use the scoreboard already fetched. Detailed events serve scoring and disciplinary alerts.",
+      "necessary_behavior": "Maintain status-transition detection and selected status/final alerts.",
+      "proposed_reduction": "Skip get_match_events and event-ID tracking when no enabled alert consumes detailed events.",
+      "preservation_conditions": "Continue detailed polling when scoring or disciplinary alerts are enabled. This removes an unnecessary request, rather than assuming ESPN supports field-level response filtering.",
+      "evidence": [
+        {"path": "scripts/setup.py", "start_line": 428, "end_line": 447},
+        {"path": "scripts/live_monitor.py", "start_line": 134, "end_line": 144},
+        {"path": "scripts/live_monitor.py", "start_line": 192, "end_line": 217},
+        {"path": "scripts/live_monitor.py", "start_line": 255, "end_line": 301},
+        {"path": "scripts/espn.py", "start_line": 95, "end_line": 97}
+      ]
+    },
+    {
+      "data_scope": "Other enabled teams and their matches during a fixture-specific monitoring job",
+      "recipient_or_storage": "Local configuration and state; ESPN endpoints and, for teams without ESPN IDs, Brave or Serper; normal output to the automation caller",
+      "condition": "An agent executes the generated --event/--league/--sport monitor command. live_monitor.py ignores those filters and always calls check_all_teams; its activation payload also requests unfiltered monitoring.",
+      "purpose_basis": "The generated job promises updates for one fixture. Processing other teams expands that job's scope and can repeat work across concurrent fixture jobs.",
+      "necessary_behavior": "Monitor and report new events for the scheduled fixture.",
+      "proposed_reduction": "Implement event/sport/league filtering and use the same fixture scope in activation instructions, or share one explicitly all-team monitor across jobs.",
+      "preservation_conditions": "Retain all-team monitoring for explicitly all-team invocations and ensure each requested fixture remains covered.",
+      "evidence": [
+        {"path": "scripts/auto_setup_crons.py", "start_line": 94, "end_line": 142},
+        {"path": "scripts/live_monitor.py", "start_line": 128, "end_line": 135},
+        {"path": "scripts/live_monitor.py", "start_line": 305, "end_line": 327}
+      ]
+    },
+    {
+      "data_scope": "Per-team source and precise cached_at metadata accompanying cached results",
+      "recipient_or_storage": "Local .score_cache.json",
+      "condition": "Every write_to_cache call adds both fields. Packaged cache display and change detection consume last_result and, for display, match_date.",
+      "purpose_basis": "Caching supports last-result display and duplicate suppression; these additional fields have no demonstrated consumer in the supplied source.",
+      "necessary_behavior": "Retain the result and the date required by the existing cached-result display.",
+      "proposed_reduction": "Omit unused source and cached_at fields, or collect them only for an explicitly selected diagnostic purpose.",
+      "preservation_conditions": "Keep last_result, team-key lookup and match_date behavior. This narrows extra data in a necessary cache write.",
+      "evidence": [
+        {"path": "scripts/cache.py", "start_line": 29, "end_line": 60},
+        {"path": "scripts/live_monitor.py", "start_line": 98, "end_line": 108},
+        {"path": "scripts/ticker.py", "start_line": 95, "end_line": 98}
+      ]
+    },
+    {
+      "data_scope": "Obsolete monitored-event entries and cached results for teams no longer selected",
+      "recipient_or_storage": "Local .live_state.json and .score_cache.json",
+      "condition": "State is accumulated by event ID and cache by team key, without reconciliation against removed teams or an expiry mechanism.",
+      "purpose_basis": "Current-match deduplication and last-result fallback justify working state; indefinite history of obsolete matches or removed selections is not required.",
+      "necessary_behavior": "Suppress repeated current-match alerts and preserve the last usable result for actively tracked teams.",
+      "proposed_reduction": "Prune event state after a safe replay window and remove cache entries for deleted selections, with optional explicit archival retention.",
+      "preservation_conditions": "Retain current-day final-match state long enough to avoid replayed alerts. Keep active-team last results available during outages; do not indiscriminately expire that required fallback.",
+      "evidence": [
+        {"path": "scripts/live_monitor.py", "start_line": 112, "end_line": 118},
+        {"path": "scripts/live_monitor.py", "start_line": 171, "end_line": 174},
+        {"path": "scripts/live_monitor.py", "start_line": 295, "end_line": 317},
+        {"path": "scripts/cache.py", "start_line": 14, "end_line": 44},
+        {"path": "scripts/config.py", "start_line": 30, "end_line": 33}
+      ]
+    },
+    {
+      "data_scope": "Telegram destination identifier, timezone, schedules and local script paths duplicated in generated configurations",
+      "recipient_or_storage": "Local cron_configs.json, additional to the required JSON return",
+      "condition": "Normal setup_crons invocation always saves the reference copy after printing the configurations.",
+      "purpose_basis": "The stated generator purpose is to return configurations for an agent to apply; the additional reference-file persistence is a separate action.",
+      "necessary_behavior": "Return complete, usable automation configurations to the caller.",
+      "proposed_reduction": "Make saving opt-in through an explicit output option instead of always writing cron_configs.json.",
+      "preservation_conditions": "Preserve stdout JSON, destination routing and timezone scheduling. This removes redundant persistence rather than required routing fields.",
+      "evidence": [
+        {"path": "scripts/setup_crons.py", "start_line": 3, "end_line": 6},
+        {"path": "scripts/setup_crons.py", "start_line": 25, "end_line": 64},
+        {"path": "scripts/setup_crons.py", "start_line": 99, "end_line": 113}
+      ]
+    },
+    {
+      "data_scope": "Precise onboarding completion timestamp",
+      "recipient_or_storage": "Local config.json under _setup_completed",
+      "condition": "Every successful onboarding run generates and persists the timestamp.",
+      "purpose_basis": "Team selection and alert preferences are explicit onboarding requirements. First-run detection uses file existence rather than this timestamp.",
+      "necessary_behavior": "Save selected settings and distinguish existing configuration from first run.",
+      "proposed_reduction": "Remove _setup_completed unless a concrete diagnostic feature requires it.",
+      "preservation_conditions": "Keep configuration persistence and the existing file-existence first-run check.",
+      "evidence": [
+        {"path": "scripts/setup.py", "start_line": 574, "end_line": 587},
+        {"path": "scripts/setup.py", "start_line": 616, "end_line": 618}
+      ]
+    }
+  ],
+  "unknowns": [
+    "External service logging, retention, secondary use and deletion are undocumented here for ESPN, Brave, Serper, OpenClaw and Telegram. Source inspection cannot resolve those downstream operations.",
+    "Actual configuration, credential availability, saved cache/state contents, Telegram destination and created or enabled automations are not supplied; execution and disclosure remain conditional.",
+    "Generic fixture-specific automation configurations provide no explicit delivery destination. Their eventual recipient, platform persistence and enforcement of oneshot/window metadata are unresolved.",
+    "The wizard stores reminder and quiet-hour preferences and promises deferred quiet-hour alerts, but supplied execution paths do not implement a quiet-hour queue or daily digest delivery. Whether an external agent supplies those features is unresolved (scripts/setup.py:438-493, 575-587; scripts/live_monitor.py:305-327).",
+    "find_team_match returns None both after no matching event and after swallowed request errors. A particular fallback's necessity cannot be established from that result alone (scripts/espn.py:149-181).",
+    "Search results are treated as text rather than validated match facts. Their actual relevance and whether they contain additional personal information cannot be determined from the supplied source (scripts/ticker.py:58-90; scripts/live_monitor.py:53-108)."
+  ]
+}

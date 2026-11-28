@@ -22,7 +22,7 @@ from tests.propagation.annotation.helpers import material, semantics
 def test_one_isolated_contract_and_canonical_binding():
     current = runtime_contract()
     assert set(current) == {"version", "rules", "operation_contract"}
-    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v14"
+    assert current["version"] == CONTRACT_VERSION == "skillflow-abstract-runtime-v16"
     assert [rule["id"] for rule in current["rules"]] == [f"EM{i:02}" for i in range(1, 19)]
     binding = runtime_contract_binding(current)
     assert binding == {"version": CONTRACT_VERSION, "sha256": canonical_sha256(current)}
@@ -47,6 +47,15 @@ def test_previous_contract_is_accepted_only_by_explicit_historical_reader(versio
     old["operation_contract"]["common"]["selectors"] = "injected"
     with pytest.raises(ValueError):
         validate_runtime_contract(old, read_only=True)
+
+
+@pytest.mark.parametrize("version, digest", [
+    ("v14", "3c5e26ebc288fbba41176d1a9e3b7eef1132f5aacc23fe69a3535665f5b711f9"),
+    ("v15", "bdb7f1b489b1a30341bdda03afcc8fca7d0496e8970ed1f30061d8074bcc763e"),
+])
+def test_archived_contract_keeps_the_recorded_identity(version, digest):
+    old = runtime_contract(version="skillflow-abstract-runtime-" + version)
+    assert runtime_contract_binding(old, read_only=True)["sha256"] == digest
 
 
 @pytest.mark.parametrize("change", [

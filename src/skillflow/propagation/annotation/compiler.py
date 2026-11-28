@@ -37,6 +37,7 @@ from skillflow.propagation.contracts.runtime_contract import runtime_contract_bi
 from skillflow.propagation.material import checked_material
 from skillflow.propagation.contracts.profiles import RawAnnotationResponse
 from skillflow.propagation.contracts.boundaries import derive_sink_boundaries
+from skillflow.propagation.expressions import bind_operation_expressions
 
 COMPILER_VERSION = "skillflow-processing-compiler-v16"
 
@@ -280,6 +281,8 @@ def compile_response(raw, material):
         result_spec = {"order": spec.order, "precedence": [],
             "sensitivity": [item.model_dump(mode="json") for item in spec.sensitivity],
             "events": output_events, "output_bindings": [item.model_dump(mode="json") for item in spec.output_bindings]}
+        if spec.outcome_bindings:
+            result_spec["outcome_bindings"] = [item.model_dump(mode="json") for item in spec.outcome_bindings]
         with _generated_artifact(f"transfer structure for {ir_id}"):
             typed = IRTransferSpec.model_validate(result_spec)
             causal_edges |= structural_precedence(typed)
@@ -295,6 +298,7 @@ def compile_response(raw, material):
         with _generated_artifact(f"IR semantics for {ir_id}"):
             compiled["ir_semantics"][ir_id] = IRSemantics.model_validate(result_spec).model_dump(mode="json")
     with _generated_artifact("sink boundaries and final compiled response"):
+        bind_operation_expressions(compiled["expressions"], mapping["events"])
         compiled["sink_boundaries"] = [boundary.model_dump(mode="json") for boundary in
             derive_sink_boundaries(compiled["locations"], compiled["ir_semantics"])]
         compiled = validate_compiled_response(compiled, material)

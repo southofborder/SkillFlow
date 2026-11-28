@@ -1,0 +1,360 @@
+{
+  "status": "completed",
+  "declared_purpose": "Trade and inspect Polymarket temperature markets using NOAA/Open-Meteo forecasts through Simmer, with configurable sizing, safeguards, exits and strategy tracking. The entry document declares dry-run by default and explicit --live opt-in (SKILL.md:1-51, 287-337).",
+  "data_operations": [
+    {
+      "operation": "Load local configuration through SDK helpers",
+      "source": "Configuration schema, config.json and named environment variables",
+      "data_scope": "Trading venue, locations, thresholds, sizing and safeguard settings; packaged config.json contains max_position_usd.",
+      "recipient_or_storage": "SDK load_config helper and process configuration",
+      "condition": "At weather_trader.py import, including imports by the archive builder. Configuration precedence is declared as config.json > environment > defaults; helper internals are absent.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 48, "end_line": 106},
+        {"path": "config.json", "start_line": 1, "end_line": 3},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 338, "end_line": 344}
+      ]
+    },
+    {
+      "operation": "Request settings persistence and echo supplied values",
+      "source": "CLI --set KEY=VALUE arguments",
+      "data_scope": "Every parsed key/value pair, including keys outside CONFIG_SCHEMA; supplied values and the destination path are printed.",
+      "recipient_or_storage": "SDK update_config helper, declared local config.json, and caller stdout",
+      "condition": "When --set supplies updates. The command subsequently continues into the selected strategy path.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 2653, "end_line": 2672},
+        {"path": "SKILL.md", "start_line": 256, "end_line": 261}
+      ]
+    },
+    {
+      "operation": "Request credentials and delegate credential initialization",
+      "source": "Setup instructions and SDK environment initialization",
+      "data_scope": "SIMMER_API_KEY; setup also unconditionally requests WALLET_PRIVATE_KEY, although package metadata limits it to external-wallet self-custody. OWS_WALLET routing is documented.",
+      "recipient_or_storage": "Operator environment and SimmerClient; API-key bearer authentication to https://api.simmer.markets is documented. Raw private-key transmission is not shown.",
+      "condition": "The strategy initializes from_env after the --config return. scripts/status.py instead uses readonly(). Actual SDK credential reads and signing are unresolved.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 131, "end_line": 139},
+        {"path": "SKILL.md", "start_line": 174, "end_line": 198},
+        {"path": "clawhub.json", "start_line": 13, "end_line": 22},
+        {"path": "weather_trader.py", "start_line": 142, "end_line": 153},
+        {"path": "scripts/status.py", "start_line": 36, "end_line": 47}
+      ]
+    },
+    {
+      "operation": "Search for markets and request catalog imports",
+      "source": "Configured ACTIVE_LOCATIONS, discovery dates and returned public market URLs",
+      "data_scope": "Location/date search terms, venue, volume floor and result limit; qualifying Polymarket URLs are passed to import_market.",
+      "recipient_or_storage": "Simmer SDK discovery/import service; catalog insertion is requested. A comment describes Dome-backed search, but downstream exchanges and retention are unverified.",
+      "condition": "Ordinary non-replay scans, including default paper execution. Returned URLs are deduplicated and checked for Polymarket origin and temperature questions. Replay skips this path.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 879, "end_line": 884},
+        {"path": "weather_trader.py", "start_line": 1279, "end_line": 1356},
+        {"path": "weather_trader.py", "start_line": 2143, "end_line": 2157}
+      ]
+    },
+    {
+      "operation": "Retrieve weather market listings",
+      "source": "Simmer market API or SDK replay service",
+      "data_scope": "Market records including resolution_criteria. Live requests weather/active listings and dated horizon pages; replay requests q=temperature. Location filtering occurs locally afterward.",
+      "recipient_or_storage": "Configured SDK service receives query parameters; returned records remain in process memory.",
+      "condition": "Normal scans after discovery. A failed base listing raises; failed supplemental pages are skipped. Resolution criteria are explicitly needed for station routing.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1758, "end_line": 1815},
+        {"path": "weather_trader.py", "start_line": 2220, "end_line": 2259},
+        {"path": "SKILL.md", "start_line": 170, "end_line": 172}
+      ]
+    },
+    {
+      "operation": "Retrieve NOAA forecasts and optional observations",
+      "source": "Packaged airport coordinates and station identifiers selected from market criteria",
+      "data_scope": "Station coordinates in /points requests; a returned forecast URL; station identifier for latest observations when today's high is absent; public forecast/observation responses.",
+      "recipient_or_storage": "api.weather.gov and the forecast_url supplied by its response; returned forecasts are held locally.",
+      "condition": "Non-replay US station routing. Requests carry a fixed skill User-Agent and Accept header. Coordinates identify resolution stations, not a measured user location.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 608, "end_line": 701},
+        {"path": "weather_trader.py", "start_line": 1722, "end_line": 1755},
+        {"path": "weather_trader.py", "start_line": 2303, "end_line": 2338}
+      ]
+    },
+    {
+      "operation": "Retrieve Open-Meteo forecasts and source cross-checks",
+      "source": "Packaged station coordinates and timezones",
+      "data_scope": "Latitude, longitude, timezone, Celsius units and a ten-day daily high/low request. US secondary forecasts are converted to Fahrenheit.",
+      "recipient_or_storage": "https://api.open-meteo.com/v1/forecast; per-scan process caches",
+      "condition": "International primary forecasts and non-replay US cross-checks. Cross-checks occur before price eligibility and safeguards, supporting documented classification of blocked candidates. Legacy city-coordinate wrappers are also exposed but are not used by the main station-routing path.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 533, "end_line": 605},
+        {"path": "weather_trader.py", "start_line": 2320, "end_line": 2338},
+        {"path": "weather_trader.py", "start_line": 2393, "end_line": 2414}
+      ]
+    },
+    {
+      "operation": "Fetch historical hourly forecast data",
+      "source": "Archive-builder date arguments and packaged station tables",
+      "data_scope": "Station coordinates, timezone, temperature units, date windows and hourly previous_day1/2/3 variables; returned hourly temperatures and timezone metadata.",
+      "recipient_or_storage": "https://previous-runs-api.open-meteo.com/v1/forecast and builder process memory",
+      "condition": "Only when the archive builder is invoked. --stations selects us, intl or all, default all. Windows use ten-day chunks; qualifying failures retry up to three attempts.",
+      "evidence": [
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 38, "end_line": 50},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 66, "end_line": 113},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 254, "end_line": 328},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 347, "end_line": 389}
+      ]
+    },
+    {
+      "operation": "Persist a historical forecast archive",
+      "source": "Validated historical hourly responses",
+      "data_scope": "Station/date daily highs and lows for three leads, source, fetch timestamp and station UTC offsets; raw hourly arrays are not written.",
+      "recipient_or_storage": "Local --out JSON file; output path, station count and date window are printed to stdout.",
+      "condition": "After successful archive construction. Parent directories are created; an existing selected output may be overwritten. The sample filename is refused.",
+      "evidence": [
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 222, "end_line": 251},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 286, "end_line": 328},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 360, "end_line": 397}
+      ]
+    },
+    {
+      "operation": "Read and retain a replay archive",
+      "source": "Explicit path, SIMMER_REPLAY_FORECASTS, or fixtures/replay_forecasts.json",
+      "data_scope": "The selected JSON file is read; station/date highs, lows, optional leads and UTC offsets are retained. Replay time comes from SIMMER_REPLAY_NOW.",
+      "recipient_or_storage": "Process-global replay maps; archive path, station count and date span are printed through a forced provenance line.",
+      "condition": "Replay only; existing injected forecasts can bypass loading. Automatic selection excludes the packaged sample, although an explicit path is not restricted by filename. The main replay forecast path avoids live weather vendors.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1368, "end_line": 1391},
+        {"path": "weather_trader.py", "start_line": 1415, "end_line": 1482},
+        {"path": "weather_trader.py", "start_line": 1489, "end_line": 1594},
+        {"path": "weather_trader.py", "start_line": 1617, "end_line": 1635},
+        {"path": "weather_trader.py", "start_line": 1722, "end_line": 1755},
+        {"path": "weather_trader.py", "start_line": 2144, "end_line": 2151}
+      ]
+    },
+    {
+      "operation": "Clear replay data from process memory",
+      "source": "Replay forecast and UTC-offset maps",
+      "data_scope": "Cached forecasts, offsets and loader state",
+      "recipient_or_storage": "In-memory maps only; no archive-file deletion",
+      "condition": "reset_replay_forecasts() explicitly clears the replay plane; parsing new offset metadata also clears the offset map.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1443, "end_line": 1449},
+        {"path": "weather_trader.py", "start_line": 1509, "end_line": 1522}
+      ]
+    },
+    {
+      "operation": "Retrieve account portfolio and positions",
+      "source": "SDK portfolio and position services",
+      "data_scope": "Balance, exposure, position counts, P&L, concentration, strategy breakdowns and position records. Strategy positions use the configured venue; replay omits that filter. The status utility requests account-wide data.",
+      "recipient_or_storage": "Returned data stays with the calling process; selected details are printed.",
+      "condition": "Smart sizing retrieves portfolios, including another retrieval for each sizing calculation. Position reads support the entry cap, exits, fresh sell quantities and --positions. scripts/status.py always retrieves a portfolio and retrieves positions only with --positions.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1041, "end_line": 1047},
+        {"path": "weather_trader.py", "start_line": 1875, "end_line": 1935},
+        {"path": "weather_trader.py", "start_line": 1942, "end_line": 2002},
+        {"path": "weather_trader.py", "start_line": 2119, "end_line": 2141},
+        {"path": "weather_trader.py", "start_line": 2183, "end_line": 2191},
+        {"path": "scripts/status.py", "start_line": 51, "end_line": 129}
+      ]
+    },
+    {
+      "operation": "Request context and price history",
+      "source": "Selected market identifier and configured analysis flags",
+      "data_scope": "Market ID and, for entry context, fixed my_probability=0.85; returned safeguards, discipline, slippage, edge information and price history.",
+      "recipient_or_storage": "SDK service; context explicitly uses /api/sdk/context/{market_id}. Responses remain with local analysis.",
+      "condition": "Entry context when safeguards are enabled; history when trends or volatility targeting are enabled. Both precede the entry-price check. Exit context is requested for threshold-qualified sells when safeguards are enabled.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1050, "end_line": 1066},
+        {"path": "weather_trader.py", "start_line": 1982, "end_line": 1990},
+        {"path": "weather_trader.py", "start_line": 2416, "end_line": 2445}
+      ]
+    },
+    {
+      "operation": "Infer strategy and position indicators",
+      "source": "Forecasts, market buckets, price history, account positions and configuration",
+      "data_scope": "Source-agreement tier, trend, volatility, position size, estimated prior buy count, weather-position classification, trading edge and journal confidence. The 0.85 order confidence is fixed, not a measured personal attribute.",
+      "recipient_or_storage": "Local calculations; selected indicators subsequently enter order annotations, journal calls and stdout.",
+      "condition": "Corresponding candidate, sizing and exit paths. Buy count is explicitly an estimate from cost basis/shares, not transaction-history reconstruction.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 971, "end_line": 1030},
+        {"path": "weather_trader.py", "start_line": 1173, "end_line": 1276},
+        {"path": "weather_trader.py", "start_line": 1896, "end_line": 1935},
+        {"path": "weather_trader.py", "start_line": 1949, "end_line": 1955},
+        {"path": "weather_trader.py", "start_line": 2493, "end_line": 2546}
+      ]
+    },
+    {
+      "operation": "Delegate redemption, balance checks and order preflight",
+      "source": "Initialized SDK client, planned order amount and venue",
+      "data_scope": "auto_redeem() receives no explicit payload; ensure_can_trade receives a minimum balance; preflight receives planned amount, exposure-cap setting and venue. Returned balances, blockers and redemption identifiers may be printed.",
+      "recipient_or_storage": "SimmerClient methods; their backend, wallet and chain operations are unresolved.",
+      "condition": "auto_redeem runs before --positions returns, including default paper and replay paths. ensure_can_trade runs when dry_run is false. Explicit order preflight runs for client.live outside replay.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1818, "end_line": 1861},
+        {"path": "weather_trader.py", "start_line": 2080, "end_line": 2141}
+      ]
+    },
+    {
+      "operation": "Submit buy/sell requests and strategy annotations",
+      "source": "Qualified entry or exit and local strategy calculations",
+      "data_scope": "Market ID, side/action, amount or shares, order type, source and skill slug. Buys additionally include reasoning, forecast, bucket, price, threshold, edge, confidence, source agreement and optional volatility metadata.",
+      "recipient_or_storage": "SDK trade method and configured trading service. Documentation describes live on-chain orders; actual onward payloads and retention are absent.",
+      "condition": "Entry and exit gates apply. CLI default initializes live=False, but both paths still call SDK trade; --live initializes live=True. Paper simulation and live signing behavior therefore depend on the SDK.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1818, "end_line": 1872},
+        {"path": "weather_trader.py", "start_line": 2004, "end_line": 2020},
+        {"path": "weather_trader.py", "start_line": 2493, "end_line": 2527},
+        {"path": "weather_trader.py", "start_line": 2691, "end_line": 2703},
+        {"path": "DISCLAIMER.md", "start_line": 20, "end_line": 25},
+        {"path": "SKILL.md", "start_line": 332, "end_line": 337}
+      ]
+    },
+    {
+      "operation": "Pass successful trade context to an optional journal component",
+      "source": "Successful SDK result and locally generated trade thesis",
+      "data_scope": "Trade ID, source and skill slug; buys add thesis, inferred confidence, location, forecast, target date and metric. Sells add exit thesis and action.",
+      "recipient_or_storage": "Installed tradejournal.log_trade or skills.tradejournal.log_trade; remote destination and persistence are unknown.",
+      "condition": "Import succeeds, a trade ID exists, and result.simulated is false. Availability activates this integration without a separate CLI opt-in.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 34, "end_line": 46},
+        {"path": "weather_trader.py", "start_line": 2013, "end_line": 2020},
+        {"path": "weather_trader.py", "start_line": 2529, "end_line": 2546}
+      ]
+    },
+    {
+      "operation": "Emit account and operational output",
+      "source": "Configuration, account responses, forecasts, market records, SDK results and exceptions",
+      "data_scope": "Balances, exposure, holdings, P&L, strategy breakdowns, settings, file paths, market snippets, trade identifiers and error text.",
+      "recipient_or_storage": "Caller stdout/stderr; subsequent capture or forwarding is not shown.",
+      "condition": "Selected command and logging paths. --quiet controls the main logger, but forced provenance/skip summaries and direct prints can still produce output. The status utility intentionally displays account details.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1915, "end_line": 1935},
+        {"path": "weather_trader.py", "start_line": 2038, "end_line": 2141},
+        {"path": "weather_trader.py", "start_line": 2611, "end_line": 2631},
+        {"path": "weather_trader.py", "start_line": 2667, "end_line": 2672},
+        {"path": "scripts/status.py", "start_line": 42, "end_line": 129},
+        {"path": "scripts/build_replay_forecast_archive.py", "start_line": 390, "end_line": 405}
+      ]
+    },
+    {
+      "operation": "Launch a local pytest subprocess with inherited environment",
+      "source": "Backtest-gate process environment and referenced test path",
+      "data_scope": "Inherited environment variables, potentially including credentials when present; interpreter, test-file argument and working directory.",
+      "recipient_or_storage": "Local Python/pytest child process with inherited output streams",
+      "condition": "When scripts/run_backtest_gate.py runs. No env override is supplied. The referenced tests are absent from the supplied package, so their behavior is unresolved.",
+      "evidence": [
+        {"path": "scripts/run_backtest_gate.py", "start_line": 43, "end_line": 48},
+        {"path": "scripts/run_backtest_gate.py", "start_line": 100, "end_line": 114}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "WALLET_PRIVATE_KEY requested as universally required setup",
+      "recipient_or_storage": "Operator environment supplied to SDK initialization; no raw-key remote disclosure is established.",
+      "condition": "Users following SKILL.md setup, including managed-wallet users",
+      "purpose_basis": "Trading requires appropriate authentication/signing, but package metadata explicitly says this private key is only needed for external-wallet self-custody.",
+      "necessary_behavior": "Keep API authentication and signing credentials required by the selected custody path.",
+      "proposed_reduction": "Make the private-key setup request conditional on external-wallet signing requirements.",
+      "preservation_conditions": "Retain client-side signing for external-wallet execution; SDK implementation remains unverified.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 131, "end_line": 139},
+        {"path": "clawhub.json", "start_line": 18, "end_line": 22},
+        {"path": "weather_trader.py", "start_line": 142, "end_line": 153}
+      ]
+    },
+    {
+      "data_scope": "Market ID and my_probability in context requests, and price-history retrieval for price-ineligible entries",
+      "recipient_or_storage": "Configured SDK context and price-history services; returned data enters local memory.",
+      "condition": "A candidate passes earlier checks but its price subsequently fails MIN_ENTRY_PRICE or ENTRY_THRESHOLD; corresponding analysis flags are enabled.",
+      "purpose_basis": "Safeguards protect potential orders; history supports a buy signal or position sizing. These candidates cannot enter regardless of either result.",
+      "necessary_behavior": "Keep safeguards and history for eligible orders and retain the separately documented all-candidate source-tier classification.",
+      "proposed_reduction": "Check entry-price eligibility before requesting entry context or history. These are avoidable requests, rather than excess fields in a necessary request.",
+      "preservation_conditions": "Preserve source-tier diagnostics, skip reporting and exit safeguards.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1050, "end_line": 1079},
+        {"path": "weather_trader.py", "start_line": 2393, "end_line": 2445},
+        {"path": "weather_trader.py", "start_line": 2478, "end_line": 2479},
+        {"path": "weather_trader.py", "start_line": 2557, "end_line": 2562}
+      ]
+    },
+    {
+      "data_scope": "Unused days of public daily high/low forecasts",
+      "recipient_or_storage": "Ten-day request to api.open-meteo.com and its response retained in scan memory",
+      "condition": "The main scan needs fewer than ten forecast days, as with the default 48-hour discovery horizon.",
+      "purpose_basis": "Forecasting and cross-checking require dates of retained station events; ten days is an implementation choice.",
+      "necessary_behavior": "Fetch every date and metric needed for primary forecasts and source-tier diagnostics.",
+      "proposed_reduction": "Parameterize the main scan's forecast window using relevant event dates. This narrows data within a required weather request.",
+      "preservation_conditions": "Respect station-local dates, widened discovery horizons and all required high/low metrics; preserve broader standalone-helper behavior where requested.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 535, "end_line": 565},
+        {"path": "weather_trader.py", "start_line": 839, "end_line": 861},
+        {"path": "weather_trader.py", "start_line": 2234, "end_line": 2242},
+        {"path": "weather_trader.py", "start_line": 2320, "end_line": 2338},
+        {"path": "weather_trader.py", "start_line": 2397, "end_line": 2404}
+      ]
+    },
+    {
+      "data_scope": "Account exposure, position count, full by_source breakdown and precise balance printed during smart sizing",
+      "recipient_or_storage": "Strategy stdout and any caller-controlled capture",
+      "condition": "Smart sizing during a strategy scan; the sizing helper also directly prints balance despite --quiet.",
+      "purpose_basis": "Smart sizing requires available balance. An account-wide overview is separately available through the explicit status command.",
+      "necessary_behavior": "Obtain sufficiently fresh balance data and calculate the capped order size.",
+      "proposed_reduction": "Limit scan output to sizing results, respect quiet mode, and reserve broader account summaries for explicit status requests. Remove the startup portfolio request if its only remaining purpose was that overview.",
+      "preservation_conditions": "Keep balance reads needed for sizing; do not treat the normal portfolio response remaining with its caller as remote disclosure.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 301, "end_line": 306},
+        {"path": "weather_trader.py", "start_line": 1915, "end_line": 1935},
+        {"path": "weather_trader.py", "start_line": 2119, "end_line": 2129},
+        {"path": "scripts/status.py", "start_line": 51, "end_line": 89}
+      ]
+    },
+    {
+      "data_scope": "Buy reasoning and signal_data, including thresholds, confidence, source comparisons and volatility sizing parameters",
+      "recipient_or_storage": "SDK trade request to the configured Simmer service",
+      "condition": "Every attempted qualified buy, including SDK paper execution",
+      "purpose_basis": "Order execution and declared source tracking require order fields and strategy tags. Rich analytical annotations are additional implementation data.",
+      "necessary_behavior": "Submit the market, side/action, size, order type and required tracking identifiers.",
+      "proposed_reduction": "Make rich annotations optional or send a minimal selected summary. This removes extra data from a required order action, rather than eliminating the order.",
+      "preservation_conditions": "Retain source/skill attribution and required safeguards; confirm SDK execution and monitoring do not require the omitted annotations.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 1818, "end_line": 1832},
+        {"path": "weather_trader.py", "start_line": 2493, "end_line": 2520},
+        {"path": "SKILL.md", "start_line": 332, "end_line": 337}
+      ]
+    },
+    {
+      "data_scope": "Duplicate trade context, including thesis, forecast, location/date and inferred confidence",
+      "recipient_or_storage": "tradejournal.log_trade or skills.tradejournal.log_trade component boundary; storage and remote recipients are unresolved.",
+      "condition": "Journal import succeeds and a successful trade has a non-simulated result and trade ID.",
+      "purpose_basis": "The integration is described as optional tracking; required trading attribution already accompanies SDK orders.",
+      "necessary_behavior": "Preserve order execution and required source tracking; retain journaling when expressly selected.",
+      "proposed_reduction": "Require an explicit journal setting and default to minimal trade identifiers/action, enabling richer context when requested.",
+      "preservation_conditions": "Keep requested journal functionality available. Do not characterize this call as proven remote transmission or durable storage.",
+      "evidence": [
+        {"path": "weather_trader.py", "start_line": 34, "end_line": 46},
+        {"path": "weather_trader.py", "start_line": 2013, "end_line": 2020},
+        {"path": "weather_trader.py", "start_line": 2529, "end_line": 2546},
+        {"path": "SKILL.md", "start_line": 332, "end_line": 337}
+      ]
+    },
+    {
+      "data_scope": "SIMMER_API_KEY, WALLET_PRIVATE_KEY and other sensitive environment variables, if present",
+      "recipient_or_storage": "Local pytest subprocess launched by scripts/run_backtest_gate.py",
+      "condition": "Gate execution from an environment containing those variables",
+      "purpose_basis": "The pinned gate is explicitly documented as requiring no API key or network. Environment inheritance is an implementation choice.",
+      "necessary_behavior": "Launch the pinned tests with required interpreter, system and nonsensitive test inputs.",
+      "proposed_reduction": "Pass a filtered child environment that excludes trading credentials.",
+      "preservation_conditions": "Retain essential platform variables and legitimate test inputs. The exact allowlist cannot be validated because the referenced tests were not supplied.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 237, "end_line": 242},
+        {"path": "scripts/run_backtest_gate.py", "start_line": 100, "end_line": 107}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Blocking end-to-end boundary: simmer-sdk source is absent. Actual credential access, private-key handling, signing, request construction, endpoint overrides, paper-mode effects and downstream payloads cannot be verified. Documentation is not proof that raw signing keys remain local.",
+    "auto_redeem runs even before position-only display and on default paper/replay paths. Its data reads, remote calls, chain effects and live-mode guards are unresolved; the supplied wrapper does not enforce a read-only guard.",
+    "Optional journal implementations are absent. Their destinations, persistence, retention, onward disclosure and deletion behavior are unknown.",
+    "The replay harness and referenced test files are not packaged. Claimed environment filtering, bundle copying, replay routing and test isolation cannot be verified.",
+    "Simmer/backend and weather-provider retention, deletion and onward processing are undocumented here. SDK/server support for narrower response fields or market filters is also unknown.",
+    "Runtime credentials, flags, installed integrations and user archive contents are unspecified. stdout/stderr may remain with the caller; capture, retention or remote forwarding is not established.",
+    "The supplied code provides no archive/config file deletion or retention schedule. Replay reset clears memory only. Server-side risk-monitor behavior and managed versus external-wallet execution remain external declarations."
+  ]
+}

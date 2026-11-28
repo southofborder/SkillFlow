@@ -1,0 +1,1055 @@
+{
+  "request_sha256": "e373a94d4ef09404c6a75e3448b23747aa711e44f8d935cad7ea1086cecb05ff",
+  "answer_sha256": "e6edd4614f4828c4591d261fde24d4141382330d57f8a764d0e8be8e2941e822",
+  "result": {
+    "status": "complete",
+    "reason": "Static extraction from the supplied files only; nothing was executed. SKILL.md describes an active connector, while README.md declares it deprecated. The implemented detector reads session delivery contexts, rather than the Clawdbot configuration described by several documents. Runtime configuration, external CLI implementations, Keychain access and launchd execution remain conditional or unspecified.",
+    "claim": "Connect a Claude subscription to Clawdbot by copying Keychain OAuth credentials into its auth profiles, refreshing tokens automatically every two hours, and optionally notifying the user. README.md separately says the skill is deprecated because Clawdbot now provides this functionality natively.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 1,
+        "end_line": 15,
+        "quote": "---\nname: claude-connect\ndescription: \"Connect Claude to Clawdbot instantly and keep it connected 24/7. Run after setup to link your subscription, then auto-refreshes tokens forever.\"\n---\n\n# claude-connect\n\n**Connect your Claude subscription to Clawdbot in one step.**\n\nAutomatically:\n- ✅ Reads Claude OAuth tokens from Keychain\n- ✅ Writes them to Clawdbot in proper OAuth format\n- ✅ Auto-refreshes every 2 hours (before expiry)\n- ✅ Notifies you on success/failure\n- ✅ Works with `clawdbot onboard` (fixes OAuth auth-profiles bug)"
+      },
+      {
+        "path": "README.md",
+        "start_line": 1,
+        "end_line": 10,
+        "quote": "# ⚠️ DEPRECATED — Clawdbot Handles This Natively\n\n**This skill is no longer needed.**\n\nAs of January 2026, Clawdbot has built-in OAuth support that:\n- Connects to Claude via the setup wizard (`clawdbot onboard --auth-choice claude-cli`)\n- Automatically refreshes tokens before expiry\n- Updates auth profiles without any user intervention\n\n**You don't need to install this skill.** Just run `clawdbot onboard` and select Claude CLI auth — it pulls tokens from Keychain automatically."
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "M01",
+        "operation": "Read",
+        "data": "Refresh buffer, log path, effective notification flags and target, Keychain service and JSON field, auth-file path and profile name, OAuth client ID and token URL. The runtime script does not load notification_channel or on_start.",
+        "source": "claude-oauth-refresh-config.json beside refresh-token.sh",
+        "recipient": "Refresh-script variables",
+        "condition": "If the file exists; otherwise built-in defaults apply. jq's // true also replaces a configured false notification flag with true.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 14,
+            "end_line": 39,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nCONFIG_FILE=\"$SCRIPT_DIR/claude-oauth-refresh-config.json\"\n\n# Defaults for Clawdbot setup\nDEFAULT_KEYCHAIN_SERVICE=\"Claude Code-credentials\"\nDEFAULT_KEYCHAIN_FIELD=\"claudeAiOauth\"\nDEFAULT_AUTH_FILE=\"$HOME/.clawdbot/agents/main/agent/auth-profiles.json\"\nDEFAULT_PROFILE_NAME=\"anthropic:claude-cli\"  # FIXED: Use claude-cli for OAuth\nDEFAULT_CLIENT_ID=\"9d1c250a-e61b-44d9-88ed-5944d1962f5e\"\nDEFAULT_TOKEN_URL=\"https://console.anthropic.com/v1/oauth/token\"\nDEFAULT_REFRESH_BUFFER=30\n\n# Load config or use defaults\nif [[ -f \"$CONFIG_FILE\" ]]; then\n    REFRESH_BUFFER=$(jq -r '.refresh_buffer_minutes // 30' \"$CONFIG_FILE\")\n    LOG_FILE=$(jq -r '.log_file // \"~/clawd/logs/claude-oauth-refresh.log\"' \"$CONFIG_FILE\" | sed \"s|^~|$HOME|\")\n    NOTIFY_SUCCESS=$(jq -r '.notifications.on_success // true' \"$CONFIG_FILE\")\n    NOTIFY_FAILURE=$(jq -r '.notifications.on_failure // true' \"$CONFIG_FILE\")\n    NOTIFY_TARGET=$(jq -r '.notification_target // \"\"' \"$CONFIG_FILE\")\n    \n    KEYCHAIN_SERVICE=$(jq -r '.keychain_service // \"\"' \"$CONFIG_FILE\")\n    KEYCHAIN_FIELD=$(jq -r '.keychain_field // \"\"' \"$CONFIG_FILE\")\n    AUTH_FILE=$(jq -r '.auth_file // \"\"' \"$CONFIG_FILE\" | sed \"s|^~|$HOME|\")\n    PROFILE_NAME=$(jq -r '.profile_name // \"\"' \"$CONFIG_FILE\")\n    CLIENT_ID=$(jq -r '.client_id // \"\"' \"$CONFIG_FILE\")\n    TOKEN_URL=$(jq -r '.token_url // \"\"' \"$CONFIG_FILE\")"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 54,
+            "end_line": 60,
+            "quote": "# Apply defaults if not set\nKEYCHAIN_SERVICE=\"${KEYCHAIN_SERVICE:-$DEFAULT_KEYCHAIN_SERVICE}\"\nKEYCHAIN_FIELD=\"${KEYCHAIN_FIELD:-$DEFAULT_KEYCHAIN_FIELD}\"\nAUTH_FILE=\"${AUTH_FILE:-$DEFAULT_AUTH_FILE}\"\nPROFILE_NAME=\"${PROFILE_NAME:-$DEFAULT_PROFILE_NAME}\"\nCLIENT_ID=\"${CLIENT_ID:-$DEFAULT_CLIENT_ID}\"\nTOKEN_URL=\"${TOKEN_URL:-$DEFAULT_TOKEN_URL}\""
+          }
+        ]
+      },
+      {
+        "move_id": "M02",
+        "operation": "Read",
+        "data": "Keychain entry metadata, filtered to unique account names associated with the selected service.",
+        "source": "Output of security dump-keychain",
+        "recipient": "ALL_ACCOUNTS in the refresh and verification scripts",
+        "condition": "Refresh uses the configured service, defaulting to Claude Code-credentials; verification fixes that service name. The dump command itself is not service-filtered.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 120,
+            "end_line": 132,
+            "quote": "# Get ALL account names for this service\nlog \"Scanning for all '$KEYCHAIN_SERVICE' entries...\"\nALL_ACCOUNTS=$(security dump-keychain 2>/dev/null | \\\n    awk '/^class: \"genp\"/,/^keychain:/ {\n        if (/\"acct\"<blob>=/) {\n            gsub(/.*\"acct\"<blob>=\"/, \"\");\n            gsub(/\".*/, \"\");\n            account=$0\n        }\n        if (/\"svce\"<blob>=\"'\"$KEYCHAIN_SERVICE\"'\"/) {\n            print account\n        }\n    }' | sort -u)"
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 70,
+            "end_line": 82,
+            "quote": "# Scan for ALL \"Claude Code-credentials\" entries (account name irrelevant)\nSERVICE=\"Claude Code-credentials\"\nALL_ACCOUNTS=$(security dump-keychain 2>/dev/null | \\\n    awk '/^class: \"genp\"/,/^keychain:/ {\n        if (/\"acct\"<blob>=/) {\n            gsub(/.*\"acct\"<blob>=\"/, \"\");\n            gsub(/\".*/, \"\");\n            account=$0\n        }\n        if (/\"svce\"<blob>=\"'\"$SERVICE\"'\"/) {\n            print account\n        }\n    }' | sort -u)"
+          }
+        ]
+      },
+      {
+        "move_id": "M03",
+        "operation": "Read",
+        "data": "Matching Keychain password payloads containing OAuth JSON; selected refresh token, expiration and, on the still-valid branch, access token.",
+        "source": "macOS Keychain entries selected by service and enumerated account",
+        "recipient": "TEMP_DATA, KEYCHAIN_DATA, KEYCHAIN_ACCOUNT, REFRESH_TOKEN, CURRENT_EXPIRES and ACCESS_TOKEN",
+        "condition": "Iterates until a payload has a nonempty refreshToken and expiresAt under KEYCHAIN_FIELD. Verification separately stops at an entry containing claudeAiOauth.refreshToken.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 106,
+            "end_line": 118,
+            "quote": "validate_keychain_data() {\n    local data=\"$1\"\n    \n    # Try to parse and check for required fields\n    local has_refresh=$(echo \"$data\" | python3 -c \"import sys, json; data=json.load(sys.stdin); print('yes' if '$KEYCHAIN_FIELD' in data and 'refreshToken' in data['$KEYCHAIN_FIELD'] and data['$KEYCHAIN_FIELD']['refreshToken'] else 'no')\" 2>/dev/null)\n    local has_expires=$(echo \"$data\" | python3 -c \"import sys, json; data=json.load(sys.stdin); print('yes' if '$KEYCHAIN_FIELD' in data and 'expiresAt' in data['$KEYCHAIN_FIELD'] and data['$KEYCHAIN_FIELD']['expiresAt'] else 'no')\" 2>/dev/null)\n    \n    if [[ \"$has_refresh\" == \"yes\" ]] && [[ \"$has_expires\" == \"yes\" ]]; then\n        return 0\n    else\n        return 1\n    fi\n}"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 150,
+            "end_line": 166,
+            "quote": "while IFS= read -r account; do\n    [[ -z \"$account\" ]] && continue\n    \n    log \"Checking entry with account: $account\"\n    \n    TEMP_DATA=$(security find-generic-password -s \"$KEYCHAIN_SERVICE\" -a \"$account\" -w 2>&1 || echo \"\")\n    \n    if [[ -n \"$TEMP_DATA\" ]] && validate_keychain_data \"$TEMP_DATA\"; then\n        KEYCHAIN_DATA=\"$TEMP_DATA\"\n        KEYCHAIN_ACCOUNT=\"$account\"\n        FOUND=true\n        log \"✓ Found complete OAuth tokens\"\n        break\n    else\n        log \"⚠ Entry incomplete, continuing...\"\n    fi\ndone <<< \"$ALL_ACCOUNTS\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 183,
+            "end_line": 185,
+            "quote": "# Parse keychain JSON\nREFRESH_TOKEN=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD']['refreshToken'])\")\nCURRENT_EXPIRES=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD']['expiresAt'])\")"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 195,
+            "end_line": 199,
+            "quote": "if [[ \"$FORCE_REFRESH\" == \"false\" ]] && [[ $TIME_LEFT_MIN -gt $REFRESH_BUFFER ]]; then\n    log \"Token still valid for ${TIME_LEFT_MIN} minutes (buffer: ${REFRESH_BUFFER}m)\"\n    \n    # FIXED: Sync token to auth-profiles.json in proper OAuth format\n    ACCESS_TOKEN=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('accessToken', ''))\" 2>/dev/null || echo \"\")"
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 87,
+            "end_line": 101,
+            "quote": "# Iterate through each entry to find one with complete OAuth data\nwhile IFS= read -r account; do\n    [[ -z \"$account\" ]] && continue\n    \n    KEYCHAIN_DATA=$(security find-generic-password -s \"$SERVICE\" -a \"$account\" -w 2>/dev/null || echo \"\")\n    \n    if [[ -n \"$KEYCHAIN_DATA\" ]]; then\n        # Check if it has valid OAuth tokens\n        if echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; data=json.load(sys.stdin); exit(0 if 'claudeAiOauth' in data and 'refreshToken' in data['claudeAiOauth'] else 1)\" 2>/dev/null; then\n            KEYCHAIN_FOUND=true\n            VALID_ACCOUNT=\"$account\"\n            break\n        fi\n    fi\ndone <<< \"$ALL_ACCOUNTS\""
+          }
+        ]
+      },
+      {
+        "move_id": "M04",
+        "operation": "Infer",
+        "data": "Remaining token lifetime in whole minutes and whether to refresh or only synchronize the existing token.",
+        "source": "Keychain expiresAt, current system time, effective refresh buffer and --force argument",
+        "recipient": "Refresh-script control flow",
+        "condition": "Skips the OAuth request only when force is false and remaining whole minutes exceed the buffer.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 8,
+            "end_line": 11,
+            "quote": "FORCE_REFRESH=false\nif [[ \"${1:-}\" == \"--force\" ]]; then\n    FORCE_REFRESH=true\nfi"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 184,
+            "end_line": 196,
+            "quote": "REFRESH_TOKEN=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD']['refreshToken'])\")\nCURRENT_EXPIRES=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD']['expiresAt'])\")\n\nlog \"✓ Using keychain account: $KEYCHAIN_ACCOUNT\"\nlog \"Current expiry: $(date -r $((CURRENT_EXPIRES / 1000)) '+%Y-%m-%d %H:%M:%S')\"\n\n# Check if refresh needed\nNOW_MS=$(($(date +%s) * 1000))\nTIME_LEFT_MS=$((CURRENT_EXPIRES - NOW_MS))\nTIME_LEFT_MIN=$((TIME_LEFT_MS / 60000))\n\nif [[ \"$FORCE_REFRESH\" == \"false\" ]] && [[ $TIME_LEFT_MIN -gt $REFRESH_BUFFER ]]; then\n    log \"Token still valid for ${TIME_LEFT_MIN} minutes (buffer: ${REFRESH_BUFFER}m)\""
+          }
+        ]
+      },
+      {
+        "move_id": "M05",
+        "operation": "Read",
+        "data": "Existing Clawdbot auth-profile access token for comparison and existing JSON document for preservation during either update branch.",
+        "source": "AUTH_FILE; default ~/.clawdbot/agents/main/agent/auth-profiles.json",
+        "recipient": "CURRENT_AUTH_TOKEN and Python data object",
+        "condition": "If the auth file exists. Parse/read exceptions in the preservation blocks are ignored, allowing replacement from an initially empty document.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 20,
+            "end_line": 21,
+            "quote": "DEFAULT_AUTH_FILE=\"$HOME/.clawdbot/agents/main/agent/auth-profiles.json\"\nDEFAULT_PROFILE_NAME=\"anthropic:claude-cli\"  # FIXED: Use claude-cli for OAuth"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 201,
+            "end_line": 205,
+            "quote": "    if [[ -n \"$ACCESS_TOKEN\" ]]; then\n        CURRENT_AUTH_TOKEN=\"\"\n        if [[ -f \"$AUTH_FILE\" ]]; then\n            CURRENT_AUTH_TOKEN=$(python3 -c \"import json; f=open('$AUTH_FILE'); d=json.load(f); print(d.get('profiles',{}).get('$PROFILE_NAME',{}).get('access',''))\" 2>/dev/null || echo \"\")\n        fi"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 215,
+            "end_line": 225,
+            "quote": "data = {'version': 1, 'profiles': {}}\nif os.path.exists('$AUTH_FILE'):\n    try:\n        with open('$AUTH_FILE') as f:\n            content = f.read().strip()\n            if content:\n                data = json.loads(content)\n    except (json.JSONDecodeError, Exception):\n        pass\nif 'profiles' not in data:\n    data['profiles'] = {}"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 310,
+            "end_line": 320,
+            "quote": "data = {'version': 1, 'profiles': {}}\nif os.path.exists('$AUTH_FILE'):\n    try:\n        with open('$AUTH_FILE') as f:\n            content = f.read().strip()\n            if content:\n                data = json.loads(content)\n    except (json.JSONDecodeError, Exception):\n        pass\nif 'profiles' not in data:\n    data['profiles'] = {}"
+          }
+        ]
+      },
+      {
+        "move_id": "M06",
+        "operation": "Save",
+        "data": "Current Keychain access token, refresh token and expiration as an anthropic OAuth profile; also replaces anthropic profile order and lastGood.",
+        "source": "Selected KEYCHAIN_DATA and existing auth-file JSON",
+        "recipient": "AUTH_FILE, default ~/.clawdbot/agents/main/agent/auth-profiles.json, through a temporary file in its directory",
+        "condition": "Token is outside the refresh buffer, --force is absent, accessToken is nonempty, and the stored profile access differs. No credential retention limit is specified.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 195,
+            "end_line": 210,
+            "quote": "if [[ \"$FORCE_REFRESH\" == \"false\" ]] && [[ $TIME_LEFT_MIN -gt $REFRESH_BUFFER ]]; then\n    log \"Token still valid for ${TIME_LEFT_MIN} minutes (buffer: ${REFRESH_BUFFER}m)\"\n    \n    # FIXED: Sync token to auth-profiles.json in proper OAuth format\n    ACCESS_TOKEN=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('accessToken', ''))\" 2>/dev/null || echo \"\")\n    \n    if [[ -n \"$ACCESS_TOKEN\" ]]; then\n        CURRENT_AUTH_TOKEN=\"\"\n        if [[ -f \"$AUTH_FILE\" ]]; then\n            CURRENT_AUTH_TOKEN=$(python3 -c \"import json; f=open('$AUTH_FILE'); d=json.load(f); print(d.get('profiles',{}).get('$PROFILE_NAME',{}).get('access',''))\" 2>/dev/null || echo \"\")\n        fi\n        \n        if [[ \"$CURRENT_AUTH_TOKEN\" != \"$ACCESS_TOKEN\" ]]; then\n            log \"Syncing token to auth-profiles.json (OAuth format)...\"\n            mkdir -p \"$(dirname \"$AUTH_FILE\")\"\n            python3 << PYEOF"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 227,
+            "end_line": 252,
+            "quote": "# FIXED: Write proper OAuth format (NOT token format)\ndata['profiles']['$PROFILE_NAME'] = {\n    'type': 'oauth',\n    'provider': 'anthropic',\n    'access': '$ACCESS_TOKEN',\n    'refresh': '$REFRESH_TOKEN',\n    'expires': $CURRENT_EXPIRES\n}\n\n# Set order to prefer OAuth profile\nif 'order' not in data:\n    data['order'] = {}\ndata['order']['anthropic'] = ['$PROFILE_NAME']\n\n# Set lastGood\nif 'lastGood' not in data:\n    data['lastGood'] = {}\ndata['lastGood']['anthropic'] = '$PROFILE_NAME'\n\n# Atomic write\nauth_dir = os.path.dirname('$AUTH_FILE')\nfd, temp_path = tempfile.mkstemp(dir=auth_dir, suffix='.tmp')\ntry:\n    with os.fdopen(fd, 'w') as f:\n        json.dump(data, f, indent=2)\n    os.rename(temp_path, '$AUTH_FILE')"
+          }
+        ]
+      },
+      {
+        "move_id": "M07",
+        "operation": "Send",
+        "data": "JSON OAuth refresh request containing grant_type=refresh_token, the selected Keychain refresh token and client ID.",
+        "source": "REFRESH_TOKEN extracted from KEYCHAIN_DATA and effective CLIENT_ID",
+        "recipient": "Effective TOKEN_URL; default https://console.anthropic.com/v1/oauth/token",
+        "condition": "Refresh is forced or remaining lifetime does not exceed the buffer. curl has a 30-second maximum time; the endpoint and client ID can be overridden in configuration.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 22,
+            "end_line": 23,
+            "quote": "DEFAULT_CLIENT_ID=\"9d1c250a-e61b-44d9-88ed-5944d1962f5e\"\nDEFAULT_TOKEN_URL=\"https://console.anthropic.com/v1/oauth/token\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 38,
+            "end_line": 39,
+            "quote": "    CLIENT_ID=$(jq -r '.client_id // \"\"' \"$CONFIG_FILE\")\n    TOKEN_URL=$(jq -r '.token_url // \"\"' \"$CONFIG_FILE\")"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 59,
+            "end_line": 60,
+            "quote": "CLIENT_ID=\"${CLIENT_ID:-$DEFAULT_CLIENT_ID}\"\nTOKEN_URL=\"${TOKEN_URL:-$DEFAULT_TOKEN_URL}\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 184,
+            "end_line": 184,
+            "quote": "REFRESH_TOKEN=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD']['refreshToken'])\")"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 266,
+            "end_line": 281,
+            "quote": "if [[ \"$FORCE_REFRESH\" == \"true\" ]]; then\n    log \"Force refresh requested (token expires in $TIME_LEFT_MIN minutes)\"\nelse\n    log \"Token expires in $TIME_LEFT_MIN minutes, refreshing...\"\nfi\n\n# Step 2: Call OAuth endpoint\nlog \"Calling OAuth endpoint...\"\nRESPONSE=$(curl -s -X POST \"$TOKEN_URL\" \\\n    -H \"Content-Type: application/json\" \\\n    --max-time 30 \\\n    -d \"{\n        \\\"grant_type\\\": \\\"refresh_token\\\",\n        \\\"refresh_token\\\": \\\"$REFRESH_TOKEN\\\",\n        \\\"client_id\\\": \\\"$CLIENT_ID\\\"\n    }\") || error_exit \"Network error calling OAuth endpoint\""
+          }
+        ]
+      },
+      {
+        "move_id": "M08",
+        "operation": "Read",
+        "data": "OAuth response body and its access_token, refresh_token and expires_in fields.",
+        "source": "Response from effective TOKEN_URL",
+        "recipient": "RESPONSE, NEW_ACCESS, NEW_REFRESH and EXPIRES_IN",
+        "condition": "After the curl request. JSON parsing failures or missing access/refresh tokens invoke error_exit.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 274,
+            "end_line": 294,
+            "quote": "RESPONSE=$(curl -s -X POST \"$TOKEN_URL\" \\\n    -H \"Content-Type: application/json\" \\\n    --max-time 30 \\\n    -d \"{\n        \\\"grant_type\\\": \\\"refresh_token\\\",\n        \\\"refresh_token\\\": \\\"$REFRESH_TOKEN\\\",\n        \\\"client_id\\\": \\\"$CLIENT_ID\\\"\n    }\") || error_exit \"Network error calling OAuth endpoint\"\n\n# Parse response\nNEW_ACCESS=$(echo \"$RESPONSE\" | python3 -c \"import sys, json; print(json.load(sys.stdin).get('access_token', ''))\" 2>/dev/null) || \\\n    error_exit \"Failed to parse OAuth response\"\n\nNEW_REFRESH=$(echo \"$RESPONSE\" | python3 -c \"import sys, json; print(json.load(sys.stdin).get('refresh_token', ''))\" 2>/dev/null) || \\\n    error_exit \"Failed to parse OAuth response\"\n\nEXPIRES_IN=$(echo \"$RESPONSE\" | python3 -c \"import sys, json; print(json.load(sys.stdin).get('expires_in', 0))\" 2>/dev/null) || \\\n    error_exit \"Failed to parse OAuth response\"\n\n[[ -n \"$NEW_ACCESS\" ]] || error_exit \"No access_token in OAuth response: $RESPONSE\"\n[[ -n \"$NEW_REFRESH\" ]] || error_exit \"No refresh_token in OAuth response\""
+          }
+        ]
+      },
+      {
+        "move_id": "M09",
+        "operation": "Infer",
+        "data": "New absolute expiration timestamp in milliseconds and formatted expiration time.",
+        "source": "OAuth expires_in and current system time",
+        "recipient": "NEW_EXPIRES_AT and NEW_EXPIRES_TIME",
+        "condition": "After response parsing and nonempty access/refresh-token checks.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 290,
+            "end_line": 297,
+            "quote": "EXPIRES_IN=$(echo \"$RESPONSE\" | python3 -c \"import sys, json; print(json.load(sys.stdin).get('expires_in', 0))\" 2>/dev/null) || \\\n    error_exit \"Failed to parse OAuth response\"\n\n[[ -n \"$NEW_ACCESS\" ]] || error_exit \"No access_token in OAuth response: $RESPONSE\"\n[[ -n \"$NEW_REFRESH\" ]] || error_exit \"No refresh_token in OAuth response\"\n\nNEW_EXPIRES_AT=$(($(date +%s) * 1000 + EXPIRES_IN * 1000))\nNEW_EXPIRES_TIME=$(date -r $((NEW_EXPIRES_AT / 1000)) '+%Y-%m-%d %H:%M:%S')"
+          }
+        ]
+      },
+      {
+        "move_id": "M10",
+        "operation": "Save",
+        "data": "New OAuth access token, refresh token and expiration; anthropic OAuth profile type/provider, preferred profile order and lastGood.",
+        "source": "Parsed OAuth response, calculated expiration and existing auth-file JSON",
+        "recipient": "AUTH_FILE, default ~/.clawdbot/agents/main/agent/auth-profiles.json, through a temporary file in its directory",
+        "condition": "After successful refresh-response checks. Replaces the selected profile and anthropic order/lastGood; no retention limit is specified.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 302,
+            "end_line": 320,
+            "quote": "# Step 3: Update auth-profiles.json (FIXED: Proper OAuth format)\nlog \"Updating auth-profiles.json (OAuth format)...\"\nmkdir -p \"$(dirname \"$AUTH_FILE\")\"\npython3 << PYEOF\nimport json\nimport os\nimport tempfile\n\ndata = {'version': 1, 'profiles': {}}\nif os.path.exists('$AUTH_FILE'):\n    try:\n        with open('$AUTH_FILE') as f:\n            content = f.read().strip()\n            if content:\n                data = json.loads(content)\n    except (json.JSONDecodeError, Exception):\n        pass\nif 'profiles' not in data:\n    data['profiles'] = {}"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 322,
+            "end_line": 347,
+            "quote": "# FIXED: Write proper OAuth format with access/refresh/expires\ndata['profiles']['$PROFILE_NAME'] = {\n    'type': 'oauth',\n    'provider': 'anthropic',\n    'access': '$NEW_ACCESS',\n    'refresh': '$NEW_REFRESH',\n    'expires': $NEW_EXPIRES_AT\n}\n\n# Set order to prefer OAuth profile\nif 'order' not in data:\n    data['order'] = {}\ndata['order']['anthropic'] = ['$PROFILE_NAME']\n\n# Set lastGood\nif 'lastGood' not in data:\n    data['lastGood'] = {}\ndata['lastGood']['anthropic'] = '$PROFILE_NAME'\n\n# Atomic write\nauth_dir = os.path.dirname('$AUTH_FILE')\nfd, temp_path = tempfile.mkstemp(dir=auth_dir, suffix='.tmp')\ntry:\n    with os.fdopen(fd, 'w') as f:\n        json.dump(data, f, indent=2)\n    os.rename(temp_path, '$AUTH_FILE')"
+          }
+        ]
+      },
+      {
+        "move_id": "M11",
+        "operation": "Delete",
+        "data": "Temporary auth-profile JSON file, potentially containing OAuth credentials.",
+        "source": "Temporary path created in AUTH_FILE's directory",
+        "recipient": null,
+        "condition": "On an exception inside either atomic-write try block; the exception is then raised.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 246,
+            "end_line": 255,
+            "quote": "# Atomic write\nauth_dir = os.path.dirname('$AUTH_FILE')\nfd, temp_path = tempfile.mkstemp(dir=auth_dir, suffix='.tmp')\ntry:\n    with os.fdopen(fd, 'w') as f:\n        json.dump(data, f, indent=2)\n    os.rename(temp_path, '$AUTH_FILE')\nexcept:\n    os.unlink(temp_path)\n    raise"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 341,
+            "end_line": 350,
+            "quote": "# Atomic write\nauth_dir = os.path.dirname('$AUTH_FILE')\nfd, temp_path = tempfile.mkstemp(dir=auth_dir, suffix='.tmp')\ntry:\n    with os.fdopen(fd, 'w') as f:\n        json.dump(data, f, indent=2)\n    os.rename(temp_path, '$AUTH_FILE')\nexcept:\n    os.unlink(temp_path)\n    raise"
+          }
+        ]
+      },
+      {
+        "move_id": "M12",
+        "operation": "Read",
+        "data": "Scopes, subscriptionType and rateLimitTier from the previously selected credential payload; defaults are [], max and default.",
+        "source": "KEYCHAIN_DATA already held in memory",
+        "recipient": "SCOPES, SUB_TYPE and RATE_TIER",
+        "condition": "After the refreshed auth profile is written; these values are used to rebuild the Keychain payload.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 357,
+            "end_line": 360,
+            "quote": "# Read existing metadata from keychain\nSCOPES=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; import json as j; print(j.dumps(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('scopes', [])))\" 2>/dev/null || echo \"[]\")\nSUB_TYPE=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('subscriptionType', 'max'))\" 2>/dev/null || echo \"max\")\nRATE_TIER=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('rateLimitTier', 'default'))\" 2>/dev/null || echo \"default\")"
+          }
+        ]
+      },
+      {
+        "move_id": "M13",
+        "operation": "Delete",
+        "data": "Existing selected generic-password credential entry.",
+        "source": "macOS Keychain entry identified by KEYCHAIN_SERVICE and KEYCHAIN_ACCOUNT",
+        "recipient": null,
+        "condition": "During Keychain replacement following refresh; deletion errors are ignored.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 155,
+            "end_line": 159,
+            "quote": "    TEMP_DATA=$(security find-generic-password -s \"$KEYCHAIN_SERVICE\" -a \"$account\" -w 2>&1 || echo \"\")\n    \n    if [[ -n \"$TEMP_DATA\" ]] && validate_keychain_data \"$TEMP_DATA\"; then\n        KEYCHAIN_DATA=\"$TEMP_DATA\"\n        KEYCHAIN_ACCOUNT=\"$account\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 379,
+            "end_line": 381,
+            "quote": "# Update keychain (delete old + add new)\nsecurity delete-generic-password -s \"$KEYCHAIN_SERVICE\" -a \"$KEYCHAIN_ACCOUNT\" 2>/dev/null || true\nsecurity add-generic-password -s \"$KEYCHAIN_SERVICE\" -a \"$KEYCHAIN_ACCOUNT\" -w \"$NEW_KEYCHAIN_DATA\" -U"
+          }
+        ]
+      },
+      {
+        "move_id": "M14",
+        "operation": "Save",
+        "data": "Rebuilt Keychain JSON containing new accessToken, refreshToken, expiresAt and retained/defaulted scopes, subscriptionType and rateLimitTier. Other original payload fields are not copied by this construction.",
+        "source": "OAuth response, calculated expiration and metadata extracted from KEYCHAIN_DATA",
+        "recipient": "macOS Keychain entry with the selected service and account",
+        "condition": "After the old-entry deletion attempt. No retention limit is specified.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 357,
+            "end_line": 381,
+            "quote": "# Read existing metadata from keychain\nSCOPES=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; import json as j; print(j.dumps(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('scopes', [])))\" 2>/dev/null || echo \"[]\")\nSUB_TYPE=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('subscriptionType', 'max'))\" 2>/dev/null || echo \"max\")\nRATE_TIER=$(echo \"$KEYCHAIN_DATA\" | python3 -c \"import sys, json; print(json.load(sys.stdin)['$KEYCHAIN_FIELD'].get('rateLimitTier', 'default'))\" 2>/dev/null || echo \"default\")\n\n# Build new keychain data\nNEW_KEYCHAIN_DATA=$(python3 << PYEOF\nimport json\ndata = {\n    '$KEYCHAIN_FIELD': {\n        'accessToken': '$NEW_ACCESS',\n        'refreshToken': '$NEW_REFRESH',\n        'expiresAt': $NEW_EXPIRES_AT,\n        'scopes': $SCOPES,\n        'subscriptionType': '$SUB_TYPE',\n        'rateLimitTier': '$RATE_TIER'\n    }\n}\nprint(json.dumps(data))\nPYEOF\n)\n\n# Update keychain (delete old + add new)\nsecurity delete-generic-password -s \"$KEYCHAIN_SERVICE\" -a \"$KEYCHAIN_ACCOUNT\" 2>/dev/null || true\nsecurity add-generic-password -s \"$KEYCHAIN_SERVICE\" -a \"$KEYCHAIN_ACCOUNT\" -w \"$NEW_KEYCHAIN_DATA\" -U"
+          }
+        ]
+      },
+      {
+        "move_id": "M15",
+        "operation": "Save",
+        "data": "Timestamped refresh status, account names, expiration details and errors; notification-command and gateway-restart stdout/stderr. A missing access_token error incorporates the entire OAuth response, whose contents are not redacted.",
+        "source": "Refresh runtime values, error strings, RESPONSE and invoked Clawdbot command output",
+        "recipient": "LOG_FILE; default ~/clawd/logs/claude-oauth-refresh.log",
+        "condition": "Append logging during reached operations; no rotation or retention period is implemented here. Account lists can enter failure messages.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 29,
+            "end_line": 29,
+            "quote": "    LOG_FILE=$(jq -r '.log_file // \"~/clawd/logs/claude-oauth-refresh.log\"' \"$CONFIG_FILE\" | sed \"s|^~|$HOME|\")"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 65,
+            "end_line": 68,
+            "quote": "# Logging function\nlog() {\n    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] $1\" | tee -a \"$LOG_FILE\"\n}"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 86,
+            "end_line": 97,
+            "quote": "    if command -v clawdbot &> /dev/null; then\n        clawdbot message send --target \"$NOTIFY_TARGET\" --message \"$message\" >> \"$LOG_FILE\" 2>&1 || true\n    fi\n}\n\n# Error handler\nerror_exit() {\n    local error_message=\"$1\"\n    log \"ERROR: $error_message\"\n    notify \"❌ Claude token refresh failed: $error_message\" \"failure\"\n    exit 1\n}"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 168,
+            "end_line": 180,
+            "quote": "if [[ \"$FOUND\" == \"false\" ]]; then\n    error_exit \"No '$KEYCHAIN_SERVICE' entry has complete OAuth data.\n\nFound entries with these account names:\n$(echo \"$ALL_ACCOUNTS\" | sed 's/^/  - /')\n\nBut none contain valid OAuth tokens.\n\nRun Claude CLI to authenticate:\n  claude auth\n\nVerify the entry contains:\n  { \\\"$KEYCHAIN_FIELD\\\": { \\\"refreshToken\\\": \\\"...\\\", \\\"expiresAt\\\": ... } }\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 187,
+            "end_line": 188,
+            "quote": "log \"✓ Using keychain account: $KEYCHAIN_ACCOUNT\"\nlog \"Current expiry: $(date -r $((CURRENT_EXPIRES / 1000)) '+%Y-%m-%d %H:%M:%S')\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 293,
+            "end_line": 293,
+            "quote": "[[ -n \"$NEW_ACCESS\" ]] || error_exit \"No access_token in OAuth response: $RESPONSE\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 385,
+            "end_line": 391,
+            "quote": "# Reload Clawdbot to pick up new tokens (delayed to allow script to complete)\nif command -v clawdbot &> /dev/null; then\n    log \"Scheduling gateway reload...\"\n    (sleep 2 && clawdbot gateway restart >> \"$LOG_FILE\" 2>&1) &\n    disown\n    log \"✓ Gateway restart scheduled\"\nfi"
+          }
+        ]
+      },
+      {
+        "move_id": "M16",
+        "operation": "Send",
+        "data": "Success notification with expiration and calculated next-refresh estimate, or failure notification with the error string. Failure strings can include account names or the full OAuth response when access_token is missing.",
+        "source": "Refresh-script runtime values and error_exit",
+        "recipient": "NOTIFY_TARGET passed to clawdbot message send; subsequent transport and channel selection are unspecified",
+        "condition": "Corresponding effective flag must be true, target must be nonempty and different from YOUR_CHAT_ID, and clawdbot must be available. Configured false flags are replaced by true by the current jq expressions. No on_start notification is implemented.",
+        "evidence": [
+          {
+            "path": "refresh-token.sh",
+            "start_line": 30,
+            "end_line": 32,
+            "quote": "    NOTIFY_SUCCESS=$(jq -r '.notifications.on_success // true' \"$CONFIG_FILE\")\n    NOTIFY_FAILURE=$(jq -r '.notifications.on_failure // true' \"$CONFIG_FILE\")\n    NOTIFY_TARGET=$(jq -r '.notification_target // \"\"' \"$CONFIG_FILE\")"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 71,
+            "end_line": 97,
+            "quote": "notify() {\n    local message=\"$1\"\n    local notification_type=\"$2\"\n    \n    if [[ \"$notification_type\" == \"success\" ]] && [[ \"$NOTIFY_SUCCESS\" != \"true\" ]]; then\n        return\n    fi\n    if [[ \"$notification_type\" == \"failure\" ]] && [[ \"$NOTIFY_FAILURE\" != \"true\" ]]; then\n        return\n    fi\n    \n    if [[ -z \"$NOTIFY_TARGET\" ]] || [[ \"$NOTIFY_TARGET\" == \"YOUR_CHAT_ID\" ]]; then\n        return\n    fi\n    \n    if command -v clawdbot &> /dev/null; then\n        clawdbot message send --target \"$NOTIFY_TARGET\" --message \"$message\" >> \"$LOG_FILE\" 2>&1 || true\n    fi\n}\n\n# Error handler\nerror_exit() {\n    local error_message=\"$1\"\n    log \"ERROR: $error_message\"\n    notify \"❌ Claude token refresh failed: $error_message\" \"failure\"\n    exit 1\n}"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 169,
+            "end_line": 172,
+            "quote": "    error_exit \"No '$KEYCHAIN_SERVICE' entry has complete OAuth data.\n\nFound entries with these account names:\n$(echo \"$ALL_ACCOUNTS\" | sed 's/^/  - /')"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 293,
+            "end_line": 293,
+            "quote": "[[ -n \"$NEW_ACCESS\" ]] || error_exit \"No access_token in OAuth response: $RESPONSE\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 395,
+            "end_line": 397,
+            "quote": "notify \"✅ Claude token refreshed!\nNew expiry: $NEW_EXPIRES_TIME\nNext refresh: ~$((EXPIRES_IN / 3600 - REFRESH_BUFFER / 60))h\" \"success\""
+          }
+        ]
+      },
+      {
+        "move_id": "M17",
+        "operation": "Read",
+        "data": "Session JSON, selecting channel and destination from the first direct session with a nonnull deliveryContext; destination falls back from deliveryContext.to to lastTo.",
+        "source": "~/.clawdbot/agents/main/sessions/sessions.json",
+        "recipient": "session_data, channel and raw_target in detect-notification-config.sh",
+        "condition": "jq must be installed and the sessions file must exist. CLAWDBOT_CONFIG is assigned but is not read by the detector; no CLI-search fallback appears in its implementation.",
+        "evidence": [
+          {
+            "path": "detect-notification-config.sh",
+            "start_line": 7,
+            "end_line": 8,
+            "quote": "CLAWDBOT_CONFIG=\"$HOME/.clawdbot/clawdbot.json\"\nSESSIONS_FILE=\"$HOME/.clawdbot/agents/main/sessions/sessions.json\""
+          },
+          {
+            "path": "detect-notification-config.sh",
+            "start_line": 18,
+            "end_line": 44,
+            "quote": "detect_notification_target() {\n    if ! command -v jq &> /dev/null; then\n        return 1\n    fi\n    \n    if [[ ! -f \"$SESSIONS_FILE\" ]]; then\n        return 1\n    fi\n    \n    # Find first direct (non-group) session with delivery context\n    local session_data=$(jq -r '\n        to_entries[] | \n        select(.value.chatType == \"direct\") |\n        select(.value.deliveryContext != null) |\n        {\n            channel: .value.deliveryContext.channel,\n            to: (.value.deliveryContext.to // .value.lastTo)\n        } | \n        @json\n    ' \"$SESSIONS_FILE\" 2>/dev/null | head -1)\n    \n    if [[ -z \"$session_data\" ]]; then\n        return 1\n    fi\n    \n    local channel=$(echo \"$session_data\" | jq -r '.channel')\n    local raw_target=$(echo \"$session_data\" | jq -r '.to')"
+          }
+        ]
+      },
+      {
+        "move_id": "M18",
+        "operation": "Infer",
+        "data": "Notification target formatted from the selected session destination: remove channel prefix, add user: for Discord/Slack when absent, and retain the stripped Signal/WhatsApp or unknown-channel destination.",
+        "source": "Session delivery channel and raw_target",
+        "recipient": "target and channel|target detection result",
+        "condition": "Uses the first selected direct session, rather than documented channel-priority traversal.",
+        "evidence": [
+          {
+            "path": "detect-notification-config.sh",
+            "start_line": 50,
+            "end_line": 103,
+            "quote": "    # Format target according to channel docs\n    local target=\"\"\n    case \"$channel\" in\n        telegram)\n            # Telegram: just numeric ID or @username\n            # Session format: \"telegram:123456789\" → extract \"123456789\"\n            target=\"${raw_target#telegram:}\"\n            ;;\n        discord)\n            # Discord: user:<id> for DMs\n            # Session format: \"discord:user:123456789\" or similar\n            local id=\"${raw_target#discord:}\"\n            if [[ \"$id\" != user:* ]]; then\n                target=\"user:${id}\"\n            else\n                target=\"$id\"\n            fi\n            ;;\n        slack)\n            # Slack: user:<id> for DMs\n            # Session format: \"slack:user:U123456789\" or similar\n            local id=\"${raw_target#slack:}\"\n            if [[ \"$id\" != user:* ]]; then\n                target=\"user:${id}\"\n            else\n                target=\"$id\"\n            fi\n            ;;\n        signal)\n            # Signal: signal:+15551234567 or plain E.164, signal:group:<groupId>, username:<name>\n            # Session format: \"signal:+15551234567\" → keep as-is or use plain E.164\n            local id=\"${raw_target#signal:}\"\n            # If it's a phone number (starts with +), use plain E.164\n            if [[ \"$id\" == +* ]]; then\n                target=\"$id\"\n            else\n                # Keep other formats (group:, username:, etc.)\n                target=\"$id\"\n            fi\n            ;;\n        whatsapp)\n            # WhatsApp: phone number\n            target=\"${raw_target#whatsapp:}\"\n            ;;\n        *)\n            # Unknown channel: try stripping channel prefix\n            target=\"${raw_target#${channel}:}\"\n            ;;\n    esac\n    \n    if [[ -n \"$target\" ]]; then\n        echo \"${channel}|${target}\"\n        return 0\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "M19",
+        "operation": "Send",
+        "data": "Detected notification channel and target, including any session-derived identifier; diagnostic credential account names and runtime log messages are also printed locally.",
+        "source": "Detection result, verification variables and log() arguments",
+        "recipient": "Standard output; detector output is captured by its calling scripts",
+        "condition": "On successful detection or reached diagnostic/logging operations. This establishes local output, not an additional external destination.",
+        "evidence": [
+          {
+            "path": "detect-notification-config.sh",
+            "start_line": 100,
+            "end_line": 115,
+            "quote": "    if [[ -n \"$target\" ]]; then\n        echo \"${channel}|${target}\"\n        return 0\n    fi\n    \n    return 1\n}\n\n# Main\nmain() {\n    if result=$(detect_notification_target); then\n        echo \"$result\"\n        exit 0\n    fi\n    exit 1\n}"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 50,
+            "end_line": 56,
+            "quote": "if [[ -x \"$SCRIPT_DIR/detect-notification-config.sh\" ]]; then\n    if detection=$(\"$SCRIPT_DIR/detect-notification-config.sh\" 2>/dev/null); then\n        DETECTED_CHANNEL=$(echo \"$detection\" | cut -d'|' -f1)\n        DETECTED_TARGET=$(echo \"$detection\" | cut -d'|' -f2)\n        echo -e \"${GREEN}✓${NC} Auto-detected: $DETECTED_CHANNEL → $DETECTED_TARGET\"\n    fi\nfi"
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 103,
+            "end_line": 107,
+            "quote": "if [[ \"$KEYCHAIN_FOUND\" == \"true\" ]]; then\n    echo -e \"${GREEN}✓${NC} Found\"\n    echo \"  → Service: $SERVICE\"\n    echo \"  → Account: $VALID_ACCOUNT (label doesn't matter)\"\n    echo \"  → Contains valid OAuth tokens\""
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 66,
+            "end_line": 68,
+            "quote": "log() {\n    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] $1\" | tee -a \"$LOG_FILE\"\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "M20",
+        "operation": "Read",
+        "data": "Interactive overwrite and success/failure-notification choices.",
+        "source": "Installer standard input",
+        "recipient": "REPLY, NOTIFY_SUCCESS_INPUT, NOTIFY_FAILURE_INPUT and derived boolean preferences",
+        "condition": "Overwrite is prompted when a configuration exists; notification choices are prompted when creating a new configuration. Default notification choices are true.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 66,
+            "end_line": 71,
+            "quote": "if [[ -n \"$EXISTING_CONFIG\" ]]; then\n    echo -e \"${YELLOW}⚠${NC} Config already exists: $EXISTING_CONFIG\"\n    echo \"\"\n    read -p \"Overwrite with new interactive config? [y/N] \" -n 1 -r\n    echo \"\"\n    if [[ ! $REPLY =~ ^[Yy]$ ]]; then"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 114,
+            "end_line": 129,
+            "quote": "    # Prompt for each notification type\n    read -p \"Enable \\\"✅ Token refreshed!\\\" notification? [Y/n] \" -n 1 -r NOTIFY_SUCCESS_INPUT\n    echo \"\"\n    if [[ $NOTIFY_SUCCESS_INPUT =~ ^[Nn]$ ]]; then\n        NOTIFY_SUCCESS=\"false\"\n    else\n        NOTIFY_SUCCESS=\"true\"\n    fi\n    \n    read -p \"Enable \\\"❌ Refresh failed\\\" notification? [Y/n] \" -n 1 -r NOTIFY_FAILURE_INPUT\n    echo \"\"\n    if [[ $NOTIFY_FAILURE_INPUT =~ ^[Nn]$ ]]; then\n        NOTIFY_FAILURE=\"false\"\n    else\n        NOTIFY_FAILURE=\"true\"\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "M21",
+        "operation": "Read",
+        "data": "Legacy configuration JSON and legacy notify_on_success/notify_on_failure values for migration.",
+        "source": "config.json beside install.sh, selected before the new filename",
+        "recipient": "OLD_SUCCESS, OLD_FAILURE and jq migration input",
+        "condition": "Existing legacy config is selected and overwrite is declined. Structural migration occurs only if jq -e '.notify_on_success' succeeds; false or null takes the rename branch.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 58,
+            "end_line": 64,
+            "quote": "# Check if config already exists (from old config.json or new name)\nEXISTING_CONFIG=\"\"\nif [[ -f \"$SCRIPT_DIR/config.json\" ]]; then\n    EXISTING_CONFIG=\"$SCRIPT_DIR/config.json\"\nelif [[ -f \"$CONFIG_FILE\" ]]; then\n    EXISTING_CONFIG=\"$CONFIG_FILE\"\nfi"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 71,
+            "end_line": 83,
+            "quote": "    if [[ ! $REPLY =~ ^[Yy]$ ]]; then\n        # Migrate old config.json to new name if needed\n        if [[ \"$EXISTING_CONFIG\" == \"$SCRIPT_DIR/config.json\" ]]; then\n            echo \"Migrating config.json → claude-oauth-refresh-config.json\"\n            # Check if it has old notification structure\n            if jq -e '.notify_on_success' \"$EXISTING_CONFIG\" &> /dev/null; then\n                # Migrate old format to new\n                OLD_SUCCESS=$(jq -r '.notify_on_success // false' \"$EXISTING_CONFIG\")\n                OLD_FAILURE=$(jq -r '.notify_on_failure // true' \"$EXISTING_CONFIG\")\n                jq --argjson on_success \"$OLD_SUCCESS\" \\\n                   --argjson on_failure \"$OLD_FAILURE\" \\\n                   'del(.notify_on_success, .notify_on_failure) | .notifications = {on_success: $on_success, on_failure: $on_failure}' \\\n                   \"$EXISTING_CONFIG\" > \"$CONFIG_FILE\""
+          }
+        ]
+      },
+      {
+        "move_id": "M22",
+        "operation": "Save",
+        "data": "Migrated configuration preserving other fields while replacing legacy notification keys, or unchanged legacy configuration renamed to the new filename.",
+        "source": "Existing config.json beside install.sh",
+        "recipient": "claude-oauth-refresh-config.json beside install.sh",
+        "condition": "Legacy config exists and overwrite is declined. No backup is made by this migration.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 14,
+            "end_line": 15,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nCONFIG_FILE=\"$SCRIPT_DIR/claude-oauth-refresh-config.json\""
+          },
+          {
+            "path": "install.sh",
+            "start_line": 71,
+            "end_line": 89,
+            "quote": "    if [[ ! $REPLY =~ ^[Yy]$ ]]; then\n        # Migrate old config.json to new name if needed\n        if [[ \"$EXISTING_CONFIG\" == \"$SCRIPT_DIR/config.json\" ]]; then\n            echo \"Migrating config.json → claude-oauth-refresh-config.json\"\n            # Check if it has old notification structure\n            if jq -e '.notify_on_success' \"$EXISTING_CONFIG\" &> /dev/null; then\n                # Migrate old format to new\n                OLD_SUCCESS=$(jq -r '.notify_on_success // false' \"$EXISTING_CONFIG\")\n                OLD_FAILURE=$(jq -r '.notify_on_failure // true' \"$EXISTING_CONFIG\")\n                jq --argjson on_success \"$OLD_SUCCESS\" \\\n                   --argjson on_failure \"$OLD_FAILURE\" \\\n                   'del(.notify_on_success, .notify_on_failure) | .notifications = {on_success: $on_success, on_failure: $on_failure}' \\\n                   \"$EXISTING_CONFIG\" > \"$CONFIG_FILE\"\n                echo -e \"${GREEN}✓${NC} Migrated to new config format with notification types\"\n                rm \"$EXISTING_CONFIG\"\n            else\n                mv \"$EXISTING_CONFIG\" \"$CONFIG_FILE\"\n                echo -e \"${GREEN}✓${NC} Renamed to new config filename\"\n            fi"
+          }
+        ]
+      },
+      {
+        "move_id": "M23",
+        "operation": "Delete",
+        "data": "Legacy config.json pathname; structural migration also removes its legacy notification keys from the saved representation.",
+        "source": "Selected legacy config.json beside install.sh",
+        "recipient": null,
+        "condition": "During the keep-existing-config migration: rm after structural conversion, or removal of the original pathname through mv.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 73,
+            "end_line": 87,
+            "quote": "        if [[ \"$EXISTING_CONFIG\" == \"$SCRIPT_DIR/config.json\" ]]; then\n            echo \"Migrating config.json → claude-oauth-refresh-config.json\"\n            # Check if it has old notification structure\n            if jq -e '.notify_on_success' \"$EXISTING_CONFIG\" &> /dev/null; then\n                # Migrate old format to new\n                OLD_SUCCESS=$(jq -r '.notify_on_success // false' \"$EXISTING_CONFIG\")\n                OLD_FAILURE=$(jq -r '.notify_on_failure // true' \"$EXISTING_CONFIG\")\n                jq --argjson on_success \"$OLD_SUCCESS\" \\\n                   --argjson on_failure \"$OLD_FAILURE\" \\\n                   'del(.notify_on_success, .notify_on_failure) | .notifications = {on_success: $on_success, on_failure: $on_failure}' \\\n                   \"$EXISTING_CONFIG\" > \"$CONFIG_FILE\"\n                echo -e \"${GREEN}✓${NC} Migrated to new config format with notification types\"\n                rm \"$EXISTING_CONFIG\"\n            else\n                mv \"$EXISTING_CONFIG\" \"$CONFIG_FILE\""
+          }
+        ]
+      },
+      {
+        "move_id": "M24",
+        "operation": "Save",
+        "data": "New configuration containing refresh/log defaults, interactive success/failure flags and detected channel/target, or Telegram/YOUR_CHAT_ID placeholders.",
+        "source": "Interactive notification preferences, detector output and built-in literals",
+        "recipient": "claude-oauth-refresh-config.json beside install.sh",
+        "condition": "No existing config or user elects to overwrite. Detected values are used only when both channel and target are nonempty; otherwise manual editing is requested. No on_start preference is written.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 14,
+            "end_line": 15,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nCONFIG_FILE=\"$SCRIPT_DIR/claude-oauth-refresh-config.json\""
+          },
+          {
+            "path": "install.sh",
+            "start_line": 50,
+            "end_line": 53,
+            "quote": "if [[ -x \"$SCRIPT_DIR/detect-notification-config.sh\" ]]; then\n    if detection=$(\"$SCRIPT_DIR/detect-notification-config.sh\" 2>/dev/null); then\n        DETECTED_CHANNEL=$(echo \"$detection\" | cut -d'|' -f1)\n        DETECTED_TARGET=$(echo \"$detection\" | cut -d'|' -f2)"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 93,
+            "end_line": 102,
+            "quote": "    else\n        # User wants to reconfigure\n        CREATE_NEW_CONFIG=true\n    fi\nelse\n    CREATE_NEW_CONFIG=true\nfi\n\n# Interactive notification setup\nif [[ \"$CREATE_NEW_CONFIG\" == \"true\" ]]; then"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 115,
+            "end_line": 129,
+            "quote": "    read -p \"Enable \\\"✅ Token refreshed!\\\" notification? [Y/n] \" -n 1 -r NOTIFY_SUCCESS_INPUT\n    echo \"\"\n    if [[ $NOTIFY_SUCCESS_INPUT =~ ^[Nn]$ ]]; then\n        NOTIFY_SUCCESS=\"false\"\n    else\n        NOTIFY_SUCCESS=\"true\"\n    fi\n    \n    read -p \"Enable \\\"❌ Refresh failed\\\" notification? [Y/n] \" -n 1 -r NOTIFY_FAILURE_INPUT\n    echo \"\"\n    if [[ $NOTIFY_FAILURE_INPUT =~ ^[Nn]$ ]]; then\n        NOTIFY_FAILURE=\"false\"\n    else\n        NOTIFY_FAILURE=\"true\"\n    fi"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 135,
+            "end_line": 164,
+            "quote": "    # Create config with detected values or prompts\n    if [[ -n \"$DETECTED_CHANNEL\" ]] && [[ -n \"$DETECTED_TARGET\" ]]; then\n        cat > \"$CONFIG_FILE\" << EOF\n{\n  \"refresh_buffer_minutes\": 30,\n  \"log_file\": \"~/clawd/logs/claude-oauth-refresh.log\",\n  \"notifications\": {\n    \"on_success\": $NOTIFY_SUCCESS,\n    \"on_failure\": $NOTIFY_FAILURE\n  },\n  \"notification_channel\": \"$DETECTED_CHANNEL\",\n  \"notification_target\": \"$DETECTED_TARGET\"\n}\nEOF\n        echo -e \"${GREEN}✓${NC} Created config with auto-detected values\"\n        echo \"  → Channel: $DETECTED_CHANNEL\"\n        echo \"  → Target: $DETECTED_TARGET\"\n    else\n        cat > \"$CONFIG_FILE\" << EOF\n{\n  \"refresh_buffer_minutes\": 30,\n  \"log_file\": \"~/clawd/logs/claude-oauth-refresh.log\",\n  \"notifications\": {\n    \"on_success\": $NOTIFY_SUCCESS,\n    \"on_failure\": $NOTIFY_FAILURE\n  },\n  \"notification_channel\": \"telegram\",\n  \"notification_target\": \"YOUR_CHAT_ID\"\n}\nEOF"
+          }
+        ]
+      },
+      {
+        "move_id": "M25",
+        "operation": "Save",
+        "data": "launchd service definition containing refresh-script path, 7200-second interval, RunAtLoad, stdout/stderr paths, working directory and PATH.",
+        "source": "Installer literals, SCRIPT_DIR and HOME",
+        "recipient": "com.clawdbot.claude-oauth-refresher.plist beside install.sh",
+        "condition": "After the installer refresh test succeeds.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 14,
+            "end_line": 17,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nCONFIG_FILE=\"$SCRIPT_DIR/claude-oauth-refresh-config.json\"\nPLIST_FILE=\"com.clawdbot.claude-oauth-refresher.plist\"\nLAUNCHAGENTS_DIR=\"$HOME/Library/LaunchAgents\""
+          },
+          {
+            "path": "install.sh",
+            "start_line": 176,
+            "end_line": 185,
+            "quote": "# Step 3: Test refresh\necho -e \"${BLUE}[3/6]${NC} Testing token refresh...\"\nchmod +x \"$SCRIPT_DIR\"/*.sh\nif \"$SCRIPT_DIR/refresh-token.sh\"; then\n    echo -e \"${GREEN}✓${NC} Refresh successful\"\nelse\n    echo -e \"${RED}✗${NC} Refresh failed - check logs\"\n    tail -10 ~/clawd/logs/claude-oauth-refresh.log\n    exit 1\nfi"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 188,
+            "end_line": 225,
+            "quote": "# Step 4: Create launchd plist\necho -e \"${BLUE}[4/6]${NC} Creating launchd service...\"\ncat > \"$SCRIPT_DIR/$PLIST_FILE\" << EOF\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>Label</key>\n    <string>com.clawdbot.claude-oauth-refresher</string>\n    \n    <key>ProgramArguments</key>\n    <array>\n        <string>$SCRIPT_DIR/refresh-token.sh</string>\n    </array>\n    \n    <key>StartInterval</key>\n    <integer>7200</integer>\n    \n    <key>RunAtLoad</key>\n    <true/>\n    \n    <key>StandardOutPath</key>\n    <string>$HOME/clawd/logs/claude-oauth-refresher-stdout.log</string>\n    \n    <key>StandardErrorPath</key>\n    <string>$HOME/clawd/logs/claude-oauth-refresher-stderr.log</string>\n    \n    <key>WorkingDirectory</key>\n    <string>$SCRIPT_DIR</string>\n    \n    <key>EnvironmentVariables</key>\n    <dict>\n        <key>PATH</key>\n        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin</string>\n    </dict>\n</dict>\n</plist>\nEOF"
+          }
+        ]
+      },
+      {
+        "move_id": "M26",
+        "operation": "Save",
+        "data": "Generated launchd service definition copied into the user's LaunchAgents directory.",
+        "source": "Installer-directory com.clawdbot.claude-oauth-refresher.plist",
+        "recipient": "~/Library/LaunchAgents/com.clawdbot.claude-oauth-refresher.plist",
+        "condition": "During installation; an existing matching service is unloaded first when listed, and the copied definition is then loaded.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 16,
+            "end_line": 17,
+            "quote": "PLIST_FILE=\"com.clawdbot.claude-oauth-refresher.plist\"\nLAUNCHAGENTS_DIR=\"$HOME/Library/LaunchAgents\""
+          },
+          {
+            "path": "install.sh",
+            "start_line": 229,
+            "end_line": 240,
+            "quote": "# Step 5: Install launchd plist\necho -e \"${BLUE}[5/6]${NC} Installing launchd service...\"\nmkdir -p \"$LAUNCHAGENTS_DIR\"\n\n# Unload if already loaded\nif launchctl list | grep -q \"com.clawdbot.claude-oauth-refresher\"; then\n    launchctl unload \"$LAUNCHAGENTS_DIR/$PLIST_FILE\" 2>/dev/null || true\n    echo \"  → Unloaded existing service\"\nfi\n\ncp \"$SCRIPT_DIR/$PLIST_FILE\" \"$LAUNCHAGENTS_DIR/$PLIST_FILE\"\nlaunchctl load \"$LAUNCHAGENTS_DIR/$PLIST_FILE\""
+          }
+        ]
+      },
+      {
+        "move_id": "M27",
+        "operation": "Save",
+        "data": "Scheduled refresh process standard output and standard error; stdout includes log() messages, so account names, expiry details and applicable error text can also appear here.",
+        "source": "refresh-token.sh process launched by launchd",
+        "recipient": "~/clawd/logs/claude-oauth-refresher-stdout.log and ~/clawd/logs/claude-oauth-refresher-stderr.log",
+        "condition": "If the generated job is loaded and launchd runs it. The supplied definition sets no retention or rotation policy.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 198,
+            "end_line": 213,
+            "quote": "    <key>ProgramArguments</key>\n    <array>\n        <string>$SCRIPT_DIR/refresh-token.sh</string>\n    </array>\n    \n    <key>StartInterval</key>\n    <integer>7200</integer>\n    \n    <key>RunAtLoad</key>\n    <true/>\n    \n    <key>StandardOutPath</key>\n    <string>$HOME/clawd/logs/claude-oauth-refresher-stdout.log</string>\n    \n    <key>StandardErrorPath</key>\n    <string>$HOME/clawd/logs/claude-oauth-refresher-stderr.log</string>"
+          },
+          {
+            "path": "refresh-token.sh",
+            "start_line": 66,
+            "end_line": 68,
+            "quote": "log() {\n    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] $1\" | tee -a \"$LOG_FILE\"\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "M28",
+        "operation": "Read",
+        "data": "Diagnostic OS version, Claude/Clawdbot versions, gateway/service status, auth-profile default field, configuration JSON validity and placeholder presence. Additional checks inspect path existence and executable permissions.",
+        "source": "Local system/CLI output, ~/.clawdbot/agents/main/agent/auth-profiles.json and skill configuration files",
+        "recipient": "Verification/installation diagnostic variables and checks",
+        "condition": "When the respective checks are reached and dependencies/files are present. Checking existence of clawdbot.json does not itself read its contents.",
+        "evidence": [
+          {
+            "path": "verify-setup.sh",
+            "start_line": 24,
+            "end_line": 26,
+            "quote": "if [[ \"$OSTYPE\" == \"darwin\"* ]]; then\n    MACOS_VERSION=$(sw_vers -productVersion)\n    echo -e \"${GREEN}✓${NC} macOS $MACOS_VERSION\""
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 36,
+            "end_line": 38,
+            "quote": "if command -v claude &> /dev/null; then\n    CLAUDE_VERSION=$(claude --version 2>&1 | head -n1 || echo \"unknown\")\n    echo -e \"${GREEN}✓${NC} Found ($CLAUDE_VERSION)\""
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 48,
+            "end_line": 55,
+            "quote": "AUTH_PROFILES=\"$HOME/.clawdbot/agents/main/agent/auth-profiles.json\"\nif [[ -f \"$AUTH_PROFILES\" ]]; then\n    echo -e \"${GREEN}✓${NC} Found\"\n    \n    # Check if it has a default profile\n    if command -v jq &> /dev/null; then\n        if jq -e '.default' \"$AUTH_PROFILES\" &> /dev/null; then\n            echo \"  → Default profile configured\""
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 131,
+            "end_line": 143,
+            "quote": "if command -v clawdbot &> /dev/null; then\n    CLAWDBOT_VERSION=$(clawdbot --version 2>&1 | head -n1 || echo \"unknown\")\n    echo -e \"${GREEN}✓${NC} Found ($CLAWDBOT_VERSION)\"\nelse\n    echo -e \"${RED}✗${NC} Not found\"\n    echo \"  → Install from: https://clawdbot.com\"\n    ((ERRORS++))\nfi\n\n# Check 6: Clawdbot Gateway running\nif command -v clawdbot &> /dev/null; then\n    echo -n \"Checking Clawdbot Gateway... \"\n    if clawdbot gateway status &> /dev/null; then"
+          },
+          {
+            "path": "verify-setup.sh",
+            "start_line": 178,
+            "end_line": 190,
+            "quote": "SCRIPT_DIR_CHECK=\"$(dirname \"$0\")\"\nNEW_CONFIG=\"$SCRIPT_DIR_CHECK/claude-oauth-refresh-config.json\"\nOLD_CONFIG=\"$SCRIPT_DIR_CHECK/config.json\"\n\nif [[ -f \"$NEW_CONFIG\" ]]; then\n    CONFIG_FILE=\"$NEW_CONFIG\"\n    echo -e \"${GREEN}✓${NC} Found (claude-oauth-refresh-config.json)\"\n    \n    # Validate JSON\n    if command -v jq &> /dev/null; then\n        if jq empty \"$CONFIG_FILE\" 2>/dev/null; then\n            # Check for placeholder values\n            if grep -q \"YOUR_CHAT_ID\" \"$CONFIG_FILE\"; then"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 266,
+            "end_line": 270,
+            "quote": "if [[ -f \"$CONFIG_FILE\" ]]; then\n    SHOW_SUCCESS=$(jq -r '.notifications.on_success' \"$CONFIG_FILE\" 2>/dev/null || echo \"unknown\")\n    SHOW_FAILURE=$(jq -r '.notifications.on_failure' \"$CONFIG_FILE\" 2>/dev/null || echo \"unknown\")\n    echo \"  • Success (✅): $SHOW_SUCCESS\"\n    echo \"  • Failure (❌): $SHOW_FAILURE\""
+          }
+        ]
+      },
+      {
+        "move_id": "M29",
+        "operation": "Read",
+        "data": "Current notification channel and target for comparison with session-derived detection results.",
+        "source": "claude-oauth-refresh-config.json beside test-detection.sh",
+        "recipient": "current_channel and current_target; comparison output on standard output",
+        "condition": "Detection succeeded and the configuration file exists. The test displays a proposed configuration without saving it.",
+        "evidence": [
+          {
+            "path": "test-detection.sh",
+            "start_line": 18,
+            "end_line": 21,
+            "quote": "if [[ -x \"$SCRIPT_DIR/detect-notification-config.sh\" ]]; then\n    if result=$(\"$SCRIPT_DIR/detect-notification-config.sh\" 2>/dev/null); then\n        channel=$(echo \"$result\" | cut -d'|' -f1)\n        target=$(echo \"$result\" | cut -d'|' -f2)"
+          },
+          {
+            "path": "test-detection.sh",
+            "start_line": 47,
+            "end_line": 60,
+            "quote": "        # Check if current config matches\n        if [[ -f \"$SCRIPT_DIR/claude-oauth-refresh-config.json\" ]]; then\n            current_channel=$(jq -r '.notification_channel // \"\"' \"$SCRIPT_DIR/claude-oauth-refresh-config.json\" 2>/dev/null)\n            current_target=$(jq -r '.notification_target // \"\"' \"$SCRIPT_DIR/claude-oauth-refresh-config.json\" 2>/dev/null)\n            \n            if [[ \"$current_channel\" == \"$channel\" ]] && [[ \"$current_target\" == \"$target\" ]]; then\n                echo -e \"${GREEN}✓ Current config matches detected values${NC}\"\n            else\n                echo -e \"${YELLOW}! Current config differs:${NC}\"\n                echo \"  Current: $current_channel → $current_target\"\n                echo \"  Detected: $channel → $target\"\n                echo \"\"\n                echo \"Run ./install.sh to update config with detected values\"\n            fi"
+          }
+        ]
+      },
+      {
+        "move_id": "M30",
+        "operation": "Read",
+        "data": "Example-config notification structure, source-code strings indicating configuration/notification/migration support, and script permission metadata.",
+        "source": "Local example JSON, refresh-token.sh, install.sh, verify-setup.sh and listed script files",
+        "recipient": "validate-update.sh checks and counters",
+        "condition": "When validation reaches each check; these are static content/metadata checks rather than execution of the referenced refresh or migration behavior.",
+        "evidence": [
+          {
+            "path": "validate-update.sh",
+            "start_line": 23,
+            "end_line": 26,
+            "quote": "# Check 1: New config example exists\necho -n \"Checking new config example... \"\nif [[ -f \"$SCRIPT_DIR/claude-oauth-refresh-config.example.json\" ]]; then\n    if jq -e '.notifications | type == \"object\"' \"$SCRIPT_DIR/claude-oauth-refresh-config.example.json\" &> /dev/null; then"
+          },
+          {
+            "path": "validate-update.sh",
+            "start_line": 48,
+            "end_line": 61,
+            "quote": "# Check 3: refresh-token.sh uses new config\necho -n \"Checking refresh-token.sh config... \"\nif grep -q \"claude-oauth-refresh-config.json\" \"$SCRIPT_DIR/refresh-token.sh\"; then\n    echo -e \"${GREEN}✓${NC}\"\n    ((CHECKS_PASSED++))\nelse\n    echo -e \"${RED}✗${NC} Still uses old config filename\"\n    ((CHECKS_FAILED++))\nfi\n\n# Check 4: refresh-token.sh has notification types\necho -n \"Checking notification types... \"\nif grep -q \"notifications.on_success\" \"$SCRIPT_DIR/refresh-token.sh\" && \\\n   grep -q \"notifications.on_failure\" \"$SCRIPT_DIR/refresh-token.sh\"; then"
+          },
+          {
+            "path": "validate-update.sh",
+            "start_line": 81,
+            "end_line": 81,
+            "quote": "if grep -q \"Token refreshed\" \"$SCRIPT_DIR/install.sh\" && grep -q \"NOTIFY_SUCCESS_INPUT\" \"$SCRIPT_DIR/install.sh\"; then"
+          },
+          {
+            "path": "validate-update.sh",
+            "start_line": 91,
+            "end_line": 91,
+            "quote": "if grep -q \"Migrating config.json\" \"$SCRIPT_DIR/install.sh\"; then"
+          },
+          {
+            "path": "validate-update.sh",
+            "start_line": 131,
+            "end_line": 148,
+            "quote": "if grep -q \"claude-oauth-refresh-config.json\" \"$SCRIPT_DIR/verify-setup.sh\" && \\\n   grep -q \"config.json\" \"$SCRIPT_DIR/verify-setup.sh\"; then\n    echo -e \"${GREEN}✓${NC}\"\n    ((CHECKS_PASSED++))\nelse\n    echo -e \"${RED}✗${NC} Doesn't check both config filenames\"\n    ((CHECKS_FAILED++))\nfi\n\n# Check 12: All scripts executable\necho -n \"Checking script permissions... \"\nALL_EXECUTABLE=true\nfor script in install.sh refresh-token.sh verify-setup.sh uninstall.sh detect-notification-config.sh test-detection.sh; do\n    if [[ ! -x \"$SCRIPT_DIR/$script\" ]]; then\n        ALL_EXECUTABLE=false\n        break\n    fi\ndone"
+          }
+        ]
+      },
+      {
+        "move_id": "M31",
+        "operation": "Read",
+        "data": "Refresh log entries and selected OAuth auth-profile JSON for troubleshooting/status inspection.",
+        "source": "~/clawd/logs/claude-oauth-refresh.log and ~/.clawdbot/agents/main/agent/auth-profiles.json",
+        "recipient": "Local command standard output",
+        "condition": "Installer automatically tails ten log lines if its refresh test fails; SKILL.md separately instructs manual log and profile inspection, which can display credential fields.",
+        "evidence": [
+          {
+            "path": "install.sh",
+            "start_line": 179,
+            "end_line": 184,
+            "quote": "if \"$SCRIPT_DIR/refresh-token.sh\"; then\n    echo -e \"${GREEN}✓${NC} Refresh successful\"\nelse\n    echo -e \"${RED}✗${NC} Refresh failed - check logs\"\n    tail -10 ~/clawd/logs/claude-oauth-refresh.log\n    exit 1"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 148,
+            "end_line": 157,
+            "quote": "```bash\n# View recent logs\ntail ~/clawd/logs/claude-oauth-refresh.log\n\n# Check auth profile\ncat ~/.clawdbot/agents/main/agent/auth-profiles.json | jq '.profiles.\"anthropic:claude-cli\"'\n\n# Check Clawdbot status\nclawdbot models status\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "M32",
+        "operation": "Delete",
+        "data": "Installed and local launchd plist files.",
+        "source": "~/Library/LaunchAgents/com.clawdbot.claude-oauth-refresher.plist and the same filename beside uninstall.sh",
+        "recipient": null,
+        "condition": "Uninstaller removes each existing file after attempting to stop the service.",
+        "evidence": [
+          {
+            "path": "uninstall.sh",
+            "start_line": 13,
+            "end_line": 15,
+            "quote": "SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\nPLIST_FILE=\"com.clawdbot.claude-oauth-refresher.plist\"\nLAUNCHAGENTS_DIR=\"$HOME/Library/LaunchAgents\""
+          },
+          {
+            "path": "uninstall.sh",
+            "start_line": 22,
+            "end_line": 44,
+            "quote": "# Step 1: Stop service\necho -e \"${BLUE}[1/4]${NC} Stopping launchd service...\"\nif launchctl list | grep -q \"com.clawdbot.claude-oauth-refresher\"; then\n    launchctl unload \"$LAUNCHAGENTS_DIR/$PLIST_FILE\" 2>/dev/null || true\n    echo -e \"${GREEN}✓${NC} Service unloaded\"\nelse\n    echo \"  Service not running (already unloaded)\"\nfi\necho \"\"\n\n# Step 2: Remove plist\necho -e \"${BLUE}[2/4]${NC} Removing launchd plist...\"\nif [[ -f \"$LAUNCHAGENTS_DIR/$PLIST_FILE\" ]]; then\n    rm \"$LAUNCHAGENTS_DIR/$PLIST_FILE\"\n    echo -e \"${GREEN}✓${NC} Removed $LAUNCHAGENTS_DIR/$PLIST_FILE\"\nelse\n    echo \"  Plist not found (already removed)\"\nfi\n\nif [[ -f \"$SCRIPT_DIR/$PLIST_FILE\" ]]; then\n    rm \"$SCRIPT_DIR/$PLIST_FILE\"\n    echo -e \"${GREEN}✓${NC} Removed local plist\"\nfi"
+          }
+        ]
+      },
+      {
+        "move_id": "M33",
+        "operation": "Read",
+        "data": "Existence and disk-usage size of the three default log files.",
+        "source": "~/clawd/logs/claude-oauth-refresh.log, claude-oauth-refresher-stdout.log and claude-oauth-refresher-stderr.log",
+        "recipient": "Uninstaller LOG_EXISTS/SIZE variables and standard output",
+        "condition": "During optional log cleanup. This code checks metadata and disk usage, not log contents; it does not resolve a custom configured log_file.",
+        "evidence": [
+          {
+            "path": "uninstall.sh",
+            "start_line": 49,
+            "end_line": 70,
+            "quote": "LOG_FILES=(\n    \"$HOME/clawd/logs/claude-oauth-refresh.log\"\n    \"$HOME/clawd/logs/claude-oauth-refresher-stdout.log\"\n    \"$HOME/clawd/logs/claude-oauth-refresher-stderr.log\"\n)\n\nLOG_EXISTS=false\nfor log in \"${LOG_FILES[@]}\"; do\n    if [[ -f \"$log\" ]]; then\n        LOG_EXISTS=true\n        break\n    fi\ndone\n\nif [[ \"$LOG_EXISTS\" == \"true\" ]]; then\n    echo \"Found log files:\"\n    for log in \"${LOG_FILES[@]}\"; do\n        if [[ -f \"$log\" ]]; then\n            SIZE=$(du -h \"$log\" | cut -f1)\n            echo \"  • $log ($SIZE)\"\n        fi\n    done"
+          }
+        ]
+      },
+      {
+        "move_id": "M34",
+        "operation": "Delete",
+        "data": "Default refresh log and launchd stdout/stderr logs.",
+        "source": "The three fixed paths in uninstall.sh LOG_FILES",
+        "recipient": null,
+        "condition": "At least one file exists and the user answers y/Y to Delete log files; otherwise retained. Custom configured log paths are not included.",
+        "evidence": [
+          {
+            "path": "uninstall.sh",
+            "start_line": 49,
+            "end_line": 53,
+            "quote": "LOG_FILES=(\n    \"$HOME/clawd/logs/claude-oauth-refresh.log\"\n    \"$HOME/clawd/logs/claude-oauth-refresher-stdout.log\"\n    \"$HOME/clawd/logs/claude-oauth-refresher-stderr.log\"\n)"
+          },
+          {
+            "path": "uninstall.sh",
+            "start_line": 72,
+            "end_line": 83,
+            "quote": "    read -p \"Delete log files? [y/N] \" -n 1 -r\n    echo \"\"\n    if [[ $REPLY =~ ^[Yy]$ ]]; then\n        for log in \"${LOG_FILES[@]}\"; do\n            if [[ -f \"$log\" ]]; then\n                rm \"$log\"\n                echo -e \"${GREEN}✓${NC} Deleted $(basename \"$log\")\"\n            fi\n        done\n    else\n        echo \"  Keeping log files\"\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "M35",
+        "operation": "Delete",
+        "data": "New and legacy skill configuration files.",
+        "source": "claude-oauth-refresh-config.json and config.json beside uninstall.sh",
+        "recipient": null,
+        "condition": "A listed config exists and the user answers y/Y to Delete config files; otherwise retained. The uninstaller does not delete Keychain credentials.",
+        "evidence": [
+          {
+            "path": "uninstall.sh",
+            "start_line": 92,
+            "end_line": 117,
+            "quote": "CONFIG_FILES=(\n    \"$SCRIPT_DIR/claude-oauth-refresh-config.json\"\n    \"$SCRIPT_DIR/config.json\"\n)\n\nCONFIG_EXISTS=false\nfor config in \"${CONFIG_FILES[@]}\"; do\n    if [[ -f \"$config\" ]]; then\n        CONFIG_EXISTS=true\n        echo \"Found config: $(basename \"$config\")\"\n    fi\ndone\n\nif [[ \"$CONFIG_EXISTS\" == \"true\" ]]; then\n    read -p \"Delete config files? [y/N] \" -n 1 -r\n    echo \"\"\n    if [[ $REPLY =~ ^[Yy]$ ]]; then\n        for config in \"${CONFIG_FILES[@]}\"; do\n            if [[ -f \"$config\" ]]; then\n                rm \"$config\"\n                echo -e \"${GREEN}✓${NC} Deleted $(basename \"$config\")\"\n            fi\n        done\n    else\n        echo \"  Keeping config files\"\n    fi"
+          }
+        ]
+      },
+      {
+        "move_id": "M36",
+        "operation": "Save",
+        "data": "Manually created configuration copied from the example, or edited refresh/log/notification preferences and target.",
+        "source": "claude-oauth-refresh-config.example.json or user-supplied edits",
+        "recipient": "claude-oauth-refresh-config.json in the working skill directory",
+        "condition": "Instruction-level manual setup or customization. Asking Clawdbot to change notification settings is documented, but no dedicated natural-language editing implementation is supplied.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 84,
+            "end_line": 94,
+            "quote": "### Manual\n\n1. Copy example config:\n   ```bash\n   cp claude-oauth-refresh-config.example.json claude-oauth-refresh-config.json\n   ```\n\n2. Edit config (optional):\n   ```bash\n   nano claude-oauth-refresh-config.json\n   ```"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 159,
+            "end_line": 174,
+            "quote": "### Disable Notifications\n\nAsk Clawdbot:\n```\nDisable Claude refresh success notifications\n```\n\nOr edit config:\n```json\n{\n  \"notifications\": {\n    \"on_success\": false,\n    \"on_failure\": true\n  }\n}\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "M37",
+        "operation": "Save",
+        "data": "Backup copy of the existing legacy configuration.",
+        "source": "config.json in the manual-migration working directory",
+        "recipient": "config.json.backup",
+        "condition": "Instruction-level manual migration; later instructions remove this backup with the legacy config.",
+        "evidence": [
+          {
+            "path": "UPGRADE.md",
+            "start_line": 61,
+            "end_line": 68,
+            "quote": "### Manual Migration\n\nIf you prefer manual control:\n\n1. **Backup your current config:**\n   ```bash\n   cp config.json config.json.backup\n   ```"
+          }
+        ]
+      },
+      {
+        "move_id": "M38",
+        "operation": "Read",
+        "data": "Legacy notification_target.",
+        "source": "config.json in the manual-migration working directory",
+        "recipient": "OLD_TARGET",
+        "condition": "Instruction-level manual migration.",
+        "evidence": [
+          {
+            "path": "UPGRADE.md",
+            "start_line": 87,
+            "end_line": 90,
+            "quote": "3. **Copy your old notification_target:**\n   ```bash\n   # Extract from old config\n   OLD_TARGET=$(jq -r '.notification_target' config.json)"
+          }
+        ]
+      },
+      {
+        "move_id": "M39",
+        "operation": "Save",
+        "data": "Manual migration configuration with refresh/log defaults, three notification flags, Telegram channel and a target subsequently copied from the old config.",
+        "source": "UPGRADE.md heredoc literals and OLD_TARGET extracted from config.json",
+        "recipient": "claude-oauth-refresh-config.json, including intermediate tmp.json",
+        "condition": "Instruction-level manual migration; the target update reads the new configuration, writes tmp.json and moves it over the new configuration.",
+        "evidence": [
+          {
+            "path": "UPGRADE.md",
+            "start_line": 70,
+            "end_line": 96,
+            "quote": "2. **Create new config with your settings:**\n   ```bash\n   cat > claude-oauth-refresh-config.json << 'EOF'\n   {\n     \"refresh_buffer_minutes\": 30,\n     \"log_file\": \"~/clawd/logs/claude-oauth-refresh.log\",\n     \"notifications\": {\n       \"on_start\": false,\n       \"on_success\": false,\n       \"on_failure\": true\n     },\n     \"notification_channel\": \"telegram\",\n     \"notification_target\": \"YOUR_CHAT_ID_HERE\"\n   }\n   EOF\n   ```\n\n3. **Copy your old notification_target:**\n   ```bash\n   # Extract from old config\n   OLD_TARGET=$(jq -r '.notification_target' config.json)\n   \n   # Update new config\n   jq --arg target \"$OLD_TARGET\" '.notification_target = $target' \\\n     claude-oauth-refresh-config.json > tmp.json && \\\n     mv tmp.json claude-oauth-refresh-config.json\n   ```"
+          }
+        ]
+      },
+      {
+        "move_id": "M40",
+        "operation": "Delete",
+        "data": "Legacy configuration and its manually created backup.",
+        "source": "config.json and config.json.backup",
+        "recipient": null,
+        "condition": "Instruction-level manual migration after creating/updating the new configuration.",
+        "evidence": [
+          {
+            "path": "UPGRADE.md",
+            "start_line": 98,
+            "end_line": 101,
+            "quote": "4. **Remove old config:**\n   ```bash\n   rm config.json config.json.backup\n   ```"
+          }
+        ]
+      },
+      {
+        "move_id": "M41",
+        "operation": "Save",
+        "data": "Configuration restored from a separately existing backup, removing the backup pathname through mv.",
+        "source": "claude-oauth-refresh-config.json.backup",
+        "recipient": "config.json",
+        "condition": "Instruction-level rollback, only if that backup was made. Its creation is not shown by this rollback instruction.",
+        "evidence": [
+          {
+            "path": "UPGRADE.md",
+            "start_line": 311,
+            "end_line": 315,
+            "quote": "2. **Restore old config:**\n   ```bash\n   mv claude-oauth-refresh-config.json.backup config.json\n   # (if you made a backup)\n   ```"
+          }
+        ]
+      },
+      {
+        "move_id": "M42",
+        "operation": "Delete",
+        "data": "Entire skill folder and installed launchd plist in the documented manual removal path.",
+        "source": "~/clawd/skills/claude-connect and ~/Library/LaunchAgents/com.clawdbot.claude-oauth-refresher.plist",
+        "recipient": null,
+        "condition": "Instruction-level manual uninstall, after unloading the launchd job. Recursive skill-folder deletion includes files contained there.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 256,
+            "end_line": 264,
+            "quote": "Or manually:\n```bash\n# Stop auto-refresh\nlaunchctl unload ~/Library/LaunchAgents/com.clawdbot.claude-oauth-refresher.plist\nrm ~/Library/LaunchAgents/com.clawdbot.claude-oauth-refresher.plist\n\n# Remove skill\nrm -rf ~/clawd/skills/claude-connect\n```"
+          }
+        ]
+      },
+      {
+        "move_id": "M43",
+        "operation": "Send",
+        "data": "Verification output, selected log excerpts and configuration file with notification_target redacted.",
+        "source": "User-collected verify-setup.sh output, refresh logs and skill configuration",
+        "recipient": null,
+        "condition": "Instruction-level support request when still stuck: open an issue. No issue tracker/address or automated submission implementation is specified here.",
+        "evidence": [
+          {
+            "path": "UPGRADE.md",
+            "start_line": 329,
+            "end_line": 338,
+            "quote": "**Issues?** Check:\n1. Run `./verify-setup.sh`\n2. Check logs: `tail -20 ~/clawd/logs/claude-oauth-refresh.log`\n3. Test manually: `./refresh-token.sh`\n4. Check config: `cat claude-oauth-refresh-config.json | jq`\n\n**Still stuck?** Open an issue with:\n- Output of `./verify-setup.sh`\n- Relevant log excerpts\n- Config file (redact notification_target)"
+          }
+        ]
+      }
+    ]
+  }
+}

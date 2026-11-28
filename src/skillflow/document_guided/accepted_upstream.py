@@ -290,6 +290,11 @@ def load_accepted_upstream(run):
     """Verify copied evidence and expose upstream values; never create clients."""
     run = checked_run_path(run)
     manifest = read(run / "manifest.json")
+    if "revalidated_upstream" in manifest:
+        if "accepted_upstream" in manifest:
+            raise ValueError("Guided run cannot declare two upstream owners")
+        from .revalidated_upstream import load
+        return load(run, manifest)
     reference = manifest.get("accepted_upstream")
     if reference is None:
         return {}

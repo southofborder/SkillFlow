@@ -1,0 +1,690 @@
+{
+  "status": "partial",
+  "declared_purpose": "Local speech-to-text, with optional translation, subtitles, speaker diarization, URL/RSS input, batch processing, search, chapters and speaker-audio export. The entry document explicitly requires minimal invocations and user-requested optional capabilities; temporary-file handling, credential propagation and output metadata are implementation choices (SKILL.md:43-67,87-174; skill.json:2-4). The advertised launcher is absent, so its execution path remains unresolved.",
+  "data_operations": [
+    {
+      "operation": "Discover local inputs and read an optional language-map file",
+      "source": "User-supplied paths, directories, globs and --language-map",
+      "data_scope": "Matching filenames, directory entries and filename-to-language mappings",
+      "recipient_or_storage": "Local CLI memory",
+      "condition": "Local inputs are resolved; an @-prefixed language map causes a JSON file read.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1507,
+          "end_line": 1558
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1571,
+          "end_line": 1590
+        }
+      ]
+    },
+    {
+      "operation": "Read audio and infer transcription or translation",
+      "source": "Resolved audio and optional language, initial_prompt, prefix and hotwords arguments",
+      "data_scope": "Speech content, segment timestamps, detected language and probability; word timing and confidence when enabled",
+      "recipient_or_storage": "Local faster-whisper pipeline and result dictionaries",
+      "condition": "Normal transcription; clipping is passed to the pipeline when requested. These calls do not establish remote audio disclosure.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1597,
+          "end_line": 1658
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1754,
+          "end_line": 1785
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1819,
+          "end_line": 1844
+        }
+      ]
+    },
+    {
+      "operation": "Load models and configure model caching",
+      "source": "Model identifier or local model directory, optional revision and --model-dir",
+      "data_scope": "Model selection and downloaded model artifacts",
+      "recipient_or_storage": "WhisperModel loader; documented HuggingFace cache or selected cache directory; torchaudio and pyannote loaders",
+      "condition": "Whisper model loading precedes inference; alignment and diarization load additional models when enabled. Exact external requests and dependency cache behavior are unresolved.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 326,
+          "end_line": 360
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 985,
+          "end_line": 1001
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1120,
+          "end_line": 1127
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2555,
+          "end_line": 2568
+        }
+      ]
+    },
+    {
+      "operation": "Handle HuggingFace credentials",
+      "source": "--hf-token; documented cached-token configuration",
+      "data_scope": "HuggingFace authentication token",
+      "recipient_or_storage": "HF_TOKEN and HUGGING_FACE_HUB_TOKEN in the CLI environment; explicit pyannote use_auth_token argument; inherited child-process environments",
+      "condition": "Explicit token propagation occurs only when --hf-token is supplied. Cached-token reading is delegated to dependencies; packaged setup checks only file existence.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1120,
+          "end_line": 1127
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2424,
+          "end_line": 2427
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 133,
+          "end_line": 138
+        },
+        {
+          "path": "skill.json",
+          "start_line": 23,
+          "end_line": 25
+        }
+      ]
+    },
+    {
+      "operation": "Fetch an RSS feed and extract episode URLs",
+      "source": "--rss URL",
+      "data_scope": "Feed URL and fixed User-Agent in the request; full returned XML, enclosure URLs and episode titles",
+      "recipient_or_storage": "Feed endpoint through urllib; returned feed data in local memory; feed URL and selected titles on stderr unless quiet",
+      "condition": "RSS mode only. Defaults to five episodes; zero selects all. Redirect destinations are unresolved.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 846,
+          "end_line": 900
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2333,
+          "end_line": 2343
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2481,
+          "end_line": 2491
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve URL audio and persist a temporary download",
+      "source": "Positional URLs or RSS enclosure URLs",
+      "data_scope": "Full supplied URL passed to yt-dlp; retrieved audio converted to MP3",
+      "recipient_or_storage": "Local yt-dlp process and its selected remote endpoints; audio.* in a faster-whisper-* temporary directory",
+      "condition": "URL inputs only; --no-playlist limits playlist retrieval. yt-dlp's exact requests, metadata handling and additional recipients are not supplied.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 804,
+          "end_line": 839
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2509,
+          "end_line": 2516
+        }
+      ]
+    },
+    {
+      "operation": "Persist stdin audio temporarily",
+      "source": "Standard input",
+      "data_scope": "Entire input audio byte stream",
+      "recipient_or_storage": "CLI memory and a delete=False fw-stdin-*.audio temporary file",
+      "condition": "A single '-' input; combined inputs are rejected.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2493,
+          "end_line": 2507
+        }
+      ]
+    },
+    {
+      "operation": "Create channel-selected or preprocessed audio",
+      "source": "Resolved audio",
+      "data_scope": "Selected stereo channel or normalized/denoised audio",
+      "recipient_or_storage": "Local ffmpeg process and adjacent .left.wav, .right.wav or .preprocessed.wav files",
+      "condition": "Requested channel selection, normalization or denoising. Failed channel extraction or preprocessing can fall back to the original audio.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 557,
+          "end_line": 589
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 907,
+          "end_line": 949
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1601,
+          "end_line": 1617
+        }
+      ]
+    },
+    {
+      "operation": "Refine word timestamps locally",
+      "source": "Effective audio file and recognized words",
+      "data_scope": "Whole decoded waveform, full-audio model emissions and per-word alignment",
+      "recipient_or_storage": "Local torchaudio/PyTorch processing and alignment-model memory cache",
+      "condition": "Non-streaming word timestamps, confidence filtering or diarization automatically trigger alignment.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 985,
+          "end_line": 1062
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1619,
+          "end_line": 1623
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1787,
+          "end_line": 1791
+        }
+      ]
+    },
+    {
+      "operation": "Infer speaker clusters and apply supplied names",
+      "source": "Effective audio, transcript timing, optional speaker-count hints and --speaker-names",
+      "data_scope": "Speaker timelines, word/segment speaker assignments and user-provided names",
+      "recipient_or_storage": "Local pyannote pipeline and result segments; temporary adjacent .diarize.wav for compressed audio",
+      "condition": "--diarize outside streaming mode. Names are supplied mappings, not independently inferred identities.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 743,
+          "end_line": 761
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1145,
+          "end_line": 1253
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1793,
+          "end_line": 1803
+        }
+      ]
+    },
+    {
+      "operation": "Detect language without returning a transcript",
+      "source": "Each resolved audio file",
+      "data_scope": "Decoded audio; inferred language and probability",
+      "recipient_or_storage": "Local model; language result on stdout to the caller",
+      "condition": "--detect-language-only takes an early-exit path, with temporary-input cleanup.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2570,
+          "end_line": 2605
+        }
+      ]
+    },
+    {
+      "operation": "Transform, search and output transcript data",
+      "source": "Local transcription results and optional search query",
+      "data_scope": "Transcript text, timestamps and optional speaker labels, words, confidence, chapters and metadata; search returns complete matching segments",
+      "recipient_or_storage": "Stdout to the caller or user-selected output files; chapter markers optionally in --chapters-file",
+      "condition": "Requested format and flags govern output. Streaming prints segments immediately. Search ordinarily replaces formatted transcript output. Normal returns do not establish onward disclosure.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1444,
+          "end_line": 1500
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1782,
+          "end_line": 1785
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1858,
+          "end_line": 1886
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2760,
+          "end_line": 2903
+        }
+      ]
+    },
+    {
+      "operation": "Persist speaker audio and subtitled video",
+      "source": "Input media and diarized/transcribed segments",
+      "data_scope": "Concatenated speaker turns, speaker-derived filenames and subtitle text embedded in video",
+      "recipient_or_storage": "Local ffmpeg; --export-speakers directory or --burn-in output; temporary SRT file for burn-in",
+      "condition": "Explicit export or burn-in flags; speaker export requires diarization and burn-in requires single-file mode. The SRT is removed in finally.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 768,
+          "end_line": 797
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1260,
+          "end_line": 1320
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2767,
+          "end_line": 2777
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2908,
+          "end_line": 2919
+        }
+      ]
+    },
+    {
+      "operation": "Persist a statistics sidecar",
+      "source": "Transcription result and execution arguments",
+      "data_scope": "Filename, language and probability, duration, timing, realtime factor, segment/word counts, model, compute type and device",
+      "recipient_or_storage": "--stats-file destination",
+      "condition": "Only when --stats-file is supplied; contains statistics and metadata rather than transcript text.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2937,
+          "end_line": 2977
+        }
+      ]
+    },
+    {
+      "operation": "Delete temporary inputs and intermediate files",
+      "source": "URL downloads, stdin audio, preprocessing/channel files and diarization WAV",
+      "data_scope": "Temporary audio copies",
+      "recipient_or_storage": "Local filesystem deletion",
+      "condition": "Normal transcription removes preprocessing/channel files; diarization uses finally for tracked WAV cleanup. Main cleanup removes URL directories unless --keep-temp and always removes stdin. Language-only cleanup removes URL directories regardless of --keep-temp. Several failure exits bypass cleanup.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1161,
+          "end_line": 1170
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1809,
+          "end_line": 1813
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2600,
+          "end_line": 2605
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2731,
+          "end_line": 2749
+        }
+      ]
+    },
+    {
+      "operation": "Inspect and report local execution environment",
+      "source": "Local hardware, executable/package metadata and filesystem existence checks",
+      "data_scope": "OS/architecture, GPU and driver, Python/package versions, venv path, tool availability and HuggingFace token presence",
+      "recipient_or_storage": "Setup stdout and CLI stderr to their callers",
+      "condition": "Setup diagnostics, installation and ordinary non-quiet CLI status. Token checks do not read or print token contents.",
+      "evidence": [
+        {
+          "path": "setup.sh",
+          "start_line": 34,
+          "end_line": 141
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 159,
+          "end_line": 186
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 206,
+          "end_line": 247
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2524,
+          "end_line": 2553
+        }
+      ]
+    },
+    {
+      "operation": "Install or update local dependencies",
+      "source": "requirements.txt and setup/update package selections",
+      "data_scope": "Package names and constraints; retrieved package artifacts",
+      "recipient_or_storage": "Configured package indexes, explicitly download.pytorch.org for CUDA builds; local .venv and installer-managed storage",
+      "condition": "Setup installs faster-whisper, platform-dependent PyTorch/torchaudio and optional pyannote.audio; update paths upgrade faster-whisper. External installer behavior is unresolved.",
+      "evidence": [
+        {
+          "path": "requirements.txt",
+          "start_line": 1,
+          "end_line": 2
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 19,
+          "end_line": 32
+        },
+        {
+          "path": "setup.sh",
+          "start_line": 249,
+          "end_line": 308
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1922,
+          "end_line": 1940
+        }
+      ]
+    },
+    {
+      "operation": "Document an optional HTTP transcription path",
+      "source": "Local audio file in the speaches examples",
+      "data_scope": "Complete audio file and model identifier",
+      "recipient_or_storage": "http://localhost:8000/v1/audio/transcriptions; response returned to the HTTP/SDK caller",
+      "condition": "Only if the separate documented server example is followed. Server implementation, access controls, processing and retention are not packaged.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 945,
+          "end_line": 974
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Internal input path in _audio_path, potentially including absolute directory names",
+      "recipient_or_storage": "JSON stdout to the caller or the selected JSON output file",
+      "condition": "Normal JSON transcription output; both parallel and sequential execution attach _audio_path before serializing the entire result.",
+      "purpose_basis": "JSON metadata is requested, but the documented input identity is the filename. Internal bookkeeping paths are an implementation addition.",
+      "necessary_behavior": "Keep the source path internally for templates, statistics, exports and burn-in.",
+      "proposed_reduction": "Remove _audio_path from the public serialization copy. This narrows extra data in a required output.",
+      "preservation_conditions": "Retain internal path access for later consumers and preserve requested filename metadata.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 656,
+          "end_line": 674
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1860,
+          "end_line": 1861
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2659,
+          "end_line": 2663
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2711,
+          "end_line": 2716
+        }
+      ]
+    },
+    {
+      "data_scope": "HuggingFace authentication token",
+      "recipient_or_storage": "Inherited environments of yt-dlp and ffmpeg child processes",
+      "condition": "--hf-token is supplied and a download, conversion, export or burn-in subprocess subsequently runs without an explicit environment.",
+      "purpose_basis": "The token is for private/gated model access and diarization; unrelated media subprocesses do not require it in the supplied implementation.",
+      "necessary_behavior": "Authenticate the relevant model-loading operations.",
+      "proposed_reduction": "Scope authentication to model loading and exclude these credential variables from unrelated child environments. This reduces credential recipients, without asserting remote token transmission.",
+      "preservation_conditions": "Preserve authenticated Whisper/pyannote loading, including required cached-token fallback.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2002,
+          "end_line": 2005
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2424,
+          "end_line": 2427
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 818,
+          "end_line": 827
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 926,
+          "end_line": 942
+        }
+      ]
+    },
+    {
+      "data_scope": "Raw downloaded/stdin audio and derived channel, preprocessed or partial diarization WAV files",
+      "recipient_or_storage": "System temporary directories and files adjacent to the input",
+      "condition": "Model-loading or single-file transcription failure bypasses main cleanup; preprocessing cleanup is not in finally. A failed diarization conversion can discard the partial output's tracking path.",
+      "purpose_basis": "Temporary copies support processing; retained URL downloads are explicitly optional through --keep-temp.",
+      "necessary_behavior": "Keep temporary inputs available until all required consumers finish.",
+      "proposed_reduction": "Use exception-safe ownership and cleanup for staged files, including partial conversions. This reduces retention after failure.",
+      "preservation_conditions": "Honor explicit --keep-temp for downloads, preserve user-owned inputs and final outputs, and defer successful cleanup until exports/burn-in finish.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1147,
+          "end_line": 1170
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1790,
+          "end_line": 1813
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2494,
+          "end_line": 2514
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2555,
+          "end_line": 2568
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2731,
+          "end_line": 2749
+        }
+      ]
+    },
+    {
+      "data_scope": "Full transcript, including segments that do not match the search query",
+      "recipient_or_storage": "Stdout to the caller, even when search results are saved separately",
+      "condition": "--stream and --search are combined. Streaming prints all segments; without -o, the later early continue also bypasses search output.",
+      "purpose_basis": "The entry document explicitly says search replaces normal transcript output with matching segments.",
+      "necessary_behavior": "Transcribe the audio locally to find matches and return matching segments with timestamps.",
+      "proposed_reduction": "Apply search filtering before streaming output, or resolve the incompatible combination before emitting content. This narrows output, not the necessary local transcription.",
+      "preservation_conditions": "Preserve requested matching semantics, timestamps and progressive delivery where supported.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 127,
+          "end_line": 132
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1782,
+          "end_line": 1785
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2779,
+          "end_line": 2782
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2811,
+          "end_line": 2832
+        }
+      ]
+    },
+    {
+      "data_scope": "Text from segments removed by --filter-hallucinations",
+      "recipient_or_storage": "The top-level text field of JSON stdout or a JSON output file",
+      "condition": "Hallucination filtering removes segments, JSON is emitted, and neither sentence merging nor filler removal rebuilds text.",
+      "purpose_basis": "The requested filter removes matching artifacts and duplicates; JSON should represent the filtered result.",
+      "necessary_behavior": "Return retained transcript segments and their metadata.",
+      "proposed_reduction": "Rebuild top-level text from filtered segments. This removes stale extra content from a required JSON export.",
+      "preservation_conditions": "Retain surviving content and metadata; this is output omission, not deletion of original audio.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 538,
+          "end_line": 550
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1759,
+          "end_line": 1780
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1805,
+          "end_line": 1830
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1860,
+          "end_line": 1861
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2761,
+          "end_line": 2765
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2791,
+          "end_line": 2794
+        }
+      ]
+    },
+    {
+      "data_scope": "Audio outside requested clip ranges",
+      "recipient_or_storage": "Local torchaudio alignment and pyannote diarization processing",
+      "condition": "--clip-timestamps is combined with word alignment or diarization. Clipping is passed to transcription, but alignment computes emissions over the whole file and diarization receives the whole effective path.",
+      "purpose_basis": "The requested outcome is transcription of specified time ranges with optional timing/speaker information.",
+      "necessary_behavior": "Align selected words and assign speakers accurately for the requested ranges.",
+      "proposed_reduction": "Process selected ranges with only required context and map results back to original timestamps. This narrows local processing; no remote audio recipient is established.",
+      "preservation_conditions": "Preserve timing accuracy, sufficient alignment context and consistent speaker labels across disjoint clips.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1647,
+          "end_line": 1658
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1009,
+          "end_line": 1024
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1147,
+          "end_line": 1167
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 1787,
+          "end_line": 1800
+        }
+      ]
+    },
+    {
+      "data_scope": "Detected language and language probability",
+      "recipient_or_storage": "--stats-file JSON sidecar",
+      "condition": "A performance-only statistics request uses --stats-file.",
+      "purpose_basis": "The entry document ties this flag to performance statistics, realtime factor and benchmarking. Language attributes are additional metadata.",
+      "necessary_behavior": "Persist duration, processing time, realtime factor and requested benchmark/count fields.",
+      "proposed_reduction": "Make language attributes optional in performance sidecars. This narrows fields in the requested persistence action.",
+      "preservation_conditions": "Retain language fields when explicitly requested for analysis and preserve necessary per-file association.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 116,
+          "end_line": 117
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 171,
+          "end_line": 173
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2957,
+          "end_line": 2973
+        }
+      ]
+    },
+    {
+      "data_scope": "URL media retrieval and temporary audio copies for files subsequently skipped",
+      "recipient_or_storage": "yt-dlp and its remote media endpoints; faster-whisper-* temporary directories",
+      "condition": "--skip-existing with URL/RSS inputs whose required outputs already exist. All URL downloads happen before skip checks.",
+      "purpose_basis": "Skipping completed work does not require downloading its full audio again when no remaining task needs the source.",
+      "necessary_behavior": "Determine expected output identities and process only unfinished work.",
+      "proposed_reduction": "Check completion before full media retrieval, retaining only any necessary identity lookup. This removes a redundant action rather than trimming a required download.",
+      "preservation_conditions": "Resolve output naming reliably, require all requested outputs to exist, and retain retrieval for outstanding source-dependent work.",
+      "evidence": [
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2509,
+          "end_line": 2516
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2615,
+          "end_line": 2630
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2641,
+          "end_line": 2655
+        },
+        {
+          "path": "scripts/transcribe.py",
+          "start_line": 2674,
+          "end_line": 2678
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Blocking entry-path gap: SKILL.md:89 advertises scripts/transcribe, but that launcher is absent from the complete supplied inventory. Findings apply to scripts/transcribe.py and setup.sh; launcher behavior and linkage remain unresolved.",
+    "Dependency implementations are absent. Their telemetry, credential-file reads, model-download endpoints, cache contents and retention cannot be verified. Model-loading calls do not establish audio or transcript uploads.",
+    "yt-dlp extractor requests, redirects, additional recipients and metadata retention are unresolved; the source establishes URL handoff and local audio staging.",
+    "The separate speaches server is not supplied. Its storage, logging, authentication, network reachability and downstream processing remain unresolved.",
+    "Actual invocation flags, cached models, ambient credentials and package-index configuration are unavailable; reported operations are conditional source behavior, not evidence of execution."
+  ]
+}

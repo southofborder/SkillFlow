@@ -122,6 +122,7 @@ class Derivation(Strict):
     conservative: bool
     information_bound: bool = False
     selector_ref: Text | None = None
+    outcome_data_ids: Annotated[list[Text], Field(min_length=1)] | None = None
     rules: Annotated[list[Text], Field(min_length=1)]
     parents: list[Text]
 
@@ -132,6 +133,8 @@ class Derivation(Strict):
             value.pop("information_bound", None)
         if self.selector_ref is None:
             value.pop("selector_ref", None)
+        if self.outcome_data_ids is None:
+            value.pop("outcome_data_ids", None)
         return value
 
     @model_validator(mode="after")
@@ -140,6 +143,10 @@ class Derivation(Strict):
             raise ValueError("A selector decision preserves truth or field presence")
         if self.information_bound and not self.conservative:
             raise ValueError("A bounded uncertain information scope must remain conservative")
+        if self.outcome_data_ids is not None and (self.node.kind not in {"ir_input", "ir_output"}
+                or self.outcome_data_ids != sorted(set(self.outcome_data_ids))
+                or not set(self.outcome_data_ids) <= set(self.node.data_ids)):
+            raise ValueError("An outcome demand must select actual versions of its operand")
         _check_goal_path(self.path)
         for path in self.excluded_paths:
             _check_goal_path(path)
@@ -543,13 +550,30 @@ def validate_result_references(value, facts, targets, *, input_contract_review=N
                   if row["status"] == "unresolved"]
     if checked["coverage"].get("unresolved_boundaries", []) != unresolved:
         raise ValueError("Demand unresolved boundary coverage differs from declared but unevaluated operations")
-    from skillflow.propagation.contracts.limitations import processing_impacts, gap_id, diagnostic_applies
+    from skillflow.propagation.contracts.limitations import processing_impacts, gap_id, diagnostic_applies, unmodeled_ids
+    from .outcome_demands import NO_RECORDED_CONTROL_OUTCOME, outcome_dispatches
     expected_gaps = processing_impacts(index.cfg, annotation["compiled_annotation"])
+    missing_semantics = unmodeled_ids(annotation["compiled_annotation"])
+    unavailable_dispatch_producers = {
+        producer for producer, dispatch in outcome_dispatches(index.instructions).items()
+        if producer in missing_semantics and producer not in index.records and dispatch not in index.records}
     gaps = {gap_id(g): g for g in annotation["compiled_annotation"].get("processing_gaps", [])
             if index.coverage[g["instruction_id"]] != "infeasible"}
     actual_gaps = {}
     for diagnostic in checked["diagnostics"]:
         affected = diagnostic.get("affected_instruction_ids")
+        if diagnostic["code"] in {"unavailable_outcome_dependency", "unresolved_outcome_dependency"}:
+            ir = diagnostic["instruction_id"]
+            declared = annotation["compiled_annotation"]["ir_semantics"].get(ir, {}).get("outcome_bindings")
+            # An unmodeled producer cannot publish a case. Its CFG dispatch still
+            # controls downstream goals, so the absent control dependency is real.
+            missing_control = (diagnostic["code"] == "unavailable_outcome_dependency"
+                               and diagnostic["reason"] == NO_RECORDED_CONTROL_OUTCOME
+                               and ir in unavailable_dispatch_producers)
+            if (affected != [ir] or diagnostic["operation_id"] is not None or not diagnostic["blocking"]
+                    or not (declared or missing_control)):
+                raise ValueError("Outcome diagnostic must identify a declared protected outcome")
+            continue
         if affected is not None:
             if diagnostic["code"] == "upstream_diagnostic":
                 if not any(row.get("affected_instruction_ids") == affected
@@ -679,6 +703,8 @@ def validate_result_references(value, facts, targets, *, input_contract_review=N
         raise ValueError("Reused demand index belongs to different facts or source-review material")
     from .selector_demands import validate_bindings
     validate_bindings(checked["derivations"], engine)
+    from .outcome_demands import validate_selected_versions
+    validate_selected_versions(checked["derivations"], engine)
     from .input_assessments import InputReviewBarrierIndex
     from .review_barriers import barrier_reason, barrier_diagnostic_value, operation_barriers
     barriers = InputReviewBarrierIndex(engine)

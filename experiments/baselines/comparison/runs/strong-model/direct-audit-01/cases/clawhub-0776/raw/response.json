@@ -1,0 +1,587 @@
+{
+  "status": "completed",
+  "declared_purpose": "Connect a Claude subscription to Clawdbot by copying Keychain OAuth credentials into its auth profiles and maintaining them through expiry-aware refresh, scheduled every two hours, with optional notifications. Keychain synchronization and gateway restart are documented behavior; discovery breadth, recipient selection, diagnostic contents and retention are implementation choices (SKILL.md:1-15, 49-65, 182-192).",
+  "data_operations": [
+    {
+      "operation": "Delegate prerequisite authentication",
+      "source": "User-invoked Claude CLI and browser login",
+      "data_scope": "Authentication information and resulting credentials; the login exchange is not supplied.",
+      "recipient_or_storage": "Claude CLI/browser and their unspecified authentication services",
+      "condition": "The documented setup requires Claude CLI to be logged in before installation.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 27,
+          "end_line": 31
+        }
+      ]
+    },
+    {
+      "operation": "Read configuration and inspect setup locally",
+      "source": "Runtime configuration, auth-profiles.json, OS and CLI version/status commands",
+      "data_scope": "Refresh settings, notification target, credential-store selectors, profile name, endpoint, file paths, software versions and setup status",
+      "recipient_or_storage": "Local script processes; verification output returns to its caller.",
+      "condition": "Refresh reads configuration when present and otherwise applies defaults. Verification performs checks when preceding checks allow execution to continue.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 18,
+          "end_line": 60
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 22,
+          "end_line": 64
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 129,
+          "end_line": 174
+        }
+      ]
+    },
+    {
+      "operation": "Enumerate Keychain metadata and read candidate credential items",
+      "source": "security dump-keychain and service/account-specific security find-generic-password calls",
+      "data_scope": "Keychain metadata is filtered for matching service account names. Candidate item passwords, containing OAuth JSON and metadata, are read until a qualifying item is found.",
+      "recipient_or_storage": "Local shell variables and Python parsers; enumeration itself supplies no remote recipient.",
+      "condition": "Refresh requires refreshToken and expiresAt. Verification separately reads candidates and checks for refreshToken. Both choose the first qualifying candidate in their iteration.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 105,
+          "end_line": 185
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 70,
+          "end_line": 101
+        }
+      ]
+    },
+    {
+      "operation": "Infer a notification destination from session metadata",
+      "source": "~/.clawdbot/agents/main/sessions/sessions.json",
+      "data_scope": "Direct-session classification, deliveryContext.channel, deliveryContext.to or lastTo; channel-specific target normalization",
+      "recipient_or_storage": "Detector process and its caller through channel|target output",
+      "condition": "Requires jq and the sessions file. Selects the first direct session with delivery context. Despite documentation, this executable does not read clawdbot.json contents or search Telegram messages.",
+      "evidence": [
+        {
+          "path": "detect-notification-config.sh",
+          "start_line": 7,
+          "end_line": 44
+        },
+        {
+          "path": "detect-notification-config.sh",
+          "start_line": 50,
+          "end_line": 117
+        }
+      ]
+    },
+    {
+      "operation": "Display and persist notification settings; migrate old configuration",
+      "source": "Detector output, interactive preferences and existing configuration",
+      "data_scope": "Channel, target identifier, success/failure preferences and other retained configuration fields",
+      "recipient_or_storage": "Installer caller and package-local claude-oauth-refresh-config.json; preview and verification callers also receive detected identifiers.",
+      "condition": "Installer attempts detection before deciding whether to keep existing settings. New configuration stores detected values or a placeholder. Migration rewrites and removes, or renames, the old configuration. Detection preview compares settings without writing configuration.",
+      "evidence": [
+        {
+          "path": "install.sh",
+          "start_line": 47,
+          "end_line": 99
+        },
+        {
+          "path": "install.sh",
+          "start_line": 114,
+          "end_line": 173
+        },
+        {
+          "path": "test-detection.sh",
+          "start_line": 18,
+          "end_line": 63
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 152,
+          "end_line": 174
+        }
+      ]
+    },
+    {
+      "operation": "Calculate remaining credential lifetime",
+      "source": "Selected Keychain expiresAt and local clock",
+      "data_scope": "Current expiry and minutes remaining",
+      "recipient_or_storage": "Refresh process, caller and activity logs",
+      "condition": "A valid selected credential is required. Without --force, remaining time greater than the buffer bypasses the OAuth request and exits after possible local synchronization.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 183,
+          "end_line": 199
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 261,
+          "end_line": 281
+        }
+      ]
+    },
+    {
+      "operation": "Exchange a refresh credential remotely",
+      "source": "Selected Keychain refreshToken and configured client_id",
+      "data_scope": "refresh_token, client_id and grant_type; response access_token, refresh_token and expires_in",
+      "recipient_or_storage": "TOKEN_URL, defaulting to https://console.anthropic.com/v1/oauth/token; response returns to the local refresh process.",
+      "condition": "Runs when expiry is within the configured buffer or --force is supplied. The request has a 30-second timeout. Existing access tokens, account names and subscription metadata are not included in the constructed request.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 22,
+          "end_line": 24
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 38,
+          "end_line": 60
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 266,
+          "end_line": 300
+        }
+      ]
+    },
+    {
+      "operation": "Read and atomically rewrite the Clawdbot credential store",
+      "source": "Existing AUTH_FILE and selected or refreshed OAuth credentials",
+      "data_scope": "Existing auth-store contents; selected profile access, refresh, expires, type and provider; Anthropic order and lastGood",
+      "recipient_or_storage": "Temporary file in the auth directory, renamed to AUTH_FILE; default ~/.clawdbot/agents/main/agent/auth-profiles.json",
+      "condition": "For a still-valid credential, writes only when accessToken exists and differs from the stored access value. After successful refresh, writes unconditionally. Normally preserves unrelated profiles; invalid or unreadable existing content falls back to an empty store and can be replaced. Script default profile is anthropic:claude-cli; the example configuration selects anthropic:default.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 195,
+          "end_line": 264
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 302,
+          "end_line": 352
+        },
+        {
+          "path": "claude-oauth-refresh-config.example.json",
+          "start_line": 12,
+          "end_line": 14
+        }
+      ]
+    },
+    {
+      "operation": "Reconstruct and replace the selected Keychain item",
+      "source": "New OAuth credentials and metadata from the original selected item",
+      "data_scope": "New accessToken, refreshToken and expiresAt; retained scopes, subscriptionType and rateLimitTier, or fallback defaults. These defaults are synthesized values, not verified entitlement inferences.",
+      "recipient_or_storage": "Selected KEYCHAIN_SERVICE/KEYCHAIN_ACCOUNT item in local Keychain",
+      "condition": "After the auth-file update, deletes the old item and adds the reconstructed JSON. Fields outside the reconstructed structure are omitted.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 354,
+          "end_line": 383
+        }
+      ]
+    },
+    {
+      "operation": "Persist runtime diagnostics",
+      "source": "Refresh log calls and captured Clawdbot command output",
+      "data_scope": "Timestamps, candidate and selected account names, expiry times, file paths, status and errors; certain failures include all candidate account names or the raw OAuth response.",
+      "recipient_or_storage": "LOG_FILE and caller stdout through tee; scheduled stdout is additionally stored in claude-oauth-refresher-stdout.log. Notification and gateway command output also append to LOG_FILE.",
+      "condition": "Logging occurs on reached refresh paths. Raw response logging occurs when parsed OAuth JSON lacks access_token. No packaged rotation or retention limit is shown.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 65,
+          "end_line": 97
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 143,
+          "end_line": 188
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 293,
+          "end_line": 300
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 385,
+          "end_line": 391
+        },
+        {
+          "path": "install.sh",
+          "start_line": 209,
+          "end_line": 213
+        }
+      ]
+    },
+    {
+      "operation": "Delegate delivery of refresh notifications",
+      "source": "Success status or error_exit message",
+      "data_scope": "Refresh outcome; success includes expiry and estimated next refresh. Failure may include account names or a raw OAuth response.",
+      "recipient_or_storage": "clawdbot message send with NOTIFY_TARGET; ultimate channel, recipient resolution and provider storage are unspecified by supplied source.",
+      "condition": "Requires an installed clawdbot command and a nonempty, non-placeholder target. The command receives no notification_channel. Boolean false notification settings become true through jq // true, so ordinary boolean disabling does not suppress delivery. The still-valid early-exit path sends no success notification.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 27,
+          "end_line": 32
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 70,
+          "end_line": 97
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 168,
+          "end_line": 180
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 293,
+          "end_line": 294
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 395,
+          "end_line": 397
+        }
+      ]
+    },
+    {
+      "operation": "Persist scheduled execution and delegate gateway restart",
+      "source": "Installer paths and refresh completion",
+      "data_scope": "Script/home paths, working directory, PATH, schedule and output-log destinations; gateway restart command",
+      "recipient_or_storage": "Package-local plist and ~/Library/LaunchAgents/com.clawdbot.claude-oauth-refresher.plist; local launchd and Clawdbot gateway",
+      "condition": "Installer tests refresh, creates and loads a job that runs at load and every 7200 seconds. After a successful actual refresh, an available Clawdbot command is scheduled to restart the gateway; its output is logged.",
+      "evidence": [
+        {
+          "path": "install.sh",
+          "start_line": 176,
+          "end_line": 240
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 385,
+          "end_line": 391
+        }
+      ]
+    },
+    {
+      "operation": "Display credentials during manual diagnostics",
+      "source": "Documented auth-profile status and Keychain debugging commands",
+      "data_scope": "The entire selected OAuth profile, including access and refresh credentials; the Keychain debugging command requests the item password.",
+      "recipient_or_storage": "Terminal or invoking agent/tool caller; no automatic external publication is specified.",
+      "condition": "Only when the user or agent follows these diagnostic instructions.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 146,
+          "end_line": 157
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 123,
+          "end_line": 125
+        }
+      ]
+    },
+    {
+      "operation": "Request manual disclosure of support diagnostics",
+      "source": "Verification output, relevant log excerpts and configuration",
+      "data_scope": "Setup diagnostics, potentially account names or raw response contents from logs, and configuration with notification_target redacted",
+      "recipient_or_storage": "Audience of the support issue the user opens; host and visibility are not specified.",
+      "condition": "The upgrade guide recommends this only if troubleshooting remains unsuccessful. No automatic upload is implemented.",
+      "evidence": [
+        {
+          "path": "UPGRADE.md",
+          "start_line": 327,
+          "end_line": 338
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 103,
+          "end_line": 125
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 293,
+          "end_line": 294
+        }
+      ]
+    },
+    {
+      "operation": "Stop execution and conditionally delete local artifacts",
+      "source": "Installed service, plist files, default logs and configuration files",
+      "data_scope": "Scheduled job, execution paths, logged diagnostics and notification preferences/identifiers",
+      "recipient_or_storage": "Local launchd and filesystem deletion boundaries",
+      "condition": "Uninstaller unloads the service and removes both plist copies. Default logs and old/new configurations are deleted only after affirmative prompts. Scripts and Keychain credentials remain; no auth-profile deletion is implemented. Custom LOG_FILE locations are outside its fixed cleanup list.",
+      "evidence": [
+        {
+          "path": "uninstall.sh",
+          "start_line": 22,
+          "end_line": 120
+        },
+        {
+          "path": "uninstall.sh",
+          "start_line": 131,
+          "end_line": 133
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Metadata for unrelated Keychain items during repeated discovery",
+      "recipient_or_storage": "Local security dump-keychain output and the refresh/verification processing pipeline",
+      "condition": "Both components enumerate Keychain metadata before filtering for the required service, including on subsequent runs.",
+      "purpose_basis": "Find a complete Claude OAuth credential across possibly multiple matching accounts; the global metadata sweep is an implementation choice.",
+      "necessary_behavior": "Locate and validate a usable service/account item, retaining fallback discovery for missing or incomplete candidates.",
+      "proposed_reduction": "Allow or remember the selected account and try its service-scoped lookup first; reserve broad enumeration for failed or unresolved discovery.",
+      "preservation_conditions": "Revalidate the credential and fall back when the remembered item disappears, becomes incomplete or the user changes accounts. Initial multi-account discovery may remain necessary.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 120,
+          "end_line": 166
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 70,
+          "end_line": 101
+        }
+      ]
+    },
+    {
+      "data_scope": "Session metadata and inferred notification identifiers",
+      "recipient_or_storage": "Detector/verification/installer processes, their caller output and newly written configuration",
+      "condition": "Verification can run detection, then installer runs it again before checking existing configuration or collecting notification preferences.",
+      "purpose_basis": "Automatically configure optional notifications.",
+      "necessary_behavior": "Obtain a destination when creating or explicitly changing enabled notification settings.",
+      "proposed_reduction": "Detect once, after determining that destination configuration is needed; reuse that result and skip detection when retaining a valid destination or disabling all notifications.",
+      "preservation_conditions": "Keep an explicit preview/reconfiguration path and manual configuration fallback. Correct boolean preference handling so disabling notifications is effective.",
+      "evidence": [
+        {
+          "path": "verify-setup.sh",
+          "start_line": 152,
+          "end_line": 169
+        },
+        {
+          "path": "install.sh",
+          "start_line": 34,
+          "end_line": 102
+        },
+        {
+          "path": "install.sh",
+          "start_line": 114,
+          "end_line": 146
+        }
+      ]
+    },
+    {
+      "data_scope": "Entire success or failure notification, target identifier and refresh activity",
+      "recipient_or_storage": "clawdbot message send and the recipient resolved from NOTIFY_TARGET",
+      "condition": "A user sets notifications.on_success or notifications.on_failure to boolean false, but jq // true changes it to true; a usable target and clawdbot command exist.",
+      "purpose_basis": "Notifications are explicitly optional and documented as individually disableable.",
+      "necessary_behavior": "Deliver only the notification types the user enables.",
+      "proposed_reduction": "Apply defaults only to missing/null fields and preserve boolean false. Suppress the entire disabled send rather than merely trimming its message.",
+      "preservation_conditions": "Keep enabled notifications, default behavior for absent settings and the existing empty-target suppression.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 125,
+          "end_line": 130
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 159,
+          "end_line": 174
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 27,
+          "end_line": 32
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 71,
+          "end_line": 88
+        }
+      ]
+    },
+    {
+      "data_scope": "Refresh outcomes, expiry times and failure diagnostics potentially sent to an unintended destination",
+      "recipient_or_storage": "NOTIFY_TARGET passed to clawdbot message send; notification_channel is stored but omitted from delivery.",
+      "condition": "The first direct session is not the intended notification recipient, or target-only routing does not resolve to the stored channel. Actual misdelivery cannot be established from supplied source.",
+      "purpose_basis": "Notify the user about their connection; selecting an arbitrary first direct session does not establish recipient ownership.",
+      "necessary_behavior": "Deliver enabled notifications to the user's intended channel and target.",
+      "proposed_reduction": "Confirm or explicitly configure the destination before its first use, validate it, and bind delivery to the configured channel using a supported routing mechanism.",
+      "preservation_conditions": "Retain automatic destination suggestions and supported channel formats. Clawdbot routing behavior must be resolved before prescribing its exact invocation.",
+      "evidence": [
+        {
+          "path": "detect-notification-config.sh",
+          "start_line": 27,
+          "end_line": 44
+        },
+        {
+          "path": "install.sh",
+          "start_line": 135,
+          "end_line": 151
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 27,
+          "end_line": 39
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 82,
+          "end_line": 88
+        }
+      ]
+    },
+    {
+      "data_scope": "Candidate and selected Keychain account names, including the complete candidate list on failure",
+      "recipient_or_storage": "LOG_FILE, caller stdout, scheduled stdout log and, for the complete-failure message, the Clawdbot notification target",
+      "condition": "Candidate checking and selection log account identifiers. If no candidate qualifies, error_exit logs and optionally sends the account list.",
+      "purpose_basis": "Report credential-discovery progress and actionable authentication failures.",
+      "necessary_behavior": "Indicate whether credentials were found and explain how to authenticate again.",
+      "proposed_reduction": "Use counts or nonidentifying candidate references in routine logs and notifications; expose account names only through an explicitly requested local diagnostic.",
+      "preservation_conditions": "Keep enough local context to distinguish duplicate or incomplete entries without automatically persisting or messaging their names.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 92,
+          "end_line": 97
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 143,
+          "end_line": 188
+        },
+        {
+          "path": "install.sh",
+          "start_line": 209,
+          "end_line": 213
+        }
+      ]
+    },
+    {
+      "data_scope": "Entire OAuth response body, potentially including a refresh credential or other sensitive response fields",
+      "recipient_or_storage": "LOG_FILE, stdout/scheduled stdout log and the configured Clawdbot notification destination",
+      "condition": "Valid parsed OAuth JSON lacks access_token. The response can still contain refresh_token or other fields; actual contents are unknown.",
+      "purpose_basis": "Explain a failed OAuth refresh.",
+      "necessary_behavior": "Record and optionally notify an actionable failure reason.",
+      "proposed_reduction": "Replace raw-response interpolation with an allowlisted, sanitized error code/message and missing-field description.",
+      "preservation_conditions": "Retain useful provider error classification without including credentials or arbitrary response fields. This narrows data in a required failure action rather than removing failure reporting.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 65,
+          "end_line": 97
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 283,
+          "end_line": 294
+        },
+        {
+          "path": "install.sh",
+          "start_line": 209,
+          "end_line": 213
+        }
+      ]
+    },
+    {
+      "data_scope": "Repeated timestamped refresh diagnostics, including account identifiers and expiry history",
+      "recipient_or_storage": "LOG_FILE and duplicate scheduled stdout persistence",
+      "condition": "log() appends through tee, while launchd separately persists stdout. The package supplies no rotation limit; uninstall retains logs by default and does not cover custom log paths.",
+      "purpose_basis": "Support monitoring and troubleshooting.",
+      "necessary_behavior": "Keep useful recent diagnostic history and capture failures.",
+      "proposed_reduction": "Use one primary persistent activity stream, bound its retention, and make cleanup aware of the configured log path.",
+      "preservation_conditions": "Preserve stderr and failure evidence needed for diagnosis; account for any externally managed rotation before changing retention.",
+      "evidence": [
+        {
+          "path": "refresh-token.sh",
+          "start_line": 62,
+          "end_line": 68
+        },
+        {
+          "path": "install.sh",
+          "start_line": 203,
+          "end_line": 213
+        },
+        {
+          "path": "uninstall.sh",
+          "start_line": 47,
+          "end_line": 86
+        }
+      ]
+    },
+    {
+      "data_scope": "Access and refresh credential values displayed during status/debug checks",
+      "recipient_or_storage": "Terminal or invoking agent/tool caller; no further disclosure is established.",
+      "condition": "The documented full-profile or password-displaying diagnostic commands are followed.",
+      "purpose_basis": "Check OAuth profile format, credential availability and connection status.",
+      "necessary_behavior": "Show profile type/provider, expiry and credential-presence indicators; identify matching Keychain items.",
+      "proposed_reduction": "Project nonsecret fields and credential-presence booleans; use metadata-only Keychain inspection for ordinary debugging.",
+      "preservation_conditions": "Retain verification of OAuth field names and token availability without returning credential values.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 146,
+          "end_line": 157
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 123,
+          "end_line": 125
+        }
+      ]
+    },
+    {
+      "data_scope": "Account identifiers and potentially sensitive response contents in support diagnostics",
+      "recipient_or_storage": "Audience of the manually opened support issue; host and visibility remain unspecified.",
+      "condition": "The user follows the support instructions and submits verification output or log excerpts containing these fields. Only notification_target redaction is expressly requested.",
+      "purpose_basis": "Help diagnose setup or refresh failures.",
+      "necessary_behavior": "Provide relevant software/setup state, sanitized error classification and minimal configuration.",
+      "proposed_reduction": "Request an allowlisted diagnostic summary and redact account identifiers, credentials and raw provider responses before submission.",
+      "preservation_conditions": "Keep issue-specific error context. Do not treat this manual recommendation as an automatic upload.",
+      "evidence": [
+        {
+          "path": "UPGRADE.md",
+          "start_line": 327,
+          "end_line": 338
+        },
+        {
+          "path": "verify-setup.sh",
+          "start_line": 103,
+          "end_line": 125
+        },
+        {
+          "path": "refresh-token.sh",
+          "start_line": 293,
+          "end_line": 294
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Recipient resolution is blocked by missing Clawdbot implementation: target-only routing, actual messaging provider, recipient identity, provider retention and command-output contents cannot be established.",
+    "The deployed configuration and Keychain contents are absent. Actual endpoint, credential account, notification destination, custom paths and response contents therefore remain conditional.",
+    "OAuth-server processing, retention, returned credential scopes and error-body contents are undocumented in the supplied implementation.",
+    "Initial browser authentication, Clawdbot gateway behavior and external CLI internals are outside the supplied source; their additional reads, transmissions and persistence remain unresolved.",
+    "Whether reconstructed Keychain metadata and fallback subscription/rate-tier values are required for Claude CLI compatibility is unknown. Removing them cannot be recommended unconditionally.",
+    "No packaged retention limit is shown, but external log rotation, backups and filesystem access policies are unknown. Support-issue visibility and retention are also unspecified.",
+    "README.md:1-20 declares native replacement and deprecation, while CHANGELOG.md:5-12 describes renewed OAuth functionality. Native equivalence is unverified, so the entire skill cannot be classified as redundant from these claims.",
+    "Reported validation success does not establish runtime privacy behavior. This audit covers supplied source paths; no commands or external implementations were executed or inspected."
+  ]
+}

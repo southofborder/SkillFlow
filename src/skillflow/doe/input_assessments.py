@@ -70,7 +70,7 @@ def derivation_problem_refs(engine):
     refs, children = {}, defaultdict(set)
     for key, row in engine.derivations.items():
         refs[key] = {rule.split(":", 1)[1] for rule in row["rules"]
-                     if rule.startswith(("input_contract_gap:", "unavailable_dependency:", "selector_gap:"))}
+                     if rule.startswith(("input_contract_gap:", "unavailable_dependency:", "selector_gap:", "outcome_gap:"))}
         for parent in row["parents"]:
             children[parent].add(key)
     queue = deque(key for key in sorted(refs) if refs[key])

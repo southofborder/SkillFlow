@@ -1,0 +1,1193 @@
+{
+  "request_sha256": "9feda4877d91dbe41faa072c9efa8c7992922c387ed92f76d1c36582afb4ef95",
+  "answer_sha256": "9c9acd32b30097a7102b35802dfab098a5e3711e6dc7a3e10b85e36b5fcd4be3",
+  "result": {
+    "status": "complete",
+    "reason": "Completed static extraction from the supplied files. Dependency internals, environment values, callers, and deployment access controls remain unspecified.",
+    "claim": "The skill states that it provides managed mining tools for OpenClaw sessions over public game APIs, authenticating with a user-provided in-game apiCode through X-Api-Code. Agents are instructed to use its tool HTTP API. It states that it does not perform game client login.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 6,
+        "end_line": 6,
+        "quote": "description: Managed mining over public game APIs using X-Api-Code authentication."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 18,
+        "end_line": 18,
+        "quote": "This Skill exposes managed mining tools for OpenClaw session workflows."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 24,
+        "end_line": 24,
+        "quote": "- **Tools only**: Interact with the game **only** through this Skill’s **tool** HTTP API — `POST /tool/:name` on the skill-openclaw service, using the tool names documented below (`set_api_code`, `check_mining_state`, `start_managed_mining_loop`, etc.). Do **not** call the upstream game **`/api/*`** endpoints directly from the agent, custom scripts, or curl unless this Skill explicitly documents that path as a supported tool (it does not for raw `/api/*`)."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 43,
+        "end_line": 45,
+        "quote": "- Header: `X-Api-Code: <apiCode>`\n\nThe Skill does not perform game client login. Users must provide `apiCode` generated in-game."
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "Tool name and JSON request fields: apiCode, cacheKey, language, polling and round intervals, error thresholds, event cursor, session keys, restart flag, and stamina-purchase options.",
+        "source": "Incoming POST /tool/:name route parameter and request body",
+        "recipient": "Express tool handler and validated payload",
+        "condition": "Each tool request; invalid payloads receive HTTP 400. Missing cacheKey becomes default.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 7,
+            "end_line": 23,
+            "quote": "app.use(express.json());\nconst requestSchema = z.object({\n    apiCode: z.string().trim().min(1).optional(),\n    cacheKey: z.string().trim().min(1).optional(),\n    lang: z\n        .enum([\"zh_CN\", \"zh_TW\", \"en_US\", \"ja_JP\", \"ko_KR\", \"ru_RU\"])\n        .optional(),\n    pollingIntervalMilliseconds: z.number().int().positive().optional(),\n    roundIntervalMilliseconds: z.number().int().positive().optional(),\n    maxConsecutiveErrorCount: z.number().int().positive().optional(),\n    sinceEventId: z.number().int().nonnegative().optional(),\n    openclawSessionKey: z.string().trim().min(1).optional(),\n    sessionKey: z.string().trim().min(1).optional(),\n    forceRestart: z.boolean().optional(),\n    autoBuyStamina: z.boolean().optional(),\n    autoBuyStaminaMaxFailures: z.number().int().positive().optional(),\n});"
+          },
+          {
+            "path": "index.js",
+            "start_line": 36,
+            "end_line": 43,
+            "quote": "app.post(\"/tool/:name\", async (req, res) => {\n    const parsed = requestSchema.safeParse(req.body ?? {});\n    if (!parsed.success) {\n        return res.status(400).json({ ok: false, error: \"invalid_payload\" });\n    }\n    const toolName = req.params.name;\n    const payload = parsed.data;\n    const cacheKey = payload.cacheKey ?? defaultCacheKey;"
+          },
+          {
+            "path": "index.js",
+            "start_line": 25,
+            "end_line": 25,
+            "quote": "const defaultCacheKey = \"default\";"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Read",
+        "data": "Environment configuration for API base URL, request timeout, credential-store and ore-map paths, loop intervals, error and auto-buy thresholds, auto-buy enablement, event-buffer capacity, and listening port; current working directory for default file paths.",
+        "source": "process.env and process.cwd()",
+        "recipient": "Service runtime configuration",
+        "condition": "Module initialization; fallback values are used when the corresponding environment variables are absent.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 26,
+            "end_line": 31,
+            "quote": "const apiCodeStorePath = process.env.API_CODE_STORE_PATH ??\n    path.join(process.cwd(), \"data\", \"api-code-store.json\");\nconst defaultManagedMaxConsecutiveErrorCount = Number(process.env.MANAGED_MINING_MAX_CONSECUTIVE_ERROR_COUNT ?? \"10\");\nconst maxMiningSessionEventCount = Number(process.env.MINING_SESSION_MAX_EVENTS ?? \"200\");\nconst defaultAutoBuyStaminaEnabledFromEnv = process.env.MANAGED_MINING_AUTO_BUY_STAMINA === \"1\" ||\n    process.env.MANAGED_MINING_AUTO_BUY_STAMINA === \"true\";"
+          },
+          {
+            "path": "index.js",
+            "start_line": 383,
+            "end_line": 383,
+            "quote": "const port = Number(process.env.PORT ?? \"4021\");"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 10,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";\nconst requestTimeoutMilliseconds = Number(process.env.REQUEST_TIMEOUT_MS ?? \"8000\");\nconst oreTypeNameMapPath = process.env.ORE_TYPE_NAME_MAP_PATH ??\n    path.join(process.cwd(), \"config\", \"ore-type-map.json\");\nconst defaultManagedPollingIntervalMilliseconds = Number(process.env.MANAGED_MINING_POLL_INTERVAL_MS ?? \"1000\");\nconst defaultManagedRoundIntervalMilliseconds = Number(process.env.MANAGED_MINING_ROUND_INTERVAL_MS ?? \"2000\");\nconst defaultManagedMaxConsecutiveErrorCount = Number(process.env.MANAGED_MINING_MAX_CONSECUTIVE_ERROR_COUNT ?? \"10\");\nconst defaultAutoBuyStaminaMaxFailures = Number(process.env.MANAGED_MINING_AUTO_BUY_MAX_FAILURES ?? \"3\");"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Read",
+        "data": "Persisted cacheKey-to-apiCode entries, parsed from JSON and trimmed; empty keys or codes are skipped.",
+        "source": "API_CODE_STORE_PATH, defaulting to data/api-code-store.json under process.cwd()",
+        "recipient": "In-memory apiCodeCache",
+        "condition": "During bootstrap before listening; a missing file is ignored.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 26,
+            "end_line": 27,
+            "quote": "const apiCodeStorePath = process.env.API_CODE_STORE_PATH ??\n    path.join(process.cwd(), \"data\", \"api-code-store.json\");"
+          },
+          {
+            "path": "index.js",
+            "start_line": 404,
+            "end_line": 430,
+            "quote": "async function bootstrap() {\n    await loadApiCodeStore();\n    app.listen(port, () => {\n        console.log(`skill-openclaw listening on :${port}`);\n    });\n}\nasync function loadApiCodeStore() {\n    try {\n        const fileContent = await readFile(apiCodeStorePath, \"utf-8\");\n        const parsedStore = JSON.parse(fileContent);\n        const apiCodeEntries = Object.entries(parsedStore.apiCodes ?? {});\n        for (const [cacheKey, apiCode] of apiCodeEntries) {\n            const normalizedCacheKey = cacheKey.trim();\n            const normalizedApiCode = String(apiCode).trim();\n            if (!normalizedCacheKey || !normalizedApiCode) {\n                continue;\n            }\n            apiCodeCache.set(normalizedCacheKey, normalizedApiCode);\n        }\n    }\n    catch (error) {\n        if (error.code === \"ENOENT\") {\n            return;\n        }\n        throw error;\n    }\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Save",
+        "data": "Provided apiCode indexed by cacheKey.",
+        "source": "Validated tool payload",
+        "recipient": "In-memory apiCodeCache Map",
+        "condition": "set_api_code, or an explicit apiCode supplied to check_mining_state, buy_stamina, get_stamina, start_managed_mining_loop, or start_mining_session. Existing entries are overwritten; no expiration is specified.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 45,
+            "end_line": 51,
+            "quote": "        if (toolName === \"set_api_code\") {\n            if (!payload.apiCode) {\n                return res.status(400).json({ ok: false, error: \"api_code_required\" });\n            }\n            apiCodeCache.set(cacheKey, payload.apiCode);\n            await persistApiCodeStore();\n            return res.json({ ok: true, data: { cacheKey, hasApiCode: true } });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 67,
+            "end_line": 70,
+            "quote": "        if (toolName === \"check_mining_state\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 78,
+            "end_line": 81,
+            "quote": "        if (toolName === \"buy_stamina\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 89,
+            "end_line": 92,
+            "quote": "        if (toolName === \"get_stamina\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 107,
+            "end_line": 111,
+            "quote": "        if (toolName === \"start_managed_mining_loop\" ||\n            toolName === \"start_mining_session\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 439,
+            "end_line": 442,
+            "quote": "async function upsertApiCode(cacheKey, apiCode) {\n    apiCodeCache.set(cacheKey, apiCode.trim());\n    await persistApiCodeStore();\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Save",
+        "data": "The complete credential cache serialized as unencrypted JSON with an apiCodes object.",
+        "source": "apiCodeCache entries",
+        "recipient": "API_CODE_STORE_PATH, defaulting to data/api-code-store.json under process.cwd(), through a temporary file suffixed .tmp.<process.pid>",
+        "condition": "Called after setting or upserting credentials and after a successful cache deletion. The temporary file is renamed over the store; no time-based retention is specified.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 26,
+            "end_line": 27,
+            "quote": "const apiCodeStorePath = process.env.API_CODE_STORE_PATH ??\n    path.join(process.cwd(), \"data\", \"api-code-store.json\");"
+          },
+          {
+            "path": "index.js",
+            "start_line": 49,
+            "end_line": 50,
+            "quote": "            apiCodeCache.set(cacheKey, payload.apiCode);\n            await persistApiCodeStore();"
+          },
+          {
+            "path": "index.js",
+            "start_line": 60,
+            "end_line": 64,
+            "quote": "        if (toolName === \"clear_api_code\") {\n            const deleted = apiCodeCache.delete(cacheKey);\n            if (deleted) {\n                await persistApiCodeStore();\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 431,
+            "end_line": 442,
+            "quote": "async function persistApiCodeStore() {\n    const apiCodeRecord = Object.fromEntries(apiCodeCache.entries());\n    const serializedStore = JSON.stringify({ apiCodes: apiCodeRecord }, null, 2);\n    await mkdir(path.dirname(apiCodeStorePath), { recursive: true });\n    const tmpPath = `${apiCodeStorePath}.tmp.${process.pid}`;\n    await writeFile(tmpPath, serializedStore, \"utf-8\");\n    await rename(tmpPath, apiCodeStorePath);\n}\nasync function upsertApiCode(cacheKey, apiCode) {\n    apiCodeCache.set(cacheKey, apiCode.trim());\n    await persistApiCodeStore();\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "Cached apiCode selected by cacheKey.",
+        "source": "In-memory apiCodeCache",
+        "recipient": "Credential retrieval or game API call resolution",
+        "condition": "get_api_code reads the selected entry; API credential resolution falls back to the cache when the payload has no apiCode.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 53,
+            "end_line": 58,
+            "quote": "        if (toolName === \"get_api_code\") {\n            const cachedApiCode = apiCodeCache.get(cacheKey);\n            if (!cachedApiCode) {\n                return res.status(404).json({ ok: false, error: \"api_code_not_found\" });\n            }\n            return res.json({ ok: true, data: { cacheKey, apiCode: cachedApiCode } });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 385,
+            "end_line": 394,
+            "quote": "function resolveApiCode(payload, cacheKey) {\n    if (payload.apiCode) {\n        return payload.apiCode;\n    }\n    const cachedApiCode = apiCodeCache.get(cacheKey);\n    if (!cachedApiCode) {\n        throw new Error(\"api_code_required_or_cache_miss\");\n    }\n    return cachedApiCode;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Send",
+        "data": "Cached apiCode in full, together with cacheKey.",
+        "source": "apiCodeCache entry",
+        "recipient": "HTTP caller of get_api_code",
+        "condition": "The requested cache entry exists; otherwise HTTP 404 is returned.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 53,
+            "end_line": 59,
+            "quote": "        if (toolName === \"get_api_code\") {\n            const cachedApiCode = apiCodeCache.get(cacheKey);\n            if (!cachedApiCode) {\n                return res.status(404).json({ ok: false, error: \"api_code_not_found\" });\n            }\n            return res.json({ ok: true, data: { cacheKey, apiCode: cachedApiCode } });\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Delete",
+        "data": "Credential entry selected by cacheKey.",
+        "source": "apiCodeCache and its persisted JSON representation",
+        "recipient": "apiCodeCache and API_CODE_STORE_PATH",
+        "condition": "clear_api_code deletes the memory entry; if deletion succeeds, the store is rewritten from the remaining entries.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 60,
+            "end_line": 66,
+            "quote": "        if (toolName === \"clear_api_code\") {\n            const deleted = apiCodeCache.delete(cacheKey);\n            if (deleted) {\n                await persistApiCodeStore();\n            }\n            return res.json({ ok: true, data: { cacheKey, deleted } });\n        }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 26,
+            "end_line": 27,
+            "quote": "const apiCodeStorePath = process.env.API_CODE_STORE_PATH ??\n    path.join(process.cwd(), \"data\", \"api-code-store.json\");"
+          },
+          {
+            "path": "index.js",
+            "start_line": 431,
+            "end_line": 438,
+            "quote": "async function persistApiCodeStore() {\n    const apiCodeRecord = Object.fromEntries(apiCodeCache.entries());\n    const serializedStore = JSON.stringify({ apiCodes: apiCodeRecord }, null, 2);\n    await mkdir(path.dirname(apiCodeStorePath), { recursive: true });\n    const tmpPath = `${apiCodeStorePath}.tmp.${process.pid}`;\n    await writeFile(tmpPath, serializedStore, \"utf-8\");\n    await rename(tmpPath, apiCodeStorePath);\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Read",
+        "data": "OpenClaw session key, normalized by trimming.",
+        "source": "x-openclaw-session-key request header, then payload.openclawSessionKey, then payload.sessionKey",
+        "recipient": "Managed session initialization",
+        "condition": "Starting either managed-loop tool; the first nonempty normalized value in that precedence order is selected.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 129,
+            "end_line": 130,
+            "quote": "            const maxConsecutiveErrorCount = normalizePositiveInteger(payload.maxConsecutiveErrorCount, defaultManagedMaxConsecutiveErrorCount);\n            const openclawSessionKey = extractOpenClawSessionKey(req, payload);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 457,
+            "end_line": 475,
+            "quote": "function extractOpenClawSessionKey(req, payload) {\n    const headerValue = req.get(\"x-openclaw-session-key\");\n    const fromHeader = normalizeOpenClawSessionKey(headerValue);\n    if (fromHeader) {\n        return fromHeader;\n    }\n    const fromBodyExplicit = normalizeOpenClawSessionKey(payload.openclawSessionKey);\n    if (fromBodyExplicit) {\n        return fromBodyExplicit;\n    }\n    return normalizeOpenClawSessionKey(payload.sessionKey);\n}\nfunction normalizeOpenClawSessionKey(value) {\n    if (value === undefined) {\n        return undefined;\n    }\n    const trimmed = value.trim();\n    return trimmed.length > 0 ? trimmed : undefined;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Save",
+        "data": "Active task credential and cacheKey; session status containing session key, timestamps, phase, counters, thresholds, rewards, and event history.",
+        "source": "Resolved apiCode, request context, normalized options, and runtime clock",
+        "recipient": "Process-memory managedMiningTask and managedMiningStatus",
+        "condition": "A managed loop or mining session is started. These are process-level variables; the shown code does not persist them to disk.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 107,
+            "end_line": 112,
+            "quote": "        if (toolName === \"start_managed_mining_loop\" ||\n            toolName === \"start_mining_session\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }\n            const apiCode = resolveApiCode(payload, cacheKey);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 129,
+            "end_line": 156,
+            "quote": "            const maxConsecutiveErrorCount = normalizePositiveInteger(payload.maxConsecutiveErrorCount, defaultManagedMaxConsecutiveErrorCount);\n            const openclawSessionKey = extractOpenClawSessionKey(req, payload);\n            miningSessionEventIdCounter = 0;\n            const loopGeneration = managedMiningTaskGeneration;\n            managedMiningTask = {\n                stopRequested: false,\n                apiCode,\n                cacheKey,\n            };\n            managedMiningStatus = {\n                running: true,\n                phase: \"starting_round\",\n                message: \"Managed mining loop started. Starting current round.\",\n                openclawSessionKey,\n                startedAt: Date.now(),\n                updatedAt: Date.now(),\n                cacheKey,\n                roundsCompleted: 0,\n                consecutiveErrorCount: 0,\n                maxConsecutiveErrorCount,\n                lastRewardDetails: [],\n                events: [],\n                lastEventId: 0,\n            };\n            appendMiningSessionEvent(\"session_started\", {\n                openclawSessionKey: openclawSessionKey ?? null,\n                cacheKey,\n            });"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Send",
+        "data": "Trimmed apiCode in X-Api-Code and an empty JSON object to check mining state.",
+        "source": "Explicit request apiCode or cached credential selected by cacheKey",
+        "recipient": "POST /api/checkMiningState at GAME_API_BASE_URL, default https://api.km.cocweb3.com",
+        "condition": "check_mining_state with a resolvable credential.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 67,
+            "end_line": 76,
+            "quote": "        if (toolName === \"check_mining_state\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }\n            const apiCode = resolveApiCodeOrBadRequest(res, payload, cacheKey);\n            if (apiCode === undefined) {\n                return;\n            }\n            const upstream = await fetchGameApiWithApiCodePost(\"/api/checkMiningState\", apiCode, {});\n            return res.status(upstream.httpStatus).json(upstream.body);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 385,
+            "end_line": 397,
+            "quote": "function resolveApiCode(payload, cacheKey) {\n    if (payload.apiCode) {\n        return payload.apiCode;\n    }\n    const cachedApiCode = apiCodeCache.get(cacheKey);\n    if (!cachedApiCode) {\n        throw new Error(\"api_code_required_or_cache_miss\");\n    }\n    return cachedApiCode;\n}\nfunction resolveApiCodeOrBadRequest(res, payload, cacheKey) {\n    try {\n        return resolveApiCode(payload, cacheKey);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 142,
+            "end_line": 144,
+            "quote": "export async function fetchGameApiWithApiCodePost(path, apiCode, jsonBody) {\n    return await executePostWithApiCode(path, apiCode, jsonBody);\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 316,
+            "end_line": 334,
+            "quote": "async function executePostWithApiCode(path, apiCode, jsonBody) {\n    const sanitizedApiCode = apiCode.trim();\n    if (!sanitizedApiCode) {\n        throw new Error(\"invalid_api_code\");\n    }\n    const abortController = new AbortController();\n    const timeoutHandle = setTimeout(() => {\n        abortController.abort();\n    }, requestTimeoutMilliseconds);\n    try {\n        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Send",
+        "data": "Trimmed apiCode in X-Api-Code and an empty JSON object to retrieve stamina information.",
+        "source": "Resolved request/cache credential, or the credential supplied to the managed loop",
+        "recipient": "POST /api/getStamina at GAME_API_BASE_URL, default https://api.km.cocweb3.com",
+        "condition": "get_stamina, or an automatic recovery attempt when auto-buy is enabled and the loop encounters insufficient-stamina code 2003.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 89,
+            "end_line": 98,
+            "quote": "        if (toolName === \"get_stamina\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }\n            const apiCode = resolveApiCodeOrBadRequest(res, payload, cacheKey);\n            if (apiCode === undefined) {\n                return;\n            }\n            const upstream = await fetchGameApiWithApiCodePost(\"/api/getStamina\", apiCode, {});\n            return res.status(upstream.httpStatus).json(upstream.body);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 385,
+            "end_line": 397,
+            "quote": "function resolveApiCode(payload, cacheKey) {\n    if (payload.apiCode) {\n        return payload.apiCode;\n    }\n    const cachedApiCode = apiCodeCache.get(cacheKey);\n    if (!cachedApiCode) {\n        throw new Error(\"api_code_required_or_cache_miss\");\n    }\n    return cachedApiCode;\n}\nfunction resolveApiCodeOrBadRequest(res, payload, cacheKey) {\n    try {\n        return resolveApiCode(payload, cacheKey);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 93,
+            "end_line": 94,
+            "quote": "async function tryAutoBuyStaminaAfterInsufficientResources(apiCode) {\n    const getResult = await executePostWithApiCode(\"/api/getStamina\", apiCode, {});"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 229,
+            "end_line": 235,
+            "quote": "        catch (error) {\n            if (error instanceof GameApiHttpError) {\n                const serverCode = extractServerErrorCode(error.responseBody);\n                if (autoBuyStaminaEnabled &&\n                    serverCode !== undefined &&\n                    isInsufficientStaminaCode(serverCode)) {\n                    const buyAttempt = await tryAutoBuyStaminaAfterInsufficientResources(apiCode);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 34,
+            "end_line": 42,
+            "quote": "    GAME_INSUFFICIENT_RESOURCES: 2003,\n    GAME_DIAMOND_NOT_ENOUGH: 2008,\n    GAME_MINING_STATE_CONFLICT: 2009,\n    GAME_MINING_API_NOT_ACTIVE: 2014,\n    GAME_MINING_NOT_FINISHED: 2018,\n};\nfunction isInsufficientStaminaCode(code) {\n    return code === SERVER_ERROR.GAME_INSUFFICIENT_RESOURCES;\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 142,
+            "end_line": 144,
+            "quote": "export async function fetchGameApiWithApiCodePost(path, apiCode, jsonBody) {\n    return await executePostWithApiCode(path, apiCode, jsonBody);\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 316,
+            "end_line": 334,
+            "quote": "async function executePostWithApiCode(path, apiCode, jsonBody) {\n    const sanitizedApiCode = apiCode.trim();\n    if (!sanitizedApiCode) {\n        throw new Error(\"invalid_api_code\");\n    }\n    const abortController = new AbortController();\n    const timeoutHandle = setTimeout(() => {\n        abortController.abort();\n    }, requestTimeoutMilliseconds);\n    try {\n        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Send",
+        "data": "Trimmed apiCode in X-Api-Code and an empty JSON object requesting a stamina purchase.",
+        "source": "Resolved request/cache credential, or the credential supplied to the managed loop",
+        "recipient": "POST /api/buyStamina at GAME_API_BASE_URL, default https://api.km.cocweb3.com",
+        "condition": "buy_stamina, or automatic recovery after insufficient stamina when enabled. Automatic purchase is skipped after unsuccessful stamina retrieval, when reported stamina is already full, or when a valid snapshot reports no diamonds.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 78,
+            "end_line": 87,
+            "quote": "        if (toolName === \"buy_stamina\") {\n            if (payload.apiCode) {\n                await upsertApiCode(cacheKey, payload.apiCode);\n            }\n            const apiCode = resolveApiCodeOrBadRequest(res, payload, cacheKey);\n            if (apiCode === undefined) {\n                return;\n            }\n            const upstream = await fetchGameApiWithApiCodePost(\"/api/buyStamina\", apiCode, {});\n            return res.status(upstream.httpStatus).json(upstream.body);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 385,
+            "end_line": 397,
+            "quote": "function resolveApiCode(payload, cacheKey) {\n    if (payload.apiCode) {\n        return payload.apiCode;\n    }\n    const cachedApiCode = apiCodeCache.get(cacheKey);\n    if (!cachedApiCode) {\n        throw new Error(\"api_code_required_or_cache_miss\");\n    }\n    return cachedApiCode;\n}\nfunction resolveApiCodeOrBadRequest(res, payload, cacheKey) {\n    try {\n        return resolveApiCode(payload, cacheKey);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 93,
+            "end_line": 111,
+            "quote": "async function tryAutoBuyStaminaAfterInsufficientResources(apiCode) {\n    const getResult = await executePostWithApiCode(\"/api/getStamina\", apiCode, {});\n    if (getResult.httpStatus < 200 || getResult.httpStatus >= 300) {\n        return \"failed\";\n    }\n    const getCode = extractServerErrorCode(getResult.body);\n    if (getCode !== undefined && getCode !== 0) {\n        return \"failed\";\n    }\n    const staminaSnapshot = extractGetStaminaSnapshot(getResult.body);\n    if (staminaSnapshot &&\n        staminaSnapshot.maxStamina > 0 &&\n        staminaSnapshot.stamina >= staminaSnapshot.maxStamina) {\n        return \"recovered\";\n    }\n    if (staminaSnapshot && staminaSnapshot.diamonds <= 0) {\n        return \"failed\";\n    }\n    const buyResult = await executePostWithApiCode(\"/api/buyStamina\", apiCode, {});"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 229,
+            "end_line": 235,
+            "quote": "        catch (error) {\n            if (error instanceof GameApiHttpError) {\n                const serverCode = extractServerErrorCode(error.responseBody);\n                if (autoBuyStaminaEnabled &&\n                    serverCode !== undefined &&\n                    isInsufficientStaminaCode(serverCode)) {\n                    const buyAttempt = await tryAutoBuyStaminaAfterInsufficientResources(apiCode);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 142,
+            "end_line": 144,
+            "quote": "export async function fetchGameApiWithApiCodePost(path, apiCode, jsonBody) {\n    return await executePostWithApiCode(path, apiCode, jsonBody);\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 316,
+            "end_line": 334,
+            "quote": "async function executePostWithApiCode(path, apiCode, jsonBody) {\n    const sanitizedApiCode = apiCode.trim();\n    if (!sanitizedApiCode) {\n        throw new Error(\"invalid_api_code\");\n    }\n    const abortController = new AbortController();\n    const timeoutHandle = setTimeout(() => {\n        abortController.abort();\n    }, requestTimeoutMilliseconds);\n    try {\n        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Send",
+        "data": "Trimmed apiCode in X-Api-Code and an empty JSON object requesting the start of a mining round.",
+        "source": "Credential resolved from the start request or cache and passed to runManagedMiningLoop",
+        "recipient": "POST /api/startMining at GAME_API_BASE_URL, default https://api.km.cocweb3.com",
+        "condition": "At the start of each managed round while shouldContinue() is true.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 112,
+            "end_line": 112,
+            "quote": "            const apiCode = resolveApiCode(payload, cacheKey);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 385,
+            "end_line": 394,
+            "quote": "function resolveApiCode(payload, cacheKey) {\n    if (payload.apiCode) {\n        return payload.apiCode;\n    }\n    const cachedApiCode = apiCodeCache.get(cacheKey);\n    if (!cachedApiCode) {\n        throw new Error(\"api_code_required_or_cache_miss\");\n    }\n    return cachedApiCode;\n}"
+          },
+          {
+            "path": "index.js",
+            "start_line": 163,
+            "end_line": 165,
+            "quote": "            void runManagedMiningLoop(apiCode, () => managedMiningTaskGeneration === loopGeneration &&\n                managedMiningTask !== undefined &&\n                !managedMiningTask.stopRequested, {"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 124,
+            "end_line": 126,
+            "quote": "export async function startMining(apiCode) {\n    return await postJson(\"/api/startMining\", apiCode, {});\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 161,
+            "end_line": 166,
+            "quote": "    while (shouldContinue()) {\n        try {\n            callbacks?.onPhaseChanged?.(\"starting_round\");\n            let startMiningState;\n            try {\n                startMiningState = await startMining(apiCode);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 348,
+            "end_line": 349,
+            "quote": "async function postJson(path, apiCode, body) {\n    const { httpStatus, body: responseBody } = await executePostWithApiCode(path, apiCode, body);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 316,
+            "end_line": 334,
+            "quote": "async function executePostWithApiCode(path, apiCode, jsonBody) {\n    const sanitizedApiCode = apiCode.trim();\n    if (!sanitizedApiCode) {\n        throw new Error(\"invalid_api_code\");\n    }\n    const abortController = new AbortController();\n    const timeoutHandle = setTimeout(() => {\n        abortController.abort();\n    }, requestTimeoutMilliseconds);\n    try {\n        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Send",
+        "data": "Trimmed apiCode in X-Api-Code and an empty JSON object requesting mining completion/reward collection. Language is used locally for display enrichment.",
+        "source": "Managed-loop apiCode argument",
+        "recipient": "POST /api/endMining at GAME_API_BASE_URL, default https://api.km.cocweb3.com",
+        "condition": "After the estimated-end wait while continuation is allowed; MiningNotFinished code 2018 causes another attempt after the polling interval.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 138,
+            "end_line": 141,
+            "quote": "export async function endMining(apiCode, lang) {\n    const response = await postJson(\"/api/endMining\", apiCode, {});\n    return await enrichRewardResponse(response, lang);\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 181,
+            "end_line": 191,
+            "quote": "            callbacks?.onPhaseChanged?.(\"waiting_estimated_end_at\", {\n                estimatedEndAt,\n            });\n            await sleepWithContinueCheck(estimatedEndAt - Date.now(), shouldContinue);\n            if (!shouldContinue()) {\n                break;\n            }\n            callbacks?.onPhaseChanged?.(\"polling_reward\");\n            while (shouldContinue()) {\n                try {\n                    const endResult = await endMining(apiCode, normalizedLanguage);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 213,
+            "end_line": 223,
+            "quote": "                catch (endError) {\n                    if (endError instanceof GameApiHttpError) {\n                        const serverCode = extractServerErrorCode(endError.responseBody);\n                        if (serverCode !== undefined && isCriticalStopCode(serverCode)) {\n                            throw endError;\n                        }\n                        if (serverCode !== undefined &&\n                            isPollingRewardRetryableCode(serverCode)) {\n                            await sleepWithContinueCheck(pollingIntervalMilliseconds, shouldContinue);\n                            continue;\n                        }"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 38,
+            "end_line": 38,
+            "quote": "    GAME_MINING_NOT_FINISHED: 2018,"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 54,
+            "end_line": 56,
+            "quote": "function isPollingRewardRetryableCode(code) {\n    return code === SERVER_ERROR.GAME_MINING_NOT_FINISHED;\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 348,
+            "end_line": 349,
+            "quote": "async function postJson(path, apiCode, body) {\n    const { httpStatus, body: responseBody } = await executePostWithApiCode(path, apiCode, body);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 316,
+            "end_line": 334,
+            "quote": "async function executePostWithApiCode(path, apiCode, jsonBody) {\n    const sanitizedApiCode = apiCode.trim();\n    if (!sanitizedApiCode) {\n        throw new Error(\"invalid_api_code\");\n    }\n    const abortController = new AbortController();\n    const timeoutHandle = setTimeout(() => {\n        abortController.abort();\n    }, requestTimeoutMilliseconds);\n    try {\n        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Send",
+        "data": "Trimmed apiCode in X-Api-Code and JSON containing enabled: true or enabled: false.",
+        "source": "Credential captured for the managed loop and lifecycle enablement flag",
+        "recipient": "POST /api/setAutoMining at GAME_API_BASE_URL, default https://api.km.cocweb3.com",
+        "condition": "true before launching the loop; false in the loop promise's finally handler. Failures of either lifecycle call are logged.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 157,
+            "end_line": 162,
+            "quote": "            try {\n                await setApiAutoMining(apiCode, true);\n            }\n            catch (error) {\n                console.warn(\"[skill-openclaw] setApiAutoMining(true) failed:\", error);\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 280,
+            "end_line": 286,
+            "quote": "                .finally(async () => {\n                try {\n                    await setApiAutoMining(apiCode, false);\n                }\n                catch (error) {\n                    console.warn(\"[skill-openclaw] setApiAutoMining(false) failed:\", error);\n                }"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 131,
+            "end_line": 137,
+            "quote": "export async function setApiAutoMining(apiCode, enabled) {\n    const body = await postJson(\"/api/setAutoMining\", apiCode, { enabled });\n    const code = extractServerErrorCode(body);\n    if (code !== undefined && code !== 0) {\n        throw new GameApiHttpError(502, `setAutoMining failed code=${code}`, body);\n    }\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 348,
+            "end_line": 349,
+            "quote": "async function postJson(path, apiCode, body) {\n    const { httpStatus, body: responseBody } = await executePostWithApiCode(path, apiCode, body);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 316,
+            "end_line": 334,
+            "quote": "async function executePostWithApiCode(path, apiCode, jsonBody) {\n    const sanitizedApiCode = apiCode.trim();\n    if (!sanitizedApiCode) {\n        throw new Error(\"invalid_api_code\");\n    }\n    const abortController = new AbortController();\n    const timeoutHandle = setTimeout(() => {\n        abortController.abort();\n    }, requestTimeoutMilliseconds);\n    try {\n        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });"
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Read",
+        "data": "Game API HTTP response status and parsed JSON body, including any state, rewards, player information, stamina information, or error data present.",
+        "source": "Responses from fetch to the configured game API base URL and supplied API path",
+        "recipient": "HTTP helper results, loop logic, and tool response handling",
+        "condition": "After each game API request when response.json() succeeds.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 3,
+            "end_line": 3,
+            "quote": "const gameApiBaseUrl = process.env.GAME_API_BASE_URL ?? \"https://api.km.cocweb3.com\";"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 326,
+            "end_line": 336,
+            "quote": "        const response = await fetch(`${gameApiBaseUrl}${path}`, {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/json\",\n                \"X-Api-Code\": sanitizedApiCode,\n            },\n            body: JSON.stringify(jsonBody),\n            signal: abortController.signal,\n        });\n        const responseJson = (await response.json());\n        return { httpStatus: response.status, body: responseJson };"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Send",
+        "data": "Upstream response JSON and HTTP status for mining-state, stamina-query, and stamina-purchase tools; upstream error objects or error messages for failed tool execution.",
+        "source": "Game API helper results and caught exceptions",
+        "recipient": "HTTP caller of the tool",
+        "condition": "Direct API tools return upstream bodies. GameApiHttpError object bodies are forwarded with their status; other error forms produce message/error responses.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 75,
+            "end_line": 76,
+            "quote": "            const upstream = await fetchGameApiWithApiCodePost(\"/api/checkMiningState\", apiCode, {});\n            return res.status(upstream.httpStatus).json(upstream.body);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 86,
+            "end_line": 87,
+            "quote": "            const upstream = await fetchGameApiWithApiCodePost(\"/api/buyStamina\", apiCode, {});\n            return res.status(upstream.httpStatus).json(upstream.body);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 97,
+            "end_line": 98,
+            "quote": "            const upstream = await fetchGameApiWithApiCodePost(\"/api/getStamina\", apiCode, {});\n            return res.status(upstream.httpStatus).json(upstream.body);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 361,
+            "end_line": 376,
+            "quote": "    catch (error) {\n        if (error instanceof GameApiHttpError) {\n            const responseBody = error.responseBody;\n            if (responseBody !== undefined &&\n                typeof responseBody === \"object\" &&\n                responseBody !== null) {\n                return res.status(error.statusCode).json(responseBody);\n            }\n            return res.status(error.statusCode).json({ message: error.message });\n        }\n        if (error instanceof Error &&\n            error.message.startsWith(\"game_api_timeout\")) {\n            return res.status(504).json({ error: error.message });\n        }\n        const errorMessage = error instanceof Error ? error.message : \"tool_execution_failed\";\n        return res.status(502).json({ ok: false, error: errorMessage });"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 348,
+            "end_line": 354,
+            "quote": "async function postJson(path, apiCode, body) {\n    const { httpStatus, body: responseBody } = await executePostWithApiCode(path, apiCode, body);\n    if (httpStatus < 200 || httpStatus >= 300) {\n        throw new GameApiHttpError(httpStatus, `game_api_error status=${httpStatus} body=${JSON.stringify(responseBody)}`, responseBody);\n    }\n    return responseBody;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Infer",
+        "data": "Numeric stamina, diamonds, and maxStamina snapshot used to decide whether recovery is already complete or a stamina purchase should be attempted.",
+        "source": "Successful getStamina JSON envelope",
+        "recipient": "Automatic stamina-recovery logic",
+        "condition": "Snapshot extraction requires code 0, an object data field, and three finite numeric values.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 64,
+            "end_line": 85,
+            "quote": "function extractGetStaminaSnapshot(envelope) {\n    if (!envelope || typeof envelope !== \"object\") {\n        return undefined;\n    }\n    const envelopeObject = envelope;\n    if (envelopeObject.code !== 0) {\n        return undefined;\n    }\n    const dataObject = envelopeObject.data;\n    if (!dataObject || typeof dataObject !== \"object\") {\n        return undefined;\n    }\n    const stamina = Number(dataObject.stamina);\n    const diamonds = Number(dataObject.diamonds);\n    const maxStamina = Number(dataObject.maxStamina);\n    if (!Number.isFinite(stamina) ||\n        !Number.isFinite(diamonds) ||\n        !Number.isFinite(maxStamina)) {\n        return undefined;\n    }\n    return { stamina, diamonds, maxStamina };\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 102,
+            "end_line": 111,
+            "quote": "    const staminaSnapshot = extractGetStaminaSnapshot(getResult.body);\n    if (staminaSnapshot &&\n        staminaSnapshot.maxStamina > 0 &&\n        staminaSnapshot.stamina >= staminaSnapshot.maxStamina) {\n        return \"recovered\";\n    }\n    if (staminaSnapshot && staminaSnapshot.diamonds <= 0) {\n        return \"failed\";\n    }\n    const buyResult = await executePostWithApiCode(\"/api/buyStamina\", apiCode, {});"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Infer",
+        "data": "Adjusted estimated mining end time: a missing or expired estimate becomes now plus 60 seconds; a future estimate receives 10 seconds padding capped at now plus 60 seconds.",
+        "source": "startMining response data.estimatedEndAt and Date.now()",
+        "recipient": "Managed-loop waiting logic and phase callback",
+        "condition": "After starting a round.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 166,
+            "end_line": 166,
+            "quote": "                startMiningState = await startMining(apiCode);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 173,
+            "end_line": 184,
+            "quote": "            const now = Date.now();\n            let estimatedEndAt = extractEstimatedEndAt(startMiningState);\n            if (!estimatedEndAt || estimatedEndAt <= now) {\n                estimatedEndAt = now + 60000;\n            }\n            else {\n                estimatedEndAt = Math.min(estimatedEndAt + 10000, now + 60000);\n            }\n            callbacks?.onPhaseChanged?.(\"waiting_estimated_end_at\", {\n                estimatedEndAt,\n            });\n            await sleepWithContinueCheck(estimatedEndAt - Date.now(), shouldContinue);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 355,
+            "end_line": 365,
+            "quote": "function extractEstimatedEndAt(startState) {\n    if (!startState || typeof startState !== \"object\") {\n        return undefined;\n    }\n    const stateObject = startState;\n    const estimatedEndAt = Number(stateObject.data?.estimatedEndAt);\n    if (!Number.isFinite(estimatedEndAt) || estimatedEndAt <= 0) {\n        return undefined;\n    }\n    return estimatedEndAt;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Read",
+        "data": "Ore-type display-name mapping from the JSON oreTypeNameMap property.",
+        "source": "ORE_TYPE_NAME_MAP_PATH, defaulting to config/ore-type-map.json under process.cwd()",
+        "recipient": "Reward-enrichment logic",
+        "condition": "Reward enrichment calls loadOreTypeNameMap; the file is read only when no mapping cache exists. Read or parse errors produce an empty mapping.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 5,
+            "end_line": 6,
+            "quote": "const oreTypeNameMapPath = process.env.ORE_TYPE_NAME_MAP_PATH ??\n    path.join(process.cwd(), \"config\", \"ore-type-map.json\");"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 404,
+            "end_line": 406,
+            "quote": "async function enrichRewardResponse(response, lang) {\n    const oreTypeNameMap = await loadOreTypeNameMap();\n    const normalizedLanguage = normalizeLanguage(lang);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 433,
+            "end_line": 447,
+            "quote": "async function loadOreTypeNameMap() {\n    if (oreTypeNameMapCache) {\n        return oreTypeNameMapCache;\n    }\n    try {\n        const fileContent = await readFile(oreTypeNameMapPath, \"utf-8\");\n        const parsed = JSON.parse(fileContent);\n        oreTypeNameMapCache = parsed.oreTypeNameMap ?? {};\n        return oreTypeNameMapCache;\n    }\n    catch {\n        oreTypeNameMapCache = {};\n        return oreTypeNameMapCache;\n    }\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Save",
+        "data": "Parsed oreTypeNameMap, or an empty object after a missing property or loading failure.",
+        "source": "Ore mapping JSON or loader fallback",
+        "recipient": "Process-memory oreTypeNameMapCache",
+        "condition": "First uncached load; subsequent calls return the cache. No invalidation or expiration is shown.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 20,
+            "end_line": 20,
+            "quote": "let oreTypeNameMapCache;"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 433,
+            "end_line": 447,
+            "quote": "async function loadOreTypeNameMap() {\n    if (oreTypeNameMapCache) {\n        return oreTypeNameMapCache;\n    }\n    try {\n        const fileContent = await readFile(oreTypeNameMapPath, \"utf-8\");\n        const parsed = JSON.parse(fileContent);\n        oreTypeNameMapCache = parsed.oreTypeNameMap ?? {};\n        return oreTypeNameMapCache;\n    }\n    catch {\n        oreTypeNameMapCache = {};\n        return oreTypeNameMapCache;\n    }\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Infer",
+        "data": "Localized oreTypeName added to each reward result, using the selected language, then zh_CN, then an Unknown Ore fallback.",
+        "source": "Reward result oreType, requested language, and loaded ore-type mapping",
+        "recipient": "Mutated endMining response reward results",
+        "condition": "The response contains an array at data.reward.resResults; unsupported or missing language defaults to zh_CN.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 11,
+            "end_line": 19,
+            "quote": "const defaultLanguage = \"zh_CN\";\nconst supportedLanguages = new Set([\n    \"zh_CN\",\n    \"zh_TW\",\n    \"en_US\",\n    \"ja_JP\",\n    \"ko_KR\",\n    \"ru_RU\",\n]);"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 138,
+            "end_line": 141,
+            "quote": "export async function endMining(apiCode, lang) {\n    const response = await postJson(\"/api/endMining\", apiCode, {});\n    return await enrichRewardResponse(response, lang);\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 404,
+            "end_line": 432,
+            "quote": "async function enrichRewardResponse(response, lang) {\n    const oreTypeNameMap = await loadOreTypeNameMap();\n    const normalizedLanguage = normalizeLanguage(lang);\n    if (!response || typeof response !== \"object\") {\n        return response;\n    }\n    const responseObject = response;\n    const resultList = responseObject.data?.reward?.resResults;\n    if (!Array.isArray(resultList)) {\n        return response;\n    }\n    for (const resultItem of resultList) {\n        const oreTypeValue = Number(resultItem.oreType);\n        if (!Number.isFinite(oreTypeValue)) {\n            resultItem.oreTypeName = \"Unknown Ore\";\n            continue;\n        }\n        const oreTypeNames = oreTypeNameMap[String(oreTypeValue)];\n        if (!oreTypeNames) {\n            resultItem.oreTypeName = `Unknown Ore(${oreTypeValue})`;\n            continue;\n        }\n        resultItem.oreTypeName =\n            oreTypeNames[normalizedLanguage] ??\n                oreTypeNames[defaultLanguage] ??\n                `Unknown Ore(${oreTypeValue})`;\n    }\n    return responseObject;\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 448,
+            "end_line": 454,
+            "quote": "function normalizeLanguage(lang) {\n    const normalizedLanguage = String(lang ?? \"\").trim();\n    if (!supportedLanguages.has(normalizedLanguage)) {\n        return defaultLanguage;\n    }\n    return normalizedLanguage;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Infer",
+        "data": "Reward-detail records copied from data.reward.resResults, and player status selected from data.commonInfo with data.playerStatus as fallback.",
+        "source": "Enriched endMining response, passed as roundResult.checkState or summary.lastCheckState",
+        "recipient": "Managed-loop round results and managed session status",
+        "condition": "Reward extraction returns an empty array when the expected response structure is absent; player extraction returns undefined for a non-object state.",
+        "evidence": [
+          {
+            "path": "tools.js",
+            "start_line": 191,
+            "end_line": 202,
+            "quote": "                    const endResult = await endMining(apiCode, normalizedLanguage);\n                    const rewardDetails = extractRewardDetails(endResult);\n                    lastRewardDetails = rewardDetails;\n                    lastCheckState = endResult;\n                    roundsCompleted += 1;\n                    autoBuyStaminaFailureCount = 0;\n                    consecutiveErrorCount = 0;\n                    lastError = undefined;\n                    callbacks?.onRoundCompleted?.({\n                        rewardDetails,\n                        checkState: endResult,\n                    });"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 366,
+            "end_line": 378,
+            "quote": "function extractRewardDetails(checkState) {\n    if (!checkState || typeof checkState !== \"object\") {\n        return [];\n    }\n    const stateObject = checkState;\n    const resourceResultList = stateObject.data?.reward?.resResults;\n    if (!Array.isArray(resourceResultList)) {\n        return [];\n    }\n    return resourceResultList.map((resourceResultItem) => ({\n        ...resourceResultItem,\n    }));\n}"
+          },
+          {
+            "path": "index.js",
+            "start_line": 202,
+            "end_line": 204,
+            "quote": "                    managedMiningStatus.lastRewardDetails = roundResult.rewardDetails;\n                    managedMiningStatus.lastCheckState = roundResult.checkState;\n                    managedMiningStatus.lastPlayerStatus = extractPlayerStatus(roundResult.checkState);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 553,
+            "end_line": 559,
+            "quote": "function extractPlayerStatus(state) {\n    if (!state || typeof state !== \"object\") {\n        return undefined;\n    }\n    const stateObject = state;\n    return stateObject.data?.commonInfo ?? stateObject.data?.playerStatus;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Save",
+        "data": "Latest loop phase, timestamps, estimated end time, error messages and counters, completed-round count, reward details, complete last check-state response, player status, and stop summary.",
+        "source": "Loop callbacks, round results, completion summary, and caught loop errors",
+        "recipient": "Process-memory managedMiningStatus",
+        "condition": "Updates apply only to the current task generation. Last results remain in status after stopping until replaced or reset.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 166,
+            "end_line": 204,
+            "quote": "                onPhaseChanged: (phase, details) => {\n                    if (managedMiningTaskGeneration !== loopGeneration)\n                        return;\n                    managedMiningStatus.phase = phase;\n                    managedMiningStatus.updatedAt = Date.now();\n                    managedMiningStatus.message = mapManagedMiningPhaseToMessage(phase);\n                    if (phase !== \"waiting_estimated_end_at\") {\n                        managedMiningStatus.estimatedEndAt = undefined;\n                    }\n                    if (phase === \"waiting_estimated_end_at\" &&\n                        details?.estimatedEndAt) {\n                        managedMiningStatus.estimatedEndAt = Number(details.estimatedEndAt);\n                    }\n                    if (phase === \"starting_round\") {\n                        managedMiningStatus.consecutiveErrorCount = 0;\n                        managedMiningStatus.lastError = undefined;\n                    }\n                },\n                onError: (errorMessage, consecutiveErrorCount) => {\n                    if (managedMiningTaskGeneration !== loopGeneration)\n                        return;\n                    managedMiningStatus.updatedAt = Date.now();\n                    managedMiningStatus.lastError = errorMessage;\n                    managedMiningStatus.consecutiveErrorCount = consecutiveErrorCount;\n                    managedMiningStatus.message =\n                        \"Loop execution error recorded. Continuing according to retry policy.\";\n                    appendMiningSessionEvent(\"error\", {\n                        message: errorMessage,\n                        consecutiveErrorCount,\n                    });\n                },\n                onRoundCompleted: (roundResult) => {\n                    if (managedMiningTaskGeneration !== loopGeneration)\n                        return;\n                    managedMiningStatus.updatedAt = Date.now();\n                    managedMiningStatus.roundsCompleted += 1;\n                    managedMiningStatus.lastRewardDetails = roundResult.rewardDetails;\n                    managedMiningStatus.lastCheckState = roundResult.checkState;\n                    managedMiningStatus.lastPlayerStatus = extractPlayerStatus(roundResult.checkState);"
+          },
+          {
+            "path": "index.js",
+            "start_line": 221,
+            "end_line": 229,
+            "quote": "                .then((summary) => {\n                if (managedMiningTaskGeneration !== loopGeneration)\n                    return;\n                managedMiningStatus.running = false;\n                managedMiningStatus.phase = \"idle\";\n                managedMiningStatus.updatedAt = Date.now();\n                managedMiningStatus.estimatedEndAt = undefined;\n                managedMiningStatus.stopReason = summary.stopReason;\n                managedMiningStatus.criticalErrorCode = summary.criticalErrorCode;"
+          },
+          {
+            "path": "index.js",
+            "start_line": 244,
+            "end_line": 256,
+            "quote": "                managedMiningStatus.roundsCompleted = summary.roundsCompleted;\n                managedMiningStatus.consecutiveErrorCount =\n                    summary.consecutiveErrorCount;\n                if (summary.lastError) {\n                    managedMiningStatus.lastError = summary.lastError;\n                }\n                if (summary.lastRewardDetails) {\n                    managedMiningStatus.lastRewardDetails = summary.lastRewardDetails;\n                }\n                if (summary.lastCheckState) {\n                    managedMiningStatus.lastCheckState = summary.lastCheckState;\n                    managedMiningStatus.lastPlayerStatus = extractPlayerStatus(summary.lastCheckState);\n                }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 266,
+            "end_line": 274,
+            "quote": "                .catch((error) => {\n                if (managedMiningTaskGeneration !== loopGeneration)\n                    return;\n                const message = error instanceof Error ? error.message : String(error);\n                managedMiningStatus.running = false;\n                managedMiningStatus.phase = \"idle\";\n                managedMiningStatus.updatedAt = Date.now();\n                managedMiningStatus.lastError = message;\n                managedMiningStatus.message = `Managed mining loop crashed: ${message}`;"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Save",
+        "data": "Session-start, error, round-completion, and stop events with incrementing ID, timestamp, type, and payload. Payloads include session key/cacheKey, errors, rewards, player status, counters, and stop details as applicable.",
+        "source": "Managed-session initialization and loop callbacks",
+        "recipient": "managedMiningStatus.events in process memory",
+        "condition": "Events are appended during session lifecycle and retained within the configured bounded buffer.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 153,
+            "end_line": 156,
+            "quote": "            appendMiningSessionEvent(\"session_started\", {\n                openclawSessionKey: openclawSessionKey ?? null,\n                cacheKey,\n            });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 192,
+            "end_line": 195,
+            "quote": "                    appendMiningSessionEvent(\"error\", {\n                        message: errorMessage,\n                        consecutiveErrorCount,\n                    });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 205,
+            "end_line": 209,
+            "quote": "                    appendMiningSessionEvent(\"round_completed\", {\n                        roundsCompleted: managedMiningStatus.roundsCompleted,\n                        rewardDetails: roundResult.rewardDetails,\n                        playerStatus: managedMiningStatus.lastPlayerStatus,\n                    });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 257,
+            "end_line": 264,
+            "quote": "                appendMiningSessionEvent(\"stopped\", {\n                    stopReason: summary.stopReason,\n                    criticalErrorCode: summary.criticalErrorCode,\n                    autoBuyStaminaFailureCount: summary.autoBuyStaminaFailureCount,\n                    roundsCompleted: summary.roundsCompleted,\n                    consecutiveErrorCount: summary.consecutiveErrorCount,\n                    lastError: summary.lastError,\n                });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 275,
+            "end_line": 278,
+            "quote": "                appendMiningSessionEvent(\"stopped\", {\n                    stopReason: \"critical_error\",\n                    lastError: message,\n                });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 476,
+            "end_line": 490,
+            "quote": "function appendMiningSessionEvent(eventType, eventPayload) {\n    miningSessionEventIdCounter += 1;\n    const miningSessionEvent = {\n        id: miningSessionEventIdCounter,\n        ts: Date.now(),\n        type: eventType,\n        payload: eventPayload,\n    };\n    managedMiningStatus.events.push(miningSessionEvent);\n    managedMiningStatus.lastEventId = miningSessionEventIdCounter;\n    const maxEventCount = Math.max(1, Math.floor(maxMiningSessionEventCount));\n    while (managedMiningStatus.events.length > maxEventCount) {\n        managedMiningStatus.events.shift();\n    }\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Delete",
+        "data": "Oldest session-event entries.",
+        "source": "managedMiningStatus.events",
+        "recipient": "In-memory session-event buffer",
+        "condition": "After appending, entries are shifted out while the length exceeds Math.max(1, floor(MINING_SESSION_MAX_EVENTS)); the environment fallback is 200.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 29,
+            "end_line": 29,
+            "quote": "const maxMiningSessionEventCount = Number(process.env.MINING_SESSION_MAX_EVENTS ?? \"200\");"
+          },
+          {
+            "path": "index.js",
+            "start_line": 484,
+            "end_line": 489,
+            "quote": "    managedMiningStatus.events.push(miningSessionEvent);\n    managedMiningStatus.lastEventId = miningSessionEventIdCounter;\n    const maxEventCount = Math.max(1, Math.floor(maxMiningSessionEventCount));\n    while (managedMiningStatus.events.length > maxEventCount) {\n        managedMiningStatus.events.shift();\n    }"
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Delete",
+        "data": "Previous managed status, reward history, session events, and event-counter state through replacement/reset.",
+        "source": "Previous process-memory managedMiningStatus and miningSessionEventIdCounter",
+        "recipient": "Managed-session runtime state",
+        "condition": "Starting a new session replaces status and resets events and IDs; forceRestart also first replaces the prior status with an idle status.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 113,
+            "end_line": 118,
+            "quote": "            if (managedMiningTask) {\n                if (payload.forceRestart) {\n                    managedMiningTask.stopRequested = true;\n                    managedMiningTask = undefined;\n                    managedMiningTaskGeneration += 1;\n                    managedMiningStatus = buildIdleManagedMiningStatus();"
+          },
+          {
+            "path": "index.js",
+            "start_line": 131,
+            "end_line": 152,
+            "quote": "            miningSessionEventIdCounter = 0;\n            const loopGeneration = managedMiningTaskGeneration;\n            managedMiningTask = {\n                stopRequested: false,\n                apiCode,\n                cacheKey,\n            };\n            managedMiningStatus = {\n                running: true,\n                phase: \"starting_round\",\n                message: \"Managed mining loop started. Starting current round.\",\n                openclawSessionKey,\n                startedAt: Date.now(),\n                updatedAt: Date.now(),\n                cacheKey,\n                roundsCompleted: 0,\n                consecutiveErrorCount: 0,\n                maxConsecutiveErrorCount,\n                lastRewardDetails: [],\n                events: [],\n                lastEventId: 0,\n            };"
+          },
+          {
+            "path": "index.js",
+            "start_line": 443,
+            "end_line": 456,
+            "quote": "function buildIdleManagedMiningStatus() {\n    return {\n        running: false,\n        phase: \"idle\",\n        message: \"Managed mining loop is not running.\",\n        updatedAt: Date.now(),\n        roundsCompleted: 0,\n        consecutiveErrorCount: 0,\n        maxConsecutiveErrorCount: defaultManagedMaxConsecutiveErrorCount,\n        lastRewardDetails: [],\n        events: [],\n        lastEventId: 0,\n    };\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Delete",
+        "data": "Active managed task reference containing apiCode, cacheKey, and stop flag.",
+        "source": "managedMiningTask process-memory variable",
+        "recipient": "Managed task runtime state",
+        "condition": "The reference is cleared during forceRestart, or in finally when the finishing task is still the current generation. This assignment does not establish erasure of other credential copies or closure references.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 113,
+            "end_line": 118,
+            "quote": "            if (managedMiningTask) {\n                if (payload.forceRestart) {\n                    managedMiningTask.stopRequested = true;\n                    managedMiningTask = undefined;\n                    managedMiningTaskGeneration += 1;\n                    managedMiningStatus = buildIdleManagedMiningStatus();"
+          },
+          {
+            "path": "index.js",
+            "start_line": 133,
+            "end_line": 137,
+            "quote": "            managedMiningTask = {\n                stopRequested: false,\n                apiCode,\n                cacheKey,\n            };"
+          },
+          {
+            "path": "index.js",
+            "start_line": 280,
+            "end_line": 290,
+            "quote": "                .finally(async () => {\n                try {\n                    await setApiAutoMining(apiCode, false);\n                }\n                catch (error) {\n                    console.warn(\"[skill-openclaw] setApiAutoMining(false) failed:\", error);\n                }\n                if (managedMiningTaskGeneration === loopGeneration) {\n                    managedMiningTask = undefined;\n                }\n            });"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Infer",
+        "data": "Friendly status text combining completed rounds, aggregated positive reward quantities by ore/name, total Gold, and phase-derived running text.",
+        "source": "managedMiningStatus, lastPlayerStatus.Gold, and lastRewardDetails",
+        "recipient": "friendlyMessage in the full managed-status response",
+        "condition": "get_managed_mining_status; inactive or zero-round sessions use simpler messages.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 318,
+            "end_line": 326,
+            "quote": "        if (toolName === \"get_managed_mining_status\") {\n            const statusMessage = generateStatusMessage(managedMiningStatus);\n            return res.json({\n                ok: true,\n                data: {\n                    ...managedMiningStatus,\n                    friendlyMessage: statusMessage,\n                },\n            });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 491,
+            "end_line": 540,
+            "quote": "function generateStatusMessage(status) {\n    if (!status.running) {\n        return \"Managed mining loop is not running\";\n    }\n    if (status.roundsCompleted === 0) {\n        return `Status: ${status.message}`;\n    }\n    const playerStatus = status.lastPlayerStatus;\n    const goldCount = playerStatus?.Gold || 0;\n    const rewardSummary = formatRewardSummary(status.lastRewardDetails);\n    return `Round ${status.roundsCompleted} | ${rewardSummary} | Total Gold Bars ${goldCount} | Status: ${getRunningStatusText(status.phase)}`;\n}\nfunction getRunningStatusText(phase) {\n    switch (phase) {\n        case \"starting_round\":\n            return \"starting\";\n        case \"waiting_estimated_end_at\":\n            return \"waiting\";\n        case \"polling_reward\":\n            return \"claiming_reward\";\n        case \"reward_collected\":\n        case \"sleeping_between_rounds\":\n            return \"mining\";\n        case \"stopping\":\n            return \"stopping\";\n        default:\n            return \"mining\";\n    }\n}\nfunction formatRewardSummary(rewardDetails) {\n    if (!Array.isArray(rewardDetails) || rewardDetails.length === 0) {\n        return \"no_reward\";\n    }\n    const oreCountMap = new Map();\n    for (const reward of rewardDetails) {\n        const name = String(reward.oreTypeName || reward.name || \"unknown\");\n        const count = Number(reward.count || reward.amount || 0);\n        if (count > 0) {\n            oreCountMap.set(name, (oreCountMap.get(name) ?? 0) + count);\n        }\n    }\n    if (oreCountMap.size === 0) {\n        return \"no_reward\";\n    }\n    const parts = [];\n    for (const [name, count] of oreCountMap) {\n        parts.push(`${name}×${count}`);\n    }\n    return parts.join(\", \");\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m31",
+        "operation": "Send",
+        "data": "Full managedMiningStatus, including retained session identifier, cacheKey, events, errors, rewards, player status, and last check-state response when present; the status-query response also includes friendlyMessage.",
+        "source": "Process-memory managedMiningStatus",
+        "recipient": "HTTP tool caller",
+        "condition": "Returned by get_managed_mining_status, successful session start, conflicting start, and stop responses, including the no-running-task response.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 120,
+            "end_line": 126,
+            "quote": "                else {\n                    return res.status(409).json({\n                        ok: false,\n                        error: \"managed_mining_loop_already_running\",\n                        message: \"Managed mining loop is already running. Call stop_managed_mining_loop first or use forceRestart: true.\",\n                        data: managedMiningStatus,\n                    });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 291,
+            "end_line": 326,
+            "quote": "            return res.json({\n                ok: true,\n                data: {\n                    created: true,\n                    openclawSessionKey,\n                    status: managedMiningStatus,\n                },\n            });\n        }\n        if (toolName === \"stop_managed_mining_loop\") {\n            if (!managedMiningTask) {\n                return res.status(404).json({\n                    ok: false,\n                    error: \"managed_mining_loop_not_running\",\n                    data: managedMiningStatus,\n                });\n            }\n            managedMiningTask.stopRequested = true;\n            managedMiningStatus.phase = \"stopping\";\n            managedMiningStatus.updatedAt = Date.now();\n            managedMiningStatus.message =\n                \"Stop request received. Exiting safely at the next checkpoint.\";\n            return res.json({\n                ok: true,\n                data: { stopRequested: true, status: managedMiningStatus },\n            });\n        }\n        if (toolName === \"get_managed_mining_status\") {\n            const statusMessage = generateStatusMessage(managedMiningStatus);\n            return res.json({\n                ok: true,\n                data: {\n                    ...managedMiningStatus,\n                    friendlyMessage: statusMessage,\n                },\n            });"
+          },
+          {
+            "path": "index.js",
+            "start_line": 138,
+            "end_line": 152,
+            "quote": "            managedMiningStatus = {\n                running: true,\n                phase: \"starting_round\",\n                message: \"Managed mining loop started. Starting current round.\",\n                openclawSessionKey,\n                startedAt: Date.now(),\n                updatedAt: Date.now(),\n                cacheKey,\n                roundsCompleted: 0,\n                consecutiveErrorCount: 0,\n                maxConsecutiveErrorCount,\n                lastRewardDetails: [],\n                events: [],\n                lastEventId: 0,\n            };"
+          },
+          {
+            "path": "index.js",
+            "start_line": 197,
+            "end_line": 209,
+            "quote": "                onRoundCompleted: (roundResult) => {\n                    if (managedMiningTaskGeneration !== loopGeneration)\n                        return;\n                    managedMiningStatus.updatedAt = Date.now();\n                    managedMiningStatus.roundsCompleted += 1;\n                    managedMiningStatus.lastRewardDetails = roundResult.rewardDetails;\n                    managedMiningStatus.lastCheckState = roundResult.checkState;\n                    managedMiningStatus.lastPlayerStatus = extractPlayerStatus(roundResult.checkState);\n                    appendMiningSessionEvent(\"round_completed\", {\n                        roundsCompleted: managedMiningStatus.roundsCompleted,\n                        rewardDetails: roundResult.rewardDetails,\n                        playerStatus: managedMiningStatus.lastPlayerStatus,\n                    });"
+          }
+        ]
+      },
+      {
+        "move_id": "m32",
+        "operation": "Send",
+        "data": "Lightweight status projection: running, phase, message, roundsCompleted, consecutiveErrorCount, lastEventId, and updatedAt.",
+        "source": "managedMiningStatus",
+        "recipient": "HTTP caller of get_mining_quick_status",
+        "condition": "On demand when that tool is called.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 328,
+            "end_line": 339,
+            "quote": "        if (toolName === \"get_mining_quick_status\") {\n            const quickStatus = {\n                running: managedMiningStatus.running,\n                phase: managedMiningStatus.phase,\n                message: managedMiningStatus.message,\n                roundsCompleted: managedMiningStatus.roundsCompleted,\n                consecutiveErrorCount: managedMiningStatus.consecutiveErrorCount,\n                lastEventId: managedMiningStatus.lastEventId,\n                updatedAt: managedMiningStatus.updatedAt,\n            };\n            return res.json({ ok: true, data: quickStatus });\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m33",
+        "operation": "Send",
+        "data": "Buffered session events with IDs greater than sinceEventId, together with openclawSessionKey, the requested cursor, and lastEventId.",
+        "source": "managedMiningStatus.events and session status",
+        "recipient": "HTTP caller of get_mining_session_events",
+        "condition": "sinceEventId defaults to 0. Only events still retained in the memory buffer can be returned.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 340,
+            "end_line": 352,
+            "quote": "        if (toolName === \"get_mining_session_events\") {\n            const sinceEventId = payload.sinceEventId ?? 0;\n            const newEvents = managedMiningStatus.events.filter((event) => event.id > sinceEventId);\n            return res.json({\n                ok: true,\n                data: {\n                    openclawSessionKey: managedMiningStatus.openclawSessionKey,\n                    sinceEventId,\n                    lastEventId: managedMiningStatus.lastEventId,\n                    events: newEvents,\n                },\n            });\n        }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 476,
+            "end_line": 489,
+            "quote": "function appendMiningSessionEvent(eventType, eventPayload) {\n    miningSessionEventIdCounter += 1;\n    const miningSessionEvent = {\n        id: miningSessionEventIdCounter,\n        ts: Date.now(),\n        type: eventType,\n        payload: eventPayload,\n    };\n    managedMiningStatus.events.push(miningSessionEvent);\n    managedMiningStatus.lastEventId = miningSessionEventIdCounter;\n    const maxEventCount = Math.max(1, Math.floor(maxMiningSessionEventCount));\n    while (managedMiningStatus.events.length > maxEventCount) {\n        managedMiningStatus.events.shift();\n    }"
+          }
+        ]
+      },
+      {
+        "move_id": "m34",
+        "operation": "Send",
+        "data": "setApiAutoMining failure label and caught error object, potentially containing upstream HTTP status, response body, and a message with serialized upstream body.",
+        "source": "Errors from setApiAutoMining lifecycle calls",
+        "recipient": "Runtime console.warn logging sink; downstream log storage is unspecified",
+        "condition": "Enabling or disabling upstream automatic mining fails.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 157,
+            "end_line": 162,
+            "quote": "            try {\n                await setApiAutoMining(apiCode, true);\n            }\n            catch (error) {\n                console.warn(\"[skill-openclaw] setApiAutoMining(true) failed:\", error);\n            }"
+          },
+          {
+            "path": "index.js",
+            "start_line": 280,
+            "end_line": 286,
+            "quote": "                .finally(async () => {\n                try {\n                    await setApiAutoMining(apiCode, false);\n                }\n                catch (error) {\n                    console.warn(\"[skill-openclaw] setApiAutoMining(false) failed:\", error);\n                }"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 21,
+            "end_line": 30,
+            "quote": "export class GameApiHttpError extends Error {\n    statusCode;\n    responseBody;\n    constructor(statusCode, message, responseBody) {\n        super(message);\n        this.name = \"GameApiHttpError\";\n        this.statusCode = statusCode;\n        this.responseBody = responseBody;\n    }\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 131,
+            "end_line": 137,
+            "quote": "export async function setApiAutoMining(apiCode, enabled) {\n    const body = await postJson(\"/api/setAutoMining\", apiCode, { enabled });\n    const code = extractServerErrorCode(body);\n    if (code !== undefined && code !== 0) {\n        throw new GameApiHttpError(502, `setAutoMining failed code=${code}`, body);\n    }\n}"
+          },
+          {
+            "path": "tools.js",
+            "start_line": 348,
+            "end_line": 354,
+            "quote": "async function postJson(path, apiCode, body) {\n    const { httpStatus, body: responseBody } = await executePostWithApiCode(path, apiCode, body);\n    if (httpStatus < 200 || httpStatus >= 300) {\n        throw new GameApiHttpError(httpStatus, `game_api_error status=${httpStatus} body=${JSON.stringify(responseBody)}`, responseBody);\n    }\n    return responseBody;\n}"
+          }
+        ]
+      },
+      {
+        "move_id": "m35",
+        "operation": "Send",
+        "data": "Failure report containing HTTP status, response body, tool name, cacheKey, timestamps, and logs.",
+        "source": "Tool failure or unexpected behavior and associated diagnostics",
+        "recipient": null,
+        "condition": "SKILL.md instructs automated agents to report this information when a tool fails or behavior is unexpected; a reporting destination and transport are not specified.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 26,
+            "end_line": 26,
+            "quote": "- **Report errors; do not self-heal in code**: If a tool fails or behaviour is unexpected, **report** the failure (HTTP status, response body, tool name, `cacheKey`, timestamps, logs). Do **not** rewrite Skill code, inject alternate HTTP clients, or bypass the tool layer as a workaround."
+          }
+        ]
+      },
+      {
+        "move_id": "m36",
+        "operation": "Send",
+        "data": "Service health response containing ok: true and service: skill-openclaw.",
+        "source": "Health route's literal response",
+        "recipient": "HTTP caller of GET /health",
+        "condition": "A health request reaches the service.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 380,
+            "end_line": 382,
+            "quote": "app.get(\"/health\", (_req, res) => {\n    res.json({ ok: true, service: \"skill-openclaw\" });\n});"
+          }
+        ]
+      },
+      {
+        "move_id": "m37",
+        "operation": "Send",
+        "data": "Service startup message including the configured listening port.",
+        "source": "port derived from process.env.PORT or default 4021",
+        "recipient": "Runtime console.log logging sink",
+        "condition": "The app.listen callback runs after loading the credential store.",
+        "evidence": [
+          {
+            "path": "index.js",
+            "start_line": 383,
+            "end_line": 383,
+            "quote": "const port = Number(process.env.PORT ?? \"4021\");"
+          },
+          {
+            "path": "index.js",
+            "start_line": 404,
+            "end_line": 409,
+            "quote": "async function bootstrap() {\n    await loadApiCodeStore();\n    app.listen(port, () => {\n        console.log(`skill-openclaw listening on :${port}`);\n    });\n}"
+          }
+        ]
+      }
+    ]
+  }
+}

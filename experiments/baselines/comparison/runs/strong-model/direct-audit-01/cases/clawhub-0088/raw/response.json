@@ -1,0 +1,510 @@
+{
+  "status": "completed",
+  "declared_purpose": "Send selected local files/directories through Xdrop using encrypted share links, or download and decrypt a full share link locally. The entry requires the fragment key and preservation of built-in path sanitization and transfer cleanup; verification with a small temporary file is conditional on user request. Metadata selection, progress logging and default expiry are implementation choices (SKILL.md:8-19, 21-44, 46-80).",
+  "data_operations": [
+    {
+      "operation": "Read local configuration and command arguments",
+      "source": "Upload/download argument parsers and process environment",
+      "data_scope": "Selected input paths, share URL, destination, display name, expiry, concurrency, output flags, XDROP_SERVER and XDROP_API_URL; no general environment collection.",
+      "recipient_or_storage": "Local process memory. API destination is the explicit override/environment value or the server origin's /api/v1.",
+      "condition": "When the corresponding CLI is invoked.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 189,
+          "end_line": 255
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 265,
+          "end_line": 287
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 99,
+          "end_line": 145
+        }
+      ]
+    },
+    {
+      "operation": "Enumerate selected files and derive metadata locally",
+      "source": "collectTransferInputs, collectDirectoryFiles and mimeTypeFromName",
+      "data_scope": "Absolute paths, relative paths including directory root names, basenames, sizes and modification times; MIME type inferred from extension. Directory traversal recursively includes regular files without a filename exclusion filter.",
+      "recipient_or_storage": "Local upload process memory; absolute paths are used for reads and are not fields in the constructed manifest.",
+      "condition": "Upload inputs are collected before transfer creation; directory entries that are neither files nor directories are skipped.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 51,
+          "end_line": 56
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 289,
+          "end_line": 356
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 608,
+          "end_line": 611
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 133,
+          "end_line": 151
+        }
+      ]
+    },
+    {
+      "operation": "Select or infer a transfer display name",
+      "source": "main, parseArgs and exported defaultDisplayName",
+      "data_scope": "Explicit --name, or a helper-derived name based on paths and file count.",
+      "recipient_or_storage": "Local memory, then the encrypted manifest.",
+      "condition": "Normal CLI parsing defaults name to an empty string, so main's nullish fallback does not call defaultDisplayName. The exported helper can infer a name when called separately.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 58,
+          "end_line": 58
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 189,
+          "end_line": 200
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 236,
+          "end_line": 239
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 358,
+          "end_line": 372
+        }
+      ]
+    },
+    {
+      "operation": "Create a remote transfer and disclose unencrypted control metadata",
+      "source": "Upload main and XdropApiClient",
+      "data_scope": "Requested expiry; transfer/file identifiers, file count, exact plaintext and ciphertext lengths, chunk sizes/counts/indexes and ciphertext SHA-256 checksums. Server-issued manageToken authenticates subsequent management requests.",
+      "recipient_or_storage": "Configured Xdrop API: /transfers and the transfer's /files, /upload-urls, /chunks/complete and /finalize endpoints. manageToken is sent as an Authorization bearer credential.",
+      "condition": "Creation precedes file-count/size validation; subsequent requests occur as upload progresses. These fields expose file structure and lengths despite content encryption.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 61,
+          "end_line": 102
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 105,
+          "end_line": 127
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 436,
+          "end_line": 441
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 625,
+          "end_line": 694
+        }
+      ]
+    },
+    {
+      "operation": "Read, encrypt and upload selected file contents",
+      "source": "uploadFileChunks, readFileChunk and encryptChunk",
+      "data_scope": "Selected file bytes, including any embedded metadata; locally generated rootKey, file identifiers and nonces. File chunks are encrypted with AES-GCM using derived file keys; checksums cover ciphertext.",
+      "recipient_or_storage": "Plaintext and keys remain in local processing; ciphertext is PUT to each URL returned by the upload-URLs API. These requests contain no manageToken header in the supplied code.",
+      "condition": "After registration, for every prepared chunk, with configured concurrency. File contents are read without a metadata-stripping step.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 73,
+          "end_line": 75
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 374,
+          "end_line": 457
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 477,
+          "end_line": 505
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 551,
+          "end_line": 568
+        }
+      ]
+    },
+    {
+      "operation": "Upload encrypted manifest and wrapped root key",
+      "source": "Upload manifest construction, encryptManifest and wrapRootKey",
+      "data_scope": "Display name, creation time, file names/relative paths, inferred MIME types, original modification times, sizes, chunk parameters, nonces and metadataStripped flag. rootKey is encrypted under a key derived from linkKey.",
+      "recipient_or_storage": "Configured Xdrop API receives the encrypted manifest at /transfers/{transferId}/manifest and wrappedRootKey at /finalize. A subsequent downloader with the fragment key can recover the metadata.",
+      "condition": "After all file chunks complete. The plaintext manifest and unwrapped root key are not submitted by these calls.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 133,
+          "end_line": 162
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 507,
+          "end_line": 549
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 657,
+          "end_line": 677
+        }
+      ]
+    },
+    {
+      "operation": "Return the share capability to the caller",
+      "source": "Upload main",
+      "data_scope": "Share URL containing transferId and the linkKey fragment; JSON additionally contains transferId and expiresAt.",
+      "recipient_or_storage": "stdout of the invoking process; no onward disclosure is shown.",
+      "condition": "After successful finalization, including quiet mode. Returning this capability is part of the declared sharing outcome.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 87,
+          "end_line": 88
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 164,
+          "end_line": 181
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 12,
+          "end_line": 12
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 29,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "operation": "Request deletion of an unsuccessful upload",
+      "source": "Upload finally block and deleteTransfer",
+      "data_scope": "Transfer identifier and manageToken; deletion targets the remote transfer.",
+      "recipient_or_storage": "Configured Xdrop API, DELETE /transfers/{transferId}. Actual erasure is outside the supplied source.",
+      "condition": "Only failures after entering the upload try block trigger cleanup. Rejected deletion requests are swallowed; successful transfers are retained for sharing. Earlier count/size failures bypass this block.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 62,
+          "end_line": 91
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 182,
+          "end_line": 187
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 679,
+          "end_line": 694
+        }
+      ]
+    },
+    {
+      "operation": "Parse the share capability locally and request public transfer metadata",
+      "source": "Download main, parseShareUrl and XdropDownloadApiClient",
+      "data_scope": "Full share URL is read locally; transferId is sent to the API. The fragment key is decoded locally, while fragment and query are removed from the URL used to derive the server origin.",
+      "recipient_or_storage": "Local memory holds linkKey. Configured download API receives GET /public/transfers/{transferId} and returns status, manifest location and wrappedRootKey.",
+      "condition": "A valid /t/:transferId link with a key fragment is required. Download stops unless the descriptor is ready and contains the required fields.",
+      "evidence": [
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 37,
+          "end_line": 48
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 155,
+          "end_line": 177
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 344,
+          "end_line": 378
+        }
+      ]
+    },
+    {
+      "operation": "Fetch encrypted manifest/chunks and decrypt locally",
+      "source": "Download main, downloadFile and decryption helpers",
+      "data_scope": "API receives transferId and fileId/chunkIndex pairs. Descriptor.manifestUrl and returned chunk URLs are fetched; encrypted metadata and content are received, then decrypted using linkKey and rootKey.",
+      "recipient_or_storage": "Configured API receives the chunk-URL request. Hosts named by descriptor.manifestUrl and returned chunk URLs receive GET requests for those URLs. Plaintext metadata/content and unwrapped keys are processed locally.",
+      "condition": "For a ready transfer; every manifest file and chunk is downloaded. The code does not send the fragment key or unwrapped rootKey in these requests.",
+      "evidence": [
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 50,
+          "end_line": 57
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 191,
+          "end_line": 224
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 233,
+          "end_line": 305
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 353,
+          "end_line": 368
+        }
+      ]
+    },
+    {
+      "operation": "Persist decrypted files and return saved locations",
+      "source": "Download main, sanitizePath and downloadFile",
+      "data_scope": "Decrypted file contents and sanitized manifest relative paths; absolute output locations are collected for the result.",
+      "recipient_or_storage": "Chosen local output directory, defaulting to ./xdrop-{transferId}. Existing destination files are truncated by open(..., 'w'). stdout returns one saved path/output root, or JSON with transferId, outputRoot and all saved paths.",
+      "condition": "During download. Parent directories are created; finally closes the file handle but does not remove partial plaintext after failure. JSON/path output is explicitly documented.",
+      "evidence": [
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 58,
+          "end_line": 97
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 179,
+          "end_line": 189
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 191,
+          "end_line": 231
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 56,
+          "end_line": 69
+        }
+      ]
+    },
+    {
+      "operation": "Emit progress and error diagnostics",
+      "source": "Upload/download logStatus calls and top-level error handlers",
+      "data_scope": "Upload server URL, transfer identifier, relative file paths, file counts and byte totals as applicable. Errors can include paths or messages returned by the API.",
+      "recipient_or_storage": "stderr of the invoking process; any further capture or retention is not specified.",
+      "condition": "Progress is emitted unless --quiet is set. Errors are still emitted in quiet mode.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 61,
+          "end_line": 61
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 105,
+          "end_line": 130
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 613,
+          "end_line": 618
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 696,
+          "end_line": 699
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 733,
+          "end_line": 738
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 44,
+          "end_line": 44
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 70,
+          "end_line": 70
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 337,
+          "end_line": 342
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 370,
+          "end_line": 389
+        }
+      ]
+    },
+    {
+      "operation": "Perform an optional verification transfer",
+      "source": "Entry-document verification instruction",
+      "data_scope": "A small temporary file and its returned transfer link.",
+      "recipient_or_storage": "Xdrop upload destination, followed by a public transfer API request or opening the link in a browser.",
+      "condition": "Only if the user wants verification. This is an instruction to the agent, not an automatic verifier in the packaged scripts; browser behavior is unspecified.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 44,
+          "end_line": 44
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Original file modification times, extension-inferred MIME types, manifest creation time and basename duplicated alongside relativePath.",
+      "recipient_or_storage": "Encrypted manifest submitted to the configured API's /transfers/{transferId}/manifest; recoverable by a downloader possessing the share capability.",
+      "condition": "Every manifest upload includes these fields, although the bundled downloader does not use them to reconstruct files.",
+      "purpose_basis": "Encrypted file transfer and preservation of relative paths require content and reconstruction metadata; these additional attributes are implementation choices. This is extra data within a required upload.",
+      "necessary_behavior": "Keep an encrypted manifest sufficient to locate, decrypt and save the selected files.",
+      "proposed_reduction": "Omit unused timestamps and inferred MIME metadata; omit name when a usable relativePath is present.",
+      "preservation_conditions": "Keep fileId, usable relativePath/name, plaintextSize, chunkSize, totalChunks and noncePrefix. Preserve explicitly requested display names. Check compatibility with other intended Xdrop clients before changing the manifest format.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 307,
+          "end_line": 314
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 344,
+          "end_line": 352
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 133,
+          "end_line": 155
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 62,
+          "end_line": 77
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 191,
+          "end_line": 224
+        }
+      ]
+    },
+    {
+      "data_scope": "Relative file paths in routine upload/download progress messages.",
+      "recipient_or_storage": "Invoking process stderr and any caller-managed capture.",
+      "condition": "Default non-quiet execution emits paths repeatedly during transfers.",
+      "purpose_basis": "Progress reporting is optional implementation behavior. Successful transfer output is separately returned to stdout; path-bearing progress adds data to those diagnostic writes.",
+      "necessary_behavior": "Transfer files and return the share link or saved-file result; optionally show useful progress.",
+      "proposed_reduction": "Use file indexes/counts and byte progress without paths, or select --quiet when diagnostic capture is unnecessary.",
+      "preservation_conditions": "Retain required final results and useful failure diagnostics. Do not treat the intended share-link return or documented JSON file list as an unrelated disclosure.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 105,
+          "end_line": 130
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 613,
+          "end_line": 618
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 70,
+          "end_line": 70
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 337,
+          "end_line": 342
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 73,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "data_scope": "An unfinalized transfer record after early validation failure, or an unsuccessful transfer's uploaded ciphertext when cleanup fails.",
+      "recipient_or_storage": "Configured Xdrop API and its backing storage; actual retention is unknown.",
+      "condition": "Creation succeeds but count/size validation fails before the try block, or a later DELETE request rejects and its error is swallowed.",
+      "purpose_basis": "Failed uploads need no continuing share artifact; the entry explicitly preserves transfer cleanup. This is potentially avoidable residual state, rather than extra fields in a successful upload.",
+      "necessary_behavior": "Obtain server upload configuration, validate limits and clean up unsuccessful transfers.",
+      "proposed_reduction": "Enter the cleanup-protected region immediately after creation, covering subsequent validation. Report unresolved deletion failures and use an appropriate bounded retry policy.",
+      "preservation_conditions": "Keep successful transfers available for sharing. Creation may still be necessary to obtain server limits; do not assume a successful DELETE guarantees backend erasure.",
+      "evidence": [
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 62,
+          "end_line": 91
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 182,
+          "end_line": 187
+        },
+        {
+          "path": "scripts/upload.mjs",
+          "start_line": 679,
+          "end_line": 684
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 80,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "data_scope": "Incomplete decrypted file bytes left after a failed download.",
+      "recipient_or_storage": "Local destination file under outputRoot.",
+      "condition": "A chunk fetch, decryption or write fails after the destination is opened; finally closes the handle without removing the incomplete file.",
+      "purpose_basis": "Saving successfully decrypted files is required. Retaining unusable partial plaintext is an implementation consequence, not an explicit requirement.",
+      "necessary_behavior": "Write complete decrypted files to sanitized intended destinations.",
+      "proposed_reduction": "Write each file to a temporary destination, remove it on handled failure and promote it only after successful completion.",
+      "preservation_conditions": "Retain completed requested files, preserve path sanitization, and avoid deleting a pre-existing destination during failure cleanup.",
+      "evidence": [
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 58,
+          "end_line": 79
+        },
+        {
+          "path": "scripts/download.mjs",
+          "start_line": 191,
+          "end_line": 231
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 69,
+          "end_line": 69
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Server and storage implementations are absent. Actual persistence, expiry enforcement, DELETE semantics, backups, request logging and access controls cannot be established.",
+    "Runtime API destinations and manifest/chunk URL hosts are unspecified; exact external organizations receiving requests cannot be identified.",
+    "The server's minimum registration-field requirements and other clients' manifest dependencies are absent. Removing plaintextBytes or unused manifest fields requires compatibility validation.",
+    "Optional browser verification behavior, including fragment-key handling and browser persistence, is outside the supplied source."
+  ]
+}

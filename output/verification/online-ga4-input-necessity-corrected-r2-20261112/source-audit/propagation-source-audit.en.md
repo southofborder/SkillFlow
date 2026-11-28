@@ -1,0 +1,11 @@
+# GA4 r2 saved propagation source audit
+
+Diagnostic propagation is incomplete: 553 of 563 generated IR are marked processed, one (`ir_419`) is unmodeled, and nine (`ir_420` through `ir_428`) are blocked. This is generated-IR coverage over unreviewed materials, not a semantic acceptance result.
+
+All 13 original API sites have recorded request delivery and response acquisition. 24 of 25 saveResult call sites have records; the inspection save at `ir_426` is blocked. Each processed save site is a delivery to `Local saveResult`, with no persistent write operation at that site. The separately represented public saver has the one selected storage sink at `ir_077`; it cannot substitute for 25 per-call persistence records. All three explicit URL loops have processed member, child-call and append structures with occurrence bindings and bounded cases. The clock and protected side-effect gaps remain.
+
+Two diagnostics remain. The first is `missing_part` at `ir_087`: the complete generated error wrapper `{ok:false,error:...}` from `ir_085` reaches the success-block projection of `value`, although `ir_086` records the false flag going to the failure block. Six other projection alternatives return values, so this IR remains marked processed. This identifies a generated-wrapper correlation problem, not a corresponding source access to a nonexistent field. The second is the explicit undefined-value representation gap at `ir_419`, which stops the inspection projection/save tail; the later `ir_423` unmodeled gap is therefore blocked rather than reached.
+
+Selected sinks number 20: one standalone storage write and 19 network sends (13 original API sites plus six normal/exceptional loop-child sends). All 13 original client receiver bindings remain omitted in the processing summaries, and all 25 save-site persistent effects remain unmaterialized. These source fidelity concerns were not adjudicated because review never started.
+
+No field deletion or DOE conclusion is established by this audit. Exact site mappings, records, scopes, failures and hashes are in `propagation-source-audit.json`. This audit only reads the saved run; it does not rerun analysis, execute a Skill, or change active materials.

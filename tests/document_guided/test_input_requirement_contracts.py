@@ -14,7 +14,7 @@ from skillflow.propagation.annotation.services import to_payload
 from skillflow.propagation.contracts.input_requirements import (
     DemandTransfer, InputRequirement, InputInformationRequirement, CompiledInputContract,
 )
-from skillflow.propagation.contracts.specs import operation_items, IRTransferSpec
+from skillflow.propagation.contracts.specs import operation_items, IRSemantics
 
 
 def row(index, *paths):
@@ -60,8 +60,7 @@ def test_compute_contract_compiles_without_erasing_extra_input_or_observation():
     assert contract["raw_path"] == ["events", 0, "events", 0, "atomic_ops", 0]
     assert contract["raw_pointer"].endswith("/atomic_ops/0/demand_transfer")
     assert mapping["input_contracts"][0]["wire_pointer"].endswith("/segments/0/ops/0/demand_transfer")
-    operations = operation_items(IRTransferSpec.model_validate({key: compiled["ir_semantics"]["ir_calc"][key]
-        for key in IRTransferSpec.model_fields}))
+    operations = operation_items(IRSemantics.model_validate(compiled["ir_semantics"]["ir_calc"]))
     compute = next(op for op in operations.values() if op.op == "compute")
     assert len(compute.inputs) == 3 and compute.dependencies == ["possible"] * 3
     assert "demand_transfer" not in compute.model_dump(mode="json")

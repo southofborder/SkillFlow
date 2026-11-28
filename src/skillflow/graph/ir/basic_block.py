@@ -117,6 +117,17 @@ class BasicBlock(BaseModel):
         # definition, which no upstream block can excuse.
         block_definitions: dict[str, str] = {}
         for position, instruction in enumerate(self.instructions):
+            if "python_argument_defaults" in instruction.metadata:
+                rows = instruction.metadata["python_argument_defaults"]
+                optional = instruction.metadata.get("optional_context_inputs", [])
+                if (not isinstance(rows, list) or not isinstance(optional, list) or any(
+                        not isinstance(row, dict) or set(row) != {"input_index", "output_index", "value"}
+                        or type(row["input_index"]) != int or row["input_index"] not in optional
+                        or type(row["output_index"]) != int or not 0 <= row["output_index"] < len(instruction.outputs)
+                        or type(row["value"]) not in (int, float, str, bool, type(None)) for row in rows)
+                        or any(len({row[field] for row in rows}) != len(rows) for field in ("input_index", "output_index"))):
+                    errors.append(f"block {self.block_id!r}, instruction {instruction.id!r}: "
+                                  "python_argument_defaults must bind unique optional inputs to actual outputs")
             if "optional_context_inputs" in instruction.metadata:
                 ports = instruction.metadata["optional_context_inputs"]
                 if (self.data_source_kind != "context" or position != 0 or not isinstance(ports, list)

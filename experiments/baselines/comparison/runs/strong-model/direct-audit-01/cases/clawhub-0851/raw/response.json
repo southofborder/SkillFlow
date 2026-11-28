@@ -1,0 +1,282 @@
+{
+  "status": "partial",
+  "declared_purpose": "Automatic, structured, persistent agent memory with importance scoring, decay, reinforcement and retrieval; supported domains include user facts, agent identity, relationships and world knowledge. A unified brain dashboard is also declared. These outcomes are explicit; transcript breadth, staging lifetime, full-index backups and external font loading are implementation choices (SKILL.md:4-24,58-107).",
+  "data_operations": [
+    {
+      "operation": "Initialize local storage and optionally register scheduled agent tasks",
+      "source": "Installer arguments and existing workspace",
+      "data_scope": "Empty memory index, domain directories, signal-limit preference and static task instructions containing workspace paths",
+      "recipient_or_storage": "$WORKSPACE/memory/ and OpenClaw cron configuration",
+      "condition": "Installation creates the index only if absent. --with-cron registers tasks when openclaw is available; otherwise it prints commands. Registration does not itself send conversation content.",
+      "evidence": [
+        {"path": "install.sh", "start_line": 76, "end_line": 106},
+        {"path": "install.sh", "start_line": 113, "end_line": 141}
+      ]
+    },
+    {
+      "operation": "Read session transcripts locally",
+      "source": "$HOME/.openclaw/agents/$AGENT_ID/sessions/*.jsonl",
+      "data_scope": "All session files for AGENT_ID, default main; JSON records are read before selecting user and assistant messages newer than a usable timestamp watermark",
+      "recipient_or_storage": "Local preprocessing process memory",
+      "condition": "Runs directly or through the encoding pipeline. --full ignores the watermark; absent, invalid or legacy message-ID watermarks start fresh. This is a local read, not demonstrated remote disclosure.",
+      "evidence": [
+        {"path": "scripts/preprocess.sh", "start_line": 16, "end_line": 20},
+        {"path": "scripts/preprocess.sh", "start_line": 70, "end_line": 93},
+        {"path": "scripts/preprocess.sh", "start_line": 98, "end_line": 147},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 29, "end_line": 34}
+      ]
+    },
+    {
+      "operation": "Filter and persist transcript-derived signals",
+      "source": "Selected user and assistant message text",
+      "data_scope": "First text block or string, truncated to 500 characters before cleanup; retained message ID, timestamp, role and cleaned text. Filters remove specified markup, CJK text and several noise patterns; they do not implement credential-field redaction.",
+      "recipient_or_storage": "$WORKSPACE/memory/signals.jsonl",
+      "condition": "Qualifying messages are sorted across sessions. An explicitly supplied --limit caps the output after collection; the output file is overwritten.",
+      "evidence": [
+        {"path": "scripts/preprocess.sh", "start_line": 138, "end_line": 190},
+        {"path": "scripts/preprocess.sh", "start_line": 195, "end_line": 211}
+      ]
+    },
+    {
+      "operation": "Infer importance and categories; reinforce existing memories and stage new candidates",
+      "source": "signals.jsonl and memory/index.json",
+      "data_scope": "Heuristic emotional, preference, decision, relationship, project and identity labels; text similarity; importance, access dates and reinforcement counts; pending raw text, role, reason, domain, category and date",
+      "recipient_or_storage": "Local process, memory/index.json and memory/pending-memories.json",
+      "condition": "Scores below 0.5 are skipped. Word-set similarity above 0.6 reinforces an existing memory by 10% of remaining headroom; other qualifying signals become pending candidates. The 800-character pending cap cannot restore text removed by preprocessing. Labels are inferred, not verified attributes.",
+      "evidence": [
+        {"path": "scripts/encode-pipeline.sh", "start_line": 95, "end_line": 175},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 183, "end_line": 220},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 222, "end_line": 238}
+      ]
+    },
+    {
+      "operation": "Return batches to the summarization caller and instruct memory creation",
+      "source": "pending-memories.json and index.json",
+      "data_scope": "Default batch of 30 filtered candidates; up to 300 characters of each candidate plus importance and file paths in stdout; requested summaries of at most 80 characters with memory metadata",
+      "recipient_or_storage": "Invoking caller or sub-agent context; remaining candidates persist in pending-memories.json",
+      "condition": "summarize-pending.sh must be invoked separately. It prints instructions rather than calling an LLM or writing summaries itself. It removes the current batch from pending storage when more remain; final-file deletion and index updates require the caller to follow its instructions. A normal tool return can remain with that caller.",
+      "evidence": [
+        {"path": "scripts/summarize-pending.sh", "start_line": 43, "end_line": 80},
+        {"path": "scripts/summarize-pending.sh", "start_line": 82, "end_line": 112},
+        {"path": "scripts/summarize-pending.sh", "start_line": 118, "end_line": 144}
+      ]
+    },
+    {
+      "operation": "Instruct scheduled agent-assisted summarization",
+      "source": "Installer-created isolated encoding cron task",
+      "data_scope": "Pending candidates, requested summaries of approximately 100 characters and updates to the memory index",
+      "recipient_or_storage": "OpenClaw isolated cron agent context; index.json and HIPPOCAMPUS_CORE.md",
+      "condition": "--with-cron installs instructions to run the pipeline with --no-spawn, inspect pending content using head -20, summarize, update the index, delete pending storage and sync core memories. Agent compliance, model routing and remote processing are unresolved. The standalone pipeline only prints a spawn command; it does not execute it.",
+      "evidence": [
+        {"path": "install.sh", "start_line": 134, "end_line": 138},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 263, "end_line": 272}
+      ]
+    },
+    {
+      "operation": "Support alternative memory-encoding agent paths",
+      "source": "Recent main-session history, preprocessed signals, or current-session context, depending on the selected instructions",
+      "data_scope": "History path requests 20 messages with includeTools:false; agentdir path reads signals.jsonl and the complete index. Instructions select user, self, relationship and world memories, reinforce matches and persist index updates.",
+      "recipient_or_storage": "Applicable background/main agent context and memory/index.json",
+      "condition": "These are distinct instructed paths, not proof that all run together. Optional configuration names Anthropic models, but supplied source does not establish a remote endpoint, actual model invocation or provider retention.",
+      "evidence": [
+        {"path": "agents/hippocampus-agent.md", "start_line": 11, "end_line": 53},
+        {"path": "agents/hippocampus-agent.md", "start_line": 55, "end_line": 97},
+        {"path": "agentdir/AGENTS.md", "start_line": 21, "end_line": 41},
+        {"path": "agentdir/AGENTS.md", "start_line": 75, "end_line": 106},
+        {"path": "prompts/process-recent.md", "start_line": 5, "end_line": 42},
+        {"path": "CONFIG-UPGRADE.md", "start_line": 18, "end_line": 40},
+        {"path": "install.sh", "start_line": 143, "end_line": 164}
+      ]
+    },
+    {
+      "operation": "Back up the full index, decay scores and flag archival candidates",
+      "source": "memory/index.json",
+      "data_scope": "Backup includes every memory and its metadata. Decay changes importance and run/update timestamps; stdout reports IDs and scores.",
+      "recipient_or_storage": "memory/index.backup.json, memory/index.json and invoking caller",
+      "condition": "Backup occurs before the same-day skip check and overwrites the previous backup. Eligible memories lose importance; low scores produce review suggestions. This script neither archives nor deletes memory content.",
+      "evidence": [
+        {"path": "scripts/decay.sh", "start_line": 13, "end_line": 38},
+        {"path": "scripts/decay.sh", "start_line": 59, "end_line": 102}
+      ]
+    },
+    {
+      "operation": "Return selected memories for session context or query recall",
+      "source": "memory/index.json and, for recall, the caller's query",
+      "data_scope": "load-core returns memory contents above THRESHOLD, default 0.7. recall returns keyword-matching contents, IDs, domains, categories and scores, default top five with minimum combined score 0.3.",
+      "recipient_or_storage": "Invoking caller through stdout; intended session context when integrated",
+      "condition": "Scripts run when invoked. Both read the local index; neither script writes access-date updates. Their returns do not independently establish disclosure to another recipient.",
+      "evidence": [
+        {"path": "scripts/load-core.sh", "start_line": 11, "end_line": 13},
+        {"path": "scripts/load-core.sh", "start_line": 27, "end_line": 54},
+        {"path": "scripts/recall.sh", "start_line": 18, "end_line": 20},
+        {"path": "scripts/recall.sh", "start_line": 56, "end_line": 110}
+      ]
+    },
+    {
+      "operation": "Persist a derived core-memory document for context and RAG",
+      "source": "memory/index.json",
+      "data_scope": "Contents and importance scores of memories above THRESHOLD, default 0.75, grouped by domain with generation metadata",
+      "recipient_or_storage": "$WORKSPACE/HIPPOCAMPUS_CORE.md; optionally OpenClaw memory_search indexing/context",
+      "condition": "sync-core.sh overwrites the markdown file. OpenClaw indexing depends on the separately recommended memorySearch.extraPaths configuration; its backend, embeddings and retention are not supplied.",
+      "evidence": [
+        {"path": "scripts/sync-core.sh", "start_line": 11, "end_line": 35},
+        {"path": "scripts/sync-core.sh", "start_line": 45, "end_line": 74},
+        {"path": "install.sh", "start_line": 166, "end_line": 176}
+      ]
+    },
+    {
+      "operation": "Read identity and other brain-state files; persist a dashboard snapshot",
+      "source": "IDENTITY.md, configured or fallback avatar file, memory/index.json, emotional-state.json and optional reward-state.json",
+      "data_scope": "Agent name and full avatar bytes; memory counts and five highest-importance memory excerpts; emotional dimensions and five recent emotion labels, intensities and triggers; optional drive, seeking, anticipating and five recent reward records. Mood labels are derived from emotional dimensions.",
+      "recipient_or_storage": "Local generator and $WORKSPACE/brain-dashboard.html, including embedded avatar and inline state data",
+      "condition": "Generation requires an index. Amygdala reads are unconditional despite optional-skill documentation; missing or invalid emotional-state data can terminate execution under set -e before HTML is written. VTA reads are conditional. Persistence requires successful generation.",
+      "evidence": [
+        {"path": "scripts/generate-dashboard.sh", "start_line": 5, "end_line": 27},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 29, "end_line": 99},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 463, "end_line": 478},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 592, "end_line": 599}
+      ]
+    },
+    {
+      "operation": "Request external presentation resources",
+      "source": "Generated dashboard CSS and rendered README badge images",
+      "data_scope": "Requests for the Inter stylesheet or static badge images; network request metadata, with exact headers and referrer behavior unresolved. No memory payload is explicitly placed in these URLs.",
+      "recipient_or_storage": "fonts.googleapis.com for the dashboard stylesheet; img.shields.io for README badges",
+      "condition": "A browser or Markdown renderer must load the respective external resources. Dashboard generation alone does not fetch the stylesheet. Further resources referenced by the external stylesheet are unknown.",
+      "evidence": [
+        {"path": "scripts/generate-dashboard.sh", "start_line": 99, "end_line": 107},
+        {"path": "README.md", "start_line": 3, "end_line": 4}
+      ]
+    },
+    {
+      "operation": "Guide consolidation, relationship inference and reflection persistence",
+      "source": "Recent daily notes, conversation experiences and reflection prompts",
+      "data_scope": "Preferences, job/location/project context, behavioral patterns, inferred trust and relationship changes, and agent identity or opinions",
+      "recipient_or_storage": "Domain memory files, MEMORY.md, daily notes and self-reflection files",
+      "condition": "Agent-followed guidance, not automatic writes by the helper scripts. Consolidation permits deletion of routine logs after a month and archival/removal of dated context; this is discretionary guidance, not an enforced retention policy.",
+      "evidence": [
+        {"path": "prompts/consolidation-guide.md", "start_line": 7, "end_line": 43},
+        {"path": "prompts/relationship-detection.md", "start_line": 23, "end_line": 39},
+        {"path": "prompts/relationship-detection.md", "start_line": 49, "end_line": 55},
+        {"path": "prompts/self-reflect.md", "start_line": 32, "end_line": 36},
+        {"path": "prompts/deep-inquiry.md", "start_line": 51, "end_line": 55},
+        {"path": "scripts/consolidate.sh", "start_line": 15, "end_line": 17},
+        {"path": "scripts/reflect.sh", "start_line": 16, "end_line": 17}
+      ]
+    },
+    {
+      "operation": "Guide contextual and proactive memory searches",
+      "source": "Current topics and stored memory documents",
+      "data_scope": "Queries about decisions, preferences, relationships, agent development and projects; related domain files, MEMORY.md and daily notes",
+      "recipient_or_storage": "memory_search tool and requesting agent; external search/index infrastructure unresolved",
+      "condition": "The agent must follow the recall guidance. It includes proactive searches when starting projects or encountering familiar or emotional topics. Tool returns may remain with the requesting agent.",
+      "evidence": [
+        {"path": "prompts/recall-patterns.md", "start_line": 7, "end_line": 37},
+        {"path": "prompts/recall-patterns.md", "start_line": 41, "end_line": 63}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Qualifying historical signals beyond the promised first-run limit, including cleaned text, roles, IDs and timestamps",
+      "recipient_or_storage": "memory/signals.jsonl and downstream scoring/pending storage",
+      "condition": "Normal pipeline execution without a usable watermark. Installation saves a default limit of 100 or a custom limit, but the pipeline supplies no --limit and preprocessing does not read .signal-limit.",
+      "purpose_basis": "The entry explicitly promises a bounded initial encoding by default; whole-history processing is a separate option.",
+      "necessary_behavior": "Find recent qualifying signals across sessions and encode the selected initial window. Reading older files locally may still be needed to identify that window.",
+      "proposed_reduction": "Consume the saved first-run preference and apply the selected limit before writing signals and scoring them. Preserve explicit whole-history and direct --full behavior.",
+      "preservation_conditions": "Keep chronological cross-session selection, usable-watermark incremental processing and explicitly requested history breadth.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 28, "end_line": 30},
+        {"path": "SKILL.md", "start_line": 45, "end_line": 52},
+        {"path": "install.sh", "start_line": 24, "end_line": 27},
+        {"path": "install.sh", "start_line": 101, "end_line": 106},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 29, "end_line": 34},
+        {"path": "scripts/preprocess.sh", "start_line": 23, "end_line": 39},
+        {"path": "scripts/preprocess.sh", "start_line": 63, "end_line": 68},
+        {"path": "scripts/preprocess.sh", "start_line": 198, "end_line": 211}
+      ]
+    },
+    {
+      "data_scope": "Raw cleaned signal text and message metadata after downstream processing has consumed or staged it",
+      "recipient_or_storage": "$WORKSPACE/memory/signals.jsonl",
+      "condition": "Preprocessing writes the file; encoding and summarization contain no signal-file cleanup. It remains until overwritten or removed outside the supplied flow, including pipeline early-return paths.",
+      "purpose_basis": "The entry labels signals.jsonl temporary. Persistent concise memories are the intended durable outcome.",
+      "necessary_behavior": "Retain signals while scoring and safely staging pending candidates; preserve enough state to recover from processing failures.",
+      "proposed_reduction": "Delete the signal staging file after successful durable staging/index updates, with explicit cleanup on successful empty runs. Keep pending candidates until summarization succeeds.",
+      "preservation_conditions": "Do not remove the only recoverable copy before downstream writes succeed. This narrows duplicate staging lifetime, not required pending data or final memories.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 66, "end_line": 79},
+        {"path": "scripts/preprocess.sh", "start_line": 202, "end_line": 211},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 47, "end_line": 50},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 230, "end_line": 238},
+        {"path": "scripts/encode-pipeline.sh", "start_line": 252, "end_line": 265},
+        {"path": "scripts/summarize-pending.sh", "start_line": 140, "end_line": 144}
+      ]
+    },
+    {
+      "data_scope": "Complete memory index copied during an already-completed daily decay run",
+      "recipient_or_storage": "$WORKSPACE/memory/index.backup.json",
+      "condition": "Every invocation copies the index before testing whether decay already ran that day.",
+      "purpose_basis": "Daily decay requires no index modification when the same-day guard skips work.",
+      "necessary_behavior": "Check decayLastRun and return on a same-day repeat.",
+      "proposed_reduction": "Move the same-day guard before backup creation. This removes a redundant persistence action.",
+      "preservation_conditions": "Keep rollback protection for invocations that actually modify decay state.",
+      "evidence": [
+        {"path": "scripts/decay.sh", "start_line": 24, "end_line": 38}
+      ]
+    },
+    {
+      "data_scope": "Memory contents, keywords and other unchanged personal fields in the decay backup",
+      "recipient_or_storage": "$WORKSPACE/memory/index.backup.json",
+      "condition": "An invocation proceeds with decay; the backup contains the entire index although decay changes only scores and run/update metadata.",
+      "purpose_basis": "The backup supports recovery from score modification; a full content snapshot is an implementation choice.",
+      "necessary_behavior": "Recover pre-decay importance values and metadata if an update fails.",
+      "proposed_reduction": "Back up only affected IDs, scores and changed metadata, or use a transient full backup with cleanup after verified success. This narrows data in a recovery action rather than eliminating recovery.",
+      "preservation_conditions": "Ensure reliable rollback and atomic writes; retain broader snapshots only for a separately established recovery requirement.",
+      "evidence": [
+        {"path": "scripts/decay.sh", "start_line": 13, "end_line": 25},
+        {"path": "scripts/decay.sh", "start_line": 74, "end_line": 95}
+      ]
+    },
+    {
+      "data_scope": "Top-memory IDs and domains, recent-emotion intensities and recent-reward intensities",
+      "recipient_or_storage": "$WORKSPACE/brain-dashboard.html inline state object",
+      "condition": "Successful dashboard generation embeds these fields, but the supplied rendering code uses importance/summary, emotion label/trigger and reward type/source respectively.",
+      "purpose_basis": "The dashboard requires the displayed values; these additional fields do not support its current rendering.",
+      "necessary_behavior": "Persist the values needed to render the declared memory, emotion and drive views.",
+      "proposed_reduction": "Omit unused fields from the generated snapshot. This reduces extra data within a required dashboard-generation action.",
+      "preservation_conditions": "Preserve displayed summaries, scores, emotion descriptions, reward descriptions and tab behavior.",
+      "evidence": [
+        {"path": "scripts/generate-dashboard.sh", "start_line": 68, "end_line": 68},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 84, "end_line": 84},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 93, "end_line": 93},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 593, "end_line": 599},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 612, "end_line": 618},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 643, "end_line": 667}
+      ]
+    },
+    {
+      "data_scope": "Browser network metadata associated with loading a presentation font",
+      "recipient_or_storage": "fonts.googleapis.com; any downstream stylesheet-selected resource recipients are unresolved",
+      "condition": "A browser opens the generated dashboard and permits the CSS import.",
+      "purpose_basis": "The declared dashboard presents local memory and brain-state information; retrieving a remote font is optional styling.",
+      "necessary_behavior": "Render the dashboard with a readable font.",
+      "proposed_reduction": "Remove the external import and use the existing system-font fallbacks or a packaged font. This removes a presentation-only remote request.",
+      "preservation_conditions": "Preserve dashboard content, readability and interactions; exact Inter typography need not be preserved.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 95, "end_line": 107},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 107, "end_line": 107},
+        {"path": "scripts/generate-dashboard.sh", "start_line": 127, "end_line": 128}
+      ]
+    }
+  ],
+  "unknowns": [
+    "All supplied files were reviewed. End-to-end model disclosure, OpenClaw RAG persistence and actual agent-performed updates/deletions remain unresolved because host implementations, runtime configuration and execution records are absent; these limits make the audit partial.",
+    "Optional configurations name Anthropic models, but actual provider endpoints, transmitted context, logging, retention and deletion behavior are undocumented. A tool return or configured model name alone does not establish a separate remote disclosure.",
+    "The pipeline does not execute its advertised spawn step, and summarize-pending.sh emits agent instructions. Whether cron or another caller completes summarization, semantic deduplication, index writes and pending-file deletion cannot be established.",
+    "OpenClaw memory_search query handling, embedding providers, additional indexes, context injection and deletion propagation are unavailable. Removing an index entry would not demonstrate removal from backups, core markdown, dashboards or external indexes.",
+    "No runtime data is supplied, so actual credentials, sensitive facts and generated inferences cannot be identified. Source filters truncate and remove selected patterns without a demonstrated sensitive-field redaction policy.",
+    "Browser headers, referrers, caching and downstream font-resource requests are unknown. Dashboard values are inserted into inline script and innerHTML without demonstrated escaping; content-dependent browser behavior cannot be bounded from the supplied runtime-free evidence.",
+    "Low importance only triggers archival review. No packaged automatic expiry or coordinated deletion mechanism establishes how long final memories and their derived copies remain."
+  ]
+}

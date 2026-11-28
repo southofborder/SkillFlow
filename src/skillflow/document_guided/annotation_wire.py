@@ -15,7 +15,7 @@ from skillflow.common.source_evidence import _json_object, json_pointer
 from skillflow.common.validation import StructuralValidationError, structural_error, schema_error
 from .action_bindings import ActionBindings, SourceAction, checked_action_bindings
 from skillflow.propagation.contracts import specs
-from skillflow.propagation.contracts.values import StrictSpec, Text, ValueRef
+from skillflow.propagation.contracts.values import StrictSpec, Text, Index, ValueRef
 from skillflow.propagation.contracts.locations import AddressPolicy, require_address_source_evidence
 from skillflow.propagation.contracts.evidence import SourceEvidence, CFGEvidence, RuleEvidence
 from skillflow.propagation.contracts.demand import OperationTaskGoal, OperationExpression, RawDemandGoal, RawDemandSupplement
@@ -43,10 +43,10 @@ PROCESSING_RULES = {
     "segment_kind": "A segment with kind=cases or kind=for_each uses that exact form; ordinary processing omits kind. Unknown keys are invalid. A case may have segments=[] when it only yields an already available value; an ordinary segment must have operations or nonempty explicit local returns.",
     "local_returns": "Only mode=local accepts returns. Local segments explicitly supply returns, including [] for no model-visible result. Yield and output_bindings do not themselves observe a value. Never add returns or a fake operation to satisfy a format check.",
     "order": "Array order is fixed by default, also for multiple segments and for_each. Set order=partial only when source leaves operations unordered. Any cases summary requires fixed order. This does not make source-prose conditions executable.",
-    "case_results": "Cases are nonrecursive alternatives with unique names. At least one candidate returns; an always-throw path belongs in the actual CFG. A summary output requires yield on every returning candidate and forbids yield on throwing candidates; without output, no candidate yields. pre_request_error has no network effects; post_request_error retains the actual preceding request. Obtain error values from the protected call's evidenced exception source, not a URL compute. Only a source catch can return an error record. Normal/error yields inside for_each are alternatives for one occurrence.",
+    "case_results": "Cases are nonrecursive alternatives with unique names. Legacy summaries require a returning candidate; a summary output requires yield on every return and forbids throw yields. A protected top-level final group may instead declare outcome={completion_index?,return_index?,exception_index?} using existing CFG output indexes. With a typed outcome_dispatch, its producer must model the protected group; omit completion_index when the producer has no Boolean completion output. The dispatch needs only evidences and its terminator ownership; the program follows the selected disposition to the existing target. It never tests the payload's truthiness. Other protected groups require the explicit completion port. The group requires fixed order, no summary output or for_each nesting, and one source action owning the whole group. Each returning case yields exactly when return_index exists; each throwing case supplies raise exactly when exception_index exists. Use raise={kind:local,name:__raised__} only for the actual exception of this protected invocation; this reserved intrinsic is forbidden in operations, ordinary outputs, yields or sensitivity. An already available real raised value may also be referenced. Only the applicable normal/exception value is bound. Always-return/always-throw protected groups omit the opposite port. pre_request_error has no network effects; post_request_error retains the actual preceding request without a successful response. Only a source catch may return an error record. Normal/error yields inside legacy for_each remain alternatives for one occurrence.",
     "evidence_inheritance": "IR evidence is nonempty. Child evidence may be omitted or []; it inherits the nearest applicable parent. Explicit expression and sensitivity evidence must cite source files and inclusive real lines; omitted source evidence skips CFG-only parents. A CFG/rule citation never becomes source evidence. Locations and source-backed gaps need their own applicable evidence.",
     "validate_ref": "input(index) reads the enclosing IR input, not the preceding operation. Indexes must exist; external_resource identifies a boundary, not payload. local(name) must be defined once in the current scope before use. Case/body locals do not escape except through declared output. Under partial order, alternatives may name a later local only while retaining an already available candidate; no cyclic local definitions.",
-    "output_bindings": "Bind every actual public CFG output index exactly once to a real available value. A binding aliases that value; it does not compute, save or select content. Return/dispatch instructions have no invented public output 0. Preserve the actual producer and consumer versions.",
+    "output_bindings": "Cover every actual CFG output index exactly once by ordinary output_bindings or a protected outcome port, never both. Ordinary bindings alias real available values; they do not compute, save or select content. Protected output indexes name existing normal result, actual exception and completion slots; no opposite outcome or inactive value is invented. Return/dispatch instructions have no public output 0. Preserve the actual producer and consumer versions. Own a process exit at its independently represented terminating CFG instruction; bind its terminator rather than duplicating sys.exit in the preceding print/format instruction or inventing a tool request.",
     "locations": "Operations name existing locations; each kind/name pair and each operand_refs coordinate is distinct. operand_refs use real CFG operands. address_kind defaults to identified: names identify sources, not known contents. Caller arguments, caught exceptions and call/member outcomes remain distinct even when unknown; use actual input/local/call results or an evidenced source identity. Only a genuinely unknown address sets address_kind=unidentified with specific address_reason and physical source evidence; it may alias every same-kind address and has weak writes. symbolic: spelling alone is rejected unless address_kind is explicit; it never determines aliasing. Storage/runtime_context scope and retention describe the actual boundary; model/remote/user cannot be task-internal. Ordinary save/write defaults to mode=replace; explicit append/delete takes priority. Delete has no input; replace/append has one. Unknown serialization does not erase a write. Only source-supported task-local runtime_context replace writes inside cases may use may=true; preserve actual creation credentials and unknown cache counts.",
     "request_pair": "call supplies location, ordered request inputs and one response output; the program generates its exact deliver/receive pairing. For separate deliver/receive, use the same ordered request references, location and lexical scope with a unique pairing. Zero arguments are []; equal arguments do not merge distinct calls. Never supply request_id.",
     "collection_scope": "for_each names its real collection and one scoped item. Supply yield and output together or omit both. Only the yield escapes; repeated occurrences stay distinct and empty collections execute no body. Body-local references cannot escape, shadow or cross members, and must not directly read mutable CFG context_key operands. Nested for_each segments and shared writes remain unsupported except the explicit may state summary above; real CFG loops need not be collapsed into for_each. Do not encode iteration or append as opaque compute.",
@@ -147,13 +147,28 @@ class FlatCase(StrictSpec):
     segments: list[FlatProcessing] = Field(default_factory=list,
         description="Actual additional processing only; omit or use [] when this candidate only yields an already available value.")
     yield_value: ValueRef | None = Field(default=None, alias="yield")
+    raise_value: ValueRef | None = Field(default=None, alias="raise", exclude_if=lambda value: value is None)
     evidences: list[WireEvidence] = Field(default_factory=list)
+
+
+class FlatOutcome(StrictSpec):
+    completion_index: Index | None = Field(default=None, exclude_if=lambda value: value is None)
+    return_index: Index | None = Field(default=None, exclude_if=lambda value: value is None)
+    exception_index: Index | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def distinct_ports(self):
+        ports = [slot for slot in (self.completion_index, self.return_index, self.exception_index) if slot is not None]
+        if len(ports) != len(set(ports)):
+            raise ValueError("outcome output indexes must be distinct")
+        return self
 
 
 class FlatCaseSummary(StrictSpec):
     kind: Literal["cases"]
     cases: list[FlatCase] = Field(min_length=1)
     output: Text | None = None
+    outcome: FlatOutcome | None = Field(default=None, exclude_if=lambda value: value is None)
     evidences: list[WireEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -161,10 +176,28 @@ class FlatCaseSummary(StrictSpec):
         if len({case.name for case in self.cases}) != len(self.cases):
             raise ValueError("case names must be unique within a summary")
         returned = [case for case in self.cases if case.disposition == "return"]
-        if not returned:
+        if not returned and self.outcome is None:
             raise ValueError("bounded call cases require at least one return candidate; express an always-throw path as a terminal CFG path or an explicit local gap")
         if any(case.yield_value is not None for case in self.cases if case.disposition == "throw"):
             raise ValueError("throwing cases cannot yield a normal result")
+        if self.outcome is not None:
+            if self.output is not None:
+                raise ValueError("outcome public ports replace the ordinary case summary output")
+            if self.outcome.return_index is not None and not returned:
+                raise ValueError("return_index cannot invent a return for an always-throw outcome")
+            if self.outcome.exception_index is not None and not any(c.disposition == "throw" for c in self.cases):
+                raise ValueError("exception_index cannot invent a throw for an always-return outcome")
+            for case in self.cases:
+                if case.disposition == "return":
+                    if case.raise_value is not None:
+                        raise ValueError("only a throwing outcome case may raise")
+                    if (case.yield_value is not None) != (self.outcome.return_index is not None):
+                        raise ValueError("outcome return_index requires exactly one yield from every returning case")
+                elif (case.raise_value is not None) != (self.outcome.exception_index is not None):
+                    raise ValueError("outcome exception_index requires exactly one raise from every throwing case")
+            return self
+        if any(case.raise_value is not None for case in self.cases):
+            raise ValueError("raise requires a protected outcome summary")
         if self.output is not None and (not returned or any(case.yield_value is None for case in returned)):
             raise ValueError("summary output requires a yield from every returning case")
         if self.output is None and any(case.yield_value is not None for case in self.cases):
@@ -175,6 +208,35 @@ class FlatCaseSummary(StrictSpec):
 def segment_kind(value):
     """Dispatch on the existing tag; ordinary processing needs no extra field."""
     return value.get("kind", "processing") if isinstance(value, dict) else getattr(value, "kind", "processing")
+
+
+def checked_outcome_layout(record):
+    """The initial protected-output extension is one final, top-level fixed group."""
+    found = []
+    for index, segment in enumerate(record.segments):
+        if getattr(segment, "outcome", None) is not None:
+            found.append(index)
+        for child in getattr(segment, "body", []):
+            if getattr(child, "outcome", None) is not None:
+                raise ValueError("protected outcomes are not supported inside for_each")
+    if found and (record.order != "fixed" or found != [len(record.segments) - 1]):
+        raise ValueError("one protected outcome group must be the final top-level segment of a fixed IR")
+    def reserved(value, path=()):
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                reserved(child, (*path, index))
+        elif isinstance(value, dict):
+            if value.get("kind") == "literal":
+                return
+            if (value.get("kind") == "local" and value.get("name") == "__raised__"
+                    and (not path or path[-1] != "raise")):
+                raise ValueError("__raised__ is reserved solely as the complete value of an outcome raise")
+            if value.get("output") == "__raised__" or value.get("item") == "__raised__":
+                raise ValueError("__raised__ cannot be declared by an operation or member binding")
+            for key, child in value.items():
+                reserved(child, (*path, key))
+    reserved(record.model_dump(mode="json", by_alias=True))
+    return record
 
 
 FlatBodySegment = Annotated[Union[
@@ -213,6 +275,10 @@ class FlatIR(StrictSpec):
     segments: list[FlatSegment] = Field(default_factory=list)
     output_bindings: list[FlatBinding] = Field(default_factory=list)
     sensitivity: list[FlatSensitivity] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def protected_layout(self):
+        return checked_outcome_layout(self)
 
 class FlatLocation(AddressPolicy):
     kind: specs.LocationKind
@@ -552,6 +618,8 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
                 if segment.get("kind") == "cases":
                     group = "case_group_" + canonical_sha256([ir_id, wp])[:20]
                     yields = []
+                    outcome = segment.get("outcome")
+                    outcome_cases = []
                     evidence = inherit(segment, inherited)
                     thrown = False
                     for ci, case in enumerate(segment["cases"]):
@@ -595,10 +663,29 @@ def _expand(raw, material, *, processing_only=False, validation_gaps=(), _sensit
                             if case.get("guard") is not None:
                                 yielded = {"kind": "alternatives", "items": [yielded], "guard": deepcopy(case["guard"])}
                             yields.append(yielded)
+                        if outcome is not None:
+                            key = "yield" if case["disposition"] == "return" else "raise"
+                            entry = {"case_id": identity, "disposition": case["disposition"],
+                                     "evidences": deepcopy(case_evidence)}
+                            if case.get(key) is not None:
+                                entry["value"] = refs(case[key], local_map)
+                            outcome_cases.append(entry)
                         thrown |= case["disposition"] == "throw"
                     if segment.get("output") is not None:
                         names[segment["output"]] = yields[0] if len(yields) == 1 else {"kind": "alternatives", "items": yields}
-                    if thrown:
+                    if outcome is not None:
+                        position = len(result.setdefault("outcome_bindings", []))
+                        binding = {"group": group, **deepcopy(outcome), "cases": outcome_cases}
+                        result["outcome_bindings"].append(binding)
+                        base = ["ir_semantics", ir_id, "outcome_bindings", position]
+                        register(base, [*wp, "outcome"])
+                        for ci, case in enumerate(segment["cases"]):
+                            cp = [*wp, "cases", ci]
+                            register([*base, "cases", ci], cp)
+                            key = "yield" if case["disposition"] == "return" else "raise"
+                            register([*base, "cases", ci, "value"], [*cp, key])
+                            register([*base, "cases", ci, "evidences"], [*cp, "evidences"] if case.get("evidences") else [*wp, "evidences"])
+                    elif thrown:
                         pending.append(group)
                     continue
                 if segment.get("kind") != "for_each":

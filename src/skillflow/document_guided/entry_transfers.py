@@ -76,13 +76,32 @@ def _read_index(op, ir, locations):
     return matches[0] if len(matches) == 1 else None
 
 
+def public_binding_values(spec):
+    """Real value bindings, including each conditional protected return/raise."""
+    for i, binding in enumerate(spec.get("output_bindings", [])):
+        yield binding["output_index"], binding["value"], ("output_bindings", i, "value"), {}
+    for si, segment in enumerate(spec.get("segments", [])):
+        outcome = segment.get("outcome")
+        if outcome is None:
+            continue
+        for ci, case in enumerate(segment["cases"]):
+            returned = case["disposition"] == "return"
+            port = outcome.get("return_index" if returned else "exception_index")
+            key = "yield" if returned else "raise"
+            choices = {("segments", si): ci}
+            if port is not None and case.get(key) is not None:
+                yield port, case[key], ("segments", si, "cases", ci, key), choices
+
+
 def entry_binding_errors(ir, ports, spec, locations):
     """An unrelated read, selected sibling or newly acquired response cannot bind a caller argument."""
     from .action_bindings import action_coordinates, _at
 
     ir_id = ir["id"]
     coordinates = list(action_coordinates(spec))
-    bindings = {b["output_index"]: (i, b["value"]) for i, b in enumerate(spec.get("output_bindings", []))}
+    bindings = {}
+    for out, value, path, choices in public_binding_values(spec):
+        bindings.setdefault(out, []).append((value, path, choices))
     reads = {}
     errors = []
     for path, choices in coordinates:
@@ -96,22 +115,24 @@ def entry_binding_errors(ir, ports, spec, locations):
             errors.extend(structural_error("entry_acquisition", json_pointer("ir_semantics", ir_id, *path),
                 "This source occurrence receives the indicated caller arguments. Its acquisition cannot read "
                 "another address or issue a fresh user/tool request. Use its actual entry operands.").diagnostics)
-        elif not choices and "body" not in path:
-            reads[op["output"]] = index
+        elif "body" not in path:
+            reads.setdefault(op["output"], []).append((index, choices))
     for port in ports:
         index, out = port["input_index"], port["output_index"]
         if out not in bindings:
             errors.extend(structural_error("entry_output_binding", json_pointer("ir_semantics", ir_id, "output_bindings"),
                 f"Bind output {out} to input {index} of {port['owner']} ({port['parameter']}).").diagnostics)
             continue
-        bi, ref = bindings[out]
-        if ref == _input(index):
-            continue
-        if ref.get("kind") == "local" and reads.get(ref["name"]) == index and not port["optional"]:
-            continue
-        errors.extend(structural_error("entry_output_binding", json_pointer("ir_semantics", ir_id, "output_bindings", bi, "value"),
-            f"Output {out} receives input {index} of {port['owner']} ({port['parameter']}). Preserve this "
-            "occurrence's entry snapshot, including omission of an optional argument.").diagnostics)
+        for ref, path, choices in bindings[out]:
+            if ref == _input(index):
+                continue
+            if (ref.get("kind") == "local" and not port["optional"] and any(
+                    actual == index and all(choices.get(axis) == value for axis, value in branch.items())
+                    for actual, branch in reads.get(ref["name"], []))):
+                continue
+            errors.extend(structural_error("entry_output_binding", json_pointer("ir_semantics", ir_id, *path),
+                f"Output {out} receives input {index} of {port['owner']} ({port['parameter']}). Preserve this "
+                "occurrence's entry snapshot, including omission of an optional argument.").diagnostics)
     return errors
 
 

@@ -1,0 +1,1069 @@
+{
+  "request_sha256": "fe373cd50c8834e165b2569e9a62a94f2031df9e0f02e4d46f7e366fd2d7e222",
+  "answer_sha256": "b4921df16c20693155c44c84a6af187d22ff8d449ce3c9bab35bc9819df8ce8c",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from the supplied static instructions and implementation without execution or additional reads. Actual files, invocations, platform, home directory, project root, and optional storage-root override remain runtime-dependent. Confirmation requirements are instructions to the Agent; the Python API does not itself obtain those confirmations.",
+    "claim": "The skill states that it protects files while users work with openclaw by indexing file operations, storing modification diffs and snapshots for rollback, and keeping deleted files for recovery. It describes local storage under ~/.openclaw/minivcs/, seven-day retention for normal files and fourteen-day retention for important files, with no encryption or remote sync.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 4,
+        "end_line": 9,
+        "quote": "description: Provide file protection while users work with openclaw. All file operations are version-indexed and support delete recovery and modification rollback.\n---\n\n# File Protection and Version Management\n\nThis Skill uses MiniVCS to track all file operations with version history."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 16,
+        "end_line": 25,
+        "quote": "**Core mechanism:**\n- **Modify**: Saves an incremental diff plus a full snapshot from before the modification, **supporting rollback**\n- **Delete**: Moves the full file into `~/.openclaw/minivcs/trash/`, **supporting restore**\n- **All files are indexed**, with different retention periods based on importance\n- **After every operation, the full record table is scanned automatically** to find expired records and ask the user for confirmation\n\n**Usage limitations:**\n- **Binary files (images, PDFs, audio/video, etc.)**: Text diffs cannot be generated. For binary-file protection, MiniVCS stores a full local `.bak` copy instead. This applies to binary-file backup/rollback protection, and deletion protection also stores a full local copy in `~/.openclaw/minivcs/trash/`. The user must be informed before the operation because storage usage may be relatively high.\n- **The first record cannot be rolled back**: When a file is recorded for the first time, there is not yet any historical baseline, so that record has no snapshot. After that, each call to `record_modify` following an edit automatically saves a snapshot, allowing rollback to the state before any edit.\n- **Local storage notice**: Protection data is stored locally under `~/.openclaw/minivcs/`. This Skill does not provide encryption or remote sync."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 63,
+        "end_line": 68,
+        "quote": "| File Type | Retention Days | Decision Rule |\n|---------|---------|---------|\n| Important files | **14 days** | System paths (`/etc/`, `/root/`, `/usr/local/etc/`, `/opt/`), user config directories (`~/.ssh/`, `~/.gnupg/`, `~/.config/`, `~/.openclaw/`, `~/.kube/`, `~/.docker/`, `~/.aws/`, `~/.azure/`, `~/.local/share/`), Windows system directories (`C:\\Windows\\`, `C:\\ProgramData\\`, `C:\\Program Files\\`), config files (`.yaml/.toml/.env`, etc.), entry files (`main.py/index.ts`, etc.) |\n| Normal files | **7 days** | All other files |\n\nWhen each record is created, the `expireAt` (expiration timestamp) and `expireAtDatetime` (human-readable time) fields are set automatically."
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "M01",
+        "operation": "Read",
+        "data": "Installed Python version, as a prerequisite check instructed for the Agent.",
+        "source": "The user's Python runtime through python3 --version or python --version",
+        "recipient": "Agent",
+        "condition": "Before performing any operation; instructions say to stop if Python 3 is unavailable.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 31,
+            "end_line": 44,
+            "quote": "**Before performing any operation, you must first check whether Python 3 is installed in the user's environment. This Skill requires Python 3 and should not run without it.**\n\n### How to check\n\n```bash\n# macOS / Linux\npython3 --version\n\n# Windows (PowerShell)\npython --version\n```\n\n- If the output is `Python 3.x.x`, it is installed and you can continue\n- If it says `command not found` or `is not recognized as an internal or external command`, stop and tell the user that this Skill requires Python 3"
+          }
+        ]
+      },
+      {
+        "move_id": "M02",
+        "operation": "Read",
+        "data": "Runtime path context: current working directory, expanded user-home path, supplied project root, optional storage root, command, file path or record ID, and CLI options.",
+        "source": "Runtime path APIs, constructor arguments, and parsed CLI arguments",
+        "recipient": "MiniVCS process",
+        "condition": "On initialization and CLI invocation. Default storage is shared under the current user's ~/.openclaw/minivcs/; an explicit vcs_root overrides it.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 482,
+            "end_line": 491,
+            "quote": "    def __init__(self, project_root: str, vcs_root: Optional[str] = None):\n        self.project_root = os.path.abspath(project_root)\n        # By default, store data in ~/.openclaw/minivcs/ so it is decoupled from the project directory\n        if vcs_root is not None:\n            self.vcs_root = os.path.abspath(vcs_root)\n        else:\n            self.vcs_root = os.path.join(os.path.expanduser(\"~\"), \".openclaw\", \"minivcs\")\n        self.log_manager = LogManager(self.vcs_root)\n        self.diff_engine = DiffEngine()\n        self.file_manager = FileManager(self.vcs_root, self.project_root)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1024,
+            "end_line": 1043,
+            "quote": "def main():\n    parser = argparse.ArgumentParser(description=\"MiniVCS - lightweight file version management system\")\n    parser.add_argument(\n        \"command\",\n        choices=[\"record\", \"delete\", \"history\", \"restore\", \"expired\", \"trash\", \"remove\", \"cleanup\", \"extend\"],\n        help=\"Command\",\n    )\n    parser.add_argument(\"file\", nargs=\"?\", help=\"File path or Record ID\")\n    parser.add_argument(\"-n\", \"--limit\", type=int, default=10, help=\"Record count limit\")\n    parser.add_argument(\"-d\", \"--show-diff\", action=\"store_true\", help=\"Show diff content\")\n    parser.add_argument(\"-c\", \"--clean\", action=\"store_true\", help=\"Clean expired records (used with the expired command)\")\n    parser.add_argument(\"--delete-files\", action=\"store_true\", help=\"Delete physical files as well\")\n    parser.add_argument(\"--confirm\", action=\"store_true\", help=\"Confirm cleanup execution (used with the cleanup command)\")\n    parser.add_argument(\"--project-root\", default=os.getcwd(), help=\"Project root directory (used to compute relative paths)\")\n    parser.add_argument(\"--vcs-root\", default=None, help=\"VCS data storage directory (default: ~/.openclaw/minivcs)\")\n\n    args = parser.parse_args()\n\n    try:\n        vcs = MiniVCS(args.project_root, vcs_root=args.vcs_root)"
+          }
+        ]
+      },
+      {
+        "move_id": "M03",
+        "operation": "Infer",
+        "data": "Whether an input path contains an excluded directory segment and should be skipped.",
+        "source": "Absolute input path and SKIP_PATH_SEGMENTS",
+        "recipient": "record_modify and record_delete control flow",
+        "condition": "Matching paths return skipped=true before content recording or moving the file.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 90,
+            "end_line": 106,
+            "quote": "# Paths containing any of these segments are auto-skipped (generated / vendored content)\nSKIP_PATH_SEGMENTS = [\n    \"node_modules\",\n    \".git\",\n    \"__pycache__\",\n    \".venv\",\n    \"venv\",\n    \".tox\",\n    \".mypy_cache\",\n    \".pytest_cache\",\n    \".ruff_cache\",\n    \"dist\",\n    \"build\",\n    \".next\",\n    \".nuxt\",\n    \".turbo\",\n]"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 150,
+            "end_line": 157,
+            "quote": "def should_skip_path(file_path: str) -> Optional[str]:\n    \"\"\"Return the matched skip segment if the path should be auto-skipped, else None.\"\"\"\n    normalized = os.path.abspath(file_path).replace(\"\\\\\", \"/\")\n    parts = normalized.split(\"/\")\n    for segment in SKIP_PATH_SEGMENTS:\n        if segment in parts:\n            return segment\n    return None"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 520,
+            "end_line": 526,
+            "quote": "        skip_segment = should_skip_path(abs_path)\n        if skip_segment:\n            return {\n                \"success\": False,\n                \"skipped\": True,\n                \"reason\": f\"Path contains '{skip_segment}' which is in the auto-skip list\",\n            }"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 645,
+            "end_line": 651,
+            "quote": "        skip_segment = should_skip_path(abs_path)\n        if skip_segment:\n            return {\n                \"success\": False,\n                \"skipped\": True,\n                \"reason\": f\"Path contains '{skip_segment}' which is in the auto-skip list\",\n            }"
+          }
+        ]
+      },
+      {
+        "move_id": "M04",
+        "operation": "Infer",
+        "data": "File importance and seven-day or fourteen-day retention, using path prefixes and filename patterns rather than inspecting configuration or credential contents.",
+        "source": "Input file path, current user's expanded home path, platform, and configured importance rules",
+        "recipient": "Operation records and retention calculations",
+        "condition": "Important matches receive fourteen days; other files receive seven days. Windows system-prefix matching is conditional on sys.platform == win32.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 31,
+            "end_line": 88,
+            "quote": "# Absolute system paths that always qualify as important\nIMPORTANT_PATH_PREFIXES_ABSOLUTE = [\n    \"/etc/\",\n    \"/root/\",\n    \"/usr/local/etc/\",\n    \"/opt/\",\n]\n\n# User-home-relative directories that qualify as important (expanded at runtime).\n# Only specific config/credential dirs -- NOT the entire home directory.\nIMPORTANT_HOME_SUBDIRS = [\n    \".ssh\",\n    \".gnupg\",\n    \".gpg\",\n    \".config\",\n    \".local/share\",\n    \".openclaw\",\n    \".kube\",\n    \".docker\",\n    \".aws\",\n    \".azure\",\n]\n\n# Windows system directories (matched case-insensitively)\nIMPORTANT_WINDOWS_PREFIXES = [\n    \"c:\\\\windows\\\\\",\n    \"c:\\\\programdata\\\\\",\n    \"c:\\\\program files\\\\\",\n    \"c:\\\\program files (x86)\\\\\",\n]\n\nIMPORTANT_FILENAME_PATTERNS = [\n    \".yaml\",\n    \".yml\",\n    \".toml\",\n    \".ini\",\n    \".cfg\",\n    \".conf\",\n    \".env\",\n    \"main.py\",\n    \"app.py\",\n    \"server.py\",\n    \"wsgi.py\",\n    \"asgi.py\",\n    \"index.ts\",\n    \"index.js\",\n    \"main.ts\",\n    \"main.go\",\n    \"main.rs\",\n    \"manage.py\",\n    \"settings.py\",\n    \"config.py\",\n    \"dockerfile\",\n    \"docker-compose.yml\",\n    \"docker-compose.yaml\",\n    \"makefile\",\n    \"cmakelists.txt\",\n]"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 108,
+            "end_line": 147,
+            "quote": "RETENTION_NORMAL_DAYS = 7\nRETENTION_IMPORTANT_DAYS = 14\n\nBINARY_SIZE_WARN_THRESHOLD = 50 * 1024 * 1024  # 50 MB\n\n\ndef _build_important_home_prefixes() -> list[str]:\n    \"\"\"Expand IMPORTANT_HOME_SUBDIRS into absolute prefixes for the current user.\"\"\"\n    home = os.path.expanduser(\"~\")\n    return [os.path.join(home, d) + os.sep for d in IMPORTANT_HOME_SUBDIRS]\n\n\ndef is_important_file(file_path: str) -> bool:\n    \"\"\"Determine whether a file is important and needs a longer retention period.\"\"\"\n    abs_path = os.path.abspath(file_path)\n\n    # System path prefixes (Unix)\n    for prefix in IMPORTANT_PATH_PREFIXES_ABSOLUTE:\n        if abs_path.startswith(prefix):\n            return True\n\n    # Specific user config/credential directories under home\n    for prefix in _build_important_home_prefixes():\n        if abs_path.startswith(prefix):\n            return True\n\n    # Windows system directories (case-insensitive)\n    if sys.platform == \"win32\":\n        lower = abs_path.lower().replace(\"/\", \"\\\\\")\n        for prefix in IMPORTANT_WINDOWS_PREFIXES:\n            if lower.startswith(prefix):\n                return True\n\n    # Filename patterns (lowercase match)\n    filename = os.path.basename(abs_path).lower()\n    for pattern in IMPORTANT_FILENAME_PATTERNS:\n        if filename == pattern or filename.endswith(pattern):\n            return True\n\n    return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 160,
+            "end_line": 162,
+            "quote": "def get_retention_days(file_path: str) -> int:\n    \"\"\"Return retention days based on file importance.\"\"\"\n    return RETENTION_IMPORTANT_DAYS if is_important_file(file_path) else RETENTION_NORMAL_DAYS"
+          }
+        ]
+      },
+      {
+        "move_id": "M05",
+        "operation": "Save",
+        "data": "The user-requested modification to a selected file; actual replacement content is unspecified.",
+        "source": null,
+        "recipient": "The file selected for modification",
+        "condition": "The instructions require confirmation, then an actual edit followed by record_modify. The supplied MiniVCS implementation records existing post-edit content; it does not implement the requested edit itself.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 117,
+            "end_line": 127,
+            "quote": "**Before deleting or modifying a file, you must explain the following to the user and wait for confirmation:**\n\n1. The file path to be operated on\n2. The operation type (modify / delete)\n3. The purpose and intent of the operation\n4. The possible impact\n5. **Explain the local storage behavior: this Skill stores protection data under `~/.openclaw/minivcs/`**\n6. **For text-file modifications, explain that MiniVCS stores diffs and snapshots so the file can be rolled back**\n7. **For deletions, explain that MiniVCS stores a full local copy in `~/.openclaw/minivcs/trash/` so the file can be restored**\n8. **If the file is binary, explicitly explain that protection uses a full local copy rather than a text diff, and ask whether the user wants that local copy to be stored before deletion or binary-file protection**\n9. **If a binary backup returns `sizeWarning: true`, the Agent must display the file size and warning message to the user, and ask for explicit confirmation before proceeding**"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 355,
+            "end_line": 359,
+            "quote": "       ├─── Modify file ───────────────────────────────────────────────┐\n       │    1. Perform the actual modification                         │\n       │    2. record_modify (Diff + snapshot -> canRollback=True)    │\n       │       snapshot = content before this modification, so        │\n       │       historical states can be rolled back step by step      │"
+          }
+        ]
+      },
+      {
+        "move_id": "M06",
+        "operation": "Read",
+        "data": "Up to the first 1,024 bytes of the selected file.",
+        "source": "The existing, non-excluded file passed to record_modify",
+        "recipient": "FileManager.is_binary_file",
+        "condition": "Before choosing text recording or binary backup. Read exceptions cause the binary-detection method to return false.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 379,
+            "end_line": 386,
+            "quote": "    def is_binary_file(self, file_path: str) -> bool:\n        \"\"\"Detect whether a file is binary using a simple heuristic: read the first 1KB and check for NUL bytes.\"\"\"\n        try:\n            with open(file_path, \"rb\") as f:\n                chunk = f.read(1024)\n            return b\"\\x00\" in chunk\n        except Exception:\n            return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 516,
+            "end_line": 530,
+            "quote": "        abs_path = os.path.abspath(file_path)\n        if not os.path.exists(abs_path):\n            return {\"success\": False, \"error\": f\"File not found: {file_path}\"}\n\n        skip_segment = should_skip_path(abs_path)\n        if skip_segment:\n            return {\n                \"success\": False,\n                \"skipped\": True,\n                \"reason\": f\"Path contains '{skip_segment}' which is in the auto-skip list\",\n            }\n\n        # Binary files: cannot generate diffs, so use a full-copy backup instead (.bak copy, original file kept)\n        if self.file_manager.is_binary_file(abs_path):\n            return self._record_binary_backup(abs_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M07",
+        "operation": "Infer",
+        "data": "A binary-versus-text routing decision based on whether the initial byte chunk contains a NUL byte.",
+        "source": "The selected file's first 1,024 bytes",
+        "recipient": "record_modify control flow",
+        "condition": "A NUL match invokes full binary backup; a non-match or detection exception proceeds through text handling. This does not establish the actual format of every file.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 379,
+            "end_line": 386,
+            "quote": "    def is_binary_file(self, file_path: str) -> bool:\n        \"\"\"Detect whether a file is binary using a simple heuristic: read the first 1KB and check for NUL bytes.\"\"\"\n        try:\n            with open(file_path, \"rb\") as f:\n                chunk = f.read(1024)\n            return b\"\\x00\" in chunk\n        except Exception:\n            return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 528,
+            "end_line": 535,
+            "quote": "        # Binary files: cannot generate diffs, so use a full-copy backup instead (.bak copy, original file kept)\n        if self.file_manager.is_binary_file(abs_path):\n            return self._record_binary_backup(abs_path)\n\n        try:\n            new_content = self.file_manager.get_file_content(abs_path)\n            if new_content is None:\n                return {\"success\": False, \"error\": \"Cannot read file content\"}"
+          }
+        ]
+      },
+      {
+        "move_id": "M08",
+        "operation": "Read",
+        "data": "Full current file content, decoded as UTF-8; fallback reads all bytes and decodes UTF-8 while ignoring decoding errors.",
+        "source": "The selected file passed to record_modify",
+        "recipient": "MiniVCS text comparison",
+        "condition": "The file exists, is not excluded, and was not routed to binary backup. Failure of both reads returns no content and recording fails.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 366,
+            "end_line": 377,
+            "quote": "    def get_file_content(self, file_path: str) -> Optional[str]:\n        if not os.path.exists(file_path):\n            return None\n        try:\n            with open(file_path, \"r\", encoding=\"utf-8\") as f:\n                return f.read()\n        except Exception:\n            try:\n                with open(file_path, \"rb\") as f:\n                    return f.read().decode(\"utf-8\", errors=\"ignore\")\n            except Exception:\n                return None"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 532,
+            "end_line": 542,
+            "quote": "        try:\n            new_content = self.file_manager.get_file_content(abs_path)\n            if new_content is None:\n                return {\"success\": False, \"error\": \"Cannot read file content\"}\n\n            relative_path = self._get_relative_path(abs_path)\n            prev_base = self.file_manager.get_base(relative_path)\n            old_content = prev_base if prev_base is not None else \"\"\n\n            diff_text = self.diff_engine.generate_diff(old_content, new_content)\n            diff_summary = self.diff_engine.parse_diff_summary(diff_text)"
+          }
+        ]
+      },
+      {
+        "move_id": "M09",
+        "operation": "Read",
+        "data": "Full previously saved baseline text, if present.",
+        "source": "vcs_root/bases/<safe relative-or-absolute path>.base",
+        "recipient": "MiniVCS text comparison and snapshot creation",
+        "condition": "During text recording. Missing or unreadable baselines become an empty old-content string. Paths outside project_root remain absolute before filename conversion.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 165,
+            "end_line": 171,
+            "quote": "def _make_safe_path(relative_path: str) -> str:\n    \"\"\"\n    Convert a relative path into a safe string that can be used as a filename.\n    Use the full relative path rather than just the filename to avoid conflicts\n    between files with the same name.\n    \"\"\"\n    return relative_path.replace(os.sep, \"__\").replace(\"/\", \"__\")"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 366,
+            "end_line": 377,
+            "quote": "    def get_file_content(self, file_path: str) -> Optional[str]:\n        if not os.path.exists(file_path):\n            return None\n        try:\n            with open(file_path, \"r\", encoding=\"utf-8\") as f:\n                return f.read()\n        except Exception:\n            try:\n                with open(file_path, \"rb\") as f:\n                    return f.read().decode(\"utf-8\", errors=\"ignore\")\n            except Exception:\n                return None"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 458,
+            "end_line": 462,
+            "quote": "    def get_base(self, relative_path: str) -> Optional[str]:\n        \"\"\"Get the baseline content from the previous record.\"\"\"\n        safe_path = _make_safe_path(relative_path)\n        base_path = os.path.join(self.bases_dir, f\"{safe_path}.base\")\n        return self.get_file_content(base_path)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 493,
+            "end_line": 496,
+            "quote": "    def _get_relative_path(self, absolute_path: str) -> str:\n        if absolute_path.startswith(self.project_root + os.sep):\n            return absolute_path[len(self.project_root) + 1 :]\n        return absolute_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 537,
+            "end_line": 539,
+            "quote": "            relative_path = self._get_relative_path(abs_path)\n            prev_base = self.file_manager.get_base(relative_path)\n            old_content = prev_base if prev_base is not None else \"\""
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 357,
+            "end_line": 357,
+            "quote": "        self.bases_dir = os.path.join(vcs_root, \"bases\")"
+          }
+        ]
+      },
+      {
+        "move_id": "M10",
+        "operation": "Infer",
+        "data": "Unified diff text, added and removed line counts, change summary, and no-change decision.",
+        "source": "Current decoded file content and previous baseline, or an empty string when no baseline is available",
+        "recipient": "Diff storage, operation log, and recording result",
+        "condition": "Text recording. No-change skipping requires nonempty old content and zero counted additions and removals; the first comparison can describe the whole current file as additions.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 315,
+            "end_line": 341,
+            "quote": "    @staticmethod\n    def generate_diff(old_content: str, new_content: str, context: int = 3) -> str:\n        old_lines = old_content.splitlines(keepends=True)\n        new_lines = new_content.splitlines(keepends=True)\n        diff = difflib.unified_diff(\n            old_lines,\n            new_lines,\n            fromfile=\"original\",\n            tofile=\"modified\",\n            lineterm=\"\\n\",\n            n=context,\n        )\n        return \"\".join(diff)\n\n    @staticmethod\n    def parse_diff_summary(diff_text: str) -> Dict[str, int | str]:\n        added = removed = 0\n        for line in diff_text.splitlines():\n            if line.startswith(\"+\") and not line.startswith(\"+++\"):\n                added += 1\n            elif line.startswith(\"-\") and not line.startswith(\"---\"):\n                removed += 1\n        return {\n            \"added\": added,\n            \"removed\": removed,\n            \"summary\": f\"+{added} lines, -{removed} lines\" if added or removed else \"No changes\",\n        }"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 533,
+            "end_line": 546,
+            "quote": "            new_content = self.file_manager.get_file_content(abs_path)\n            if new_content is None:\n                return {\"success\": False, \"error\": \"Cannot read file content\"}\n\n            relative_path = self._get_relative_path(abs_path)\n            prev_base = self.file_manager.get_base(relative_path)\n            old_content = prev_base if prev_base is not None else \"\"\n\n            diff_text = self.diff_engine.generate_diff(old_content, new_content)\n            diff_summary = self.diff_engine.parse_diff_summary(diff_text)\n\n            if old_content != \"\" and diff_summary[\"added\"] == 0 and diff_summary[\"removed\"] == 0:\n                due = self.query_due_for_cleanup()\n                return {\"success\": True, \"message\": \"No changes detected\", \"skipped\": True, \"due_for_cleanup\": due}"
+          }
+        ]
+      },
+      {
+        "move_id": "M11",
+        "operation": "Save",
+        "data": "UTF-8 unified diff patch containing changed text and context.",
+        "source": "Diff computed from baseline and current file content",
+        "recipient": "vcs_root/diffs/<millisecond timestamp>_<safe path>.patch",
+        "condition": "Text recording that is not skipped as unchanged. Its record receives a seven-day or fourteen-day expiry; expiration alone does not remove the patch.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 355,
+            "end_line": 359,
+            "quote": "        self.trash_dir = os.path.join(vcs_root, \"trash\")\n        self.diffs_dir = os.path.join(vcs_root, \"diffs\")\n        self.bases_dir = os.path.join(vcs_root, \"bases\")\n        self.snapshots_dir = os.path.join(vcs_root, \"snapshots\")  # Full pre-edit snapshots for text files, used for rollback\n        self.backups_dir = os.path.join(vcs_root, \"backups\")  # Full-copy backups for binary files"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 432,
+            "end_line": 439,
+            "quote": "    def save_diff(self, relative_path: str, diff_content: str) -> str:\n        \"\"\"Save a diff patch into the diffs directory, named by full relative path to avoid same-name conflicts.\"\"\"\n        timestamp = int(time.time() * 1000)\n        safe_path = _make_safe_path(relative_path)\n        diff_path = os.path.join(self.diffs_dir, f\"{timestamp}_{safe_path}.patch\")\n        with open(diff_path, \"w\", encoding=\"utf-8\") as f:\n            f.write(diff_content)\n        return diff_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 537,
+            "end_line": 548,
+            "quote": "            relative_path = self._get_relative_path(abs_path)\n            prev_base = self.file_manager.get_base(relative_path)\n            old_content = prev_base if prev_base is not None else \"\"\n\n            diff_text = self.diff_engine.generate_diff(old_content, new_content)\n            diff_summary = self.diff_engine.parse_diff_summary(diff_text)\n\n            if old_content != \"\" and diff_summary[\"added\"] == 0 and diff_summary[\"removed\"] == 0:\n                due = self.query_due_for_cleanup()\n                return {\"success\": True, \"message\": \"No changes detected\", \"skipped\": True, \"due_for_cleanup\": due}\n\n            diff_path = self.file_manager.save_diff(relative_path, diff_text)"
+          }
+        ]
+      },
+      {
+        "move_id": "M12",
+        "operation": "Save",
+        "data": "Full previous baseline text as a rollback snapshot.",
+        "source": "old_content loaded from the previous baseline",
+        "recipient": "vcs_root/snapshots/<millisecond timestamp>_<safe path>.snap",
+        "condition": "Only when old_content is nonempty. A missing baseline or an existing empty baseline produces no snapshot. The content is the previous recorded baseline, which depends on the caller's recording sequence.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 358,
+            "end_line": 358,
+            "quote": "        self.snapshots_dir = os.path.join(vcs_root, \"snapshots\")  # Full pre-edit snapshots for text files, used for rollback"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 441,
+            "end_line": 448,
+            "quote": "    def save_snapshot(self, relative_path: str, content: str) -> str:\n        \"\"\"Save a full snapshot from before file modification for rollback.\"\"\"\n        timestamp = int(time.time() * 1000)\n        safe_path = _make_safe_path(relative_path)\n        snap_path = os.path.join(self.snapshots_dir, f\"{timestamp}_{safe_path}.snap\")\n        with open(snap_path, \"w\", encoding=\"utf-8\") as f:\n            f.write(content)\n        return snap_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 537,
+            "end_line": 539,
+            "quote": "            relative_path = self._get_relative_path(abs_path)\n            prev_base = self.file_manager.get_base(relative_path)\n            old_content = prev_base if prev_base is not None else \"\""
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 550,
+            "end_line": 553,
+            "quote": "            # When a baseline exists, old_content is the pre-edit content; save it as a snapshot for rollback\n            snap_path = None\n            if old_content:\n                snap_path = self.file_manager.save_snapshot(relative_path, old_content)"
+          }
+        ]
+      },
+      {
+        "move_id": "M13",
+        "operation": "Save",
+        "data": "Full current decoded text as the baseline for the next comparison, overwriting an existing baseline for the same encoded path.",
+        "source": "new_content read from the selected file",
+        "recipient": "vcs_root/bases/<safe path>.base",
+        "condition": "After a text recording proceeds beyond no-change skipping. The baseline has no independent expiry field and is not refreshed by the supplied rollback branches.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 357,
+            "end_line": 357,
+            "quote": "        self.bases_dir = os.path.join(vcs_root, \"bases\")"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 450,
+            "end_line": 456,
+            "quote": "    def save_base(self, relative_path: str, content: str) -> str:\n        \"\"\"Save current content as the baseline for the next comparison, named by full relative path.\"\"\"\n        safe_path = _make_safe_path(relative_path)\n        base_path = os.path.join(self.bases_dir, f\"{safe_path}.base\")\n        with open(base_path, \"w\", encoding=\"utf-8\") as f:\n            f.write(content)\n        return base_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 533,
+            "end_line": 535,
+            "quote": "            new_content = self.file_manager.get_file_content(abs_path)\n            if new_content is None:\n                return {\"success\": False, \"error\": \"Cannot read file content\"}"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 555,
+            "end_line": 556,
+            "quote": "            # Update the baseline to the current content\n            self.file_manager.save_base(relative_path, new_content)"
+          }
+        ]
+      },
+      {
+        "move_id": "M14",
+        "operation": "Read",
+        "data": "Selected binary file's size in bytes.",
+        "source": "Filesystem metadata for abs_path",
+        "recipient": "_record_binary_backup",
+        "condition": "When record_modify routes the file to binary backup.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 528,
+            "end_line": 530,
+            "quote": "        # Binary files: cannot generate diffs, so use a full-copy backup instead (.bak copy, original file kept)\n        if self.file_manager.is_binary_file(abs_path):\n            return self._record_binary_backup(abs_path)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 591,
+            "end_line": 601,
+            "quote": "    def _record_binary_backup(self, abs_path: str) -> Dict[str, Any]:\n        \"\"\"Binary file backup: copy the current file in full as a .bak, keep the original file, and support later restoration.\"\"\"\n        try:\n            relative_path = self._get_relative_path(abs_path)\n            important = is_important_file(abs_path)\n            retention_days = get_retention_days(abs_path)\n\n            file_size = os.path.getsize(abs_path)\n            size_warning = file_size > BINARY_SIZE_WARN_THRESHOLD\n\n            backup_path = self.file_manager.save_binary_backup(abs_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M15",
+        "operation": "Infer",
+        "data": "Whether binary size exceeds 50 * 1024 * 1024 bytes, plus a human-readable size warning.",
+        "source": "Binary file size and BINARY_SIZE_WARN_THRESHOLD",
+        "recipient": "Binary-backup result and subsequent Agent warning flow",
+        "condition": "The code creates the backup before returning the warning. Instructions require confirmation before further similarly large backup operations.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 111,
+            "end_line": 111,
+            "quote": "BINARY_SIZE_WARN_THRESHOLD = 50 * 1024 * 1024  # 50 MB"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 598,
+            "end_line": 601,
+            "quote": "            file_size = os.path.getsize(abs_path)\n            size_warning = file_size > BINARY_SIZE_WARN_THRESHOLD\n\n            backup_path = self.file_manager.save_binary_backup(abs_path)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 626,
+            "end_line": 632,
+            "quote": "            if size_warning:\n                result[\"sizeWarning\"] = True\n                result[\"sizeWarningMessage\"] = (\n                    f\"Binary file is {file_size / 1024 / 1024:.1f} MB, \"\n                    f\"exceeding the {BINARY_SIZE_WARN_THRESHOLD / 1024 / 1024:.0f} MB warning threshold\"\n                )\n            return result"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 84,
+            "end_line": 88,
+            "quote": "When a binary file exceeds **50 MB**, the return value from `record_modify` (binary backup) will include:\n- `\"sizeWarning\": true`\n- `\"sizeWarningMessage\"`: a human-readable description of the file size and threshold\n\n**When `sizeWarning` is present, the Agent must explicitly inform the user of the file size and ask for confirmation before proceeding with any further binary backup operations on similarly large files.**"
+          }
+        ]
+      },
+      {
+        "move_id": "M16",
+        "operation": "Save",
+        "data": "Full current binary-file copy, using shutil.copy2.",
+        "source": "Selected binary file at abs_path",
+        "recipient": "vcs_root/backups/<millisecond timestamp>_<basename>.bak",
+        "condition": "Binary recording preserves the original file and assigns the backup record a seven-day or fourteen-day expiry. The code does not wait for size-warning confirmation before making this copy.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 359,
+            "end_line": 359,
+            "quote": "        self.backups_dir = os.path.join(vcs_root, \"backups\")  # Full-copy backups for binary files"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 410,
+            "end_line": 419,
+            "quote": "    def save_binary_backup(self, file_path: str) -> str:\n        \"\"\"Copy a binary file in full to the backups directory, saved with a .bak extension, without deleting the original file.\"\"\"\n        if not os.path.exists(file_path):\n            raise FileNotFoundError(f\"File not found: {file_path}\")\n        timestamp = int(time.time() * 1000)\n        filename = os.path.basename(file_path)\n        backup_filename = f\"{timestamp}_{filename}.bak\"\n        backup_path = os.path.join(self.backups_dir, backup_filename)\n        shutil.copy2(file_path, backup_path)\n        return backup_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 594,
+            "end_line": 610,
+            "quote": "            relative_path = self._get_relative_path(abs_path)\n            important = is_important_file(abs_path)\n            retention_days = get_retention_days(abs_path)\n\n            file_size = os.path.getsize(abs_path)\n            size_warning = file_size > BINARY_SIZE_WARN_THRESHOLD\n\n            backup_path = self.file_manager.save_binary_backup(abs_path)\n\n            record = {\n                \"filePath\": relative_path,\n                \"action\": \"BINARY_BACKUP\",\n                \"backupFile\": backup_path,\n                \"summary\": f\"Binary file backup ({file_size} bytes)\",\n                \"isImportant\": important,\n                \"retentionDays\": retention_days,\n            }"
+          }
+        ]
+      },
+      {
+        "move_id": "M17",
+        "operation": "Save",
+        "data": "Full selected file retained in trash through a move.",
+        "source": "Existing, non-excluded file passed to record_delete",
+        "recipient": "vcs_root/trash/<millisecond timestamp>_<basename>.bak",
+        "condition": "Applies to both text and binary files. Instructions require confirmation of local storage before protected deletion. The resulting record receives a seven-day or fourteen-day expiry, with cleanup handled separately.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 218,
+            "end_line": 224,
+            "quote": "**Do not delete the file directly**. Use `record_delete` instead, and the file is moved into `trash` automatically.\n\nBefore running `record_delete`:\n\n- Tell the user that a full local copy will be stored in `~/.openclaw/minivcs/trash/`\n- If the file is binary, explicitly ask whether they want that local copy to be stored\n- Only proceed with protected deletion after the user confirms the local storage behavior"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 355,
+            "end_line": 355,
+            "quote": "        self.trash_dir = os.path.join(vcs_root, \"trash\")"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 388,
+            "end_line": 397,
+            "quote": "    def save_to_trash(self, file_path: str) -> str:\n        \"\"\"Move a deleted file into the trash directory while preserving its full content.\"\"\"\n        if not os.path.exists(file_path):\n            raise FileNotFoundError(f\"File not found: {file_path}\")\n        timestamp = int(time.time() * 1000)\n        filename = os.path.basename(file_path)\n        trash_filename = f\"{timestamp}_{filename}.bak\"\n        trash_path = os.path.join(self.trash_dir, trash_filename)\n        shutil.move(file_path, trash_path)\n        return trash_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 653,
+            "end_line": 667,
+            "quote": "        try:\n            relative_path = self._get_relative_path(abs_path)\n            important = is_important_file(abs_path)\n            retention_days = get_retention_days(abs_path)\n\n            trash_path = self.file_manager.save_to_trash(abs_path)\n\n            record = {\n                \"filePath\": relative_path,\n                \"action\": \"DELETE\",\n                \"trashFile\": trash_path,\n                \"summary\": \"File moved to trash as a local restore copy\",\n                \"isImportant\": important,\n                \"retentionDays\": retention_days,\n            }"
+          }
+        ]
+      },
+      {
+        "move_id": "M18",
+        "operation": "Delete",
+        "data": "The selected file's entry at its original path, as the source-removal side of moving it to trash.",
+        "source": "Original path supplied to record_delete",
+        "recipient": null,
+        "condition": "After existence and exclusion checks, save_to_trash uses shutil.move; the full content remains at the trash destination.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 388,
+            "end_line": 397,
+            "quote": "    def save_to_trash(self, file_path: str) -> str:\n        \"\"\"Move a deleted file into the trash directory while preserving its full content.\"\"\"\n        if not os.path.exists(file_path):\n            raise FileNotFoundError(f\"File not found: {file_path}\")\n        timestamp = int(time.time() * 1000)\n        filename = os.path.basename(file_path)\n        trash_filename = f\"{timestamp}_{filename}.bak\"\n        trash_path = os.path.join(self.trash_dir, trash_filename)\n        shutil.move(file_path, trash_path)\n        return trash_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 641,
+            "end_line": 658,
+            "quote": "        abs_path = os.path.abspath(file_path)\n        if not os.path.exists(abs_path):\n            return {\"success\": False, \"error\": f\"File not found: {file_path}\"}\n\n        skip_segment = should_skip_path(abs_path)\n        if skip_segment:\n            return {\n                \"success\": False,\n                \"skipped\": True,\n                \"reason\": f\"Path contains '{skip_segment}' which is in the auto-skip list\",\n            }\n\n        try:\n            relative_path = self._get_relative_path(abs_path)\n            important = is_important_file(abs_path)\n            retention_days = get_retention_days(abs_path)\n\n            trash_path = self.file_manager.save_to_trash(abs_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M19",
+        "operation": "Read",
+        "data": "The complete JSON operation log, including recorded paths, actions, artifact paths, summaries, timestamps, importance, retention, and expiry metadata.",
+        "source": "vcs_root/logs.json",
+        "recipient": "LogManager and its history, lookup, modification, cleanup, extension, and restore callers",
+        "condition": "Log operations load the whole JSON document. Missing or invalid JSON is treated as an empty record collection. Shared-root history is not filtered by project identity; file-specific history filters by stored filePath.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 182,
+            "end_line": 198,
+            "quote": "    def __init__(self, vcs_root: str):\n        self.vcs_root = vcs_root\n        self.log_file = os.path.join(vcs_root, \"logs.json\")\n        self._ensure_log_file()\n\n    def _ensure_log_file(self):\n        if not os.path.exists(self.log_file):\n            os.makedirs(os.path.dirname(self.log_file), exist_ok=True)\n            with open(self.log_file, \"w\", encoding=\"utf-8\") as f:\n                json.dump({\"version\": \"1.0\", \"records\": []}, f, ensure_ascii=False, indent=2)\n\n    def _read_log(self) -> Dict[str, Any]:\n        try:\n            with open(self.log_file, \"r\", encoding=\"utf-8\") as f:\n                return json.load(f)\n        except (json.JSONDecodeError, FileNotFoundError):\n            return {\"version\": \"1.0\", \"records\": []}"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 239,
+            "end_line": 249,
+            "quote": "    def get_history_by_file(self, file_path: str, descending: bool = True) -> List[Dict[str, Any]]:\n        data = self._read_log()\n        records = [r for r in data[\"records\"] if r.get(\"filePath\") == file_path]\n        records.sort(key=lambda x: x.get(\"timestamp\", 0), reverse=descending)\n        return records\n\n    def get_all_history(self, descending: bool = True) -> List[Dict[str, Any]]:\n        data = self._read_log()\n        records = list(data[\"records\"])\n        records.sort(key=lambda x: x.get(\"timestamp\", 0), reverse=descending)\n        return records"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 299,
+            "end_line": 304,
+            "quote": "    def get_record_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:\n        data = self._read_log()\n        for record in data[\"records\"]:\n            if record.get(\"recordId\") == record_id:\n                return record\n        return None"
+          }
+        ]
+      },
+      {
+        "move_id": "M20",
+        "operation": "Save",
+        "data": "Initial JSON log containing version 1.0 and an empty records array.",
+        "source": "Implementation constants",
+        "recipient": "vcs_root/logs.json",
+        "condition": "Initialization creates it only if it does not exist. Initialization also creates the protection-artifact directories, including for query-only CLI commands.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 182,
+            "end_line": 191,
+            "quote": "    def __init__(self, vcs_root: str):\n        self.vcs_root = vcs_root\n        self.log_file = os.path.join(vcs_root, \"logs.json\")\n        self._ensure_log_file()\n\n    def _ensure_log_file(self):\n        if not os.path.exists(self.log_file):\n            os.makedirs(os.path.dirname(self.log_file), exist_ok=True)\n            with open(self.log_file, \"w\", encoding=\"utf-8\") as f:\n                json.dump({\"version\": \"1.0\", \"records\": []}, f, ensure_ascii=False, indent=2)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 352,
+            "end_line": 364,
+            "quote": "    def __init__(self, vcs_root: str, project_root: str):\n        self.vcs_root = vcs_root\n        self.project_root = project_root\n        self.trash_dir = os.path.join(vcs_root, \"trash\")\n        self.diffs_dir = os.path.join(vcs_root, \"diffs\")\n        self.bases_dir = os.path.join(vcs_root, \"bases\")\n        self.snapshots_dir = os.path.join(vcs_root, \"snapshots\")  # Full pre-edit snapshots for text files, used for rollback\n        self.backups_dir = os.path.join(vcs_root, \"backups\")  # Full-copy backups for binary files\n        os.makedirs(self.trash_dir, exist_ok=True)\n        os.makedirs(self.diffs_dir, exist_ok=True)\n        os.makedirs(self.bases_dir, exist_ok=True)\n        os.makedirs(self.snapshots_dir, exist_ok=True)\n        os.makedirs(self.backups_dir, exist_ok=True)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 482,
+            "end_line": 491,
+            "quote": "    def __init__(self, project_root: str, vcs_root: Optional[str] = None):\n        self.project_root = os.path.abspath(project_root)\n        # By default, store data in ~/.openclaw/minivcs/ so it is decoupled from the project directory\n        if vcs_root is not None:\n            self.vcs_root = os.path.abspath(vcs_root)\n        else:\n            self.vcs_root = os.path.join(os.path.expanduser(\"~\"), \".openclaw\", \"minivcs\")\n        self.log_manager = LogManager(self.vcs_root)\n        self.diff_engine = DiffEngine()\n        self.file_manager = FileManager(self.vcs_root, self.project_root)"
+          }
+        ]
+      },
+      {
+        "move_id": "M21",
+        "operation": "Save",
+        "data": "Operation metadata: filePath, action, diff/snapshot/trash/backup artifact paths as applicable, summary, text line counts, importance, retention days, record ID, creation timestamps, and calculated expiration timestamps.",
+        "source": "Recording results, file-path classification, and runtime clock",
+        "recipient": "vcs_root/logs.json, written through logs.json.tmp and os.replace",
+        "condition": "Successful text, binary-backup, and delete recording. File paths are relative only when beneath the current project root; otherwise they remain absolute. Expiry is metadata, not automatic deletion.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 182,
+            "end_line": 185,
+            "quote": "    def __init__(self, vcs_root: str):\n        self.vcs_root = vcs_root\n        self.log_file = os.path.join(vcs_root, \"logs.json\")\n        self._ensure_log_file()"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 200,
+            "end_line": 227,
+            "quote": "    def _write_log(self, data: Dict[str, Any]):\n        # Atomic write: write a temp file first, then rename it to avoid corrupting logs.json on crash\n        tmp_file = self.log_file + \".tmp\"\n        with open(tmp_file, \"w\", encoding=\"utf-8\") as f:\n            json.dump(data, f, ensure_ascii=False, indent=2)\n        os.replace(tmp_file, self.log_file)\n\n    def append_record(self, record: Dict[str, Any]) -> str:\n        data = self._read_log()\n        record_id = record.get(\"recordId\", f\"{int(time.time() * 1000)}\")\n        record[\"recordId\"] = record_id\n\n        now_ms = int(time.time() * 1000)\n        if \"timestamp\" not in record:\n            record[\"timestamp\"] = now_ms\n        if \"datetime\" not in record:\n            record[\"datetime\"] = datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")\n\n        # If expireAt is not set, calculate it automatically from retentionDays\n        if \"expireAt\" not in record:\n            retention_days = record.get(\"retentionDays\", RETENTION_NORMAL_DAYS)\n            record[\"expireAt\"] = record[\"timestamp\"] + retention_days * 24 * 60 * 60 * 1000\n        if \"expireAtDatetime\" not in record:\n            record[\"expireAtDatetime\"] = datetime.fromtimestamp(record[\"expireAt\"] / 1000).strftime(\"%Y-%m-%d %H:%M:%S\")\n\n        data[\"records\"].append(record)\n        self._write_log(data)\n        return record_id"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 493,
+            "end_line": 496,
+            "quote": "    def _get_relative_path(self, absolute_path: str) -> str:\n        if absolute_path.startswith(self.project_root + os.sep):\n            return absolute_path[len(self.project_root) + 1 :]\n        return absolute_path"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 558,
+            "end_line": 575,
+            "quote": "            retention_days = get_retention_days(abs_path)\n            important = is_important_file(abs_path)\n\n            record: Dict[str, Any] = {\n                \"filePath\": relative_path,\n                \"action\": \"MODIFY\",\n                \"diffFile\": diff_path,\n                \"summary\": diff_summary[\"summary\"],\n                \"linesAdded\": diff_summary[\"added\"],\n                \"linesRemoved\": diff_summary[\"removed\"],\n                \"isImportant\": important,\n                \"retentionDays\": retention_days,\n            }\n            if snap_path:\n                record[\"snapshotFile\"] = snap_path\n\n            record_id = self.log_manager.append_record(record)\n            due = self.query_due_for_cleanup()"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 603,
+            "end_line": 613,
+            "quote": "            record = {\n                \"filePath\": relative_path,\n                \"action\": \"BINARY_BACKUP\",\n                \"backupFile\": backup_path,\n                \"summary\": f\"Binary file backup ({file_size} bytes)\",\n                \"isImportant\": important,\n                \"retentionDays\": retention_days,\n            }\n\n            record_id = self.log_manager.append_record(record)\n            due = self.query_due_for_cleanup()"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 660,
+            "end_line": 670,
+            "quote": "            record = {\n                \"filePath\": relative_path,\n                \"action\": \"DELETE\",\n                \"trashFile\": trash_path,\n                \"summary\": \"File moved to trash as a local restore copy\",\n                \"isImportant\": important,\n                \"retentionDays\": retention_days,\n            }\n\n            record_id = self.log_manager.append_record(record)\n            due = self.query_due_for_cleanup()"
+          }
+        ]
+      },
+      {
+        "move_id": "M22",
+        "operation": "Infer",
+        "data": "Expired-record lists, sorted by expiration; separately, legacy age-based record selection.",
+        "source": "Complete stored operation log and current runtime time",
+        "recipient": "Cleanup queries, recording results, and legacy expired-record operations",
+        "condition": "Normal cleanup selects expireAt <= current time and excludes RESTORED and ROLLED_BACK. Legacy queries instead compare creation age with caller-supplied days without those action exclusions. A shared storage root permits selection across its entire log.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 251,
+            "end_line": 265,
+            "quote": "    def get_due_for_cleanup(self) -> List[Dict[str, Any]]:\n        \"\"\"\n        Return expired records (expireAt <= current time), sorted by expireAt\n        from earliest to latest. Skip records that were already restored or rolled back.\n        \"\"\"\n        data = self._read_log()\n        current_time = int(time.time() * 1000)\n        skip_actions = {\"RESTORED\", \"ROLLED_BACK\"}\n        due = [\n            r\n            for r in data[\"records\"]\n            if r.get(\"expireAt\") is not None and r[\"expireAt\"] <= current_time and r.get(\"action\") not in skip_actions\n        ]\n        due.sort(key=lambda x: x.get(\"expireAt\", 0))\n        return due"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 278,
+            "end_line": 283,
+            "quote": "    def get_expired_records(self, days: int) -> List[Dict[str, Any]]:\n        \"\"\"Compatibility for the old interface: query expired records by fixed days.\"\"\"\n        data = self._read_log()\n        current_time = int(time.time() * 1000)\n        expire_ms = days * 24 * 60 * 60 * 1000\n        return [r for r in data[\"records\"] if current_time - r.get(\"timestamp\", 0) > expire_ms]"
+          }
+        ]
+      },
+      {
+        "move_id": "M23",
+        "operation": "Save",
+        "data": "Extended expiration timestamp and human-readable expiration time.",
+        "source": "Existing record expiration plus one stored retention cycle, defaulting to seven days",
+        "recipient": "The selected record in the MiniVCS JSON log",
+        "condition": "When extend_record_expiry is invoked for an existing record. Extension adds to the previous expiration rather than necessarily starting from the current time.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 267,
+            "end_line": 276,
+            "quote": "    def extend_record_expiry(self, record_id: str, additional_ms: int) -> bool:\n        \"\"\"Extend expireAt on the specified record by additional_ms milliseconds.\"\"\"\n        data = self._read_log()\n        for record in data[\"records\"]:\n            if record.get(\"recordId\") == record_id:\n                record[\"expireAt\"] = record.get(\"expireAt\", int(time.time() * 1000)) + additional_ms\n                record[\"expireAtDatetime\"] = datetime.fromtimestamp(record[\"expireAt\"] / 1000).strftime(\"%Y-%m-%d %H:%M:%S\")\n                self._write_log(data)\n                return True\n        return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 784,
+            "end_line": 792,
+            "quote": "    def extend_record_expiry(self, record_id: str) -> Dict[str, Any]:\n        \"\"\"Extend a record's expiration time by one retention cycle (retentionDays days).\"\"\"\n        record = self.log_manager.get_record_by_id(record_id)\n        if not record:\n            return {\"success\": False, \"error\": \"Record not found\"}\n\n        retention_days = record.get(\"retentionDays\", RETENTION_NORMAL_DAYS)\n        additional_ms = retention_days * 24 * 60 * 60 * 1000\n        ok = self.log_manager.extend_record_expiry(record_id, additional_ms)"
+          }
+        ]
+      },
+      {
+        "move_id": "M24",
+        "operation": "Read",
+        "data": "Full stored diff content for a requested MODIFY record.",
+        "source": "The diffFile path taken from the selected log record",
+        "recipient": "get_file_diff caller, including optional CLI history display",
+        "condition": "The record must exist, still have action MODIFY, and reference an existing diff file. The same full-content UTF-8/fallback reader is used even though CLI display later limits output to thirty lines.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 366,
+            "end_line": 377,
+            "quote": "    def get_file_content(self, file_path: str) -> Optional[str]:\n        if not os.path.exists(file_path):\n            return None\n        try:\n            with open(file_path, \"r\", encoding=\"utf-8\") as f:\n                return f.read()\n        except Exception:\n            try:\n                with open(file_path, \"rb\") as f:\n                    return f.read().decode(\"utf-8\", errors=\"ignore\")\n            except Exception:\n                return None"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 841,
+            "end_line": 848,
+            "quote": "    def get_file_diff(self, record_id: str) -> Optional[str]:\n        record = self.log_manager.get_record_by_id(record_id)\n        if not record or record.get(\"action\") != \"MODIFY\":\n            return None\n        diff_file = record.get(\"diffFile\")\n        if not diff_file or not os.path.exists(diff_file):\n            return None\n        return self.file_manager.get_file_content(diff_file)"
+          }
+        ]
+      },
+      {
+        "move_id": "M25",
+        "operation": "Read",
+        "data": "Full stored snapshot text for rollback.",
+        "source": "The snapshotFile path in the requested MODIFY record",
+        "recipient": "restore_file",
+        "condition": "A MODIFY record and existing snapshot are required. No expiration check is performed here; availability depends on the artifact still existing.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 366,
+            "end_line": 377,
+            "quote": "    def get_file_content(self, file_path: str) -> Optional[str]:\n        if not os.path.exists(file_path):\n            return None\n        try:\n            with open(file_path, \"r\", encoding=\"utf-8\") as f:\n                return f.read()\n        except Exception:\n            try:\n                with open(file_path, \"rb\") as f:\n                    return f.read().decode(\"utf-8\", errors=\"ignore\")\n            except Exception:\n                return None"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 695,
+            "end_line": 699,
+            "quote": "        record = self.log_manager.get_record_by_id(record_id)\n        if not record:\n            return {\"success\": False, \"error\": \"Record not found\"}\n\n        action = record.get(\"action\")"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 722,
+            "end_line": 735,
+            "quote": "        elif action == \"MODIFY\":\n            snap_file = record.get(\"snapshotFile\")\n            if not snap_file or not os.path.exists(snap_file):\n                return {\n                    \"success\": False,\n                    \"error\": (\n                        \"No pre-edit snapshot available for this record. \"\n                        \"Rollback is only possible when record_modify was called \"\n                        \"both before AND after the edit.\"\n                    ),\n                }\n            content = self.file_manager.get_file_content(snap_file)\n            if content is None:\n                return {\"success\": False, \"error\": \"Cannot read snapshot file\"}"
+          }
+        ]
+      },
+      {
+        "move_id": "M26",
+        "operation": "Save",
+        "data": "Deleted file's full content restored by moving its trash artifact.",
+        "source": "trashFile from the requested DELETE record",
+        "recipient": "Stored absolute filePath, or current project_root joined with a stored relative filePath",
+        "condition": "The DELETE record and trash artifact must exist. The restoration target depends on the project root supplied at restore time; parent directories are created.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 399,
+            "end_line": 408,
+            "quote": "    def restore_from_trash(self, trash_path: str, target_path: str) -> bool:\n        \"\"\"Restore a file from the trash directory (move; the original backup disappears).\"\"\"\n        try:\n            if not os.path.exists(trash_path):\n                return False\n            os.makedirs(os.path.dirname(target_path), exist_ok=True)\n            shutil.move(trash_path, target_path)\n            return True\n        except Exception:\n            return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 695,
+            "end_line": 708,
+            "quote": "        record = self.log_manager.get_record_by_id(record_id)\n        if not record:\n            return {\"success\": False, \"error\": \"Record not found\"}\n\n        action = record.get(\"action\")\n\n        if action == \"DELETE\":\n            trash_file = record.get(\"trashFile\")\n            if not trash_file or not os.path.exists(trash_file):\n                return {\"success\": False, \"error\": \"Backup file not found (may have been cleaned up)\"}\n            # filePath may be relative or absolute\n            file_path = record.get(\"filePath\", \"\")\n            target_path = file_path if os.path.isabs(file_path) else os.path.join(self.project_root, file_path)\n            success = self.file_manager.restore_from_trash(trash_file, target_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M27",
+        "operation": "Delete",
+        "data": "Trash artifact at its former trash path, as the source-removal side of restoration.",
+        "source": "trashFile from the selected DELETE record",
+        "recipient": null,
+        "condition": "Successful restore_from_trash moves the artifact to the restoration target; it does not retain a separate trash copy.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 399,
+            "end_line": 406,
+            "quote": "    def restore_from_trash(self, trash_path: str, target_path: str) -> bool:\n        \"\"\"Restore a file from the trash directory (move; the original backup disappears).\"\"\"\n        try:\n            if not os.path.exists(trash_path):\n                return False\n            os.makedirs(os.path.dirname(target_path), exist_ok=True)\n            shutil.move(trash_path, target_path)\n            return True"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 701,
+            "end_line": 708,
+            "quote": "        if action == \"DELETE\":\n            trash_file = record.get(\"trashFile\")\n            if not trash_file or not os.path.exists(trash_file):\n                return {\"success\": False, \"error\": \"Backup file not found (may have been cleaned up)\"}\n            # filePath may be relative or absolute\n            file_path = record.get(\"filePath\", \"\")\n            target_path = file_path if os.path.isabs(file_path) else os.path.join(self.project_root, file_path)\n            success = self.file_manager.restore_from_trash(trash_file, target_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M28",
+        "operation": "Save",
+        "data": "Decoded snapshot content written as UTF-8, replacing the current target file contents.",
+        "source": "snapshotFile from the requested MODIFY record",
+        "recipient": "Stored absolute filePath, or current project_root joined with a stored relative filePath",
+        "condition": "Snapshot read succeeds. Parent directories are created; the snapshot itself is retained. This restores the saved baseline state, whose relationship to an actual edit depends on prior recording calls.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 722,
+            "end_line": 740,
+            "quote": "        elif action == \"MODIFY\":\n            snap_file = record.get(\"snapshotFile\")\n            if not snap_file or not os.path.exists(snap_file):\n                return {\n                    \"success\": False,\n                    \"error\": (\n                        \"No pre-edit snapshot available for this record. \"\n                        \"Rollback is only possible when record_modify was called \"\n                        \"both before AND after the edit.\"\n                    ),\n                }\n            content = self.file_manager.get_file_content(snap_file)\n            if content is None:\n                return {\"success\": False, \"error\": \"Cannot read snapshot file\"}\n            file_path = record.get(\"filePath\", \"\")\n            target_path = file_path if os.path.isabs(file_path) else os.path.join(self.project_root, file_path)\n            os.makedirs(os.path.dirname(target_path), exist_ok=True)\n            with open(target_path, \"w\", encoding=\"utf-8\") as f:\n                f.write(content)"
+          }
+        ]
+      },
+      {
+        "move_id": "M29",
+        "operation": "Save",
+        "data": "Full binary backup copied back with shutil.copy2, replacing current target contents while retaining the backup.",
+        "source": "backupFile from the requested BINARY_BACKUP record",
+        "recipient": "Stored absolute filePath, or current project_root joined with a stored relative filePath",
+        "condition": "The BINARY_BACKUP record and referenced backup must exist. Parent directories are created. No expiration check is performed in this branch.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 421,
+            "end_line": 430,
+            "quote": "    def restore_binary_backup(self, backup_path: str, target_path: str) -> bool:\n        \"\"\"Copy a .bak file from the backups directory back to the original path, overwriting the current file while keeping the backup.\"\"\"\n        try:\n            if not os.path.exists(backup_path):\n                return False\n            os.makedirs(os.path.dirname(target_path), exist_ok=True)\n            shutil.copy2(backup_path, target_path)\n            return True\n        except Exception:\n            return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 750,
+            "end_line": 756,
+            "quote": "        elif action == \"BINARY_BACKUP\":\n            backup_file = record.get(\"backupFile\")\n            if not backup_file or not os.path.exists(backup_file):\n                return {\"success\": False, \"error\": \"Backup file not found (may have been cleaned up)\"}\n            file_path = record.get(\"filePath\", \"\")\n            target_path = file_path if os.path.isabs(file_path) else os.path.join(self.project_root, file_path)\n            success = self.file_manager.restore_binary_backup(backup_file, target_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M30",
+        "operation": "Save",
+        "data": "Restoration status and time: RESTORED with restoredAt and trashFile cleared, or ROLLED_BACK with rolledBackAt.",
+        "source": "Successful trash restoration, text rollback, or binary restoration and runtime clock",
+        "recipient": "The selected record in the MiniVCS JSON log",
+        "condition": "Written after successful restoration. The record remains in the log. RESTORED and ROLLED_BACK records are excluded from normal due-cleanup selection, and repeated restore attempts are rejected.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 229,
+            "end_line": 237,
+            "quote": "    def update_record(self, record_id: str, updates: Dict[str, Any]) -> bool:\n        \"\"\"Update fields on the specified record.\"\"\"\n        data = self._read_log()\n        for record in data[\"records\"]:\n            if record.get(\"recordId\") == record_id:\n                record.update(updates)\n                self._write_log(data)\n                return True\n        return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 709,
+            "end_line": 718,
+            "quote": "            if success:\n                # Mark the record as restored to prevent duplicate restore or appearance in the trash list\n                self.log_manager.update_record(\n                    record_id,\n                    {\n                        \"action\": \"RESTORED\",\n                        \"restoredAt\": datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\"),\n                        \"trashFile\": None,\n                    },\n                )"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 741,
+            "end_line": 747,
+            "quote": "            self.log_manager.update_record(\n                record_id,\n                {\n                    \"action\": \"ROLLED_BACK\",\n                    \"rolledBackAt\": datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\"),\n                },\n            )"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 757,
+            "end_line": 769,
+            "quote": "            if success:\n                self.log_manager.update_record(\n                    record_id,\n                    {\n                        \"action\": \"ROLLED_BACK\",\n                        \"rolledBackAt\": datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\"),\n                    },\n                )\n                return {\"success\": True, \"message\": f\"Binary file restored to: {target_path}\"}\n            return {\"success\": False, \"error\": \"Failed to restore binary backup\"}\n\n        elif action in (\"RESTORED\", \"ROLLED_BACK\"):\n            return {\"success\": False, \"error\": f\"This record has already been {action.lower()}\"}"
+          }
+        ]
+      },
+      {
+        "move_id": "M31",
+        "operation": "Delete",
+        "data": "Existing diff, trash backup, snapshot, and binary backup artifacts referenced by a selected record.",
+        "source": "diffFile, trashFile, snapshotFile, and backupFile paths loaded from the selected log record",
+        "recipient": null,
+        "condition": "delete_record_by_id with delete_files=true, including remove and batch cleanup. The batch API accepts supplied IDs without independently checking expiration or user confirmation. CLI cleanup selects due records and requires --confirm; Agent instructions separately require user confirmation.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 806,
+            "end_line": 818,
+            "quote": "    def delete_due_records(self, record_ids: List[str]) -> Dict[str, Any]:\n        \"\"\"Batch-delete expired records that the user has confirmed can be cleaned up (log + physical files).\"\"\"\n        deleted_records = []\n        failed_records = []\n        deleted_files: List[str] = []\n\n        for record_id in record_ids:\n            result = self.delete_record_by_id(record_id, delete_files=True)\n            if result.get(\"success\"):\n                deleted_records.append(record_id)\n                deleted_files.extend(result.get(\"deleted_files\", []))\n            else:\n                failed_records.append({\"recordId\": record_id, \"error\": result.get(\"error\")})"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 885,
+            "end_line": 916,
+            "quote": "    def delete_record_by_id(self, record_id: str, delete_files: bool = True) -> Dict[str, Any]:\n        \"\"\"Delete the specified record (log + physical files).\"\"\"\n        record = self.log_manager.get_record_by_id(record_id)\n        if not record:\n            return {\"success\": False, \"error\": \"Record not found\"}\n\n        deleted_files = []\n\n        if delete_files:\n            # Delete diff file\n            diff_file = record.get(\"diffFile\")\n            if diff_file and os.path.exists(diff_file):\n                os.remove(diff_file)\n                deleted_files.append(diff_file)\n\n            # Delete trash backup\n            trash_file = record.get(\"trashFile\")\n            if trash_file and os.path.exists(trash_file):\n                os.remove(trash_file)\n                deleted_files.append(trash_file)\n\n            # Delete snapshot file\n            snap_file = record.get(\"snapshotFile\")\n            if snap_file and os.path.exists(snap_file):\n                os.remove(snap_file)\n                deleted_files.append(snap_file)\n\n            # Delete binary backup file\n            backup_file = record.get(\"backupFile\")\n            if backup_file and os.path.exists(backup_file):\n                os.remove(backup_file)\n                deleted_files.append(backup_file)"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1171,
+            "end_line": 1186,
+            "quote": "    elif args.command == \"cleanup\":\n        due = vcs.query_due_for_cleanup()\n        if not due:\n            print(\"✓ No records due for cleanup.\")\n            return 0\n        print(f\"\\n=== Records Due for Cleanup ({len(due)} total, oldest first) ===\")\n        print_records(due, vcs=vcs)\n        if args.confirm:\n            record_ids = [rid for r in due if isinstance((rid := r.get(\"recordId\")), str)]\n            result = vcs.delete_due_records(record_ids)\n            print(f\"\\n✓ Cleanup complete: {result.get('deleted_count')} records deleted.\")\n            if result.get(\"failed_records\"):\n                print(f\"  Failed: {result.get('failed_records')}\")\n        else:\n            print(\"\\n  To delete these records, run with --confirm\")\n            print(\"  To postpone a record, run: extend <record_id>\")"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 268,
+            "end_line": 271,
+            "quote": "**If `due_for_cleanup` is not empty, the Agent must:**\n\n1. Show the user the list of expired records (sorted from earliest to latest)\n2. Ask which ones can be deleted and which ones need an extension"
+          }
+        ]
+      },
+      {
+        "move_id": "M32",
+        "operation": "Delete",
+        "data": "Baseline file associated with a removed MODIFY record.",
+        "source": "vcs_root/bases/<safe stored filePath>.base",
+        "recipient": null,
+        "condition": "During delete_record_by_id with physical deletion enabled, only if the selected record has action MODIFY and no other MODIFY records remain for the same stored filePath. Other action values do not satisfy this branch.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 464,
+            "end_line": 471,
+            "quote": "    def delete_base(self, relative_path: str) -> bool:\n        \"\"\"Delete the baseline file.\"\"\"\n        safe_path = _make_safe_path(relative_path)\n        base_path = os.path.join(self.bases_dir, f\"{safe_path}.base\")\n        if os.path.exists(base_path):\n            os.remove(base_path)\n            return True\n        return False"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 893,
+            "end_line": 895,
+            "quote": "        if delete_files:\n            # Delete diff file\n            diff_file = record.get(\"diffFile\")"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 918,
+            "end_line": 927,
+            "quote": "            # Delete the base file only when no other MODIFY records exist for this file\n            file_path = record.get(\"filePath\")\n            if file_path and record.get(\"action\") == \"MODIFY\":\n                remaining = [\n                    r\n                    for r in self.log_manager.get_history_by_file(file_path)\n                    if r.get(\"action\") == \"MODIFY\" and r.get(\"recordId\") != record_id\n                ]\n                if not remaining:\n                    self.file_manager.delete_base(file_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "M33",
+        "operation": "Delete",
+        "data": "Selected operation records from the persisted JSON records array.",
+        "source": "MiniVCS operation log",
+        "recipient": null,
+        "condition": "Record deletion rewrites the log without matching IDs. It is used by direct record removal, cleanup, legacy age-based cleanup, and merge. delete_record_by_id removes the log entry even when delete_files=false; legacy log cleanup does not itself remove all protection artifacts.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 285,
+            "end_line": 297,
+            "quote": "    def delete_record(self, record_id: str) -> bool:\n        data = self._read_log()\n        original_count = len(data[\"records\"])\n        data[\"records\"] = [r for r in data[\"records\"] if r.get(\"recordId\") != record_id]\n        if len(data[\"records\"]) < original_count:\n            self._write_log(data)\n            return True\n        return False\n\n    def clean_expired_records(self, days: int) -> Dict[str, Any]:\n        expired = self.get_expired_records(days)\n        deleted_count = sum(1 for r in expired if self.delete_record(r.get(\"recordId\", \"\")))\n        return {\"deleted_count\": deleted_count, \"deleted_records\": expired}"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 929,
+            "end_line": 935,
+            "quote": "        self.log_manager.delete_record(record_id)\n        return {\n            \"success\": True,\n            \"deleted_record\": record_id,\n            \"deleted_files\": deleted_files,\n            \"message\": f\"Record {record_id} deleted\",\n        }"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 957,
+            "end_line": 962,
+            "quote": "        for r in modify_records:\n            if r.get(\"recordId\") == keep_record.get(\"recordId\"):\n                continue\n            rid = r.get(\"recordId\")\n            if isinstance(rid, str) and self.log_manager.delete_record(rid):\n                deleted_count += 1"
+          }
+        ]
+      },
+      {
+        "move_id": "M34",
+        "operation": "Delete",
+        "data": "Diff artifacts for records selected by legacy creation-age cleanup.",
+        "source": "diffFile paths in records older than the supplied number of days",
+        "recipient": null,
+        "condition": "clean_expired(days, delete_files=true), exposed through expired --clean --delete-files. This path removes existing diff files and log records, but does not remove snapshots, trash copies, binary backups, or baselines through this method.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 278,
+            "end_line": 283,
+            "quote": "    def get_expired_records(self, days: int) -> List[Dict[str, Any]]:\n        \"\"\"Compatibility for the old interface: query expired records by fixed days.\"\"\"\n        data = self._read_log()\n        current_time = int(time.time() * 1000)\n        expire_ms = days * 24 * 60 * 60 * 1000\n        return [r for r in data[\"records\"] if current_time - r.get(\"timestamp\", 0) > expire_ms]"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 854,
+            "end_line": 866,
+            "quote": "    def clean_expired(self, days: int, delete_files: bool = False) -> Dict[str, Any]:\n        \"\"\"Compatibility for the old interface: clean expired records.\"\"\"\n        expired = self.log_manager.get_expired_records(days)\n        deleted_files = []\n        if delete_files:\n            for record in expired:\n                diff_file = record.get(\"diffFile\")\n                if diff_file and os.path.exists(diff_file):\n                    os.remove(diff_file)\n                    deleted_files.append(diff_file)\n        result = self.log_manager.clean_expired_records(days)\n        result[\"deleted_files\"] = deleted_files\n        return result"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1133,
+            "end_line": 1138,
+            "quote": "        if args.clean:\n            result = vcs.clean_expired(days, args.delete_files)\n            print(f\"\\n=== Cleaned Expired Records (>{days} days) ===\")\n            print(f\"Records deleted: {result.get('deleted_count')}\")\n            if args.delete_files and result.get(\"deleted_files\"):\n                print(f\"Diff files deleted: {len(result.get('deleted_files', []))}\")"
+          }
+        ]
+      },
+      {
+        "move_id": "M35",
+        "operation": "Delete",
+        "data": "Diff and snapshot artifacts belonging to non-kept MODIFY records for the same stored file path.",
+        "source": "diffFile and snapshotFile fields of records selected by merge_modify",
+        "recipient": null,
+        "condition": "Python API merge_modify requires more than one MODIFY record. It keeps the caller-selected record or the latest by timestamp, deleting other records and their existing diff/snapshot files. This method is not among the supplied CLI command choices.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 937,
+            "end_line": 967,
+            "quote": "    def merge_modify(self, file_path: str, keep_record_id: Optional[str] = None) -> Dict[str, Any]:\n        \"\"\"Merge multiple modification records for the same file, keeping the latest one by default.\"\"\"\n        abs_path = os.path.abspath(file_path)\n        relative_path = self._get_relative_path(abs_path)\n\n        records = self.log_manager.get_history_by_file(relative_path, descending=True)\n        modify_records = [r for r in records if r.get(\"action\") == \"MODIFY\"]\n\n        if len(modify_records) <= 1:\n            return {\"success\": False, \"error\": \"No need to merge (only one or zero record)\"}\n\n        if keep_record_id:\n            keep_record = next((r for r in modify_records if r.get(\"recordId\") == keep_record_id), None)\n            if not keep_record:\n                return {\"success\": False, \"error\": \"Record not found\"}\n        else:\n            keep_record = modify_records[0]\n\n        deleted_count = 0\n        deleted_files = []\n        for r in modify_records:\n            if r.get(\"recordId\") == keep_record.get(\"recordId\"):\n                continue\n            rid = r.get(\"recordId\")\n            if isinstance(rid, str) and self.log_manager.delete_record(rid):\n                deleted_count += 1\n            for fkey in (\"diffFile\", \"snapshotFile\"):\n                f = r.get(fkey)\n                if f and os.path.exists(f):\n                    os.remove(f)\n                    deleted_files.append(f)"
+          }
+        ]
+      },
+      {
+        "move_id": "M36",
+        "operation": "Send",
+        "data": "Selected file path, proposed operation, purpose, impact, local storage location, protection mechanism, and binary-copy or size-warning information in an approval request.",
+        "source": "Agent's operation context, skill instructions, and binary-backup warnings when returned",
+        "recipient": "User",
+        "condition": "Instructions require this before modification or deletion; binary-copy consent is explicit. Large-backup warnings are returned after a backup and require confirmation before further similarly large backups.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 117,
+            "end_line": 131,
+            "quote": "**Before deleting or modifying a file, you must explain the following to the user and wait for confirmation:**\n\n1. The file path to be operated on\n2. The operation type (modify / delete)\n3. The purpose and intent of the operation\n4. The possible impact\n5. **Explain the local storage behavior: this Skill stores protection data under `~/.openclaw/minivcs/`**\n6. **For text-file modifications, explain that MiniVCS stores diffs and snapshots so the file can be rolled back**\n7. **For deletions, explain that MiniVCS stores a full local copy in `~/.openclaw/minivcs/trash/` so the file can be restored**\n8. **If the file is binary, explicitly explain that protection uses a full local copy rather than a text diff, and ask whether the user wants that local copy to be stored before deletion or binary-file protection**\n9. **If a binary backup returns `sizeWarning: true`, the Agent must display the file size and warning message to the user, and ask for explicit confirmation before proceeding**\n\nIf the file is binary and the user does **not** want a local stored copy, do not treat the operation as a protected delete/rollback flow under this Skill.\n\nIf the path is auto-skipped (return contains `\"skipped\": true`), inform the user that the file was not tracked and state the reason."
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 88,
+            "end_line": 88,
+            "quote": "**When `sizeWarning` is present, the Agent must explicitly inform the user of the file size and ask for confirmation before proceeding with any further binary backup operations on similarly large files.**"
+          }
+        ]
+      },
+      {
+        "move_id": "M37",
+        "operation": "Send",
+        "data": "Operation-record outcome, record ID, change summary, retention and expiration, restoration availability, skipped-path reason, and expired-record details for cleanup decisions.",
+        "source": "MiniVCS operation results and due_for_cleanup records",
+        "recipient": "User",
+        "condition": "Agent instructions require reporting results after operations and showing expired records when due_for_cleanup is nonempty. Actual user-facing transport is not supplied.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 157,
+            "end_line": 170,
+            "quote": "After the operation completes, **you must inform the user of the record result**, for example:\n```\n# After a modification is completed\nThe modification to path/to/file.py has been completed, and this change has been recorded (Record ID: 1710000000000).\n- Change summary: +5 lines, -2 lines\n- Retention period: 7 days (expires at: 2026-03-20 10:00:00)\n- Rollback available: yes (use restore 1710000000000 to recover the state before the modification)\nIf you want to view the diff or roll it back, let me know.\n\n# After a deletion is completed\npath/to/file.py has been moved to the trash and backed up (Record ID: 1710000001000).\n- Retention period: 14 days (expires at: 2026-03-27 10:00:00) [important file]\nIf you want to restore this file, let me know.\n```"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 266,
+            "end_line": 284,
+            "quote": "After each call to `record_modify` or `record_delete`, the return value contains the `due_for_cleanup` field.\n\n**If `due_for_cleanup` is not empty, the Agent must:**\n\n1. Show the user the list of expired records (sorted from earliest to latest)\n2. Ask which ones can be deleted and which ones need an extension\n\nExample display format:\n```\nThe following N historical records have expired. Please confirm whether they can be cleaned up:\n\n[1] ID=1710000000000  File=src/old.py  Action=MODIFY\n    Recorded at=2026-03-01 10:00:00  Expires at=2026-03-08 10:00:00\n\n[2] ID=1710000001000  File=config.yaml  Action=DELETE  [important file]\n    Recorded at=2026-02-28 09:00:00  Expires at=2026-03-14 09:00:00\n\nCan these records be deleted? (delete all / specify which ones to extend)\n```"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 78,
+            "end_line": 78,
+            "quote": "When a file is skipped, the return value will contain `\"skipped\": true` and a `\"reason\"` field. The Agent should inform the user that the file was not tracked and explain why."
+          }
+        ]
+      },
+      {
+        "move_id": "M38",
+        "operation": "Send",
+        "data": "CLI output containing record IDs, file paths, actions, creation times, summaries, expiry and retention, importance and rollback indicators; optionally up to thirty lines of each requested diff. Cleanup notices include expired record paths, actions, and timestamps.",
+        "source": "Loaded history or cleanup records and, when requested, stored diff content",
+        "recipient": "Python standard output",
+        "condition": "History, expired-record, and cleanup display paths invoke print_records. Diff output requires show_diff, a MiniVCS instance, and a MODIFY record. The destination beyond stdout depends on the execution context.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 983,
+            "end_line": 1016,
+            "quote": "def print_records(records: list, show_diff: bool = False, vcs: Optional[MiniVCS] = None):\n    if not records:\n        print(\"No records found.\")\n        return\n    for i, record in enumerate(records):\n        important_tag = \" [IMPORTANT]\" if record.get(\"isImportant\") else \"\"\n        action = record.get(\"action\", \"\")\n        rollback_tag = \" [rollback available]\" if action == \"MODIFY\" and record.get(\"snapshotFile\") else \"\"\n        print(f\"\\n[{i + 1}] Record ID: {record.get('recordId')}\")\n        print(f\"    File    : {record.get('filePath')}{important_tag}\")\n        print(f\"    Action  : {action}{rollback_tag}\")\n        print(f\"    Time    : {record.get('datetime')}\")\n        print(f\"    Summary : {record.get('summary')}\")\n        print(f\"    Expires : {record.get('expireAtDatetime', 'N/A')}  (retention {record.get('retentionDays', '?')}d)\")\n        if show_diff and vcs and action == \"MODIFY\":\n            diff_content = vcs.get_file_diff(record.get(\"recordId\"))\n            if diff_content:\n                print(\"\\n    Diff Content:\")\n                print(\"    \" + \"-\" * 40)\n                for line in diff_content.splitlines()[:30]:\n                    print(f\"    {line}\")\n\n\ndef print_due_for_cleanup(due: list):\n    if not due:\n        return\n    print(f\"\\n{'=' * 50}\")\n    print(f\"  [CLEANUP NOTICE] {len(due)} record(s) have expired and are pending cleanup:\")\n    for i, r in enumerate(due):\n        important_tag = \" [IMPORTANT]\" if r.get(\"isImportant\") else \"\"\n        print(f\"  [{i + 1}] ID={r.get('recordId')}  File={r.get('filePath')}{important_tag}\")\n        print(f\"       Action={r.get('action')}  Created={r.get('datetime')}  Expired={r.get('expireAtDatetime')}\")\n    print(\"  Use 'cleanup --confirm' to delete, or 'extend <record_id>' to postpone.\")\n    print(f\"{'=' * 50}\")"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1105,
+            "end_line": 1111,
+            "quote": "    elif args.command == \"history\":\n        records = vcs.get_history(args.file, args.limit)\n        if args.file:\n            print(f\"\\n=== History for: {args.file} ===\")\n        else:\n            print(f\"\\n=== All History (latest {args.limit} records) ===\")\n        print_records(records, args.show_diff, vcs)"
+          }
+        ]
+      },
+      {
+        "move_id": "M39",
+        "operation": "Send",
+        "data": "CLI operation results including record IDs, backup or trash artifact paths, summaries, retention, binary-size warning messages, rollback availability, trash listing metadata, and cleanup notices.",
+        "source": "record_modify, record_delete, and list_trash results",
+        "recipient": "Python standard output",
+        "condition": "When the corresponding CLI command executes. The code prints backup and deletion outcomes after their filesystem operations; stdout's downstream recipient is unspecified.",
+        "evidence": [
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1055,
+            "end_line": 1079,
+            "quote": "        result = vcs.record_modify(args.file)\n        if result.get(\"skipped\") and not result.get(\"success\"):\n            print(f\"~ Skipped: {result.get('reason')}\")\n        elif result.get(\"success\"):\n            if result.get(\"skipped\"):\n                print(\"~ No changes detected, skipped.\")\n            elif result.get(\"action\") == \"BINARY_BACKUP\" or result.get(\"backupFile\"):\n                print(\"✓ Binary file backed up! (.bak copy saved)\")\n                print(f\"  Record ID  : {result.get('recordId')}\")\n                print(f\"  Backup     : {result.get('backupFile')}\")\n                print(f\"  Summary    : {result.get('summary')}\")\n                important_tag = \" [IMPORTANT]\" if result.get(\"isImportant\") else \"\"\n                print(f\"  Retention  : {result.get('retentionDays')} days{important_tag}\")\n                print(f\"  Rollback   : available (use restore {result.get('recordId')})\")\n                if result.get(\"sizeWarning\"):\n                    print(f\"  ⚠ WARNING  : {result.get('sizeWarningMessage')}\")\n            else:\n                print(\"✓ File change recorded!\")\n                print(f\"  Record ID  : {result.get('recordId')}\")\n                print(f\"  Summary    : {result.get('summary')}\")\n                important_tag = \" [IMPORTANT]\" if result.get(\"isImportant\") else \"\"\n                print(f\"  Retention  : {result.get('retentionDays')} days{important_tag}\")\n                if result.get(\"canRollback\"):\n                    print(f\"  Rollback   : available (use restore {result.get('recordId')})\")\n            print_due_for_cleanup(result.get(\"due_for_cleanup\", []))"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1091,
+            "end_line": 1100,
+            "quote": "        result = vcs.record_delete(args.file)\n        if result.get(\"skipped\") and not result.get(\"success\"):\n            print(f\"~ Skipped: {result.get('reason')}\")\n        elif result.get(\"success\"):\n            print(\"✓ File deleted and backed up!\")\n            print(f\"  Record ID  : {result.get('recordId')}\")\n            print(f\"  Backup     : {result.get('trashFile')}\")\n            important_tag = \" [IMPORTANT]\" if result.get(\"isImportant\") else \"\"\n            print(f\"  Retention  : {result.get('retentionDays')} days{important_tag}\")\n            print_due_for_cleanup(result.get(\"due_for_cleanup\", []))"
+          },
+          {
+            "path": "scripts/minivcs/minivcs.py",
+            "start_line": 1145,
+            "end_line": 1156,
+            "quote": "    elif args.command == \"trash\":\n        files = vcs.list_trash()\n        print(\"\\n=== Trash Bin ===\")\n        if not files:\n            print(\"Trash is empty.\")\n            return 0\n        for i, f in enumerate(files):\n            important_tag = \" [IMPORTANT]\" if f.get(\"isImportant\") else \"\"\n            print(f\"\\n[{i + 1}] {f.get('filePath')}{important_tag}\")\n            print(f\"    Deleted at : {f.get('datetime')}\")\n            print(f\"    Expires at : {f.get('expireAtDatetime', 'N/A')}\")\n            print(f\"    Record ID  : {f.get('recordId')}\")"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -146,3 +146,60 @@ def test_reuse_of_a_closed_descendant_retains_original_owners(tmp_path):
     assert len(grandchild.calls)==4
     matching_replay(grandchild.directory,result)
     assert inventory(child.directory)==before
+
+
+@pytest.mark.parametrize("domains", [("task", "cfg"), ("task", "cfg", "annotation")])
+def test_fixed_upstream_reviews_retain_scopes_and_only_dispatch_downstream(tmp_path, monkeypatch, domains):
+    from skillflow.document_guided import revalidated_upstream
+
+    parent = parent_run(tmp_path)
+    child = Downstream(tmp_path / "child", domains=domains, precise_repair=True)
+    manifest = runner.prepare_from_accepted_cfg(parent.directory, run_dir=child.directory)
+    # Supply verified synthetic values at the loader boundary. The first-answer
+    # admission suite covers decoding and new-producer validation of real receipts.
+    values = accepted_upstream.load_accepted_upstream(child.directory)
+    values["graph"]["origin"] = "revalidated_upstream"
+    monkeypatch.setattr(revalidated_upstream, "load", lambda run, manifest: values)
+    manifest = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    manifest["revalidated_upstream"] = manifest.pop("accepted_upstream")
+    runner.WRITER.json(child.directory / "manifest.json", runner.seal(manifest))
+
+    acquired = []
+    def factory(name, owner):
+        acquired.append(name)
+        assert name in {"processing", "task-correspondence", "sensitivity", "review", "revision-processing",
+                        "revision-task-correspondence", "revision-sensitivity", "revision/review"}
+        return child.factory(name, owner)
+
+    result = runner.run(child.directory, client_factory=factory)
+    assert result["status"] == "partial", result
+    assert result["counts"]["scope"] == "fresh_downstream_requests"
+    assert result["counts"]["logical_calls"] == len(child.calls)
+    assert result["counts"]["inherited_history"]["logical_calls"] == 3
+    assert result["stages"]["graph"]["origin"] == "revalidated_upstream"
+    assert result["graph_review"] == result["annotation_review"] == "incomplete"
+    original = read(child.directory / "review/result.json")["review"]["findings"]
+    decision = read(child.directory / "audit/shared-repair-decision.json")
+    fixed = [row for row in original if row["domain"] in {"task", "cfg"}]
+    assert {row["domain"] for row in fixed} == {"task", "cfg"}
+    assert decision["fixed_upstream_findings"] == [
+        {key: row[key] for key in ("id", "domain", "target_ids", "source_refs")} for row in fixed]
+    for row in fixed:
+        assert any(row["id"] in line and "review/result.json" in line
+                   and all(target in line for target in row["target_ids"]) for line in result["limitations"])
+    assert result["repair_used"] == ("annotation" in domains)
+    assert decision["domains"] == (["annotation"] if "annotation" in domains else [])
+    if result["repair_used"]:
+        assert "revision-processing" in acquired and "revision/review" in acquired
+    else:
+        assert set(acquired) == {"processing", "task-correspondence", "sensitivity", "review"}
+    assert read(child.directory / "graph/selected.json") == {"cfg": values["graph"]["value"]}
+    assert not (child.directory / "revision/task").exists()
+    assert not (child.directory / "steps/revision-graph").exists()
+    assert runner.replay(child.directory) == result
+
+    # Missing evidence must fail before a native factory even when the child
+    # already has a terminal result and would otherwise choose offline replay.
+    del values["graph"]
+    with pytest.raises(ValueError, match="requires the verified inherited"):
+        runner.run(child.directory, client_factory=factory)

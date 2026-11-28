@@ -26,9 +26,10 @@ from .batches import validate_batch, batch_model, combine_annotation
 STEP_IDENTITY = "skillflow-document-step-v21"
 PREVIOUS_STEP_IDENTITY = "skillflow-document-step-v20"
 READABLE_STEP_IDENTITIES = {STEP_IDENTITY, PREVIOUS_STEP_IDENTITY, "skillflow-document-step-v19", "skillflow-document-step-v18"}
-ANNOTATION_IDENTITY = "skillflow-document-annotation-v15"
+ANNOTATION_IDENTITY = "skillflow-document-annotation-v17"
 ARCHIVED_ANNOTATION_IDENTITY = "skillflow-document-annotation-v11"
-READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v14", "skillflow-document-annotation-v13",
+READABLE_ANNOTATION_IDENTITIES = frozenset({ANNOTATION_IDENTITY, "skillflow-document-annotation-v16", "skillflow-document-annotation-v15",
+                                          "skillflow-document-annotation-v14", "skillflow-document-annotation-v13",
                                           "skillflow-document-annotation-v12", ARCHIVED_ANNOTATION_IDENTITY})
 FRAGMENT_KINDS = {name + "_fragment": name for name in
                   ("processing", "task-correspondence", "sensitivity")}
@@ -148,6 +149,8 @@ def _step_context(directory, manifest):
     value = {"slot_revisions": manifest.get("identity") == STEP_IDENTITY,
              "full_revision": directory.name.startswith("revision-")}
     if manifest.get("kind") in {"graph_facts_v1", "graph_updates_v1"}:
+        from .graph_steps import has_outcome_contract
+        value["check_outcome_routes"] = has_outcome_contract(manifest)
         value["normalize_blocks"] = manifest.get("identity") in {"skillflow-document-step-v19", PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}
         value["check_occurrences"] = manifest.get("identity") in {PREVIOUS_STEP_IDENTITY, STEP_IDENTITY}
         value["check_calls"] = manifest.get("identity") == STEP_IDENTITY
@@ -174,7 +177,8 @@ def _step_context(directory, manifest):
         from .graph_steps import load_revision_input
         value["graph_repair"] = load_revision_input(directory, value["graph_repair_path"], value["files"],
             [resolve_file(directory, ref) for ref in manifest["dependencies"]], archived=value.get("archived_graph", False),
-            normalize_blocks=value["normalize_blocks"], check_occurrences=value["check_occurrences"], check_calls=value["check_calls"])
+            normalize_blocks=value["normalize_blocks"], check_occurrences=value["check_occurrences"], check_calls=value["check_calls"],
+            check_outcome_routes=value["check_outcome_routes"])
     if "processing_scope_path" in value:
         from .fragment_revision import processing_scope
         run = directory.parent.parent
@@ -258,7 +262,8 @@ def _correction_strategy(kind, context=None):
     if kind == FACTS:
         return GraphFactsCorrection(context["files"], archived=context.get("archived_graph", False),
                                     normalize_blocks=context.get("normalize_blocks", True),
-                                    check_occurrences=context.get("check_occurrences", True), check_calls=context.get("check_calls", True))
+                                    check_occurrences=context.get("check_occurrences", True), check_calls=context.get("check_calls", True),
+                                    check_outcome_routes=context.get("check_outcome_routes", True))
     if kind == "cfg_wire_v5":
         from .fragments import fragment_correction_strategy
         return fragment_correction_strategy("cfg")
@@ -536,7 +541,9 @@ def prepare_step(directory, prompt, *, kind, dependencies=(), context=None, max_
             raise ValueError("Step preparation requires an empty directory or the identical prompt-only interruption")
     else:
         (directory / "prompt.txt").write_bytes(prompt.encode("utf-8"))
+    from .graph_steps import FACTS, UPDATES, ROUTE_CONTRACT
     manifest = seal({"identity": STEP_IDENTITY, "created_at": now(), "kind": kind,
+        **({"graph_route_contract": ROUTE_CONTRACT} if kind in (FACTS, UPDATES) and STEP_IDENTITY == "skillflow-document-step-v21" else {}),
         "max_corrections": max_corrections,
         "config": config, "implementation": implementation_provenance(),
         "context": refs,
@@ -951,6 +958,10 @@ def _check_annotation_steps(directory, manifest, refs):
 def _read_archived_step(directory, annotation_identity):
     """Read a terminal archived constituent with its recorded step/producer identity."""
     identity = read(directory / "manifest.json")["identity"]
+    if annotation_identity == "skillflow-document-annotation-v15":
+        if identity != "skillflow-document-step-v21":
+            raise ValueError("Unsupported step producer for archived annotation")
+        return load_step(directory)
     if annotation_identity == "skillflow-document-annotation-v14":
         if identity != "skillflow-document-step-v20":
             raise ValueError("Unsupported step producer for archived annotation")

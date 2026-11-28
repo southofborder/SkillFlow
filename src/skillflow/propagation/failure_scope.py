@@ -38,6 +38,28 @@ def dependencies(ir, spec, interpreter, block, predecessor, state):
     reads = set(_ambient_locations(ir, block, interpreter))
     writes, clears, state_evidence = set(), set(), set()
     controls = ir["opcode"] == "dispatch"
+    def case_may_execute(case):
+        """Exclude only an impossible typed selector on an available snapshot."""
+        if case is None or case.guard is None:
+            return True
+        from skillflow.propagation.selectors import literal_choice, selector_outcomes
+        guard = case.guard.model_dump(mode="json")
+        operand = ir["inputs"][case.guard.input_index]
+        if operand["type"] == "literal":
+            return literal_choice(operand.get("literal_value"), guard) == guard["outcome"]
+        locations = _operand_locations(ir, "input", case.guard.input_index, interpreter)
+        if not locations or any(loc in state.unavailable for loc in locations):
+            return True
+        identities = set().union(*(state.get(loc, ()) for loc in locations))
+        if not identities:
+            return True
+        outcomes = set().union(*(selector_outcomes(interpreter.registry, identity, guard)
+                                 for identity in identities))
+        return not outcomes or guard["outcome"] in outcomes
+
+    scoped_events = list(iter_scoped_events(spec))
+    active_cases = {event.case.id: case_may_execute(event.case)
+                    for _, _, event in scoped_events if event.case is not None}
     def false_guard(ref):
         if ref is None:
             return False
@@ -63,14 +85,25 @@ def dependencies(ir, spec, interpreter, block, predecessor, state):
         location = FlowLocation(kind="result", name=operand["identifier"])
         writes.add(location)
         clears.add(location)
+    for group in spec.outcome_bindings:
+        for index in (group.completion_index, group.return_index, group.exception_index):
+            if index is not None:
+                locations = _operand_locations(ir, "output", index, interpreter)
+                writes.update(locations)
+                clears.update(locations)
+        for case in group.cases:
+            if case.value is not None and active_cases.get(case.case_id, True):
+                reads.update(_ref_locations(case.value, ir, interpreter))
     for event in spec.events:
         if getattr(event, "kind", None) == "for_each":
             reads.update(_ref_locations(event.collection, ir, interpreter))
             if event.yield_value is not None:
                 reads.update(_ref_locations(event.yield_value, ir, interpreter))
-    for _, body, event in iter_scoped_events(spec):
+    for _, body, event in scoped_events:
         if event.case and event.case.guard:
             reads.update(_operand_locations(ir, "input", event.case.guard.input_index, interpreter))
+        if event.case is not None and not active_cases[event.case.id]:
+            continue
         for op in event.atomic_ops:
             if op.op == "merge" and predecessor is not None:
                 for incoming in op.incoming:

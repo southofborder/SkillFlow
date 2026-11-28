@@ -1,0 +1,549 @@
+{
+  "status": "completed",
+  "declared_purpose": "Monitor stocks, ETFs and gold using seven alert rules, severity levels, holding-cost calculations, background scheduling and news analysis. Overnight and weekend monitoring is expressly gold-only and hourly. These are functional requirements; particular providers, request breadth and logging arrangements are implementation choices (SKILL.md:1-29, 69-88, 90-139, 175-181; README.md:1-19).",
+  "data_operations": [
+    {
+      "operation": "Load local monitoring configuration",
+      "source": "Module-level WATCHLIST",
+      "data_scope": "Configured instrument codes, names, markets, types, costs and alert thresholds; packaged values are defaults, not evidence of actual user holdings.",
+      "recipient_or_storage": "Local monitor process memory; the configuration already resides in scripts/monitor.py.",
+      "condition": "When the monitor module is imported or executed. No separate holdings-file reader is shown.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 34,
+          "end_line": 136
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 403,
+          "end_line": 412
+        }
+      ]
+    },
+    {
+      "operation": "Disclose selected instruments and retrieve current quotes",
+      "source": "StockAlert.fetch_sina_realtime",
+      "data_scope": "A batch of market-prefixed stock/ETF codes, or the fixed gold identifier hf_XAU. Receives prices, OHLC, volume, amount and timestamps. Configured holding costs and thresholds are not included in these requests.",
+      "recipient_or_storage": "HTTPS hq.sinajs.cn; parsed results return to the local caller.",
+      "condition": "Each requested scan. Direct smart-mode scans use the scheduled subset; smart_mode=False uses the full WATCHLIST, including in the daemon.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 330,
+          "end_line": 401
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 584,
+          "end_line": 600
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 71,
+          "end_line": 79
+        }
+      ]
+    },
+    {
+      "operation": "Disclose instrument identifiers and retrieve historical market data",
+      "source": "StockAlert historical-data helpers",
+      "data_scope": "Market-qualified secid and requested field/window parameters; responses contain two, six or thirty daily records with eleven requested K-line fields.",
+      "recipient_or_storage": "HTTPS push2his.eastmoney.com/api/qt/stock/kline/get; response data and calculations remain with the local caller.",
+      "condition": "Two-day fallback when stock/ETF quotes are missing or invalid; six-day volume lookup for configured non-gold volume checks with positive volume; thirty-day technical lookup when non-gold ma_monitor is enabled, which defaults to True.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 188,
+          "end_line": 301
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 369,
+          "end_line": 376
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 458,
+          "end_line": 497
+        }
+      ]
+    },
+    {
+      "operation": "Infer financial alert attributes and recommendations locally",
+      "source": "Configured costs and rules, retrieved prices/history, news titles and fixed correlation mappings",
+      "data_scope": "Cost-relative profit/loss percentages and target prices, daily changes, volume ratios, MA/RSI signals, estimated gaps, drawdowns, alert severity, news sentiment and rule-based advice. Gold correlation uses a fixed instrument mapping.",
+      "recipient_or_storage": "Local process and calling function; no model-service request is implemented for the text labelled Kimi advice.",
+      "condition": "When relevant checks or analyser methods execute. RSI follows ma_monitor rather than rsi_monitor; gap and trailing-stop checks do not consult their documented switches.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 252,
+          "end_line": 328
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 403,
+          "end_line": 561
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 58,
+          "end_line": 85
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 143,
+          "end_line": 160
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 200,
+          "end_line": 225
+        }
+      ]
+    },
+    {
+      "operation": "Retain and prune alert-suppression state",
+      "source": "Triggered instrument code and alert type",
+      "data_scope": "Code, alert type and timestamp.",
+      "recipient_or_storage": "StockAlert.alert_log in process memory; no disk persistence is shown.",
+      "condition": "Recorded while constructing alerts. Entries at least thirty minutes old are removed when _alerted_recently runs.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 147,
+          "end_line": 152
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 563,
+          "end_line": 571
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 646,
+          "end_line": 649
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve news for alert enrichment",
+      "source": "StockAnalyser.fetch_eastmoney_news",
+      "data_scope": "Configured instrument name, type=14 and count, normally five. Receives titles, URLs and publication times; locally derives sentiment and selects two shortened titles for the report.",
+      "recipient_or_storage": "HTTPS searchapi.eastmoney.com/api/suggest/get; fetched data and report return locally.",
+      "condition": "During generate_insight after an alert, when analyser execution succeeds; also on direct helper invocation and the analyser's standalone demonstration. The symbol argument is not transmitted by this helper.",
+      "evidence": [
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 24,
+          "end_line": 44
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 164,
+          "end_line": 198
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 228,
+          "end_line": 243
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 651,
+          "end_line": 661
+        }
+      ]
+    },
+    {
+      "operation": "Request fund-flow data without consuming the response",
+      "source": "StockAnalyser.fetch_fund_flow called by generate_insight",
+      "data_scope": "Market-prefixed instrument code and source=sina. The method returns fixed placeholder strings or an error; generate_insight does not use its result.",
+      "recipient_or_storage": "HTTPS quotes.sina.cn/cn/api/quotes.php; placeholder result stays local.",
+      "condition": "Every generate_insight execution that reaches the fund-flow call, plus direct helper invocation.",
+      "evidence": [
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 89,
+          "end_line": 104
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 164,
+          "end_line": 198
+        }
+      ]
+    },
+    {
+      "operation": "Perform an auxiliary news search",
+      "source": "StockAnalyser.fetch_sina_news",
+      "data_scope": "Instrument name in the URL query. Response HTML is unused; the returned news item is a locally constructed placeholder.",
+      "recipient_or_storage": "HTTPS search.sina.com.cn; placeholder returned to the caller.",
+      "condition": "Only if this helper is invoked; no packaged monitoring-path call is shown.",
+      "evidence": [
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 46,
+          "end_line": 56
+        }
+      ]
+    },
+    {
+      "operation": "Perform an auxiliary northbound-flow request",
+      "source": "StockAnalyser.fetch_northbound_flow",
+      "data_scope": "Fixed secid=1.000001 and fields=f170, rather than user holdings. Response content is unused.",
+      "recipient_or_storage": "HTTPS push2.eastmoney.com/api/qt/stock/get; a fixed placeholder returns locally.",
+      "condition": "Only if this helper is invoked; no packaged monitoring-path call is shown.",
+      "evidence": [
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 106,
+          "end_line": 114
+        }
+      ]
+    },
+    {
+      "operation": "Retrieve an auxiliary trading leaderboard",
+      "source": "StockAnalyser.fetch_dragon_tiger",
+      "data_scope": "Supplied date or current local date, report identifier, sorting, page size fifty and columns=ALL. Returns the provider's result data without local field filtering.",
+      "recipient_or_storage": "HTTP datacenter-web.eastmoney.com/api/data/v1/get; normal return to the caller.",
+      "condition": "Only if this helper is invoked; no packaged monitoring-path call is shown.",
+      "evidence": [
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 118,
+          "end_line": 139
+        }
+      ]
+    },
+    {
+      "operation": "Perform an auxiliary company-survey request",
+      "source": "StockAlert.fetch_news",
+      "data_scope": "Supplied symbol in the code parameter. Response content is unused and the method returns a fixed readiness message.",
+      "recipient_or_storage": "HTTPS emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax; placeholder returned locally.",
+      "condition": "Only if this helper is invoked; run_once instead uses StockAnalyser.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 573,
+          "end_line": 582
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 651,
+          "end_line": 658
+        }
+      ]
+    },
+    {
+      "operation": "Return or print alert reports",
+      "source": "StockAlert.run_once and standalone entry points",
+      "data_scope": "Instrument identity, price/change, configured cost and derived profit/loss, alert explanations and optional news analysis. The analyser demonstration prints sample news, sentiment and correlation.",
+      "recipient_or_storage": "run_once caller; stdout when monitor.py or analyser.py runs directly. The daemon receives reports and logs their count; no notification recipient or sending implementation is present.",
+      "condition": "Reports are returned when alerts trigger; standalone monitor execution prints them. A normal function return does not establish remote disclosure.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 635,
+          "end_line": 670
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 79,
+          "end_line": 85
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 228,
+          "end_line": 249
+        }
+      ]
+    },
+    {
+      "operation": "Persist operational logs and conditional diagnostics",
+      "source": "Daemon logging and monitor stdout/stderr",
+      "data_scope": "Timestamps, lifecycle events, scan modes/counts, alert counts and errors with tracebacks. Fallback/error prints can additionally contain instrument names, codes, prices and exception text; daemon code does not log complete alert reports.",
+      "recipient_or_storage": "~/.stock_monitor/monitor.log through FileHandler; the same events also reach stdout, which control.sh redirects into that file along with stderr.",
+      "condition": "Daemon logging is configured on module load. Redirected monitor diagnostics persist when launched through control.sh start. No in-process rotation is configured.",
+      "evidence": [
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 14,
+          "end_line": 25
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 61,
+          "end_line": 103
+        },
+        {
+          "path": "scripts/control.sh",
+          "start_line": 15,
+          "end_line": 20
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 220,
+          "end_line": 250
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 366,
+          "end_line": 399
+        }
+      ]
+    },
+    {
+      "operation": "Store/read process metadata, read logs and delete or truncate local files",
+      "source": "control.sh commands",
+      "data_scope": "Daemon PID and operational log contents.",
+      "recipient_or_storage": "~/.stock_monitor/monitor.pid and monitor.log; PID/status and log output go to the invoking terminal.",
+      "condition": "start writes the PID and truncates monitor.log through > redirection. status reads the PID and last five log lines; log follows the file. stop reads the PID, terminates an existing process and removes the PID file, including stale PID files; it does not remove the log.",
+      "evidence": [
+        {
+          "path": "scripts/control.sh",
+          "start_line": 4,
+          "end_line": 51
+        }
+      ]
+    },
+    {
+      "operation": "Make live data requests during tests",
+      "source": "test_suite.py data-fetching, alert-rule and integration tests",
+      "data_scope": "WATCHLIST instruments and, during full integration, any triggered enrichment queries. Synthetic alert tests also reach the default-enabled MA lookup; no request mocks are applied.",
+      "recipient_or_storage": "The quote/history/news recipients described above if the packaged monitor is imported; test results and counts go to the test caller/stdout.",
+      "condition": "When those tests execute. Import resolution is conditional because the suite prepends an unpackaged absolute directory.",
+      "evidence": [
+        {
+          "path": "scripts/test_suite.py",
+          "start_line": 7,
+          "end_line": 44
+        },
+        {
+          "path": "scripts/test_suite.py",
+          "start_line": 53,
+          "end_line": 97
+        },
+        {
+          "path": "scripts/test_suite.py",
+          "start_line": 206,
+          "end_line": 228
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 475,
+          "end_line": 477
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Stock/ETF identifiers outside the expressly gold-only overnight/weekend monitoring scope, plus associated history and alert-enrichment requests.",
+      "recipient_or_storage": "hq.sinajs.cn; conditionally push2his.eastmoney.com, searchapi.eastmoney.com and quotes.sina.cn.",
+      "condition": "Daemon night/weekend scans: it computes the restricted schedule but calls run_once(smart_mode=False), which selects the complete WATCHLIST.",
+      "purpose_basis": "SKILL.md explicitly limits these periods to gold. Additional stock/ETF identifiers are extra data within the quote batch, with additional downstream requests.",
+      "necessary_behavior": "Continue monitoring the scheduled gold instruments and preserve full coverage in other applicable periods.",
+      "proposed_reduction": "Pass the scheduled instrument subset into run_once, or use its smart-mode filtering.",
+      "preservation_conditions": "Keep the same enabled rules and alert output for instruments included in the schedule.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 80,
+          "end_line": 88
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 163,
+          "end_line": 184
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 584,
+          "end_line": 600
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 71,
+          "end_line": 79
+        }
+      ]
+    },
+    {
+      "data_scope": "Repeated instrument queries and resulting request timing during weekends.",
+      "recipient_or_storage": "Quote providers and any conditionally reached history/enrichment providers.",
+      "condition": "The weekend schedule omits interval; the daemon therefore uses its 300-second default rather than the documented hourly interval.",
+      "purpose_basis": "Weekend hourly monitoring is explicit. These are redundant scan actions relative to that cadence, separate from the oversized instrument batch.",
+      "necessary_behavior": "Perform weekend gold monitoring once per hour.",
+      "proposed_reduction": "Return interval=3600 from the weekend schedule branch.",
+      "preservation_conditions": "Retain the documented weekday intervals and weekend gold coverage.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 82,
+          "end_line": 88
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 163,
+          "end_line": 165
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 46,
+          "end_line": 59
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 89,
+          "end_line": 97
+        }
+      ]
+    },
+    {
+      "data_scope": "Alerting instrument's market-prefixed code.",
+      "recipient_or_storage": "HTTPS quotes.sina.cn/cn/api/quotes.php.",
+      "condition": "generate_insight invokes fetch_fund_flow, but the response is not parsed and its placeholder result is unused.",
+      "purpose_basis": "News-based insight is supported; this particular request contributes nothing to the generated insight. The excess is the entire redundant request, not extra fields in a necessary request.",
+      "necessary_behavior": "Produce the existing price, alert, sentiment, news-title and recommendation report.",
+      "proposed_reduction": "Remove the unused fund-flow call from generate_insight.",
+      "preservation_conditions": "The current report remains unchanged; assess any future implemented fund-flow feature separately.",
+      "evidence": [
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 89,
+          "end_line": 104
+        },
+        {
+          "path": "scripts/analyser.py",
+          "start_line": 164,
+          "end_line": 198
+        }
+      ]
+    },
+    {
+      "data_scope": "Unused K-line response fields in volume/technical lookups and ten additional daily records in the thirty-day technical lookup.",
+      "recipient_or_storage": "Response acquisition from push2his.eastmoney.com into monitor process memory.",
+      "condition": "fetch_volume_ma5 requests eleven fields but consumes volume only; fetch_ma_data requests eleven fields and thirty rows but consumes closing prices, with a maximum required lookback of twenty.",
+      "purpose_basis": "Volume averages and MA/RSI calculations are required outcomes. The excess is public market data acquired within necessary requests, not disclosure of additional holding costs.",
+      "necessary_behavior": "Calculate prior-five-day average volume, MA5/10/20, previous MA5/10 and fourteen-period RSI.",
+      "proposed_reduction": "Request only needed fields and twenty closing-price records for technical calculations; retain the six-record volume window and adjust parsing.",
+      "preservation_conditions": "Preserve date/order semantics, exclusion of today's volume and equivalent indicator results.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 224,
+          "end_line": 247
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 252,
+          "end_line": 328
+        }
+      ]
+    },
+    {
+      "data_scope": "Gap/RSI-derived alerts and instrument lookups caused solely by checks the user has disabled.",
+      "recipient_or_storage": "Local alert caller; conditionally searchapi.eastmoney.com and quotes.sina.cn during enrichment.",
+      "condition": "A user sets documented gap_monitor or rsi_monitor to False in WATCHLIST, but gap detection ignores its switch and RSI follows ma_monitor. An otherwise suppressed alert can consequently trigger enrichment.",
+      "purpose_basis": "The entry document presents technical indicators as configurable switches. Disabled checks do not require their derived alerts or resulting requests.",
+      "necessary_behavior": "Run enabled checks and enrich alerts that remain enabled.",
+      "proposed_reduction": "Honor gap_monitor and rsi_monitor independently before generating those alerts.",
+      "preservation_conditions": "Keep shared historical acquisition when another enabled calculation needs it; suppress enrichment only when no enabled alert remains.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 53,
+          "end_line": 57
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 168,
+          "end_line": 173
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 475,
+          "end_line": 517
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 615,
+          "end_line": 661
+        }
+      ]
+    },
+    {
+      "data_scope": "Duplicate copies of each daemon logging event, including diagnostic errors.",
+      "recipient_or_storage": "~/.stock_monitor/monitor.log.",
+      "condition": "control.sh start redirects stdout to the same file used by the daemon's FileHandler; its StreamHandler writes each logging event to that redirected stdout.",
+      "purpose_basis": "Operational logging and log viewing are supported. The second write is redundant persistence.",
+      "necessary_behavior": "Keep one accessible copy of each operational event.",
+      "proposed_reduction": "Use a single file-writing route when launched by control.sh, while retaining capture of necessary diagnostics.",
+      "preservation_conditions": "Preserve status/log command output and useful error information.",
+      "evidence": [
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 14,
+          "end_line": 24
+        },
+        {
+          "path": "scripts/control.sh",
+          "start_line": 15,
+          "end_line": 20
+        },
+        {
+          "path": "scripts/control.sh",
+          "start_line": 40,
+          "end_line": 51
+        }
+      ]
+    },
+    {
+      "data_scope": "Stock-specific fallback diagnostics and unfiltered exception text retained without an in-process size or age limit.",
+      "recipient_or_storage": "~/.stock_monitor/monitor.log via redirected stdout/stderr and daemon logging.",
+      "condition": "Fallbacks/errors occur during control.sh-launched monitoring. stop leaves the log; a subsequent start truncates it, but an uninterrupted process has no configured rotation.",
+      "purpose_basis": "Recent operational diagnostics support status/log viewing; unrestricted diagnostic detail and retention are implementation choices.",
+      "necessary_behavior": "Provide recent scan status and actionable failure information.",
+      "proposed_reduction": "Bound log retention and size; omit routine stock names/prices from fallback messages and sanitize request details in exceptions unless detailed diagnostics are needed.",
+      "preservation_conditions": "Retain timestamps, failure categories and sufficient bounded context for troubleshooting.",
+      "evidence": [
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 220,
+          "end_line": 250
+        },
+        {
+          "path": "scripts/monitor.py",
+          "start_line": 366,
+          "end_line": 399
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 14,
+          "end_line": 24
+        },
+        {
+          "path": "scripts/monitor_daemon.py",
+          "start_line": 99,
+          "end_line": 101
+        },
+        {
+          "path": "scripts/control.sh",
+          "start_line": 15,
+          "end_line": 51
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Provider-side response contents, retention, secondary use, redirects and deletion are undocumented. Requests establish disclosure to the specified endpoints, not subsequent external behavior.",
+    "End-to-end notification delivery is unresolved: scripts/monitor_daemon.py:79-85 only receives reports, logs their count and comments about a message tool. No sender, destination or transport is implemented.",
+    "Actual holdings configuration is unresolved: README.md:14-20 references config.example.py and config.py, neither supplied; scripts/monitor.py:34-136 defines WATCHLIST directly and shows no reader for those files.",
+    "Actual test import behavior is unresolved: scripts/test_suite.py:13-15 prepends an unpackaged absolute directory that can shadow the supplied monitor module. Test-operation findings assume the packaged module resolves.",
+    "The leaderboard helper returns externally defined columns=ALL without a supplied response schema or downstream caller; the precise returned attributes and necessary subset cannot be established (scripts/analyser.py:118-139).",
+    "Invocation and caller needs for otherwise uncalled auxiliary helpers are unspecified; their normal returns do not establish onward disclosure.",
+    "Filesystem access controls, external log cleanup and deletion of provider-held data are not specified. The implemented PID removal and launch-time log truncation do not establish secure erasure."
+  ]
+}

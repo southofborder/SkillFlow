@@ -4,8 +4,9 @@ from __future__ import annotations
 from skillflow.common.recording import canonical_sha256
 
 
-ROOT_RULES = {"typed_case_selector", "typed_control_operand", "declared_unavailable_selector"}
+ROOT_RULES = {"typed_case_selector", "typed_control_operand", "declared_unavailable_selector", "outcome_dispatch_selector"}
 COPY_RULES = {"actual_operand", "cfg_result_use", "incoming_value", "public_result",
+              "protected_outcome_value",
               "public_return_boundary", "processing_boundary", "selected_path", "remaining_content",
               "unchanged_content", "updated_value", "constructed_member", "same_element",
               "context_reaching_write", "saved_read", "map_yield", "expression_reference",
@@ -81,6 +82,8 @@ def validate_bindings(derivations, engine):
         meta = row["node"]
         node = node_ids.get(canonical_sha256(meta))
         wanted = {field: row[field] for field in ("property", "path", "each", "excluded_paths", "selector_ref")}
+        if "outcome_data_ids" in row:
+            wanted["outcome_data_ids"] = row["outcome_data_ids"]
         if node is None or key != _id("demand_", [node, wanted, row["requirement_id"], row["seed_goal_id"],
                                                    row["conservative"], row.get("information_bound", False)]):
             raise ValueError("Demand selector derivation identity differs from its subject or information range")

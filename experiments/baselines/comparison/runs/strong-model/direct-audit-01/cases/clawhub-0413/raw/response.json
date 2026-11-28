@@ -1,0 +1,353 @@
+{
+  "status": "completed",
+  "declared_purpose": "Monitor user-selected topics through scheduled web searches, RSS/Atom feeds and GitHub releases; filter and deduplicate results, score importance and sentiment, produce contextual alerts and weekly digests, and track state. These features are explicit; particular stored fields, automatic search queries and retention periods are implementation choices (SKILL.md:4-4,24-24,52-66).",
+  "data_operations": [
+    {
+      "operation": "Collect, read, persist and display configuration",
+      "source": "Setup answers, CLI arguments and config.json",
+      "data_scope": "Topic names, queries, keywords, feed URLs, repositories, context, schedules, alert conditions and channels. Configuration is plain JSON.",
+      "recipient_or_storage": "Skill-local config.json; configuration summaries return to the caller through stdout.",
+      "condition": "Setup, quick-add and topic-management paths. The setup wizard can overwrite existing configuration after its own confirmation.",
+      "evidence": [
+        {"path": "scripts/config.py", "start_line": 11, "end_line": 42},
+        {"path": "scripts/setup.py", "start_line": 90, "end_line": 132},
+        {"path": "scripts/setup.py", "start_line": 192, "end_line": 230},
+        {"path": "scripts/quick.py", "start_line": 52, "end_line": 85},
+        {"path": "scripts/manage_topics.py", "start_line": 113, "end_line": 138}
+      ]
+    },
+    {
+      "operation": "Read and import local subscriptions",
+      "source": "The OPML file supplied to import-opml",
+      "data_scope": "Outline titles, xmlUrl and htmlUrl values; imported monitoring settings and context. htmlUrl also becomes a search query when the topic lacks one.",
+      "recipient_or_storage": "Local parser memory and config.json.",
+      "condition": "import-opml; matching topics merge feed subscriptions, while other outlines create topics. An htmlUrl additionally triggers the discovery operation below.",
+      "evidence": [
+        {"path": "scripts/manage_topics.py", "start_line": 228, "end_line": 278}
+      ]
+    },
+    {
+      "operation": "Request webpages for feed discovery",
+      "source": "Explicit discovery URLs, add/edit --discover-feeds arguments, or imported OPML htmlUrl values",
+      "data_scope": "Requested URL, User-Agent and Accept headers; up to 250,000 response bytes. Extracted alternate links and five guessed paths form the returned candidate list.",
+      "recipient_or_storage": "Requested website and any redirect destination reached by urlopen; response processing is local. Callers may print candidates or save them in config.json.",
+      "condition": "Discovery invocation. Recognized feed suffixes return immediately without fetching. Candidate links are returned without validation.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 110, "end_line": 162},
+        {"path": "scripts/manage_topics.py", "start_line": 66, "end_line": 71},
+        {"path": "scripts/manage_topics.py", "start_line": 184, "end_line": 188},
+        {"path": "scripts/manage_topics.py", "start_line": 247, "end_line": 248}
+      ]
+    },
+    {
+      "operation": "Pass search data and credentials to a local subprocess",
+      "source": "Topic query and process environment",
+      "data_scope": "Control-character-stripped query capped at 500 characters, a five-result request, PATH, HOME, LANG, TERM, SERPER_API_KEY, TAVILY_API_KEY, EXA_API_KEY, YOU_API_KEY, SEARXNG_INSTANCE_URL and WSP_CACHE_DIR when present.",
+      "recipient_or_storage": "web-search-plus search.py at WEB_SEARCH_PLUS_PATH or the computed sibling path. Its stdout returns to monitor.py; downstream provider disclosure and caching are unresolved.",
+      "condition": "A nonempty query and an existing search script, including during --dry-run. Verbose mode prints the sanitized query and selected diagnostics; timeout handling prints the original query. Mock results are only a dry-run fallback.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 270, "end_line": 330}
+      ]
+    },
+    {
+      "operation": "Poll remote feeds and conditionally authenticate",
+      "source": "Configured feeds, github_repos and saved feed validators",
+      "data_scope": "Feed URL, User-Agent, Accept and encoding headers, and cached ETag/Last-Modified validators. URL-embedded HTTP credentials become Basic authentication; the vendored handler can retry using Digest authentication.",
+      "recipient_or_storage": "Configured feed servers, github.com release feeds, and redirect destinations handled by the URL handler. Entire response bodies are read into local memory.",
+      "condition": "Feed collection, including --dry-run; duplicate configured feed URLs are consolidated. HTTP 304 responses skip entry processing. These are direct network operations despite documentation claiming no direct HTTP.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 333, "end_line": 375},
+        {"path": "scripts/_vendor/feedparser/http.py", "start_line": 48, "end_line": 91},
+        {"path": "scripts/_vendor/feedparser/http.py", "start_line": 94, "end_line": 123},
+        {"path": "scripts/_vendor/feedparser/http.py", "start_line": 134, "end_line": 175}
+      ]
+    },
+    {
+      "operation": "Read or parse feed input locally",
+      "source": "Configured feed strings and retrieved feed bodies",
+      "data_scope": "feedparser accepts streams, supported URL schemes and local filenames. Monitor converts at most ten parsed entries per feed into title, URL, full normalized summary, publication date, tags and source metadata.",
+      "recipient_or_storage": "Local parser and monitor memory; projected results subsequently enter scoring, findings or alert paths.",
+      "condition": "The value passed as a feed determines whether resource access is remote or local. A local filename or file URL can cause a local read; this does not itself upload that file.",
+      "evidence": [
+        {"path": "scripts/_vendor/feedparser/api.py", "start_line": 77, "end_line": 140},
+        {"path": "scripts/monitor.py", "start_line": 234, "end_line": 267},
+        {"path": "scripts/monitor.py", "start_line": 369, "end_line": 375}
+      ]
+    },
+    {
+      "operation": "Filter results and infer importance and sentiment",
+      "source": "Result titles, snippets, URLs and publication dates; topic keywords, source preferences and alert conditions",
+      "data_scope": "Relevance score, priority, scoring reason, positive/negative/neutral/mixed sentiment and sentiment-shift status. These describe findings, not an inferred user mood.",
+      "recipient_or_storage": "Local Python processing; inferred values subsequently accompany state, findings and alerts.",
+      "condition": "Results with URLs that survive deduplication and boolean filters. Scoring uses local rules; no model-service request appears in this component.",
+      "evidence": [
+        {"path": "scripts/importance_scorer.py", "start_line": 28, "end_line": 91},
+        {"path": "scripts/importance_scorer.py", "start_line": 214, "end_line": 242},
+        {"path": "scripts/monitor.py", "start_line": 385, "end_line": 400},
+        {"path": "scripts/monitor.py", "start_line": 561, "end_line": 591}
+      ]
+    },
+    {
+      "operation": "Read and persist monitoring state",
+      "source": "Prior state, processed result URLs, feed responses and monitoring counters",
+      "data_scope": "MD5 URL hashes with timestamps; feed URLs, validators, check/status metadata, site URLs and feed titles; topic check times, result counts and alert counts.",
+      "recipient_or_storage": "topic-monitor-state.json under TOPIC_MONITOR_DATA_DIR, defaulting to skill-local .data/.",
+      "condition": "State is loaded for monitoring and testing. Loading can create directories. Normal monitor execution saves state; --dry-run suppresses the final state write. Expired deduplication entries are checked but not removed.",
+      "evidence": [
+        {"path": "scripts/config.py", "start_line": 14, "end_line": 64},
+        {"path": "scripts/monitor.py", "start_line": 165, "end_line": 222},
+        {"path": "scripts/monitor.py", "start_line": 616, "end_line": 620},
+        {"path": "scripts/monitor.py", "start_line": 675, "end_line": 677}
+      ]
+    },
+    {
+      "operation": "Persist finding sentiment history",
+      "source": "Every scored, nonduplicate result that passes topic filters",
+      "data_scope": "Timestamp, sentiment, result URL and title; last_sentiment. Each topic retains at most 50 history entries.",
+      "recipient_or_storage": "Topic records in the local monitor state file.",
+      "condition": "Non-dry-run monitoring, including low-priority results and topics with sentiment-shift alerts disabled. The shift comparison itself reads only the previous sentiment.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 434, "end_line": 455},
+        {"path": "scripts/monitor.py", "start_line": 589, "end_line": 591}
+      ]
+    },
+    {
+      "operation": "Append medium-priority findings",
+      "source": "Collected result dictionaries and derived scoring values",
+      "data_scope": "Entire result dictionary, score, reason, timestamp, sentiment and shift flag. Search-provider fields are not projected to a fixed schema before storage.",
+      "recipient_or_storage": "findings/YYYY-MM-DD_topic-id.json under the configured data directory.",
+      "condition": "Medium-priority results during non-dry-run monitoring. Existing daily findings are loaded and appended; no findings cleanup path is supplied.",
+      "evidence": [
+        {"path": "scripts/config.py", "start_line": 101, "end_line": 122},
+        {"path": "scripts/monitor.py", "start_line": 603, "end_line": 612}
+      ]
+    },
+    {
+      "operation": "Persist high-priority alert records",
+      "source": "Topic configuration, high-priority result and scoring output",
+      "data_scope": "Topic identifiers, title, full snippet, URL, context, rendered message, score/reason, sentiment, source, feed URL, repository and delivery status.",
+      "recipient_or_storage": "alerts-queue.json under the configured data directory; stdout receives a short ALERT_QUEUED announcement.",
+      "condition": "Non-dry-run high-priority results passing rate limits, iterated over topic channels. This path does not consult global channel enabled settings. Queueing is local persistence, not platform delivery.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 489, "end_line": 527},
+        {"path": "scripts/monitor.py", "start_line": 593, "end_line": 598},
+        {"path": "scripts/config.py", "start_line": 138, "end_line": 191}
+      ]
+    },
+    {
+      "operation": "Return alert previews and delivery envelopes",
+      "source": "Topic/result data or pending local queue records; TOPIC_MONITOR_TELEGRAM_ID",
+      "data_scope": "Rendered alert includes topic, title, a bounded snippet, complete configured context, source/link, scoring reason and sentiment. JSON processing also includes routing metadata and the Telegram target variable for every channel.",
+      "recipient_or_storage": "stdout to the invoking caller, potentially an OpenClaw agent. Telegram, Discord and email are intended downstream channels; actual transmission is not implemented here.",
+      "condition": "Dry-run alert previews or process_alerts.py human/JSON output. Returning JSON does not itself prove remote disclosure or further persistence.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 458, "end_line": 501},
+        {"path": "scripts/process_alerts.py", "start_line": 26, "end_line": 123}
+      ]
+    },
+    {
+      "operation": "Mark delivered alerts and delete aged queue entries",
+      "source": "Local alert queue and supplied alert IDs or age threshold",
+      "data_scope": "Marking adds sent and sent_at without removing payloads. Age cleanup removes both sent and unsent records older than the cutoff; invalid timestamps are retained.",
+      "recipient_or_storage": "Rewritten alerts-queue.json.",
+      "condition": "Explicit --mark-sent or --clear-old HOURS invocation. Cleanup is not automatically scheduled by the packaged monitoring flow.",
+      "evidence": [
+        {"path": "scripts/config.py", "start_line": 210, "end_line": 263},
+        {"path": "scripts/process_alerts.py", "start_line": 144, "end_line": 165}
+      ]
+    },
+    {
+      "operation": "Read findings and return a weekly digest",
+      "source": "Date-matching local findings files and current topic configuration",
+      "data_scope": "Topic names, titles, links, scores, reasons and sentiments; full snippets for three highlights and shortened snippets for up to five entries per topic.",
+      "recipient_or_storage": "Local aggregation and stdout to the caller. No digest file write or channel transmission is implemented.",
+      "condition": "digest.py preview/default or --send, with optional --week-offset. The --send path prints the digest and a success message.",
+      "evidence": [
+        {"path": "scripts/digest.py", "start_line": 34, "end_line": 64},
+        {"path": "scripts/digest.py", "start_line": 103, "end_line": 150},
+        {"path": "scripts/digest.py", "start_line": 165, "end_line": 181}
+      ]
+    },
+    {
+      "operation": "Remove a topic definition",
+      "source": "config.json and the requested topic ID",
+      "data_scope": "Deletes the matching topic configuration. Associated findings, queued alerts, sentiment history and feed state are not deleted by this command.",
+      "recipient_or_storage": "Rewritten config.json; historical data remains at its separate data-directory boundaries.",
+      "condition": "manage_topics.py remove for an existing topic.",
+      "evidence": [
+        {"path": "scripts/manage_topics.py", "start_line": 196, "end_line": 205},
+        {"path": "scripts/config.py", "start_line": 14, "end_line": 18}
+      ]
+    },
+    {
+      "operation": "Return scheduling configuration",
+      "source": "Configured digest schedule and computed skill/script paths",
+      "data_scope": "Schedules and commands containing absolute local paths.",
+      "recipient_or_storage": "JSON on stdout to the caller; intended for OpenClaw's cron tool.",
+      "condition": "setup_cron.py. The packaged script does not install jobs or modify crontab.",
+      "evidence": [
+        {"path": "scripts/setup_cron.py", "start_line": 22, "end_line": 63},
+        {"path": "scripts/setup_cron.py", "start_line": 74, "end_line": 82}
+      ]
+    },
+    {
+      "operation": "Read and print standalone parser test input",
+      "source": "A supplied local filename, default test.html, or stdin",
+      "data_scope": "Input markup, text and attributes.",
+      "recipient_or_storage": "Local parser memory and diagnostic stdout.",
+      "condition": "Direct execution of vendored sgmllib.py; its default test class prints parsed data. This entry point is not invoked by importing it for monitoring.",
+      "evidence": [
+        {"path": "scripts/_vendor/sgmllib.py", "start_line": 453, "end_line": 505},
+        {"path": "scripts/_vendor/sgmllib.py", "start_line": 508, "end_line": 545}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Automatically invented topic searches and OPML htmlUrl search queries",
+      "recipient_or_storage": "web-search-plus search.py subprocess; ultimate search-provider recipient is unresolved.",
+      "condition": "Quick-add with feeds/repositories still defaults to a search query; OPML import populates otherwise empty queries from htmlUrl.",
+      "purpose_basis": "The skill supports combining sources, but feed subscription and release monitoring do not explicitly require an additional web search.",
+      "necessary_behavior": "Poll selected feeds and releases; retain searches explicitly requested by the user.",
+      "proposed_reduction": "Make generated web searches opt-in for feed/repository setup and OPML import. This removes a potentially redundant action, rather than trimming a required search payload.",
+      "preservation_conditions": "Preserve explicit queries and intentional mixed-source monitoring.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 52, "end_line": 66},
+        {"path": "scripts/quick.py", "start_line": 52, "end_line": 75},
+        {"path": "scripts/manage_topics.py", "start_line": 250, "end_line": 261},
+        {"path": "scripts/monitor.py", "start_line": 270, "end_line": 301}
+      ]
+    },
+    {
+      "data_scope": "OPML htmlUrl requests and additional discovered or guessed feed subscriptions",
+      "recipient_or_storage": "Each imported htmlUrl website during discovery; additional subscriptions in config.json and subsequent feed servers.",
+      "condition": "An imported outline contains both an explicit xmlUrl and htmlUrl.",
+      "purpose_basis": "Importing the supplied feed subscription is explicit; visiting its website and expanding subscriptions is an implementation choice.",
+      "necessary_behavior": "Read and save the supplied xmlUrl and subscription title.",
+      "proposed_reduction": "Import explicit subscriptions directly and offer website discovery separately. This removes an additional request and subscription-expansion action.",
+      "preservation_conditions": "Keep discovery available when requested or when resolving a missing feed URL.",
+      "evidence": [
+        {"path": "scripts/manage_topics.py", "start_line": 236, "end_line": 261},
+        {"path": "scripts/monitor.py", "start_line": 119, "end_line": 162}
+      ]
+    },
+    {
+      "data_scope": "Original query characters omitted from the actual search request, including content beyond the 500-character limit",
+      "recipient_or_storage": "stderr returned to the caller; any subsequent log retention is unknown.",
+      "condition": "The search subprocess times out; this diagnostic is not restricted to verbose mode.",
+      "purpose_basis": "Failure diagnostics are useful, but the original unbounded query exceeds the query used by the search action.",
+      "necessary_behavior": "Identify the failed topic and timeout.",
+      "proposed_reduction": "Log the topic ID and timeout, or at most the same sanitized query prefix sent to the child.",
+      "preservation_conditions": "Retain enough identification to troubleshoot the failed search.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 288, "end_line": 292},
+        {"path": "scripts/monitor.py", "start_line": 315, "end_line": 316}
+      ]
+    },
+    {
+      "data_scope": "Expired MD5 URL hashes and last-seen timestamps",
+      "recipient_or_storage": "deduplication.url_hash_map in topic-monitor-state.json",
+      "condition": "Normal monitoring accumulates entries beyond deduplication_window_hours; expiry changes matching behavior but does not delete records.",
+      "purpose_basis": "Deduplication is explicit, with a configured time window. Indefinite retention beyond that window is unnecessary for the implemented check.",
+      "necessary_behavior": "Recognize URLs seen inside the active deduplication window.",
+      "proposed_reduction": "Prune entries older than the active window before saving state.",
+      "preservation_conditions": "Use the current configured window; preserve longer history only if retrospective window expansion is an intended requirement.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 165, "end_line": 177},
+        {"path": "scripts/monitor.py", "start_line": 540, "end_line": 540},
+        {"path": "scripts/monitor.py", "start_line": 675, "end_line": 676}
+      ]
+    },
+    {
+      "data_scope": "Cached site_url and feed_title copies",
+      "recipient_or_storage": "Per-feed records in topic-monitor-state.json",
+      "condition": "Feed responses contain a site link or title.",
+      "purpose_basis": "Conditional polling requires validators and check metadata; these two persisted descriptive fields are not consumed by the supplied polling or result-conversion path.",
+      "necessary_behavior": "Retain ETag/Last-Modified values and required check metadata; use the current parsed title when producing results.",
+      "proposed_reduction": "Omit unused site_url and feed_title copies from persisted cache records.",
+      "preservation_conditions": "Retain them only if an additional feed-management display or other consumer requires them.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 195, "end_line": 222},
+        {"path": "scripts/monitor.py", "start_line": 369, "end_line": 374}
+      ]
+    },
+    {
+      "data_scope": "Result titles and URLs attached to each sentiment-history entry",
+      "recipient_or_storage": "Per-topic sentiment_history in topic-monitor-state.json",
+      "condition": "Every scored result during non-dry-run monitoring, including low-priority findings and topics without shift alerts.",
+      "purpose_basis": "Sentiment history is explicitly declared; retaining finding identifiers alongside every label is an implementation choice. Shift detection reads only the preceding label.",
+      "necessary_behavior": "Track sentiment labels and compare the previous label when shift alerts are enabled.",
+      "proposed_reduction": "Retain a bounded label history and any needed timestamps; omit titles and URLs unless a history-view feature requires them.",
+      "preservation_conditions": "Preserve declared sentiment tracking and the previous label required for shift detection.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 4, "end_line": 4},
+        {"path": "scripts/monitor.py", "start_line": 434, "end_line": 455},
+        {"path": "scripts/monitor.py", "start_line": 589, "end_line": 591}
+      ]
+    },
+    {
+      "data_scope": "Whole result dictionaries, including unused feed metadata and any additional fields returned by web-search-plus",
+      "recipient_or_storage": "Daily findings JSON files under FINDINGS_DIR",
+      "condition": "A result receives medium priority during non-dry-run monitoring.",
+      "purpose_basis": "Saving findings for digests is required; serializing every returned field is extra data within that required persistence action.",
+      "necessary_behavior": "Retain titles, URLs, digest snippets and the scoring/sentiment metadata consumed by digest generation.",
+      "proposed_reduction": "Project results to an explicit digest schema before saving, excluding unused provider and feed fields.",
+      "preservation_conditions": "Preserve snippets needed for highlights and historical --week-offset digests; do not impose a shorter archive window without a corresponding retention requirement.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 302, "end_line": 312},
+        {"path": "scripts/monitor.py", "start_line": 248, "end_line": 258},
+        {"path": "scripts/monitor.py", "start_line": 603, "end_line": 612},
+        {"path": "scripts/digest.py", "start_line": 103, "end_line": 150}
+      ]
+    },
+    {
+      "data_scope": "Full snippets and duplicate context/reason/sentiment components, plus source/feed/repository fields accompanying an already rendered message",
+      "recipient_or_storage": "alerts-queue.json",
+      "condition": "monitor.py queues a new alert with message already populated. The message bounds its snippet, while the separate snippet field retains the full value.",
+      "purpose_basis": "Reliable queued delivery is necessary; duplicate rendering inputs and unused source fields are extra data in that persistence action.",
+      "necessary_behavior": "Retain the rendered message, delivery state, routing information and metadata consumed by the human/JSON output formats.",
+      "proposed_reduction": "For new pre-rendered records, omit unused raw rendering inputs and source fields. Retain component-based rendering only for records lacking message.",
+      "preservation_conditions": "Preserve existing queue compatibility, JSON metadata, human previews and delivery acknowledgments.",
+      "evidence": [
+        {"path": "scripts/monitor.py", "start_line": 469, "end_line": 486},
+        {"path": "scripts/monitor.py", "start_line": 505, "end_line": 524},
+        {"path": "scripts/process_alerts.py", "start_line": 26, "end_line": 29},
+        {"path": "scripts/process_alerts.py", "start_line": 76, "end_line": 90},
+        {"path": "scripts/process_alerts.py", "start_line": 104, "end_line": 115}
+      ]
+    },
+    {
+      "data_scope": "Complete delivered alert payloads, including topic context and result content",
+      "recipient_or_storage": "alerts-queue.json after sent is set",
+      "condition": "Alerts are marked sent and explicit age cleanup is never invoked.",
+      "purpose_basis": "The queue supports pending delivery. Keeping completed payloads indefinitely is not required by its supplied consumers.",
+      "necessary_behavior": "Keep pending alerts until acknowledged and retain any required delivery bookkeeping.",
+      "proposed_reduction": "Automatically remove or reduce acknowledged records after a defined retry/audit interval.",
+      "preservation_conditions": "Do not delete unacknowledged alerts merely because they are old; preserve any explicitly required delivery-history period.",
+      "evidence": [
+        {"path": "scripts/config.py", "start_line": 194, "end_line": 232},
+        {"path": "scripts/config.py", "start_line": 235, "end_line": 263},
+        {"path": "scripts/process_alerts.py", "start_line": 144, "end_line": 165}
+      ]
+    },
+    {
+      "data_scope": "TOPIC_MONITOR_TELEGRAM_ID on Discord, email or other non-Telegram alert envelopes",
+      "recipient_or_storage": "stdout JSON returned by process_alerts.py --json to its caller/OpenClaw agent",
+      "condition": "A pending non-Telegram alert is formatted while the Telegram target environment variable is populated.",
+      "purpose_basis": "Routing requires the selected channel's destination; attaching a Telegram destination to every channel is extra data in the required return.",
+      "necessary_behavior": "Return the appropriate destination for each alert's channel.",
+      "proposed_reduction": "Include TOPIC_MONITOR_TELEGRAM_ID only for Telegram alerts; resolve other destinations through their applicable channel mechanism.",
+      "preservation_conditions": "Preserve Telegram routing and the caller's ability to deliver other channels. No onward disclosure to those platforms is established by this code.",
+      "evidence": [
+        {"path": "scripts/process_alerts.py", "start_line": 104, "end_line": 115}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Downstream search assessment is blocked by absent web-search-plus source: provider selection, exact outbound payloads, credential use, WSP_CACHE_DIR contents and retention cannot be determined. Passing allowed environment variables to its local subprocess does not establish disclosure of all credentials to search providers.",
+    "Actual OpenClaw message and cron behavior is outside the package. Platform transmission, final recipients, delivery acknowledgments and retention of returned output remain unresolved. The packaged digest sender only prints.",
+    "Runtime configuration, OPML content, environment and provider responses are not supplied. Concrete feed hosts, channel destinations, embedded credentials and additional result fields are therefore unknown.",
+    "Memory-aware summaries are declared, but the supplied implementation uses configured context. No packaged path reads past conversations or personal-analytics data; learning_enabled does not establish such collection.",
+    "The supplied inventory has no .gitignore supporting the README's state-file exclusion claim. Filesystem access controls, backups and external storage behavior for TOPIC_MONITOR_DATA_DIR are also unknown."
+  ]
+}

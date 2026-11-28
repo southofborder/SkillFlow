@@ -1,0 +1,466 @@
+{
+  "status": "completed",
+  "declared_purpose": "Manage a trusted user's Kanban tasks through a dashboard and CLI, automatically execute tasks moved to in_progress, and process EPIC children sequentially. GitHub synchronization, Pages hosting and webhook setup are explicit architecture requirements; Slack notifications are optional. Supporting source adds cron management. Snapshot breadth, logging, browser credential retention and fixed routing are implementation choices. Sources: SKILL.md:3-22,42-47,117-144,190-208; README.md:22-27; docs/gateway-setup.md:1-3.",
+  "data_operations": [
+    {
+      "operation": "Instruct agent-guided setup, configuration persistence and remote provisioning",
+      "source": "Setup instructions and configuration examples",
+      "data_scope": "Workspace paths, gateway address, hook credential, optional Slack bot credential/channel, dashboard files and task data; webhook URL containing the hook credential",
+      "recipient_or_storage": "Local ~/.clawdbot configuration; GitHub repository, webhook configuration and Pages deployment; webhook ingress through Tailscale Funnel",
+      "condition": "When setup is requested. These are documented instructions; no packaged setup implementation establishes the exact deployed files or visibility.",
+      "evidence": [
+        { "path": "SKILL.md", "start_line": 16, "end_line": 22 },
+        { "path": "SKILL.md", "start_line": 162, "end_line": 174 },
+        { "path": "assets/examples/HOOKS-CONFIG.md", "start_line": 28, "end_line": 41 },
+        { "path": "docs/PREREQUISITES.md", "start_line": 38, "end_line": 56 }
+      ]
+    },
+    {
+      "operation": "Receive webhook data, verify locally and filter processing",
+      "source": "Gateway-supplied ctx.payload, ctx.headers and ctx.rawBody",
+      "data_scope": "Repository metadata, actor identifiers, refs, commit identifiers, changed filenames, signature and raw request body; locally read HMAC secret",
+      "recipient_or_storage": "Transform process; HMAC secret remains a local input",
+      "condition": "HMAC verification runs only when signature and rawBody exist, and accepts when the secret file is absent. Ordinary processing requires a ref containing main/master and a changed path containing tasks.json. Ping handling precedes these filters.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 214, "end_line": 233 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 510, "end_line": 561 }
+      ]
+    },
+    {
+      "operation": "Read a local GitHub credential and retrieve repository state",
+      "source": "config.secrets.githubTokenFile and webhook-selected repository/commit",
+      "data_scope": "Reads the credential file locally, extracts the first oauth_token match, then retrieves commit metadata, a recursive repository tree and the complete task-file blob",
+      "recipient_or_storage": "Credential and repository/commit requests go to api.github.com; responses return to the transform",
+      "condition": "A qualifying push supplies a commit identifier. Authorization is omitted if no credential is found. The credential file itself is not transmitted.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 141, "end_line": 208 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 584, "end_line": 598 }
+      ]
+    },
+    {
+      "operation": "Read task baselines and persist fetched task state",
+      "source": "Local snapshot, fallback live task file and fetched GitHub task document",
+      "data_scope": "Complete board document, including descriptions, comments, subtasks, projects and other supplied fields",
+      "recipient_or_storage": "config.workspace.tasksFile and config.workspace.snapshotFile under the configured workspace",
+      "condition": "Reads snapshot first, otherwise the live file. Successful fetch overwrites the live file. Snapshot overwrite occurs only after a recognized diff event; comment deletion/editing or other unrecognized changes can leave older snapshot content.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 327, "end_line": 373 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 565, "end_line": 633 }
+      ]
+    },
+    {
+      "operation": "Append diagnostic records",
+      "source": "Webhook metadata and transform execution",
+      "data_scope": "Timestamps, repository name, rejected ref, unrelated changed filenames on skipped pushes, abbreviated commit identifier, task/event counts, EPIC task identifier and error messages",
+      "recipient_or_storage": "config.workspace.debugLog, default data/.webhook-debug.log; console if file logging fails",
+      "condition": "Across webhook processing, including rejected or irrelevant events. No rotation or deletion is implemented.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 118, "end_line": 132 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 538, "end_line": 560 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 565, "end_line": 679 }
+      ]
+    },
+    {
+      "operation": "Send a task work order to the configured gateway",
+      "source": "Tasks newly moved to in_progress and discovered EPIC children",
+      "data_scope": "Task identifiers, titles, descriptions, definitions of done and subtasks; ordinary work orders also include the latest comment and its author. Request includes a task-keyed session, hook credential and Slack delivery parameters.",
+      "recipient_or_storage": "config.gateway.url/hooks/agent, local by default but configurable remotely; downstream agent processing is external",
+      "condition": "A recognized status transition triggers execution. EPIC matching selects a sequential child work order. deliver:true and channel:slack are unconditional; to is supplied only when a Slack channel is configured.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 239, "end_line": 266 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 301, "end_line": 321 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 379, "end_line": 458 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 635, "end_line": 676 }
+      ]
+    },
+    {
+      "operation": "Send optional direct Slack status notifications",
+      "source": "Webhook actor and formatted task events",
+      "data_scope": "Actor name, task titles, status transitions and EPIC child count; general notifications summarize at most five events plus an additional-event count",
+      "recipient_or_storage": "https://slack.com/api/chat.postMessage and config.slack.channel, authenticated with the Slack bot credential",
+      "condition": "Requires both botToken and channel. Sends a start notification for execution, otherwise a general notification. These formatters do not include task descriptions or comment bodies.",
+      "evidence": [
+        { "path": "README.md", "start_line": 22, "end_line": 27 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 272, "end_line": 295 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 459, "end_line": 505 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 635, "end_line": 676 }
+      ]
+    },
+    {
+      "operation": "Return transform results to its caller",
+      "source": "Calculated events, selected tasks, ping payload or fetch failure",
+      "data_scope": "Final metadata contains events, complete selected in-progress task objects and repository name. Comment events contain the latest comment object. Ping/error paths return a message with deliver:true.",
+      "recipient_or_storage": "Calling gateway; no additional transmission is implemented by the return itself",
+      "condition": "Final successful processing returns deliver:false. Gateway handling, retention and routing of returned metadata or deliver:true messages are unresolved.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 327, "end_line": 373 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 529, "end_line": 536 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 608, "end_line": 638 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 679, "end_line": 684 }
+      ]
+    },
+    {
+      "operation": "Mutate local tasks and commit/push changes",
+      "source": "mc-update.sh arguments and the repository containing that script",
+      "data_scope": "Reads the full data/tasks.json; changes status, subtasks, comments, completion summaries and processing timestamps. Comments record MoltBot as author. Completion removes processingStartedAt.",
+      "recipient_or_storage": "Local task file and Git history, then the configured Git push remote/ref; command output returns to its caller",
+      "condition": "Supported commands rewrite the document. If git status reports task-file changes, the script stages that file, runs an unrestricted git commit and git push. It does not load the transform's workspace configuration.",
+      "evidence": [
+        { "path": "scripts/mc-update.sh", "start_line": 15, "end_line": 19 },
+        { "path": "scripts/mc-update.sh", "start_line": 46, "end_line": 66 },
+        { "path": "scripts/mc-update.sh", "start_line": 82, "end_line": 104 },
+        { "path": "scripts/mc-update.sh", "start_line": 118, "end_line": 146 },
+        { "path": "scripts/mc-update.sh", "start_line": 160, "end_line": 184 },
+        { "path": "scripts/mc-update.sh", "start_line": 198, "end_line": 284 },
+        { "path": "scripts/mc-update.sh", "start_line": 303, "end_line": 309 }
+      ]
+    },
+    {
+      "operation": "Authenticate the dashboard and retain browser credentials",
+      "source": "User-entered GitHub PAT and GitHub /user response",
+      "data_scope": "PAT and user profile; active login stores gh_token. The older modal stores github_token plus login, avatar URL and display name in github_user. Full profile responses are held in STATE.user.",
+      "recipient_or_storage": "api.github.com for validation; dashboard-origin localStorage and browser memory; returned avatar URL receives an image request",
+      "condition": "Active checkAuth migrates old keys and validates saved credentials on load. Logout removes only the old keys, leaving gh_token. This implementation contradicts the entry document's no-dashboard-credential-storage claim.",
+      "evidence": [
+        { "path": "SKILL.md", "start_line": 197, "end_line": 202 },
+        { "path": "assets/index.html", "start_line": 3462, "end_line": 3574 },
+        { "path": "assets/index.html", "start_line": 7096, "end_line": 7209 }
+      ]
+    },
+    {
+      "operation": "Retrieve, edit and synchronize the task board",
+      "source": "GitHub task document and dashboard inputs",
+      "data_scope": "Complete STATE.data, including tasks, comments/authors/timestamps, projects, activities, templates and scheduling fields; commit messages can repeat titles, subtask text and comment excerpts",
+      "recipient_or_storage": "Browser memory and GitHub Contents API for CONFIG.owner/CONFIG.repo; repository file and commit history",
+      "condition": "Authenticated loads and saves use the fixed CONFIG, initially rdsthomas/mission-control. Polls every 30 seconds when authenticated, visible and without unsaved changes. Missing authentication or load failure uses embedded synthetic FALLBACK_DATA.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 2767, "end_line": 2785 },
+        { "path": "assets/index.html", "start_line": 2932, "end_line": 3260 },
+        { "path": "assets/index.html", "start_line": 4212, "end_line": 4227 },
+        { "path": "assets/index.html", "start_line": 4759, "end_line": 4955 },
+        { "path": "assets/index.html", "start_line": 4991, "end_line": 5076 },
+        { "path": "assets/index.html", "start_line": 5433, "end_line": 5483 }
+      ]
+    },
+    {
+      "operation": "Search locally and construct activity/template records",
+      "source": "Search input, loaded board, logged-in identifier and template objects",
+      "data_scope": "Search matches title, description, tags and comment text/author locally. Activity records associate actor with task/status. Template execution/copy clones task fields, including existing comments unless otherwise removed.",
+      "recipient_or_storage": "Browser memory and DOM; activity/template changes enter STATE.data and its GitHub saves",
+      "condition": "Search itself has no network submission. Activity records follow relevant actions; template cloning follows explicit Run/Copy actions.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 4258, "end_line": 4274 },
+        { "path": "assets/index.html", "start_line": 4511, "end_line": 4576 },
+        { "path": "assets/index.html", "start_line": 5582, "end_line": 5673 },
+        { "path": "assets/index.html", "start_line": 6071, "end_line": 6095 }
+      ]
+    },
+    {
+      "operation": "Delete live records, mark archives and export archived data",
+      "source": "Dashboard task/comment actions and archived task objects",
+      "data_scope": "Task/comment deletion removes current STATE entries and saves a new file revision. Archiving retains full tasks with flags/timestamps. CSV includes identifiers, titles, descriptions, status, priority, project, tags and dates.",
+      "recipient_or_storage": "Current board and GitHub revision history; CSV downloads to the user's device; archive index/offload flags remain in browser memory",
+      "condition": "Confirmed deletion or requested archive/export. Batch archive saves normally. Individual archive/restore calls undefined saveToGitHub. The 90-day offload code marks records and updates an in-memory index without moving or deleting task files.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 4293, "end_line": 4455 },
+        { "path": "assets/index.html", "start_line": 4851, "end_line": 4860 },
+        { "path": "assets/index.html", "start_line": 5061, "end_line": 5076 },
+        { "path": "assets/index.html", "start_line": 3213, "end_line": 3259 }
+      ]
+    },
+    {
+      "operation": "Persist gateway configuration and make connection-test requests",
+      "source": "gateway query parameter, Settings inputs and saved per-URL gateway credential",
+      "data_scope": "Gateway URL and credential; a cron-list response during reachability testing",
+      "recipient_or_storage": "Dashboard-origin localStorage; selected gateway /tools/invoke, local or remote",
+      "condition": "Query gateway is stored and removed from the address bar. Settings Connect calls probeGateway, which invokes cron list and discards its result. autoProbeGateway is defined, but no invocation is supplied. Clearing the gateway URL does not remove its separately keyed credential.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 2793, "end_line": 2931 },
+        { "path": "assets/index.html", "start_line": 5110, "end_line": 5208 }
+      ]
+    },
+    {
+      "operation": "Retrieve cron inventories and execution state",
+      "source": "Configured gateway, otherwise GitHub data/crons.json",
+      "data_scope": "Gateway list includes disabled jobs; mapping retains names, prompts, full payloads, schedules/timezones, session targets, tags/projects and execution/error statistics",
+      "recipient_or_storage": "Browser STATE.crons; GitHub receives authenticated fallback read requests",
+      "condition": "After authentication and periodic visible-tab refresh. After manual execution, two-second polling reloads the entire inventory until success or five minutes. A normal gateway result returns to the browser caller.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 3272, "end_line": 3331 },
+        { "path": "assets/index.html", "start_line": 6126, "end_line": 6157 },
+        { "path": "assets/index.html", "start_line": 6983, "end_line": 7012 }
+      ]
+    },
+    {
+      "operation": "Request cron mutations and provide clipboard fallbacks",
+      "source": "Selected cron and editor inputs",
+      "data_scope": "Job identifier for run/remove; enabled flag for disabling; name, schedule and timezone for updates. Edited prompt is retained locally but omitted from the update patch. Clipboard fallbacks contain a CLI command and job identifier.",
+      "recipient_or_storage": "Configured gateway /tools/invoke; browser memory and optional system clipboard",
+      "condition": "Explicit run, disable, save or conversion actions. Without a gateway or on certain failures, commands are displayed/copied. Gateway-side execution, mutation persistence and deletion semantics are not implemented here.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 6097, "end_line": 6178 },
+        { "path": "assets/index.html", "start_line": 6414, "end_line": 6481 },
+        { "path": "assets/index.html", "start_line": 6795, "end_line": 6841 }
+      ]
+    },
+    {
+      "operation": "Convert tasks and cron jobs across storage boundaries",
+      "source": "Selected task description/subtasks or selected cron prompt/schedule",
+      "data_scope": "Task-to-cron sends a name, schedule and prompt built from description/title plus subtask titles. Fallback saves all STATE.crons to GitHub. Original task is archived. Cron-to-task copies schedule/prompt into a board task and can request disable/remove.",
+      "recipient_or_storage": "Configured gateway; GitHub data/crons.json and data/tasks.json through the fixed CONFIG; browser memory",
+      "condition": "Explicit conversion. Task-to-cron uses GitHub fallback when no gateway exists or gateway creation throws. Cron-to-task always saves the created board task; removal is requested only when selected.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 3333, "end_line": 3375 },
+        { "path": "assets/index.html", "start_line": 6606, "end_line": 6747 },
+        { "path": "assets/index.html", "start_line": 6795, "end_line": 6841 }
+      ]
+    },
+    {
+      "operation": "Load and display repository collaborators",
+      "source": "GitHub collaborators endpoint",
+      "data_scope": "Collaborator identifiers, profile/avatar URLs and role names; role counts and an inferred read label when role_name is absent",
+      "recipient_or_storage": "Browser memory and DOM; each returned avatar URL receives an image request",
+      "condition": "People tab selected with a token; fetched once per loaded page. This path does not write collaborator profiles into the board.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 6843, "end_line": 6960 }
+      ]
+    },
+    {
+      "operation": "Infer workflow and display attributes locally",
+      "source": "Task tags/titles, subtask identifiers, schedules, timestamps and statuses",
+      "data_scope": "EPIC classification and child matching; approximate running, overdue and processing-timeout labels; board completion statistics",
+      "recipient_or_storage": "Transform/browser memory and displayed UI; EPIC classification changes the work order sent to the gateway",
+      "condition": "EPIC uses tag/title heuristics. Cron running status uses time windows rather than confirmed execution. Scheduled tasks becoming due are moved to in_progress and saved.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 301, "end_line": 321 },
+        { "path": "assets/index.html", "start_line": 3419, "end_line": 3429 },
+        { "path": "assets/index.html", "start_line": 3814, "end_line": 3849 },
+        { "path": "assets/index.html", "start_line": 4606, "end_line": 4619 },
+        { "path": "assets/index.html", "start_line": 5745, "end_line": 5825 }
+      ]
+    },
+    {
+      "operation": "Read version metadata and persist a UI preference",
+      "source": "Deployed data/version.json, local Git metadata and sidebar state",
+      "data_scope": "Version, abbreviated dashboard commit hash, build time, cache-busting request timestamp and activity-sidebar collapsed flag",
+      "recipient_or_storage": "Version requests go to the dashboard deployment origin; helper writes assets/data/version.json locally; sidebar flag uses localStorage",
+      "condition": "Version checking starts after page load, repeats every five minutes and on visibility changes. Dismissal clears the interval but leaves the visibility listener. Helper runs only when invoked.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 5413, "end_line": 5422 },
+        { "path": "assets/index.html", "start_line": 7014, "end_line": 7083 },
+        { "path": "scripts/update-version.sh", "start_line": 5, "end_line": 27 }
+      ]
+    },
+    {
+      "operation": "Forward requests and responses through the optional CORS proxy",
+      "source": "Incoming HTTP requests",
+      "data_scope": "Request method, URL, all incoming headers with Host replaced, and streamed body; complete upstream response body and headers",
+      "recipient_or_storage": "Normally localhost:18789; targetUrl can instead resolve an absolute incoming URL. Responses return to the requesting caller with wildcard CORS headers.",
+      "condition": "Only when the proxy is run. Listens on all interfaces. OPTIONS is answered locally. No request-body persistence is implemented; error text returns to the caller.",
+      "evidence": [
+        { "path": "scripts/cors-proxy.js", "start_line": 5, "end_line": 44 },
+        { "path": "docs/gateway-setup.md", "start_line": 63, "end_line": 65 }
+      ]
+    },
+    {
+      "operation": "Instruct local troubleshooting reads and an optional Slack authentication test",
+      "source": "Troubleshooting commands",
+      "data_scope": "Gateway/debug logs, hook configuration/credential and Slack configuration/credential; Slack bot credential for auth.test",
+      "recipient_or_storage": "Local command output and its caller; slack.com/api/auth.test for the optional test",
+      "condition": "Only if the documented diagnostic commands are followed. The source does not direct uploading logs or credential-bearing output to a support service.",
+      "evidence": [
+        { "path": "docs/TROUBLESHOOTING.md", "start_line": 55, "end_line": 75 },
+        { "path": "docs/TROUBLESHOOTING.md", "start_line": 130, "end_line": 167 }
+      ]
+    },
+    {
+      "operation": "Generate a fixed example cron file",
+      "source": "Literal demo records in sync-to-opensource.sh",
+      "data_scope": "Synthetic cron identifiers, names, schedules and example execution timestamps; no live task/configuration input is read",
+      "recipient_or_storage": "Local assets/data/crons-example.json",
+      "condition": "When the script is invoked. It suggests a later commit but performs no publish operation or credential scan.",
+      "evidence": [
+        { "path": "scripts/sync-to-opensource.sh", "start_line": 1, "end_line": 51 }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Complete task board and fallback cron contents",
+      "recipient_or_storage": "GitHub Contents API and repository history for rdsthomas/mission-control, as fixed in dashboard CONFIG",
+      "condition": "A user's installation retains packaged CONFIG and its token permits writes; read requests also target this repository",
+      "purpose_basis": "The declared purpose is managing the user's workspace. GitHub synchronization is explicit; this particular repository destination is an implementation choice.",
+      "necessary_behavior": "Read and persist the intended workspace board and requested cron records.",
+      "proposed_reduction": "Configure and verify the workspace repository before loading or saving user data; bind credentials and state to that selected repository.",
+      "preservation_conditions": "Retain Contents API synchronization, branch selection and webhook operation for the intended repository. Actual repository access/visibility remains unknown.",
+      "evidence": [
+        { "path": "SKILL.md", "start_line": 16, "end_line": 22 },
+        { "path": "assets/index.html", "start_line": 2767, "end_line": 2785 },
+        { "path": "assets/index.html", "start_line": 3165, "end_line": 3259 },
+        { "path": "assets/index.html", "start_line": 3333, "end_line": 3375 }
+      ]
+    },
+    {
+      "data_scope": "Descriptions, complete comment histories, subtasks and unrelated board fields duplicated in the diff snapshot",
+      "recipient_or_storage": "config.workspace.snapshotFile, default data/.tasks-snapshot.json",
+      "condition": "A recognized event writes the entire fetched document; unrecognized edits or deletions leave older content",
+      "purpose_basis": "The snapshot exists to detect task creation/deletion, status transitions and increased comment counts.",
+      "necessary_behavior": "Retain identifiers, deletion-notification titles, statuses and sufficient comment-change state.",
+      "proposed_reduction": "Persist a minimal, versioned diff projection and refresh it after validated fetches; remove redundant sensitive snapshot fields.",
+      "preservation_conditions": "Preserve existing event detection and required live task content. This narrows a separate persistence copy, not the work order needed by the agent.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 327, "end_line": 373 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 565, "end_line": 633 }
+      ]
+    },
+    {
+      "data_scope": "Unrelated changed filenames, rejected refs and accumulating diagnostic metadata",
+      "recipient_or_storage": "Local config.workspace.debugLog; console fallback",
+      "condition": "Every webhook can append diagnostics, including pushes unrelated to task processing; no retention limit is supplied",
+      "purpose_basis": "Troubleshooting needs processing outcomes, but does not inherently require retaining unrelated repository paths indefinitely.",
+      "necessary_behavior": "Explain validation, fetch and execution failures sufficiently for diagnosis.",
+      "proposed_reduction": "Log skip reasons/counts instead of full unrelated path lists; make detailed diagnostics opt-in and rotate or expire logs.",
+      "preservation_conditions": "Keep actionable failure codes and bounded diagnostic context.",
+      "evidence": [
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 118, "end_line": 132 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 538, "end_line": 560 },
+        { "path": "docs/TROUBLESHOOTING.md", "start_line": 65, "end_line": 75 }
+      ]
+    },
+    {
+      "data_scope": "Slack delivery/routing instructions attached to every agent wake; eventual delivered content is unresolved",
+      "recipient_or_storage": "Configured gateway /hooks/agent, requesting channel:slack and an optional configured channel destination",
+      "condition": "Any task execution, even without an explicit optional-notification mode or configured Slack channel",
+      "purpose_basis": "Task execution is required; README identifies Slack notifications as optional.",
+      "necessary_behavior": "Wake the agent with the necessary work order.",
+      "proposed_reduction": "Make delivery/routing parameters conditional on the user's Slack notification configuration.",
+      "preservation_conditions": "Verify the gateway contract preserves agent execution with delivery disabled. Do not assume the work order itself is posted to Slack.",
+      "evidence": [
+        { "path": "README.md", "start_line": 22, "end_line": 27 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 239, "end_line": 266 },
+        { "path": "assets/transforms/github-mission-control.mjs", "start_line": 657, "end_line": 672 }
+      ]
+    },
+    {
+      "data_scope": "Active GitHub PAT retained after Logout",
+      "recipient_or_storage": "Dashboard-origin localStorage key gh_token",
+      "condition": "Login uses the active authentication gate, followed by logout(), which removes only github_token/github_user",
+      "purpose_basis": "Saved authentication supports continued access; retaining it after explicit logout defeats that boundary.",
+      "necessary_behavior": "End the selected GitHub login while permitting a later explicit reconnection.",
+      "proposed_reduction": "Remove gh_token and legacy authentication keys on logout; clear related authenticated state and outstanding authenticated polling.",
+      "preservation_conditions": "Maintain normal login and deliberate remembered-login behavior before logout.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 3537, "end_line": 3548 },
+        { "path": "assets/index.html", "start_line": 6128, "end_line": 6157 },
+        { "path": "assets/index.html", "start_line": 7098, "end_line": 7139 },
+        { "path": "assets/index.html", "start_line": 7159, "end_line": 7201 }
+      ]
+    },
+    {
+      "data_scope": "Classic PAT authority across repositories accessible under repo scope",
+      "recipient_or_storage": "Credential entered into the dashboard, persisted in browser storage and used at api.github.com",
+      "condition": "Following the documented classic-token setup",
+      "purpose_basis": "repo is an explicit documented requirement, but the product operates on one selected repository plus identity and optional collaborator endpoints.",
+      "necessary_behavior": "Authenticate, read/write selected repository contents and obtain required identity/collaborator metadata.",
+      "proposed_reduction": "Offer a repository-restricted credential with only the permissions needed by the enabled endpoints.",
+      "preservation_conditions": "First verify that GitHub accepts the narrower credential on all enabled paths; retain compatibility where required. Broad authority is not evidence that other repositories are actually read.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 2103, "end_line": 2127 },
+        { "path": "assets/index.html", "start_line": 2380, "end_line": 2389 },
+        { "path": "assets/index.html", "start_line": 3462, "end_line": 3528 },
+        { "path": "assets/index.html", "start_line": 6872, "end_line": 6888 }
+      ]
+    },
+    {
+      "data_scope": "Task/subtask titles, old and new subtask text, and the first 50 characters of comments",
+      "recipient_or_storage": "GitHub commit-message metadata, separately from required task-file contents",
+      "condition": "Dashboard autosaves construct descriptive action messages",
+      "purpose_basis": "Saving task content is required; repeating that content in commit metadata is an implementation choice.",
+      "necessary_behavior": "Commit the updated board with enough information to identify the operation.",
+      "proposed_reduction": "Use generic operation names and opaque task identifiers in commit messages; keep detailed content in the board.",
+      "preservation_conditions": "Preserve task descriptions, feedback and subtasks in their intended records. This removes extra data from a required commit, not the commit itself.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 3213, "end_line": 3238 },
+        { "path": "assets/index.html", "start_line": 4212, "end_line": 4227 },
+        { "path": "assets/index.html", "start_line": 4759, "end_line": 4777 },
+        { "path": "assets/index.html", "start_line": 4930, "end_line": 4955 }
+      ]
+    },
+    {
+      "data_scope": "Unrelated already-staged files and previously unpushed commits",
+      "recipient_or_storage": "Local Git commit and configured Git push remote/ref",
+      "condition": "Task-file changes trigger the helper while unrelated changes are staged or commits are pending",
+      "purpose_basis": "The helper's purpose is publishing task updates.",
+      "necessary_behavior": "Commit and push the intended task-file update.",
+      "proposed_reduction": "Commit only data/tasks.json and verify outgoing commit scope and intended remote/ref before pushing.",
+      "preservation_conditions": "Preserve the task update and its webhook-triggering branch. This is conditional extra data in required Git actions, not a redundant push.",
+      "evidence": [
+        { "path": "scripts/mc-update.sh", "start_line": 303, "end_line": 309 }
+      ]
+    },
+    {
+      "data_scope": "Cron inventory returned solely to test reachability",
+      "recipient_or_storage": "Configured gateway to browser caller; response is discarded by probeGateway",
+      "condition": "Settings Connect invokes probeGateway; defined automatic-probe helper has no supplied caller",
+      "purpose_basis": "Connection testing requires reachability/authentication status, not cron details.",
+      "necessary_behavior": "Determine whether the selected gateway responds.",
+      "proposed_reduction": "Use a minimal health/authentication response rather than cron list.",
+      "preservation_conditions": "Requires a supported lightweight endpoint or gateway adapter. Keep full inventory retrieval for actual board loading.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 2891, "end_line": 2931 },
+        { "path": "assets/index.html", "start_line": 5141, "end_line": 5177 }
+      ]
+    },
+    {
+      "data_scope": "All jobs, disabled jobs, prompts and payloads repeatedly fetched to monitor one execution",
+      "recipient_or_storage": "Configured gateway to browser STATE.crons; GitHub inventory read on fallback",
+      "condition": "Two-second pollCronStatus loop after manual execution",
+      "purpose_basis": "Monitoring the selected job needs its execution state; inventory refresh serves a separate board purpose.",
+      "necessary_behavior": "Detect selected-job completion or timeout.",
+      "proposed_reduction": "Poll a selected-job status projection and retain normal inventory refresh separately.",
+      "preservation_conditions": "Requires gateway support or a gateway-side adapter; preserve initial inventory and editor data when needed.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 3295, "end_line": 3331 },
+        { "path": "assets/index.html", "start_line": 6128, "end_line": 6157 }
+      ]
+    },
+    {
+      "data_scope": "Previously gateway-loaded jobs, including unrelated prompts, payloads, session targets and execution metadata",
+      "recipient_or_storage": "GitHub data/crons.json and its commit history",
+      "condition": "STATE.crons contains gateway inventory, then task-to-cron gateway creation fails and createLocalCron calls saveCronsToGitHub on the entire array",
+      "purpose_basis": "Fallback needs to preserve the requested new pending cron, not automatically mirror the private gateway inventory.",
+      "necessary_behavior": "Persist the new pending cron and maintain intended previously stored fallback records.",
+      "proposed_reduction": "Keep gateway inventory separate from GitHub-backed pending records and save only the intended fallback collection.",
+      "preservation_conditions": "Preserve the new cron's name, schedule and execution prompt, plus task archival. Broader inventory mirroring should be explicit.",
+      "evidence": [
+        { "path": "assets/index.html", "start_line": 3295, "end_line": 3331 },
+        { "path": "assets/index.html", "start_line": 3333, "end_line": 3375 },
+        { "path": "assets/index.html", "start_line": 6658, "end_line": 6741 }
+      ]
+    },
+    {
+      "data_scope": "All incoming headers and body, including Authorization and incidental Cookie/Referer headers if present",
+      "recipient_or_storage": "Proxy targetUrl: normally localhost:18789, but an absolute incoming request URL can select another recipient",
+      "condition": "Optional proxy receives extra headers or an absolute-form request URL. Ordinary dashboard calls use /tools/invoke.",
+      "purpose_basis": "The proxy exists to enable access to the configured local gateway, not arbitrary destinations or unrelated header forwarding.",
+      "necessary_behavior": "Forward required gateway authentication, JSON tool arguments and responses.",
+      "proposed_reduction": "Fix and validate the upstream target, restrict supported routes and forward an explicit necessary-header allowlist; restrict allowed dashboard origins.",
+      "preservation_conditions": "Retain required Authorization, JSON content type, tunnel compatibility and CORS preflight behavior. No stored proxy credential or automatic arbitrary-recipient disclosure is shown.",
+      "evidence": [
+        { "path": "scripts/cors-proxy.js", "start_line": 5, "end_line": 44 },
+        { "path": "assets/index.html", "start_line": 2850, "end_line": 2889 }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Deployment assessment is blocked by absent setup/deployment implementations and .gitignore rules. Actual repository visibility, Pages access controls, published data files and exclusion of snapshots/debug logs cannot be established.",
+    "Installed CONFIG changes, configured Git remotes/refs, gateway addresses, Slack channels, credential privileges and user notification choices are unknown. Conditional destinations above are not claims that a deployment used them.",
+    "Gateway/agent implementations are not supplied. Work-order/session retention, model-provider disclosures, deliver:true routing, result contents and handling of returned transform metadata remain unresolved.",
+    "GitHub, Slack, Tailscale, tunnel and avatar-host retention, request logging, onward disclosure and deletion behavior are undocumented here.",
+    "Live-file deletion is observable; repository-history erasure is not implemented. Remote cron remove semantics and deletion from external backups/logs cannot be determined.",
+    "Individual archive/restore persistence is unresolved because assets/index.html:4294-4316 calls saveToGitHub, which has no supplied definition. The 90-day offload path implements no archive-file movement.",
+    "Lightweight gateway health and selected-job status capabilities are unknown; related minimization proposals require a compatible endpoint or adapter.",
+    "Credential-scanning and version-control-exclusion claims cannot be verified from this inventory. scripts/sync-to-opensource.sh:1-51 generates fixed examples and contains no credential scanner.",
+    "Agent actions beyond the supplied work orders and workflow instructions are task-dependent and not implemented in this package."
+  ]
+}

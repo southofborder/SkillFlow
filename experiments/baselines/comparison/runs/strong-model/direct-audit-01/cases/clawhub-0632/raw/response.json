@@ -1,0 +1,312 @@
+{
+  "status": "completed",
+  "declared_purpose": "Prevent DeepSeek's 64k context overflow while preserving useful conversation information through compaction, relevance filtering, searchable archiving and optimization-event logging (SKILL.md:1-20,75-98,126-139). Archiving and logging are explicit features; default enablement, diagnostic excerpts and duplicated archival metadata are implementation choices.",
+  "data_operations": [
+    {
+      "operation": "Initialize embedding components and potentially obtain cached model artifacts",
+      "source": "Optimizer and archive initialization",
+      "data_scope": "Model identifier Xenova/all-MiniLM-L6-v2 and model artifacts; installation documentation describes an initial download and subsequent caching",
+      "recipient_or_storage": "@xenova/transformers pipelines; download recipient and cache location are unspecified",
+      "condition": "Optimizer initialization always requests a pipeline; archive initialization requests another when archiveIndexing is enabled. processMessages initializes again on every call.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 114, "end_line": 123},
+        {"path": "lib/index.js", "start_line": 585, "end_line": 601},
+        {"path": "lib/index.js", "start_line": 771, "end_line": 772},
+        {"path": "INSTALL.md", "start_line": 181, "end_line": 184}
+      ]
+    },
+    {
+      "operation": "Create archive directory and read or initialize its persistent index",
+      "source": "ContextArchive.initialize",
+      "data_scope": "Existing index entries, paths, metadata, keywords and archive statistics",
+      "recipient_or_storage": "Local optimizer memory and index.json under resolved archivePath; default ./context-archive",
+      "condition": "Archive enabled, which is the default. Any index read or parse failure triggers writing a new index.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 54, "end_line": 60},
+        {"path": "lib/index.js", "start_line": 82, "end_line": 112},
+        {"path": "lib/index.js", "start_line": 547, "end_line": 549}
+      ]
+    },
+    {
+      "operation": "Read, tokenize, compact and filter supplied conversation content",
+      "source": "Effective ContextOptimizer.processMessages and its compaction helpers",
+      "data_scope": "Message content, roles, priorities and timestamps; inferred duplication, verbosity and temporal characteristics",
+      "recipient_or_storage": "In-process optimizer and returned message array to its caller",
+      "condition": "The later processMessages definition is effective. It uses autoCompact, dynamicContext and optional archive retrieval; the earlier autoPrune implementation is superseded. Default compaction thresholds are 75% and 90%.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 30, "end_line": 45},
+        {"path": "lib/index.js", "start_line": 610, "end_line": 646},
+        {"path": "lib/index.js", "start_line": 651, "end_line": 687},
+        {"path": "lib/index.js", "start_line": 771, "end_line": 828},
+        {"path": "lib/index.js", "start_line": 1494, "end_line": 1535},
+        {"path": "lib/index.js", "start_line": 1814, "end_line": 1820}
+      ]
+    },
+    {
+      "operation": "Generate embeddings and infer relevance",
+      "source": "Semantic compaction, relevance scoring and dynamic filtering",
+      "data_scope": "Full message content and currentQuery; vectors, similarity scores and priority-weighted relevance",
+      "recipient_or_storage": "Embedding pipeline and in-process relevanceScores map; dependency-internal behavior is unresolved",
+      "condition": "Embedding model available. Semantic compaction embeds all supplied messages when at least three are present; query scoring combines similarity and priority. Dynamic filtering removes messages below the configured relevance threshold after decay.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 870, "end_line": 907},
+        {"path": "lib/index.js", "start_line": 1302, "end_line": 1344},
+        {"path": "lib/index.js", "start_line": 1349, "end_line": 1386},
+        {"path": "lib/index.js", "start_line": 1789, "end_line": 1799}
+      ]
+    },
+    {
+      "operation": "Retain conversation and processing state in memory",
+      "source": "Optimizer instance and integration wrappers",
+      "data_scope": "Up to 100 processing-history records containing timestamps, message counts and token counts; relevance scores; lastQuery when query-aware compaction runs; wrapper conversation arrays",
+      "recipient_or_storage": "Optimizer or wrapper instance memory; getContextPruner can retain an instance as a module singleton",
+      "condition": "During processing or wrapper addMessage calls. History records contain aggregate measurements rather than full messages; wrappers retain full messages.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 552, "end_line": 562},
+        {"path": "lib/index.js", "start_line": 660, "end_line": 665},
+        {"path": "lib/index.js", "start_line": 783, "end_line": 796},
+        {"path": "lib/index.js", "start_line": 1945, "end_line": 1953},
+        {"path": "examples/simple-integration.js", "start_line": 43, "end_line": 74},
+        {"path": "examples/clawdbot-integration.js", "start_line": 40, "end_line": 75}
+      ]
+    },
+    {
+      "operation": "Persist original compacted messages and derived search data",
+      "source": "adaptiveCompact → storeRemovedInArchive → ContextArchive.store",
+      "data_scope": "Original message content; role, priority, token count, storage and compaction times, reasons, strategies and compaction context; inferred category, keywords and optional embedding",
+      "recipient_or_storage": "Local archive entry JSON files and index.json; index duplicates metadata and keywords",
+      "condition": "Archive exists and compaction reports removed originals. Semantic merging records both originals. This moves content out of active context without deleting it from storage.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 131, "end_line": 190},
+        {"path": "lib/index.js", "start_line": 760, "end_line": 765},
+        {"path": "lib/index.js", "start_line": 942, "end_line": 955},
+        {"path": "lib/index.js", "start_line": 1567, "end_line": 1593},
+        {"path": "lib/index.js", "start_line": 1750, "end_line": 1768}
+      ]
+    },
+    {
+      "operation": "Search local archive and return ranked entries",
+      "source": "ContextArchive.search and exported searchArchive",
+      "data_scope": "Query keywords and optional embedding; each indexed entry's full JSON, including content, metadata and embedding; returned content, metadata, keywords and score",
+      "recipient_or_storage": "Local search component, then its caller; search counters remain in the index object and can be persisted by later index saves",
+      "condition": "Explicit search or retrieval. Entry files are read before category and age filters. All remaining candidates are scored before result limiting.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 196, "end_line": 282},
+        {"path": "lib/index.js", "start_line": 547, "end_line": 549},
+        {"path": "lib/index.js", "start_line": 1973, "end_line": 1978}
+      ]
+    },
+    {
+      "operation": "Extract bounded snippets and return source metadata",
+      "source": "ContextArchive.retrieveRelevantInfo and optimizer retrieveFromArchive",
+      "data_scope": "Selected archive sentences, estimated token counts, source identifiers, scores, coverage and complete source metadata",
+      "recipient_or_storage": "Retrieval caller; no external transmission is implemented here",
+      "condition": "Archive available. Retrieval searches up to five results and budgets snippet text using maxContextTokens; returned metadata is outside that snippet budget.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 287, "end_line": 332},
+        {"path": "lib/index.js", "start_line": 337, "end_line": 395},
+        {"path": "lib/index.js", "start_line": 1598, "end_line": 1616}
+      ]
+    },
+    {
+      "operation": "Automatically reintroduce archive snippets into current context",
+      "source": "smartArchiveRetrieval",
+      "data_scope": "Current query and messages for similarity checks; up to three deduplicated archive snippets with relevance annotations",
+      "recipient_or_storage": "System-role messages in the array returned to the caller",
+      "condition": "Archive enabled, query supplied, at least 10% context space available, query exceeds 20 tokens and no current message has similarity above 0.8. Retrieval uses minimum relevance 0.6 and a bounded snippet budget.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 1392, "end_line": 1489}
+      ]
+    },
+    {
+      "operation": "Write diagnostic content and optimization events",
+      "source": "Core processing, archive storage and default ContextOptimizerLogger",
+      "data_scope": "Current-query prefix up to 50 characters; archived-content prefix up to 80; archive-search query prefix up to 30; entry identifiers, categories, priorities, counts, scores, strategies, health and timing",
+      "recipient_or_storage": "Process stdout through console.log; warning/error paths also emit messages to the console",
+      "condition": "Core processing and archive diagnostics are unconditional on chat logging settings. The default event handler checks logToChat and chatLogLevel. Its chat-send call is only a comment.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 139, "end_line": 141},
+        {"path": "lib/index.js", "start_line": 778, "end_line": 781},
+        {"path": "lib/index.js", "start_line": 824, "end_line": 825},
+        {"path": "chat-logger.js", "start_line": 14, "end_line": 22},
+        {"path": "chat-logger.js", "start_line": 31, "end_line": 82}
+      ]
+    },
+    {
+      "operation": "Pass event data to optional logging handlers",
+      "source": "ContextOptimizerLogger.onLog or optimizer config.chatLogger",
+      "data_scope": "Event measurements and details; logArchiveSearch includes the full query in its handler payload",
+      "recipient_or_storage": "Configured logger or callback; any downstream destination is unspecified",
+      "condition": "A custom logger or logger-level onLog is supplied. The optimizer does not forward its own options.onLog to the default logger. logToChat and chatLogLevel checks exist inside the default handler, not before custom handler invocation.",
+      "evidence": [
+        {"path": "chat-logger.js", "start_line": 4, "end_line": 22},
+        {"path": "chat-logger.js", "start_line": 45, "end_line": 56},
+        {"path": "lib/index.js", "start_line": 565, "end_line": 570},
+        {"path": "lib/index.js", "start_line": 1456, "end_line": 1460}
+      ]
+    },
+    {
+      "operation": "Pass role-labelled source text to an optional summarizer",
+      "source": "ContextOptimizer.summarizeGroup",
+      "data_scope": "Combined full content of the supplied message group, prefixed with message roles",
+      "recipient_or_storage": "config.summarizer callback; subsequent processing, transmission or persistence is unknown",
+      "condition": "summarizeGroup is explicitly invoked with a configured summarizer. No supplied normal compaction path calls this helper; temporal summarization uses local extractive summarization.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 1186, "end_line": 1198},
+        {"path": "lib/index.js", "start_line": 1689, "end_line": 1692},
+        {"path": "lib/index.js", "start_line": 1770, "end_line": 1787}
+      ]
+    },
+    {
+      "operation": "Read a local conversation file and persist processed output",
+      "source": "CLI pruneFile",
+      "data_scope": "Entire input JSON; message array; all other top-level fields when an object envelope is supplied; processed messages and output path",
+      "recipient_or_storage": "CLI memory, caller-selected output file and console diagnostics; normal optimizer processing can additionally write its archive",
+      "condition": "CLI prune command with input and output paths. Object-envelope fields are copied unchanged into output alongside processed messages.",
+      "evidence": [
+        {"path": "scripts/cli.js", "start_line": 23, "end_line": 41},
+        {"path": "scripts/cli.js", "start_line": 111, "end_line": 152}
+      ]
+    },
+    {
+      "operation": "Print demonstration data and retrieved excerpts",
+      "source": "Standalone logger and integration demonstrations",
+      "data_scope": "Packaged synthetic conversation/query examples, aggregate status, archive snippet prefixes up to 80 characters and current-message prefixes up to 60",
+      "recipient_or_storage": "Process stdout; the simple integration demonstration also enables a local archive",
+      "condition": "Demonstration scripts are executed directly. These calls do not establish production chat disclosure.",
+      "evidence": [
+        {"path": "chat-logger.js", "start_line": 86, "end_line": 108},
+        {"path": "examples/simple-integration.js", "start_line": 12, "end_line": 29},
+        {"path": "examples/simple-integration.js", "start_line": 144, "end_line": 162},
+        {"path": "examples/simple-integration.js", "start_line": 224, "end_line": 260}
+      ]
+    },
+    {
+      "operation": "Attempt archive deletion and reset local conversation buffers",
+      "source": "Archive cleanup/clear, wrapper clear and optimizer destroy",
+      "data_scope": "Indexed archive entry files and index records; wrapper conversation arrays; tokenizer resources",
+      "recipient_or_storage": "Local filesystem and process memory",
+      "condition": "Size cleanup runs after storage exceeds archiveMaxSize, removing lower-priority and older entries toward 90% capacity. Explicit archive.clear attempts removal of indexed files. Failed unlink calls can leave files after index removal. Wrapper clear and optimizer destroy do not clear the archive; uninstall documentation separately instructs directory removal.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 400, "end_line": 437},
+        {"path": "lib/index.js", "start_line": 456, "end_line": 480},
+        {"path": "lib/index.js", "start_line": 1920, "end_line": 1932},
+        {"path": "examples/simple-integration.js", "start_line": 123, "end_line": 128},
+        {"path": "examples/clawdbot-integration.js", "start_line": 109, "end_line": 121},
+        {"path": "INSTALL.md", "start_line": 217, "end_line": 224}
+      ]
+    },
+    {
+      "operation": "Attempt unavailable test and compatibility paths",
+      "source": "CLI test, legacy pruning helpers and example force-pruning method",
+      "data_scope": "Test operations are unspecified; compatibility calls receive supplied message arrays",
+      "recipient_or_storage": "Referenced test module or missing methods; no downstream data operation is established",
+      "condition": "CLI test imports lib/index.test.js, absent from the supplied inventory. Compatibility helpers reference undefined WithArchive methods, and the Clawdbot example calls an undefined prune method.",
+      "evidence": [
+        {"path": "scripts/cli.js", "start_line": 78, "end_line": 84},
+        {"path": "lib/index.js", "start_line": 983, "end_line": 986},
+        {"path": "lib/index.js", "start_line": 1058, "end_line": 1063},
+        {"path": "lib/index.js", "start_line": 1138, "end_line": 1142},
+        {"path": "examples/clawdbot-integration.js", "start_line": 80, "end_line": 89}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Raw query prefixes and original archived-content prefixes",
+      "recipient_or_storage": "Process stdout from processMessages, ContextArchive.store and the default archive-search logger",
+      "condition": "Processing receives a query, an original message is archived, or an archive-search event is logged. Core excerpts bypass chat logging settings.",
+      "purpose_basis": "Optimization-event logging is declared; copying conversation text into diagnostics is an implementation choice.",
+      "necessary_behavior": "Report optimization actions, counts, strategies, health and retrieval scores.",
+      "proposed_reduction": "Remove query/content excerpts from routine diagnostics and retain aggregate event details and entry identifiers.",
+      "preservation_conditions": "Keep declared event logging and useful failure diagnostics; require explicit configuration if content-bearing debugging is needed.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 137, "end_line": 151},
+        {"path": "lib/index.js", "start_line": 139, "end_line": 141},
+        {"path": "lib/index.js", "start_line": 778, "end_line": 781},
+        {"path": "chat-logger.js", "start_line": 14, "end_line": 20},
+        {"path": "chat-logger.js", "start_line": 45, "end_line": 55}
+      ]
+    },
+    {
+      "data_scope": "Full archive-search query in the event payload",
+      "recipient_or_storage": "ContextOptimizerLogger.onLog callback or equivalent supplied logger; further destinations are unknown",
+      "condition": "logArchiveSearch is invoked, including successful automatic archive retrieval. Custom callback invocation is not gated by the default handler's logging checks.",
+      "purpose_basis": "Search-event reporting needs outcome measurements; full query text is additional data in that event.",
+      "necessary_behavior": "Report snippet count and similarity while supporting configured logging controls.",
+      "proposed_reduction": "Omit the query from routine callback payloads and make content-bearing payloads an explicit option.",
+      "preservation_conditions": "Retain event type, result count and similarity; allow explicit query access for handlers whose intended function requires it.",
+      "evidence": [
+        {"path": "chat-logger.js", "start_line": 4, "end_line": 22},
+        {"path": "chat-logger.js", "start_line": 45, "end_line": 56},
+        {"path": "lib/index.js", "start_line": 1456, "end_line": 1460}
+      ]
+    },
+    {
+      "data_scope": "Repeated temporal summaries and extracted text inside compactionContext",
+      "recipient_or_storage": "Each archived original's metadata in its entry JSON and another copy in index.json",
+      "condition": "Temporal or extractive compaction records summary/extraction text in removal context, which storeRemovedInArchive copies into metadata.",
+      "purpose_basis": "Searchable storage of compacted originals is explicit. Repeating derived conversation text in every metadata record is extra data within the required storage action.",
+      "necessary_behavior": "Preserve original content, search vectors/keywords and sufficient source, priority and timing metadata.",
+      "proposed_reduction": "Exclude summary/extraction text from compactionContext or store one shared derivation reference; keep index metadata free of duplicated conversation text.",
+      "preservation_conditions": "Retain original archived content and fields used for ranking, category filtering, cleanup and source identification.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 90, "end_line": 98},
+        {"path": "lib/index.js", "start_line": 143, "end_line": 177},
+        {"path": "lib/index.js", "start_line": 1031, "end_line": 1037},
+        {"path": "lib/index.js", "start_line": 1121, "end_line": 1126},
+        {"path": "lib/index.js", "start_line": 1570, "end_line": 1587}
+      ]
+    },
+    {
+      "data_scope": "Complete source metadata, potentially including whole temporal summaries or extractions beyond selected snippets",
+      "recipient_or_storage": "retrieveRelevantInfo caller through sources[].metadata; this is a caller return, not an established remote disclosure",
+      "condition": "Retrieved entries have content-bearing compactionContext metadata. maxContextTokens budgets snippet text only.",
+      "purpose_basis": "The declared retrieval goal is selective loading of relevant snippets.",
+      "necessary_behavior": "Return relevant snippets within budget with enough information to identify and assess their sources.",
+      "proposed_reduction": "Return a source-metadata allowlist and omit summary/extraction payloads; budget any intentionally returned additional text.",
+      "preservation_conditions": "Keep source identifiers, scores, snippet counts and required attribution fields.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 96, "end_line": 98},
+        {"path": "lib/index.js", "start_line": 337, "end_line": 395},
+        {"path": "lib/index.js", "start_line": 1574, "end_line": 1583}
+      ]
+    },
+    {
+      "data_scope": "Full archive files belonging to excluded categories or outside the requested age range",
+      "recipient_or_storage": "Local ContextArchive.search memory through fs.readFile and JSON.parse",
+      "condition": "Explicit search supplies category/timeRange filters that exclude entries. The current implementation reads files before applying those filters.",
+      "purpose_basis": "Search must rank eligible candidates; reading already-excludable files is a redundant local read.",
+      "necessary_behavior": "Filter candidates and rank matching entries using keywords and available embeddings.",
+      "proposed_reduction": "Apply category and timestamp filters using existing index metadata before reading entry files.",
+      "preservation_conditions": "Use equivalent filter semantics and keep index metadata consistent; read all eligible candidates needed for ranking.",
+      "evidence": [
+        {"path": "lib/index.js", "start_line": 171, "end_line": 177},
+        {"path": "lib/index.js", "start_line": 196, "end_line": 202},
+        {"path": "lib/index.js", "start_line": 220, "end_line": 239}
+      ]
+    },
+    {
+      "data_scope": "Existing archive index, including keywords and content-bearing metadata, plus embedding-model initialization",
+      "recipient_or_storage": "CLI optimizer/archive memory and embedding components",
+      "condition": "CLI status or stats initializes the optimizer before dispatch even though those commands only print current counters/configuration and do not display archive data.",
+      "purpose_basis": "These commands report status and statistics; archive-content loading is a redundant initialization action for their implemented outputs.",
+      "necessary_behavior": "Construct and print the requested status or statistics.",
+      "proposed_reduction": "Initialize archive and embedding components only for commands that use them.",
+      "preservation_conditions": "Preserve the implemented status/statistics output and initialize fully before prune or future archive-aware commands.",
+      "evidence": [
+        {"path": "scripts/cli.js", "start_line": 23, "end_line": 45},
+        {"path": "scripts/cli.js", "start_line": 86, "end_line": 109},
+        {"path": "scripts/cli.js", "start_line": 154, "end_line": 172},
+        {"path": "lib/index.js", "start_line": 101, "end_line": 123},
+        {"path": "lib/index.js", "start_line": 585, "end_line": 598}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Dependency implementations are not supplied. Model-download endpoints, request metadata, cache paths, telemetry and dependency-internal handling of text cannot be determined. Packaged code establishes pipeline calls, not conversation disclosure to DeepSeek or another remote service.",
+    "Custom summarizer and logging-handler implementations are absent. Their downstream recipients, persistence and deletion behavior remain unresolved; the default logger implements console output only.",
+    "The supplied inventory lacks lib/index.test.js and the compatibility methods referenced by legacy/example paths. Their intended downstream operations cannot be audited; packaged execution would encounter missing-module or missing-method failures.",
+    "Console capture, caller persistence and filesystem backups are outside the supplied source. Unlink attempts and index resets do not establish removal from those locations."
+  ]
+}

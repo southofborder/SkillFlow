@@ -79,7 +79,8 @@ def failed_graph_slots(assembly, finding, files):
             continue
         if path[-1] == "exit":
             kind = assembly.facts["blocks"][bi]["exit"].get("kind")
-            fields = {"jump": ("target",), "branch": ("conditions", "arms"), "return": ("values",)}.get(kind, ())
+            fields = {"jump": ("target",), "branch": ("conditions", "arms"), "return": ("values",),
+                      "outcome_dispatch": ("producer", "on_return", "on_throw", "inputs")}.get(kind, ())
         else:
             fields = ("inputs", "outputs", "opcode", "constraints", "source") if oi is not None else ("constraints",)
         slots.extend(field_slot(assembly.facts, (*path, key)) for key in fields)

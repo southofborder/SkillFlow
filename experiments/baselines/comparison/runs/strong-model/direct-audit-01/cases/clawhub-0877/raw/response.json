@@ -1,0 +1,282 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide an OpenClaw credential-security workflow: discover credentials, back up originals, consolidate into ~/.openclaw/.env, apply mode 600 and Git protection, validate, and clean up migrated files. The entry declares centralization mandatory; supporting policy requires encrypted backups and minimized access. These requirements do not prescribe unrestricted JSON-field migration, bulk credential exports, or value logging (SKILL.md:3-16, 40-48; CORE-PRINCIPLE.md:29-52).",
+  "data_operations": [
+    {
+      "operation": "Discover and inspect local files; infer whether they contain credentials",
+      "source": "scripts/scan.py",
+      "data_scope": "Matching configuration, memory, workspace, skills, scripts and local-share files; additional user patterns; existing root .env. JSON is parsed completely, but classification examines top-level key names. Env files are read line by line to collect variable names. Results include paths, keys, sizes, modes and errors. Read failures are classified as likely credentials.",
+      "recipient_or_storage": "Scanner memory and its local caller; no file persistence in the scanner.",
+      "condition": "Called directly or by consolidation/cleanup. Dispatch accepts JSON and names ending in .env; ordinary .env.production and shell rc files are skipped despite matching advertised patterns. ~/.env is absent from default patterns.",
+      "evidence": [
+        {"path":"scripts/scan.py","start_line":14,"end_line":26},
+        {"path":"scripts/scan.py","start_line":47,"end_line":104},
+        {"path":"scripts/scan.py","start_line":106,"end_line":139}
+      ]
+    },
+    {
+      "operation": "Print discovery metadata",
+      "source": "scripts/scan.py CLI",
+      "data_scope": "Text output exposes paths, types, modes, counts and up to five key names per file. JSON output includes all returned key names, metadata and errors.",
+      "recipient_or_storage": "Standard output of the invoking process; subsequent capture or retention is unknown.",
+      "condition": "Direct CLI execution; imported scan_locations returns results to its caller without this CLI reporting.",
+      "evidence": [
+        {"path":"scripts/scan.py","start_line":141,"end_line":170}
+      ]
+    },
+    {
+      "operation": "Load, classify and normalize migration data locally",
+      "source": "scripts/consolidate.py",
+      "data_scope": "Existing root credentials and complete parsed candidate files. Service is inferred from path substrings, key names and sometimes API-key contents. Every top-level field is eligible for normalization, including mapped account identifiers and unmapped fields.",
+      "recipient_or_storage": "Consolidation-process dictionaries; paths, inferred services and key mappings also reach standard output.",
+      "condition": "All candidates are scanned and loaded before the service filter is applied. Backup-only mode also performs loading and normalization. Existing root keys take precedence; later candidates can replace earlier pending values for the same new key.",
+      "evidence": [
+        {"path":"scripts/consolidate.py","start_line":15,"end_line":82},
+        {"path":"scripts/consolidate.py","start_line":100,"end_line":114},
+        {"path":"scripts/consolidate.py","start_line":125,"end_line":180}
+      ]
+    },
+    {
+      "operation": "Persist full-file rollback copies",
+      "source": "scripts/consolidate.py backup_files",
+      "data_scope": "Complete credential files, including unrelated contents, comments and filesystem metadata; copies are not redacted or encrypted by this function.",
+      "recipient_or_storage": "~/.openclaw/backups/credentials-old-YYYYMMDD/*.bak; source and destination paths are printed.",
+      "condition": "Existing root .env is copied before change confirmation. Selected source files are copied after confirmation, with --yes, or without confirmation in --backup-only mode. Day-based destinations and reused filenames can overwrite previous copies. Cleanup does not delete these backups.",
+      "evidence": [
+        {"path":"scripts/consolidate.py","start_line":84,"end_line":98},
+        {"path":"scripts/consolidate.py","start_line":119,"end_line":143},
+        {"path":"scripts/consolidate.py","start_line":182,"end_line":199},
+        {"path":"scripts/cleanup.py","start_line":50,"end_line":57},
+        {"path":"scripts/cleanup.py","start_line":84,"end_line":85}
+      ]
+    },
+    {
+      "operation": "Write consolidated credentials and supporting files",
+      "source": "scripts/consolidate.py",
+      "data_scope": "Existing credentials plus new normalized fields and their values. The template contains variable names with placeholders, not copied values. Git configuration receives an .env exclusion.",
+      "recipient_or_storage": "~/.openclaw/.env, ~/.openclaw/.env.example and ~/.openclaw/.gitignore; completion paths and counts return to the local caller.",
+      "condition": "After confirmation or --yes, when new keys exist and backup-only is false. Mode 600 is applied after writing the credential file. Git protection is decided by a substring check.",
+      "evidence": [
+        {"path":"scripts/consolidate.py","start_line":178,"end_line":199},
+        {"path":"scripts/consolidate.py","start_line":201,"end_line":256}
+      ]
+    },
+    {
+      "operation": "Validate local content and protection; optionally change permissions and Git exclusions",
+      "source": "scripts/validate.py",
+      "data_scope": "Root .env permissions, key/value syntax, duplicates, placeholder-like content and total content size; .gitignore text. Reports contain counts, key names and warnings.",
+      "recipient_or_storage": "Validation-process memory and standard output. --fix changes .env mode and writes .gitignore entries.",
+      "condition": "According to --check; default all performs the content and metadata checks. The validator does not scan for scattered credential files.",
+      "evidence": [
+        {"path":"scripts/validate.py","start_line":12,"end_line":108},
+        {"path":"scripts/validate.py","start_line":110,"end_line":126},
+        {"path":"scripts/validate.py","start_line":128,"end_line":201}
+      ]
+    },
+    {
+      "operation": "Enforce protection checks and return one requested credential",
+      "source": "scripts/enforce.py",
+      "data_scope": "Root .env existence and mode, .gitignore text, and credential-file lines until the requested key is found.",
+      "recipient_or_storage": "The requested value returns to the importing caller. Failures print security metadata or the requested variable name to standard error.",
+      "condition": "get_credential first requires successful security checks. Direct enforce.py execution checks metadata and reports status without loading credential values.",
+      "evidence": [
+        {"path":"scripts/enforce.py","start_line":19,"end_line":77},
+        {"path":"scripts/enforce.py","start_line":79,"end_line":121}
+      ]
+    },
+    {
+      "operation": "List and delete discovered non-root source files",
+      "source": "scripts/cleanup.py",
+      "data_scope": "Every existing scanner result except ~/.openclaw/.env; deletion removes the entire file, including any noncredential contents.",
+      "recipient_or_storage": "Original filesystem paths are unlinked; paths, errors and counts reach standard output. Credential backups remain.",
+      "condition": "Default is a listing-only dry run. Deletion requires --confirm and the exact DELETE response. The --force option is not forwarded to bypass that response. No successful migration or per-file backup check is required.",
+      "evidence": [
+        {"path":"scripts/cleanup.py","start_line":14,"end_line":45},
+        {"path":"scripts/cleanup.py","start_line":47,"end_line":93},
+        {"path":"scripts/cleanup.py","start_line":95,"end_line":113}
+      ]
+    },
+    {
+      "operation": "Documented bulk loading into execution environments",
+      "source": "SKILL.md loading examples",
+      "data_scope": "Every parsed credential variable in the root .env, although the examples subsequently use one SERVICE_API_KEY.",
+      "recipient_or_storage": "Python process environment or Bash shell; the export recipes also make credentials available through inherited child-process environments.",
+      "condition": "Only when a consumer adopts these documentation snippets. The consolidation executable does not perform these exports.",
+      "evidence": [
+        {"path":"SKILL.md","start_line":286,"end_line":312},
+        {"path":"references/security.md","start_line":103,"end_line":110}
+      ]
+    },
+    {
+      "operation": "Documented credential-bearing console output",
+      "source": "Loading and security examples",
+      "data_scope": "Full SERVICE_API_KEY in Bash examples; an API-key prefix in the recommended logging example; matching staged-diff lines, potentially including complete credentials, in the precommit command.",
+      "recipient_or_storage": "Standard output of the adopted example or command; no remote recipient or log storage is specified.",
+      "condition": "Only if these documentation recipes are executed. Staged-diff exposure requires matching credential-bearing changes.",
+      "evidence": [
+        {"path":"SKILL.md","start_line":303,"end_line":312},
+        {"path":"CONSOLIDATION-RULE.md","start_line":81,"end_line":88},
+        {"path":"references/security.md","start_line":41,"end_line":48},
+        {"path":"references/security.md","start_line":85,"end_line":92}
+      ]
+    },
+    {
+      "operation": "Documented encryption, decryption and backup persistence",
+      "source": "references/security.md optional storage recipes",
+      "data_scope": "Root credential-file contents; the entire ~/.openclaw directory for encrypted archives; home-directory contents except the primary .env for the general-backup recipe.",
+      "recipient_or_storage": "GPG output, plaintext /tmp/.env, encrypted backup.tar.gz.gpg, restored archive paths, or local /backup/, depending on the recipe.",
+      "condition": "Optional commands only. The general-backup exclusion covers the primary .env but does not exclude credential-backup directories or scattered source files.",
+      "evidence": [
+        {"path":"references/security.md","start_line":112,"end_line":121},
+        {"path":"references/security.md","start_line":144,"end_line":159}
+      ]
+    },
+    {
+      "operation": "Documented access-event logging",
+      "source": "references/security.md audit-trail command",
+      "data_scope": "Timestamp, shell user name and a claim that .env was accessed; no credential value.",
+      "recipient_or_storage": "~/.openclaw/access.log, appended locally.",
+      "condition": "Only if the manual command is adopted. It is not an automatic access monitor; retention is unspecified.",
+      "evidence": [
+        {"path":"references/security.md","start_line":208,"end_line":212}
+      ]
+    },
+    {
+      "operation": "Documented authenticated network-request example",
+      "source": "references/security.md recommended API example",
+      "data_scope": "A bearer token in an Authorization header.",
+      "recipient_or_storage": "The endpoint represented by url; no actual endpoint is supplied.",
+      "condition": "Only if a consumer adopts the example and supplies an endpoint. This is not invoked by the packaged credential-management scripts; downstream processing is unknown.",
+      "evidence": [
+        {"path":"references/security.md","start_line":161,"end_line":173}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Unrelated top-level JSON fields, beyond credentials and necessary companion identifiers/configuration.",
+      "recipient_or_storage": "~/.openclaw/.env values, plus corresponding variable names in .env.example and console mappings.",
+      "condition": "A detected, selected JSON file contains unrelated fields. One sensitive-looking key can qualify the file, after which all fields are normalized.",
+      "purpose_basis": "Centralizing credentials is required; unrestricted migration of every JSON field is an implementation choice.",
+      "necessary_behavior": "Persist credentials and companion fields needed for the migrated services.",
+      "proposed_reduction": "Select credential fields and required companion fields explicitly; review unknown fields before persisting them. Generate the template from that selected set.",
+      "preservation_conditions": "Retain required usernames, account identifiers and configuration. Preserve complete originals in protected rollback backups when exact restoration is required.",
+      "evidence": [
+        {"path":"scripts/scan.py","start_line":47,"end_line":69},
+        {"path":"scripts/consolidate.py","start_line":157,"end_line":173},
+        {"path":"scripts/consolidate.py","start_line":208,"end_line":235},
+        {"path":"SKILL.md","start_line":40,"end_line":48}
+      ]
+    },
+    {
+      "data_scope": "The complete existing root credential set and its metadata.",
+      "recipient_or_storage": "~/.openclaw/backups/credentials-old-YYYYMMDD/ root-file backup.",
+      "condition": "Ordinary consolidation subsequently cancels or finds no new keys. The root backup has already occurred.",
+      "purpose_basis": "A backup protects a pending modification; these branches perform no credential-file modification. This is a redundant persistence action, rather than extra fields in a necessary backup.",
+      "necessary_behavior": "Back up the root file before an approved write, or when explicitly requested through backup-only mode.",
+      "proposed_reduction": "Defer the root backup until a nonempty migration plan is confirmed.",
+      "preservation_conditions": "Create the backup before any write and preserve explicit backup-only behavior.",
+      "evidence": [
+        {"path":"scripts/consolidate.py","start_line":135,"end_line":143},
+        {"path":"scripts/consolidate.py","start_line":178,"end_line":199}
+      ]
+    },
+    {
+      "data_scope": "Complete plaintext originals and old credential versions retained outside the consolidated file.",
+      "recipient_or_storage": "~/.openclaw/backups/credentials-old-YYYYMMDD/*.bak.",
+      "condition": "Any backup is created. copy2 performs no encryption and preserves source permission metadata; cleanup leaves backups in place without an expiry mechanism.",
+      "purpose_basis": "Rollback backups are explicitly required, but supporting policy requires encrypted backups and minimized access. Plaintext retention is an implementation choice.",
+      "necessary_behavior": "Maintain recoverable originals through validation and application testing.",
+      "proposed_reduction": "Persist encrypted rollback copies with restrictive access instead of plaintext copies; provide a retention policy after successful migration.",
+      "preservation_conditions": "Keep complete recoverable originals for the required rollback period. Do not redact backups needed for exact restoration or remove the sole recovery copy prematurely.",
+      "evidence": [
+        {"path":"CORE-PRINCIPLE.md","start_line":45,"end_line":52},
+        {"path":"scripts/consolidate.py","start_line":84,"end_line":98},
+        {"path":"scripts/consolidate.py","start_line":123,"end_line":123},
+        {"path":"scripts/cleanup.py","start_line":50,"end_line":57},
+        {"path":"scripts/cleanup.py","start_line":84,"end_line":85},
+        {"path":"SKILL.md","start_line":223,"end_line":242}
+      ]
+    },
+    {
+      "data_scope": "Unmigrated, unreadable or mixed-content files, including sources previously skipped by a service filter or existing-key conflict.",
+      "recipient_or_storage": "Original non-root files selected for unlinking by cleanup.py.",
+      "condition": "Cleanup is confirmed. Selection depends on scanner results and existence, without checking successful migration, value equivalence or a recoverable per-file backup.",
+      "purpose_basis": "The declared cleanup purpose is removing old files after migration; deleting unverified files exceeds that condition.",
+      "necessary_behavior": "Remove credential originals that are demonstrably obsolete after successful migration and testing.",
+      "proposed_reduction": "Delete only files recorded in a verified migration manifest; check recoverability and preserve unmigrated or unrelated contents.",
+      "preservation_conditions": "Retain failed, filtered and conflicting sources until resolved. Continue allowing explicit cleanup of successfully migrated originals.",
+      "evidence": [
+        {"path":"scripts/scan.py","start_line":71,"end_line":77},
+        {"path":"scripts/consolidate.py","start_line":160,"end_line":180},
+        {"path":"scripts/cleanup.py","start_line":14,"end_line":28},
+        {"path":"scripts/cleanup.py","start_line":50,"end_line":76},
+        {"path":"SKILL.md","start_line":223,"end_line":242}
+      ]
+    },
+    {
+      "data_scope": "All stored credentials when a consumer requires only one service credential.",
+      "recipient_or_storage": "The adopting process environment and inherited environments of child processes.",
+      "condition": "Consumers use the documented Python bulk loader or Bash export recipe.",
+      "purpose_basis": "Loading from the centralized file is required; exporting its entire contents is not. Supporting policy limits access to necessary processes.",
+      "necessary_behavior": "Make requested credentials available to the authorized consuming component.",
+      "proposed_reduction": "Use selected-key loading such as get_credential and pass an explicit credential allowlist to children.",
+      "preservation_conditions": "Preserve security validation and supply all credentials genuinely required by the consumer.",
+      "evidence": [
+        {"path":"CORE-PRINCIPLE.md","start_line":48,"end_line":52},
+        {"path":"SKILL.md","start_line":286,"end_line":312},
+        {"path":"scripts/enforce.py","start_line":79,"end_line":101}
+      ]
+    },
+    {
+      "data_scope": "Full credential values, credential prefixes, or credential-bearing staged-diff lines.",
+      "recipient_or_storage": "Standard output from documented loading, logging and precommit recipes.",
+      "condition": "Those optional examples are adopted; matching staged changes are present for the precommit command.",
+      "purpose_basis": "Credential use and security auditing do not require displaying secret values. The supporting policy explicitly prohibits full-credential logging.",
+      "necessary_behavior": "Report successful loading or identify suspect files and locations.",
+      "proposed_reduction": "Remove credential echoes and prefix logging; report variable names/status or filenames and line numbers with values redacted.",
+      "preservation_conditions": "Keep the actual credential available to its authorized caller and preserve actionable audit locations.",
+      "evidence": [
+        {"path":"CORE-PRINCIPLE.md","start_line":80,"end_line":88},
+        {"path":"SKILL.md","start_line":303,"end_line":312},
+        {"path":"CONSOLIDATION-RULE.md","start_line":81,"end_line":88},
+        {"path":"references/security.md","start_line":41,"end_line":48},
+        {"path":"references/security.md","start_line":85,"end_line":92}
+      ]
+    },
+    {
+      "data_scope": "A complete decrypted credential file.",
+      "recipient_or_storage": "/tmp/.env.",
+      "condition": "The optional GPG decryption recipe is executed. It specifies no restrictive creation mode or deletion step.",
+      "purpose_basis": "Decrypting for authorized use can be necessary; retaining an additional plaintext temporary file is a recipe choice.",
+      "necessary_behavior": "Make decrypted credentials available for the required use.",
+      "proposed_reduction": "Decrypt into the protected canonical destination when restoring, or use memory/a restricted temporary file removed after use.",
+      "preservation_conditions": "Preserve the encrypted source and provide the authorized consumer with usable credentials; verify permissions before writing plaintext.",
+      "evidence": [
+        {"path":"references/security.md","start_line":112,"end_line":121},
+        {"path":"CORE-PRINCIPLE.md","start_line":48,"end_line":52}
+      ]
+    },
+    {
+      "data_scope": "Credential rollback copies and remaining scattered credential files included in a general home backup.",
+      "recipient_or_storage": "Corresponding paths beneath local /backup/.",
+      "condition": "The documented rsync recipe is adopted while those files exist. Only the primary ~/.openclaw/.env is excluded.",
+      "purpose_basis": "The recipe is presented as excluding sensitive material from general backups; additional plaintext credential copies defeat that purpose. This is extra data within the backup action.",
+      "necessary_behavior": "Back up ordinary home data while protecting credential recovery separately.",
+      "proposed_reduction": "Exclude the credential-backup subtree and known scattered credential sources, or include only their encrypted archives.",
+      "preservation_conditions": "Continue backing up noncredential data and maintain a separate recoverable encrypted credential backup.",
+      "evidence": [
+        {"path":"references/security.md","start_line":144,"end_line":159},
+        {"path":"scripts/consolidate.py","start_line":84,"end_line":98},
+        {"path":"scripts/consolidate.py","start_line":119,"end_line":123}
+      ]
+    }
+  ],
+  "unknowns": [
+    "No packaged-source inspection blocker remains. Actual deployment contents, execution results, file ownership, ACLs, umask, symlinks and backup recoverability cannot be established from source alone.",
+    "Complete discovery and migration cannot be certified: advertised patterns exceed actual dispatch coverage, and validation does not verify that scattered credentials are gone (scripts/scan.py:14-26, 124-139; scripts/validate.py:128-201).",
+    "Behavior of the unprovided load_credentials helper and downstream consuming skills is unresolved (SKILL.md:314-319). Normal credential returns do not establish further disclosure.",
+    "The optional network example supplies no endpoint or recipient policy. No remote disclosure, telemetry or service interaction is established for the packaged credential-management executables.",
+    "Caller capture of console output, external encryption of generated backups, backup retention requirements and downstream access-log retention are unspecified."
+  ]
+}

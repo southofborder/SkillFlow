@@ -33,6 +33,21 @@ BLOCK_KIND_RULES = (
     "successor. Preserve their original order, versions and control conditions."
 )
 
+OUTCOME_DISPATCH_RULES = (
+    "When a protected operation can continue normally or transfer control on an exception, end its block "
+    "immediately after that operation with kind=outcome_dispatch. Set producer to its local operation ref, "
+    "on_return to its normal continuation, on_throw to the first applicable handler test or propagation exit, "
+    "and source to the physical operation. Locate each typed catch at its physical handler clause and carry "
+    "the same thrown value to the matching handler or past it to the next handler or outer exceptional exit. "
+    "When an argument default depends on omission, distinguish the supplied argument from the sourced default "
+    "on its absent path. Control uses that invocation's disposition. Expose the normal "
+    "return value or raised exception only where the source uses it. For an effect-only call both payloads "
+    "may be absent. Do not synthesize a Boolean result, a response key, an exception packet or a caller marker. "
+    "If the source separately computes a Boolean or tests data, preserve that ordinary branch and its inputs. "
+    "Keep source-backed arguments, predecessor-specific values, external effects and the actual exception object "
+    "at their producer and consumer sites."
+)
+
 
 class ResultValue(StrictRecord):
     result: Text
@@ -113,12 +128,21 @@ class Branch(Exit):
     arms: list[Arm] = Field(min_length=1)
 
 
+class OutcomeDispatch(Exit):
+    kind: Literal["outcome_dispatch"]
+    producer: Text = Field(description="Local ref of the immediately preceding protected operation.")
+    on_return: Text
+    on_throw: Text
+    inputs: list[ResultValue] = Field(default_factory=list,
+        description="Existing data ports of that operation consumed at this exit. They do not select its successor.")
+
+
 class Return(Exit):
     kind: Literal["return"]
     values: list[Value]
 
 
-ExitFact = Annotated[Jump | Branch | Return, Field(discriminator="kind")]
+ExitFact = Annotated[Jump | Branch | Return | OutcomeDispatch, Field(discriminator="kind")]
 
 
 class Block(StrictRecord):
@@ -138,6 +162,7 @@ class Facts(StrictRecord):
 
 class ArchivedBlock(Block):
     operations: list[_ActionFields]
+    exit: Annotated[Jump | Branch | Return, Field(discriminator="kind")]
 
 
 class _ArchivedFacts(Facts):
@@ -146,12 +171,17 @@ class _ArchivedFacts(Facts):
 
 GRAPH_FACTS_SCHEMA = Facts.model_json_schema()
 # The nullable variant is reserved for importing old accepted records internally.
-for _name in ("Action", "Jump", "Branch", "Return"):
+for _name in ("Action", "Jump", "Branch", "Return", "OutcomeDispatch"):
     GRAPH_FACTS_SCHEMA["$defs"][_name]["properties"]["source"] = {"$ref": "#/$defs/SourceRef"}
 _arm_condition = GRAPH_FACTS_SCHEMA["$defs"]["Arm"]["properties"]["condition"]
 GRAPH_FACTS_SCHEMA["$defs"]["Arm"]["properties"]["condition"] = _arm_condition["anyOf"][0]
 GRAPH_FACTS_SCHEMA["$defs"]["Branch"]["properties"]["arms"]["maxItems"] = 2
-ARCHIVED_GRAPH_FACTS_SCHEMA = deepcopy(GRAPH_FACTS_SCHEMA)
+PRE_OUTCOME_GRAPH_FACTS_SCHEMA = deepcopy(GRAPH_FACTS_SCHEMA)
+del PRE_OUTCOME_GRAPH_FACTS_SCHEMA["$defs"]["OutcomeDispatch"]
+_legacy_exit = PRE_OUTCOME_GRAPH_FACTS_SCHEMA["$defs"]["Block"]["properties"]["exit"]
+del _legacy_exit["discriminator"]["mapping"]["outcome_dispatch"]
+_legacy_exit["oneOf"] = [row for row in _legacy_exit["oneOf"] if row["$ref"] != "#/$defs/OutcomeDispatch"]
+ARCHIVED_GRAPH_FACTS_SCHEMA = deepcopy(PRE_OUTCOME_GRAPH_FACTS_SCHEMA)
 del ARCHIVED_GRAPH_FACTS_SCHEMA["$defs"]["Action"]["properties"]["source_actions"]
 del ARCHIVED_GRAPH_FACTS_SCHEMA["$defs"]["Action"]["properties"]["role"]
 del ARCHIVED_GRAPH_FACTS_SCHEMA["$defs"]["SourceAction"]
@@ -174,6 +204,7 @@ class GraphAssembly:
     block_layout: dict = field(default_factory=dict)
     check_occurrences: bool = True
     check_calls: bool = True
+    check_outcome_routes: bool = True
 
     def to_receipt(self):
         identity = (IDENTITY if self.check_calls else OCCURRENCE_IDENTITY if self.check_occurrences else BLOCK_LAYOUT_IDENTITY if self.normalize_blocks
@@ -358,6 +389,8 @@ def _acquisition_layout(facts):
             names.add(block.exit.target)
         elif isinstance(block.exit, Branch):
             names.update(arm.target for arm in block.exit.arms)
+        elif isinstance(block.exit, OutcomeDispatch):
+            names.update((block.exit.on_return, block.exit.on_throw))
     for block in facts.blocks:
         if block.source_kind == "normal" or refs[block.ref] != 1:
             continue
@@ -426,12 +459,17 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
         metadata = deepcopy(fact.metadata)
         legacy = (previous.get((facts.blocks[path[1]].ref, prior_id)) if archived else
                   previous_ids.get(canonical_ids.get("instructions", {}).get(ref)))
+        if "outcome_dispatch" in metadata:
+            _add_gap(raw, slots, gaps, "generated_metadata", (*path, "metadata"),
+                     "Declare this route in the source-located outcome_dispatch exit fact.")
+        legacy_metadata = ({key: val for key, val in legacy["metadata"].items() if key != "outcome_dispatch"}
+                           if legacy is not None else None)
         actions = getattr(fact, "source_actions", [])
         if fact.source is None:
             if legacy is None:
                 _add_gap(raw, slots, gaps, "source_required", (*path, "source"),
                          "An authored action or exit needs its exact frozen source location.")
-            elif metadata != legacy["metadata"]:
+            elif metadata != legacy_metadata:
                 _add_gap(raw, slots, gaps, "source_required", (*path, "source"),
                          "Changed source metadata needs a new frozen source location.")
             if actions:
@@ -446,7 +484,7 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
                 generated = {"script_content", "_source_span", "source_span"}
                 if not archived:
                     generated.add("source_actions")
-                if legacy is not None and metadata == legacy["metadata"]:
+                if legacy is not None and metadata == legacy_metadata:
                     metadata = {name: content for name, content in metadata.items() if name not in generated}
                 elif generated & metadata.keys():
                     _add_gap(raw, slots, gaps, "generated_metadata", (*path, "metadata"),
@@ -473,7 +511,7 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
                         metadata["source_actions"] = deepcopy(legacy["metadata"]["source_actions"])
                     else:
                         role = ((fact.role or opcode) if isinstance(fact, Action)
-                                else "branch" if isinstance(fact, Branch) else "other")
+                                else "branch" if isinstance(fact, (Branch, OutcomeDispatch)) else "other")
                         metadata["source_actions"] = [{"ref": getattr(fact, "ref", "exit"), "kind": opcode,
                                                        "source": span.model_dump(), "role": role}]
         inputs = [_operand(value) for value in values]
@@ -534,6 +572,25 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
         exit_block = continuation or block.ref
         if isinstance(exit, Jump):
             add_edge(exit_block, exit.target, None, (*exit_path, "target"))
+        elif isinstance(exit, OutcomeDispatch):
+            if not block.operations or block.operations[-1].ref != exit.producer:
+                _add_gap(raw, slots, gaps, "outcome_producer", (*exit_path, "producer"),
+                         "Identify the immediately preceding protected operation in this block.")
+            else:
+                for index, operand in enumerate(exit.inputs):
+                    if operand.result not in block.operations[-1].outputs:
+                        _add_gap(raw, slots, gaps, "outcome_operand", (*exit_path, "inputs", index),
+                                 "Preserve only actual result ports of the protected operation at its outcome exit.")
+            if exit.on_return == exit.on_throw:
+                _add_gap(raw, slots, gaps, "outcome_targets", (*exit_path, "on_throw"),
+                         "Normal and exceptional continuations must be distinct blocks.")
+            for disposition in ("return", "throw"):
+                key = "on_" + disposition
+                target = getattr(exit, key)
+                # Preserve the physical edge's original display label when importing
+                # an accepted graph. The typed target remains authoritative.
+                labels = dict(legacy_edges.get(block.ref, []))
+                add_edge(exit_block, target, labels.get(target, disposition), (*exit_path, key))
         elif isinstance(exit, Branch):
             actual_arms = [(arm.target, arm.condition) for arm in exit.arms]
             if actual_arms != legacy_edges.get(block.ref):
@@ -546,7 +603,8 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
                                  "Supply the actual condition for this guarded arm.")
             for ai, arm in enumerate(exit.arms):
                 add_edge(exit_block, arm.target, arm.condition, (*exit_path, "arms", ai, "target"))
-        values = exit.values if isinstance(exit, Return) else exit.conditions if isinstance(exit, Branch) else []
+        values = (exit.values if isinstance(exit, Return) else exit.conditions if isinstance(exit, Branch)
+                  else exit.inputs if isinstance(exit, OutcomeDispatch) else [])
         for vi, value in enumerate(values):
             if isinstance(value, ContextValue):
                 _add_gap(raw, slots, gaps, "context_acquisition_only",
@@ -557,6 +615,9 @@ def _lower(facts, raw, *, files, slots, gaps, legacy_cfg, archived, canonical_id
         legacy_exit = legacy_ops[-1]["id"] if legacy_ops else None
         operations.append(instruction(instruction_ref(block.ref), "return" if isinstance(exit, Return) else "dispatch",
             values, [], exit, exit_path, legacy_exit))
+        if isinstance(exit, OutcomeDispatch):
+            operations[-1]["metadata"]["outcome_dispatch"] = {
+                "producer": instruction_ref(block.ref, exit.producer), "on_return": exit.on_return, "on_throw": exit.on_throw}
         kind = None if block.source_kind == "normal" or layout.get("kind") == "control" else block.source_kind
         if continuation:
             # This instruction only connects the two physical blocks. It has no
@@ -641,7 +702,8 @@ def _restore_legacy_labels(cfg, inherited_refs):
 
 
 def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, archived=False,
-                         normalize_blocks=True, check_occurrences=True, check_calls=True, _retained=False):
+                         normalize_blocks=True, check_occurrences=True, check_calls=True, check_outcome_routes=True,
+                         _retained=False):
     """Lower complete facts and revalidate the entire CFG without synthesizing semantics."""
     sha = source_digest(files)
     if not isinstance(value, dict):
@@ -653,19 +715,49 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
     normalize_blocks = normalize_blocks and not archived
     check_occurrences = check_occurrences and normalize_blocks
     check_calls = check_calls and check_occurrences
+    check_outcome_routes = check_outcome_routes and check_calls
     if not archived:
         _check_authored_roles(raw, slots, gaps, imported=legacy_cfg is not None, prior=prior)
     facts = _validate_facts(raw, slots, gaps, archived=archived)
     if facts is None:
         return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, archived=archived,
-                             normalize_blocks=normalize_blocks, check_occurrences=check_occurrences, check_calls=check_calls)
+                             normalize_blocks=normalize_blocks, check_occurrences=check_occurrences, check_calls=check_calls,
+                             check_outcome_routes=check_outcome_routes)
+    snapshots = {}
     if check_calls:
         from .source_calls import bind_source_calls
         bind_source_calls(raw, files)
+        if not gaps and legacy_cfg is None and not _retained:
+            from .call_continuations import specialize_call_continuations
+            for caller, entry in specialize_call_continuations(raw, files):
+                bi = next(i for i, block in enumerate(raw["blocks"]) if block["ref"] == entry)
+                _add_gap(raw, slots, gaps, "call_return_binding", ("blocks", bi, "operations", 0, "metadata"),
+                         "Represent the inlined call and independent entry with separate callee blocks. "
+                         "Each normal value must reach its own consumer and each exception its own handler or exit.")
+                gaps[-1]["call_site"] = caller
+            if check_outcome_routes and not gaps:
+                from .python_handlers import split_handler_admission
+                for target, path, message in split_handler_admission(raw, files):
+                    bi = next(i for i, b in enumerate(raw["blocks"]) if b["ref"] == target)
+                    _add_gap(raw, slots, gaps, "python_handler_admission", ("blocks", bi, *path), message)
+                from .python_arguments import explicit_argument_ports
+                for bi, message in explicit_argument_ports(raw, files, snapshots):
+                    _add_gap(raw, slots, gaps, "python_argument_presence", ("blocks", bi, "exit"), message)
         facts = Facts.model_validate(raw)
     layout = _acquisition_layout(facts) if normalize_blocks else {}
     options = {"archived": archived, "normalize_blocks": normalize_blocks, "block_layout": layout,
-               "check_occurrences": check_occurrences, "check_calls": check_calls}
+               "check_occurrences": check_occurrences, "check_calls": check_calls, "check_outcome_routes": check_outcome_routes}
+    if check_outcome_routes and not _retained:
+        from .outcome_branches import needs_outcome_targets
+        blocks_by_ref = {block.ref: block for block in facts.blocks}
+        for bi, block in enumerate(facts.blocks):
+            if needs_outcome_targets(block, files, blocks_by_ref):
+                _add_gap(raw, slots, gaps, "outcome_targets_required", ("blocks", bi, "exit"),
+                         "The two successor roles are unresolved. This straight-line operation supplies multiple "
+                         "alternative result ports and has no data test here. Assign the source-backed return and throw targets.")
+                if slot_id := gaps[-1].get("slot_id"):
+                    slots[slot_id].update(kind="outcome_targets", producer=block.operations[-1].ref,
+                                          targets=[arm.target for arm in block.exit.arms])
     candidate, locators, inherited_refs = _lower(facts, raw, files=files, slots=slots, gaps=gaps,
                                                 legacy_cfg=legacy_cfg, archived=archived, canonical_ids=prior,
                                                 block_layout=layout)
@@ -680,9 +772,9 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
                             source_sites=owners or spans)
         for bi, block in enumerate(raw["blocks"]):
             for oi, op in enumerate(block["operations"]):
-                if "optional_context_inputs" in op.get("metadata", {}) and op.get("source") is not None:
+                if {"optional_context_inputs", "python_argument_defaults", "python_argument_snapshot", "python_raised_class"} & op.get("metadata", {}).keys() and op.get("source") is not None:
                     _add_gap(raw, slots, gaps, "generated_metadata", ("blocks", bi, "operations", oi, "metadata"),
-                             "Optional context input indices are derived from the physical signature.")
+                             "Optional inputs, Python defaults and raised classes are derived from the physical source.")
     if check_calls and not gaps and not _retained:
         from .call_region import call_sites
         by_ref = {b["ref"]: i for i, b in enumerate(raw["blocks"])}
@@ -690,13 +782,20 @@ def assemble_graph_facts(value, *, files, canonical_ids=None, legacy_cfg=None, a
             if site["errors"]:
                 bi = by_ref[site["caller"]]
                 path = ("blocks", bi, "operations", len(raw["blocks"][bi]["operations"]) - 1, "inputs")
+                if site["formal_error"]:
+                    path = ("blocks", by_ref[site["formals"]], "operations", 0)
+                    path += (("metadata", "predecessor_bindings", site["caller"]) if site["formal_error"] == "row"
+                             else ("inputs",))
                 _add_gap(raw, slots, gaps, "call_return_binding", path, " ".join(site["errors"]))
                 gaps[-1]["call_site"] = site["caller"]
     if gaps:
         return GraphAssembly(raw, None, None, slots, gaps, prior, sha, origin, legacy_cfg, **options)
     if check_occurrences:
         from .entry_occurrences import qualify_occurrence_keys
-        qualify_occurrence_keys(candidate, files, inherited_refs)
+        qualify_occurrence_keys(candidate, files, inherited_refs, bind_defaults=check_outcome_routes, snapshots=snapshots)
+    if check_outcome_routes:
+        from .python_handlers import qualify_raised_classes
+        qualify_raised_classes(candidate, files, inherited_refs)
     try:
         parsed = IRAnalysisCandidate.model_validate(candidate)
     except ValidationError as error:
@@ -729,7 +828,8 @@ def _fact_input(operand):
             else {operand["type"]: operand["identifier"]})
 
 
-def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True):
+def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, check_occurrences=True, check_calls=True,
+                      check_outcome_routes=True):
     """Bind old canonical material without representing it as new model-authored facts."""
     verified = ControlFlowGraph.model_validate(cfg)
     verified.validate_integrity()
@@ -758,10 +858,13 @@ def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, chec
             raise ValueError("No repairable semantic exit is available for an empty accepted block")
         terminal = block["instructions"][-1]
         ids["instructions"][instruction_ref(ref)] = terminal["id"]
-        exit = {"source": None, "constraints": terminal["constraints"], "metadata": terminal["metadata"]}
+        exit = {"source": None, "constraints": terminal["constraints"], "metadata": deepcopy(terminal["metadata"])}
         edges = outgoing.get(ref, [])
         inputs = [_fact_input(value) for value in terminal["inputs"]]
-        if terminal["opcode"] == "return":
+        if "outcome_dispatch" in exit["metadata"]:
+            dispatch = exit["metadata"].pop("outcome_dispatch")
+            exit.update(kind="outcome_dispatch", **dispatch, inputs=inputs)
+        elif terminal["opcode"] == "return":
             exit.update(kind="return", values=inputs)
         elif len(edges) == 1 and edges[0]["condition_text"] is None and not inputs:
             exit.update(kind="jump", target=edges[0]["target_block_id"])
@@ -772,7 +875,7 @@ def from_accepted_cfg(cfg, *, files, archived=False, normalize_blocks=True, chec
         facts["blocks"].append(draft)
     assembly = assemble_graph_facts(facts, files=files, canonical_ids=ids, legacy_cfg=cfg, archived=archived,
                                     normalize_blocks=normalize_blocks, check_occurrences=check_occurrences, check_calls=check_calls,
-                                    _retained=True)
+                                    check_outcome_routes=check_outcome_routes, _retained=True)
     if assembly.cfg != cfg:
         raise ValueError("Cannot reconstruct the accepted CFG exactly from editable facts")
     return assembly

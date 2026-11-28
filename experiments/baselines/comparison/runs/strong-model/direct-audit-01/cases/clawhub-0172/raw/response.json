@@ -1,0 +1,600 @@
+{
+  "status": "partial",
+  "declared_purpose": "Manage Tencent Weiyun cloud files through 12 documented MCP tools, including listing, upload, download, deletion, sharing and file organization. Supporting scripts generate FTN upload parameters locally and provide a recommended uploader. Initial authorization, local hashing and daily version checks are explicitly prescribed (SKILL.md:2–5, 14–20, 53–85).",
+  "data_operations": [
+    {
+      "operation": "Prescribe authorization initiation and token retrieval; implementation unresolved",
+      "source": "references/auth.md",
+      "data_scope": "Authorization status, authorization URL/code and MCP token readiness; browser authorization uses QQ or WeChat.",
+      "recipient_or_storage": "Local setup helpers, caller and user's browser; helper endpoints and credential storage are unspecified.",
+      "condition": "Check readiness first. After AUTH_REQUIRED, retrieve the token only following a new user confirmation. Neither setup.sh nor setup.ps1 is supplied.",
+      "evidence": [
+        {
+          "path": "references/auth.md",
+          "start_line": 3,
+          "end_line": 45
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 78,
+          "end_line": 92
+        }
+      ]
+    },
+    {
+      "operation": "Request a replacement credential through conversation",
+      "source": "references/auth.md",
+      "data_scope": "Replacement MCP token.",
+      "recipient_or_storage": "User-agent conversation; subsequent conversation persistence is unspecified.",
+      "condition": "The ERROR:expired response template asks the user to obtain and tell the agent a new token.",
+      "evidence": [
+        {
+          "path": "references/auth.md",
+          "start_line": 39,
+          "end_line": 45
+        }
+      ]
+    },
+    {
+      "operation": "Prescribe plaintext credential persistence and conditional removal",
+      "source": "Manual authentication fallback",
+      "data_scope": "MCP token in the configured WyHeader and Weiyun endpoint configuration.",
+      "recipient_or_storage": "Local mcporter configuration with --scope home; exact filename is not supplied.",
+      "condition": "Manual fallback uses mcporter config add. The documentation recommends removing the weiyun entry after use on temporary devices; automatic cleanup is not shown.",
+      "evidence": [
+        {
+          "path": "references/auth.md",
+          "start_line": 47,
+          "end_line": 75
+        }
+      ]
+    },
+    {
+      "operation": "Read connection settings and disclose authentication material",
+      "source": "Uploader CLI/environment handling and documented MCP authentication",
+      "data_scope": "MCP token, configured MCP URL and optional env_id; category listing additionally requires real Weiyun uid/uid_key cookies.",
+      "recipient_or_storage": "Uploader process, then the configured MCP endpoint through WyHeader and optional Cookie headers.",
+      "condition": "Uploader reads CLI values or WEIYUN_MCP_URL, WEIYUN_MCP_TOKEN and WEIYUN_ENV_ID. Normally only HTTPS hosts under weiyun.com or qq.com are accepted; WEIYUN_MCP_URL_ALLOW_INSECURE=1 permits other HTTP/HTTPS destinations with a warning. The category-cookie requirement applies to that documented tool, not the upload-only script.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 70,
+          "end_line": 111
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 485,
+          "end_line": 506
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 300,
+          "end_line": 313
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 90,
+          "end_line": 95
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 447,
+          "end_line": 455
+        }
+      ]
+    },
+    {
+      "operation": "Read the selected local file and derive upload attributes",
+      "source": "Both Python parameter calculators",
+      "data_scope": "Selected file bytes, basename and size; derived SHA1, MD5, block states and check_sha. check_data encodes actual trailing bytes, normally 1–128 bytes, rather than a hash.",
+      "recipient_or_storage": "Local process memory during calculation.",
+      "condition": "Parameter generation or upload. The uploader computes SHA1 and MD5 together; the standalone generator performs another file pass for MD5. For nonempty files up to 128 bytes, check_data can contain the entire file.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 239,
+          "end_line": 281
+        },
+        {
+          "path": "scripts/gen_block_info_list.py",
+          "start_line": 147,
+          "end_line": 196
+        }
+      ]
+    },
+    {
+      "operation": "Disclose pre-upload metadata and verification data",
+      "source": "Uploader pre-upload request",
+      "data_scope": "Filename, size, file_sha, block_sha_list, check_sha, optional-contract file_md5 and raw-tail check_data, plus pdir_key when supplied.",
+      "recipient_or_storage": "Configured MCP endpoint; documented successful upload associates the file with the Weiyun drive.",
+      "condition": "Every upload round sends these fields. file_exist=true completes the upload without shard transmission. Local hashing does not prevent the script from sending raw-tail verification bytes.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 365,
+          "end_line": 394
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 190,
+          "end_line": 201
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 226,
+          "end_line": 241
+        }
+      ]
+    },
+    {
+      "operation": "Re-read the entire file into memory before checking instant-upload completion",
+      "source": "upload_file",
+      "data_scope": "Complete selected file contents, after the hashing pass.",
+      "recipient_or_storage": "Uploader process RAM as file_data; no persistent local copy is created by this code.",
+      "condition": "Unconditionally before the first pre-upload response, including uploads that subsequently finish through file_exist=true.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 376,
+          "end_line": 394
+        }
+      ]
+    },
+    {
+      "operation": "Transmit shards for cloud storage",
+      "source": "Uploader shard loop and MCP transport",
+      "data_scope": "Base64-encoded file slices, filename, upload_key, channel information and ex; requests also repeat file_size, file_sha and check_sha.",
+      "recipient_or_storage": "Configured MCP endpoint; cloud file persistence and overwrite behavior are documented. Internal forwarding and physical storage are not supplied.",
+      "condition": "When pre-upload returns a usable channel. The script refreshes pre-upload information each round, defaults to 50 rounds and retries busy responses up to three total attempts per call.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 305,
+          "end_line": 331
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 381,
+          "end_line": 447
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 203,
+          "end_line": 241
+        }
+      ]
+    },
+    {
+      "operation": "Return parameters and diagnostics through stdout",
+      "source": "Both Python CLI entry paths",
+      "data_scope": "Generator: local path, file metadata, complete hashes, block information and check_data. Uploader: path, URL, token prefix/suffix, directory/environment identifiers, hash prefixes, progress and result identifiers.",
+      "recipient_or_storage": "Invoking caller through stdout; further forwarding or log persistence is not established.",
+      "condition": "Normal CLI execution. Parameter output is the standalone generator's declared function; the uploader also emits diagnostic credential fragments.",
+      "evidence": [
+        {
+          "path": "scripts/gen_block_info_list.py",
+          "start_line": 203,
+          "end_line": 240
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 356,
+          "end_line": 363
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 508,
+          "end_line": 539
+        }
+      ]
+    },
+    {
+      "operation": "Query remote directory and category metadata",
+      "source": "Documented listing tools and search workflow",
+      "data_scope": "Outbound directory keys, filters, sorting and pagination; returned file/folder names, identifiers, sizes, timestamps, counts and continuation cursors.",
+      "recipient_or_storage": "Weiyun MCP endpoint receives query parameters; listing results return to the caller without an additional specified recipient.",
+      "condition": "Requested listing/search or prerequisite lookup. Directory search may recursively traverse subdirectories; category listing requires additional cookies.",
+      "evidence": [
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 13,
+          "end_line": 60
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 68,
+          "end_line": 95
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 495,
+          "end_line": 519
+        }
+      ]
+    },
+    {
+      "operation": "Obtain download access material",
+      "source": "Documented weiyun.download",
+      "data_scope": "Requested file_id/pdir_key pairs; returned HTTPS URLs, download cookies, identifiers and sizes.",
+      "recipient_or_storage": "Weiyun MCP endpoint receives identifiers; access material returns to the caller.",
+      "condition": "Download-link request for selected owned files, subject to documented ownership checks. Returning a link does not itself download or publish the file.",
+      "evidence": [
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 103,
+          "end_line": 135
+        }
+      ]
+    },
+    {
+      "operation": "Fetch selected download content and persist it locally",
+      "source": "Documented curl and PowerShell download workflow",
+      "data_scope": "Returned download URL and cookie; downloaded file bytes.",
+      "recipient_or_storage": "Download destination named by the returned URL; selected local output file. The PowerShell example scopes its cookie to .weiyun.com.",
+      "condition": "The workflow's download step uses redirect-following curl or Invoke-WebRequest and checks the resulting file size. Redirect credential handling is not defined by packaged implementation.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 531,
+          "end_line": 546
+        }
+      ]
+    },
+    {
+      "operation": "Request remote recycling or permanent deletion",
+      "source": "Documented weiyun.delete",
+      "data_scope": "Selected file/directory identifiers, parent keys, directory names and deletion mode.",
+      "recipient_or_storage": "Weiyun MCP endpoint and remote drive/recycle-bin state.",
+      "condition": "Explicit user confirmation is required; directories and permanent deletion require additional confirmation. Default false moves items to the recycle bin; true requests irreversible deletion. Reference documentation describes membership-dependent recycle periods.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 160,
+          "end_line": 194
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 176,
+          "end_line": 179
+        }
+      ]
+    },
+    {
+      "operation": "Create link-based access to selected cloud content",
+      "source": "Documented weiyun.gen_share_link",
+      "data_scope": "Selected object identifiers, share name and optional password; directory sharing exposes descendants.",
+      "recipient_or_storage": "Weiyun sharing service; content becomes accessible to link holders subject to password controls. The generated URL returns to the caller.",
+      "condition": "Explicit sharing confirmation and target review. Instructions recommend a random password unless the user requests none. No additional publication channel is specified.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 202,
+          "end_line": 230
+        }
+      ]
+    },
+    {
+      "operation": "Modify cloud names, directories and locations",
+      "source": "Documented rename, create and move tools",
+      "data_scope": "File/directory identifiers, source and destination keys, new names, required original directory names and optional conflict-handling names.",
+      "recipient_or_storage": "Weiyun MCP endpoint and cloud filesystem metadata; responses return to the caller.",
+      "condition": "Corresponding file-management request. These are metadata mutations, rather than local file-content reads.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 266,
+          "end_line": 346
+        }
+      ]
+    },
+    {
+      "operation": "Check version and conditionally request an update",
+      "source": "Entry-document update workflow",
+      "data_scope": "Installed skill version outbound; latest version, release notes and update instruction inbound.",
+      "recipient_or_storage": "https://www.weiyun.com/api/v3/mcpserver and the caller; later update destinations and writes are unknown.",
+      "condition": "Explicitly required before each day's first use. If outdated, follow the returned instruction or notify the user. The API reference says this check needs no token.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 18,
+          "end_line": 49
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 426,
+          "end_line": 443
+        }
+      ]
+    },
+    {
+      "operation": "Prescribe device telemetry collection and disclosure",
+      "source": "Entry-document req_header instructions",
+      "data_scope": "Real-time OS type/version, MCP client product/version and installed skill version, combined into qua and version.",
+      "recipient_or_storage": "Weiyun MCP server through request-body req_header; server retention is unspecified.",
+      "condition": "The entry initially mandates reporting on every interface, later labels it recommended and permits omission after refusal while retaining functionality. The bundled uploader constructs requests without req_header and does not implement QUA collection.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 88,
+          "end_line": 107
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 686,
+          "end_line": 716
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 365,
+          "end_line": 375
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 426,
+          "end_line": 437
+        }
+      ]
+    },
+    {
+      "operation": "Persist installation provenance and credential-shaped examples in the distributed source",
+      "source": "_skillhub_meta.json and uploader documentation/help",
+      "data_scope": "Installation timestamp, absolute installer-home iconLocalPath, icon provenance URLs and literal MCP-token-shaped examples of unknown validity.",
+      "recipient_or_storage": "Recipients of the public package; token-shaped help examples also reach callers requesting CLI help.",
+      "condition": "Static packaged content. Recorded icon URLs do not establish runtime retrieval.",
+      "evidence": [
+        {
+          "path": "_skillhub_meta.json",
+          "start_line": 2,
+          "end_line": 6
+        },
+        {
+          "path": "_skillhub_meta.json",
+          "start_line": 17,
+          "end_line": 19
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 18,
+          "end_line": 24
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 456,
+          "end_line": 466
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Detailed OS/client versions and req_header skill version attached to each request.",
+      "recipient_or_storage": "Weiyun MCP endpoint.",
+      "condition": "A client follows the document's reporting instructions; this is not implemented by the bundled uploader.",
+      "purpose_basis": "Declared purpose is cloud file management; reporting serves separate fault diagnosis. The document explicitly says omission preserves interface functionality.",
+      "necessary_behavior": "Keep required tool arguments, authentication and the daily update check's version argument.",
+      "proposed_reduction": "Omit diagnostic req_header by default or collect only diagnostic fields needed for an expressly chosen troubleshooting session. These are extra fields within otherwise required requests.",
+      "preservation_conditions": "Do not remove check_skill_update.version or operational metadata; retain diagnostics when the user specifically wants them.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 688,
+          "end_line": 716
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 348,
+          "end_line": 366
+        }
+      ]
+    },
+    {
+      "data_scope": "First eight and last four characters of mcp_token.",
+      "recipient_or_storage": "Uploader stdout and its caller; subsequent persistence is unknown.",
+      "condition": "Every normal uploader invocation after credential validation.",
+      "purpose_basis": "Uploading requires authenticating the request, not displaying credential fragments.",
+      "necessary_behavior": "Transmit the token in WyHeader to the validated endpoint.",
+      "proposed_reduction": "Remove the token-fragment print and report only credential availability.",
+      "preservation_conditions": "Keep authentication headers and useful upload status. This removes a redundant diagnostic output, not authentication.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 501,
+          "end_line": 511
+        }
+      ]
+    },
+    {
+      "data_scope": "A second full-file read retained as file_data.",
+      "recipient_or_storage": "Uploader process RAM.",
+      "condition": "Occurs before discovering whether instant upload eliminates all shard transfers.",
+      "purpose_basis": "Local hashing requires reading the file; this unconditional complete in-memory reread is an implementation choice.",
+      "necessary_behavior": "Compute required hashes locally and provide requested shard bytes when needed.",
+      "proposed_reduction": "Wait for pre-upload results, then seek and read only requested shard ranges into bounded buffers.",
+      "preservation_conditions": "Keep the selected file consistent with its hashes and preserve channel offsets, retries and completion handling. This narrows a redundant local read and memory footprint, not remote upload scope.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 252,
+          "end_line": 281
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 376,
+          "end_line": 394
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 413,
+          "end_line": 422
+        }
+      ]
+    },
+    {
+      "data_scope": "Optional file_md5 and raw-tail check_data, including potentially complete very small files.",
+      "recipient_or_storage": "Configured MCP endpoint in every pre-upload request.",
+      "condition": "The script always includes both fields although the API contract marks them optional, including on instant-upload paths.",
+      "purpose_basis": "Upload requires the documented mandatory metadata and SHA states; MD5 supports instant-upload checking and check_data supports verification.",
+      "necessary_behavior": "Preserve successful upload and any actually required integrity or instant-upload validation.",
+      "proposed_reduction": "Conditionally omit these optional fields when the service accepts the documented mandatory-field request. This removes extra data from pre-upload, not the pre-upload action.",
+      "preservation_conditions": "Candidate reduction remains unresolved until backend requirements are verified; retain either field if necessary for required integrity or requested instant-upload behavior.",
+      "evidence": [
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 194,
+          "end_line": 201
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 242,
+          "end_line": 280
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 365,
+          "end_line": 394
+        }
+      ]
+    },
+    {
+      "data_scope": "Repeated file_size, file_sha and check_sha on shard requests, already disclosed during pre-upload.",
+      "recipient_or_storage": "Configured MCP endpoint on each shard request.",
+      "condition": "Uploader transmits shards; these fields are absent from the documented shard-stage required fields.",
+      "purpose_basis": "Shard transfer requires upload session/channel material, filename and shard bytes. Repeated pre-upload metadata is an implementation choice not explained by the supplied contract.",
+      "necessary_behavior": "Continue transferring the correct shard under the existing upload session.",
+      "proposed_reduction": "Use the documented shard-stage fields if accepted. Narrow fields within required shard requests rather than removing shard transfers.",
+      "preservation_conditions": "Backend compatibility is unresolved; retain repeated fields if the actual service requires them despite the documentation.",
+      "evidence": [
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 203,
+          "end_line": 212
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 426,
+          "end_line": 437
+        }
+      ]
+    },
+    {
+      "data_scope": "Root listing metadata unrelated to the selected local upload file.",
+      "recipient_or_storage": "Listing results returned from Weiyun to the caller.",
+      "condition": "Upload workflow first lists the root solely to obtain pdir_key, although the intended destination is the token-bound directory or its valid key is already known.",
+      "purpose_basis": "The upload API explicitly permits omission of pdir_key and then uses the token-bound directory.",
+      "necessary_behavior": "Upload to the intended authorized destination.",
+      "proposed_reduction": "Skip the root listing in this condition; omit pdir_key or reuse the known correct key. This removes a redundant lookup action.",
+      "preservation_conditions": "Keep directory discovery when selecting another destination, resolving unknown keys or handling a directory-ownership failure.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 550,
+          "end_line": 558
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 29,
+          "end_line": 55
+        },
+        {
+          "path": "references/mcp_api.md",
+          "start_line": 194,
+          "end_line": 201
+        }
+      ]
+    },
+    {
+      "data_scope": "Replacement MCP token requested from the user.",
+      "recipient_or_storage": "User-agent conversation.",
+      "condition": "The user follows the expired-token response template.",
+      "purpose_basis": "Restoring authenticated access requires configuring a valid credential; transmitting its value through conversation is an avoidable setup choice.",
+      "necessary_behavior": "Obtain usable authentication for subsequent authorized drive operations.",
+      "proposed_reduction": "Have the user configure the token locally and report completion instead of sending the credential value to the agent.",
+      "preservation_conditions": "Use a supported local configuration path and verify readiness without echoing the token; automatic helper implementation remains unavailable.",
+      "evidence": [
+        {
+          "path": "references/auth.md",
+          "start_line": 43,
+          "end_line": 45
+        },
+        {
+          "path": "references/auth.md",
+          "start_line": 49,
+          "end_line": 70
+        }
+      ]
+    },
+    {
+      "data_scope": "Plaintext MCP credential retained beyond a temporary task.",
+      "recipient_or_storage": "Home-scoped local mcporter configuration.",
+      "condition": "Manual fallback is used on a temporary device or for a one-off session; cleanup is only recommended.",
+      "purpose_basis": "Credential availability is necessary for authentication; indefinite home-scoped reuse is conditional on the user's setup needs.",
+      "necessary_behavior": "Keep authentication available throughout authorized work.",
+      "proposed_reduction": "Use a supported session credential mechanism, or remove the weiyun entry after temporary work using the documented cleanup command.",
+      "preservation_conditions": "Finish dependent operations before removal and preserve intentionally reusable configuration on the user's dedicated device. Removal does not establish secure erasure.",
+      "evidence": [
+        {
+          "path": "references/auth.md",
+          "start_line": 51,
+          "end_line": 70
+        }
+      ]
+    },
+    {
+      "data_scope": "Installation-specific installedAt and absolute installer-home iconLocalPath.",
+      "recipient_or_storage": "Distributed public _skillhub_meta.json artifact.",
+      "condition": "The supplied package is distributed with this metadata.",
+      "purpose_basis": "Skill discovery and icon display do not require exposing an installation timestamp or installer filesystem identity.",
+      "necessary_behavior": "Retain skill identity, version and a usable icon reference.",
+      "proposed_reduction": "Remove installation-specific metadata from the release artifact and reference the bundled _icon.svg through a package-relative path.",
+      "preservation_conditions": "Preserve metadata fields required by the package consumer; the bundled icon remains available.",
+      "evidence": [
+        {
+          "path": "_skillhub_meta.json",
+          "start_line": 2,
+          "end_line": 6
+        },
+        {
+          "path": "_skillhub_meta.json",
+          "start_line": 17,
+          "end_line": 19
+        },
+        {
+          "path": "_icon.svg",
+          "start_line": 1,
+          "end_line": 4
+        }
+      ]
+    },
+    {
+      "data_scope": "Literal MCP-token-shaped examples; validity unknown.",
+      "recipient_or_storage": "Public uploader source and CLI help output.",
+      "condition": "Package distribution or help display.",
+      "purpose_basis": "Usage examples need credential syntax, not a concrete credential-shaped value.",
+      "necessary_behavior": "Explain how to supply a locally obtained MCP token.",
+      "proposed_reduction": "Replace literal examples with consistent placeholders or environment-variable examples.",
+      "preservation_conditions": "Keep argument syntax understandable. This finding does not establish that any sample is an active credential.",
+      "evidence": [
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 18,
+          "end_line": 24
+        },
+        {
+          "path": "scripts/upload_to_weiyun.py",
+          "start_line": 456,
+          "end_line": 466
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Partial scope: setup.sh and setup.ps1 are absent despite references/auth.md:7–45 and 73–75 invoking them. Automatic authorization endpoints, local reads, code handling, token retrieval, credential caching and cleanup cannot be audited.",
+    "Remote MCP implementations are not supplied. Documented ownership enforcement, optional upload-field acceptance, internal forwarding, telemetry retention, cloud retention and physical deletion cannot be verified. This blocks unconditional adoption of the proposed upload-field reductions.",
+    "Returned update instructions are unavailable (SKILL.md:39–49); their eventual downloads, execution, disclosures and filesystem writes remain unresolved.",
+    "mcporter, requests, curl, Invoke-WebRequest and browser implementations are outside the supplied source. Exact configuration filenames/permissions, redirect behavior, credential propagation, proxy behavior and external logging are unresolved.",
+    "SKILL.md:678–682 gives a blanket token requirement, while references/mcp_api.md:443 and 451 exempt check_skill_update. Whether mcporter nevertheless attaches configured credentials to that unauthenticated check is unknown.",
+    "references/mcp_api.md:161–166 omits dir_name from directory deletion, while SKILL.md:175–192 says the backend requires it. Server requirements cannot be reconciled from implementation source; omission is not a supported reduction.",
+    "Actual sharing expiry and service access enforcement are unavailable. SKILL.md:220 requests expiry review, but the listed request fields at 202–207 provide no expiry parameter.",
+    "No supplied source establishes that stdout is persistently logged or forwarded beyond its caller, that recorded icon URLs are fetched at runtime, or that token-shaped documentation samples are valid credentials."
+  ]
+}

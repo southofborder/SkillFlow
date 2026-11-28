@@ -1,0 +1,737 @@
+{
+  "status": "partial",
+  "declared_purpose": "Provide persistent agent memory, semantic recall, knowledge graphs and decay, with defenses against prompt injection, credential leakage and poisoning. Optional conversation capture and Cloud sync support that purpose; particular capture scopes, logging fields and repair defaults are implementation choices (SKILL.md:3–4,80–82,168–179).",
+  "data_operations": [
+    {
+      "operation": "Read configuration and resolve local components",
+      "source": "ShieldCortex config, OpenClaw plugin configuration, installed binaries and package files",
+      "data_scope": "Configuration including cloudApiKey, consent flags, binary paths and installation metadata; parsed configuration remains in gateway memory.",
+      "recipient_or_storage": "Local hook/plugin runtime",
+      "condition": "Runtime initialization and configuration checks; ShieldCortex configuration is refreshed when its modification time changes.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 26,
+          "end_line": 100
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 34,
+          "end_line": 103
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 188,
+          "end_line": 255
+        }
+      ]
+    },
+    {
+      "operation": "Read session transcripts locally",
+      "source": "Session JSONL file supplied by the OpenClaw event",
+      "data_scope": "Entire file is read before selecting its last 30 lines. User and assistant text is collected; only assistant-authored text reaches session extraction.",
+      "recipient_or_storage": "Hook process memory",
+      "condition": "Registered /new or /stop event, openclawAutoMemory=true and a session file path. Reading occurs before checking extractor availability.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/HOOK.md",
+          "start_line": 5,
+          "end_line": 6
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 309,
+          "end_line": 364
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 378,
+          "end_line": 416
+        }
+      ]
+    },
+    {
+      "operation": "Extract and request storage of session memories",
+      "source": "Recent assistant transcript text",
+      "data_scope": "Extractor-generated title, content, category and memoryPurpose; project=openclaw, scope=global, normal importance, provenance tags and workspaceDir. Categories and purposes are inferred attributes.",
+      "recipient_or_storage": "Local ShieldCortex remember tool through mcporter; entry declares persistence in ~/.shieldcortex/memories.db shared across integrations.",
+      "condition": "Auto-memory enabled, local extractor resolves, candidates exist, novelty permits them and any available candidate screen accepts them. Missing candidate-screen export permits unscreened candidates to proceed to remember.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 407,
+          "end_line": 477
+        },
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 134,
+          "end_line": 167
+        },
+        {
+          "path": "bundled/cortex-memory-hook/HOOK.md",
+          "start_line": 144,
+          "end_line": 146
+        }
+      ]
+    },
+    {
+      "operation": "Scan live input locally",
+      "source": "OpenClaw llm_input event",
+      "data_scope": "event.prompt plus the last five user text blocks extracted from history; internal-pattern matches and texts shorter than ten characters are skipped.",
+      "recipient_or_storage": "Local ShieldCortex scan_tool_response tool, in advisory mode; parsed verdict returns to the plugin.",
+      "condition": "Realtime plugin installed and enabled; manifest disables it by default. This scan does not require auto-memory or Cloud sync.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/openclaw.plugin.json",
+          "start_line": 11,
+          "end_line": 23
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 266,
+          "end_line": 283
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 321,
+          "end_line": 337
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 467,
+          "end_line": 512
+        }
+      ]
+    },
+    {
+      "operation": "Infer memories from live assistant output",
+      "source": "event.assistantTexts",
+      "data_scope": "Pattern-inferred architecture, error, learning, preference or note category; title from the first 80 characters and content from the first 500 characters of matching text. Includes sessionId, agentId, workspaceDir, provenance and global scope.",
+      "recipient_or_storage": "Local ShieldCortex remember tool",
+      "condition": "Realtime plugin active, openclawAutoMemory=true, eligible output matches a pattern and passes novelty filtering. Up to three candidates; recognized tool-result text is excluded.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 285,
+          "end_line": 319
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 513,
+          "end_line": 574
+        }
+      ]
+    },
+    {
+      "operation": "Transfer tool arguments to local subprocesses",
+      "source": "Hook/plugin scan, remember and recall calls",
+      "data_scope": "JSON arguments containing relevant raw text, titles, queries and contextual metadata appear in subprocess argv.",
+      "recipient_or_storage": "npx mcporter process and its ShieldCortex stdio server; stdout normally returns only to the caller.",
+      "condition": "callCortex invocation. Uses execFile with an argv array rather than a shell.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 169,
+          "end_line": 230
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 262,
+          "end_line": 271
+        }
+      ]
+    },
+    {
+      "operation": "Inspect memory-write tool calls and retain temporary denial fingerprints",
+      "source": "remember and mcp__memory__remember title/content arguments",
+      "data_scope": "Local directive checks, imported defense-pipeline classifications and deterministic normalized-content hashes. Denial cache defaults to 200 entries per tool with two-hour validity.",
+      "recipient_or_storage": "Local interceptor and dynamically imported shieldcortex/defence; denial cache stays in process memory.",
+      "condition": "Plugin interceptor initializes successfully and a watched tool receives nonempty text. Inline directive failures block immediately; ordinary pipeline verdicts follow severityActions, whose defaults log or warn. Session-end cleanup clears the cache when supported.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 5,
+          "end_line": 99
+        },
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 192,
+          "end_line": 274
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 597,
+          "end_line": 673
+        }
+      ]
+    },
+    {
+      "operation": "Display content during conditional approval",
+      "source": "Intercepted memory title and content",
+      "data_scope": "Up to 200 characters, tool name, inferred severity and threat indicators.",
+      "recipient_or_storage": "Host-provided context.requireApproval interface; its downstream handling is unspecified.",
+      "condition": "Interceptor component receives require_approval configuration and the host supplies the callback. Bundled registration normalizes away interceptor configuration, so this branch is not established as reachable through that registration.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 118,
+          "end_line": 135
+        },
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 275,
+          "end_line": 340
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 188,
+          "end_line": 218
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 245,
+          "end_line": 255
+        }
+      ]
+    },
+    {
+      "operation": "Append local audit records",
+      "source": "Flagged input scans, memory extraction summaries and intercepted memory writes",
+      "data_scope": "Flagged input previews up to 100 characters with session/model metadata; intercepted title/content previews up to 200 characters with verdicts and outcomes, including blocked or denied attempts; successful extraction counts.",
+      "recipient_or_storage": "~/.shieldcortex/audit/realtime-YYYY-MM-DD.jsonl",
+      "condition": "Relevant event occurs. Interceptor logging includes ordinary log/warn outcomes. Supplied appenders contain no preview redaction or retention cleanup.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 338,
+          "end_line": 349
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 481,
+          "end_line": 504
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 559,
+          "end_line": 568
+        },
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 136,
+          "end_line": 148
+        },
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 197,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "operation": "Emit rejected candidate titles to diagnostics",
+      "source": "Session memory candidates refused by the optional candidate screen",
+      "data_scope": "Candidate title and matched pattern names; full candidate content is omitted.",
+      "recipient_or_storage": "Gateway console; persistence or forwarding of console output is unknown.",
+      "condition": "Candidate screen exists and returns refusal patterns.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 450,
+          "end_line": 456
+        }
+      ]
+    },
+    {
+      "operation": "Persist deduplication fingerprints and descriptive fields",
+      "source": "Auto-memory candidates following a truthy remember response",
+      "data_scope": "Normalized-content hash, up to 200 deterministic token/bigram hashes, plaintext title up to 120 characters, category and creation timestamp. Default count limit is 300, configurable from 50 to 1000.",
+      "recipient_or_storage": "~/.shieldcortex/openclaw-memory-cache.json, shared by hook and plugin",
+      "condition": "Dedupe is enabled and a fingerprint is generated. Code tests response truthiness rather than parsing an accepted-storage verdict. Count pruning is implemented; time-based expiry is not shown.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 58,
+          "end_line": 88
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 105,
+          "end_line": 198
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 472,
+          "end_line": 477
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 386,
+          "end_line": 465
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 559,
+          "end_line": 564
+        }
+      ]
+    },
+    {
+      "operation": "Read installed hooks and surface scan warnings",
+      "source": "~/.openclaw/hooks immediate child directories",
+      "data_scope": "HOOK.md and handler.js contents, excluding cortex-memory and internal directories; resulting unsafe hook names.",
+      "recipient_or_storage": "Local scan_skill tool; warning names enter OpenClaw bootstrapFiles context.",
+      "condition": "agent:bootstrap with bootstrapFiles available. Warning Markdown is added as context, without an observed Markdown file write.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 244,
+          "end_line": 297
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 648,
+          "end_line": 678
+        }
+      ]
+    },
+    {
+      "operation": "Read memory directly for an optional bootstrap pack and persist session state",
+      "source": "Configured memories.db, inject configuration and previous session-state JSON",
+      "data_scope": "Helper-selected memory rows, helper-built context and sessionState; sanitized session identifier appears in the state filename.",
+      "recipient_or_storage": "OpenClaw bootstrapFiles context and <config directory>/state/inject-oc-<session>.json",
+      "condition": "External inject helper resolves, nativeContract is set, mode is neither off nor turn, and database exists. Database opens read-only; state is written before checking whether pack text will be injected.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 529,
+          "end_line": 646
+        }
+      ]
+    },
+    {
+      "operation": "Implement dormant keyword capture and proactive recall",
+      "source": "Compatible user-message events or command fallback text",
+      "data_scope": "Substring-inferred save intent/category; text after a trigger or the whole short-context message. Recall uses the first 200 message characters, project=*, limit=5; framed results can enter event.messages.",
+      "recipient_or_storage": "Local remember/recall tools, novelty cache and host event messages",
+      "condition": "Dormant under the supplied manifest: no message subscription or other command subscription. Message paths additionally require top-level role/content absent from the documented core event shape. Proactive recall separately requires proactiveRecall=true.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/HOOK.md",
+          "start_line": 38,
+          "end_line": 70
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 737,
+          "end_line": 844
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 888,
+          "end_line": 958
+        }
+      ]
+    },
+    {
+      "operation": "Transmit realtime threat and interception metadata",
+      "source": "Flagged llm_input entries and interceptor audit entries",
+      "data_scope": "Input events retain sessionId, model, reason, hook/type and timestamp after removing content/preview. Interceptor events retain tool, severity, verdict, threats, anomaly score, action, outcome and timestamp after removing preview. cloudApiKey authenticates requests.",
+      "recipient_or_storage": "<cloudBaseUrl>/v1/threats and <cloudBaseUrl>/v1/audit/ingest; default base https://api.shieldcortex.ai",
+      "condition": "Sender requires cloudEnabled and cloudApiKey. Input forwarding loads configuration per event; interceptor forwarding uses configuration captured at first initialization and can continue after a later opt-out.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/cloud-sync.js",
+          "start_line": 4,
+          "end_line": 30
+        },
+        {
+          "path": "bundled/openclaw-plugin/intercept-ingest.js",
+          "start_line": 1,
+          "end_line": 23
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 494,
+          "end_line": 504
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 597,
+          "end_line": 636
+        }
+      ]
+    },
+    {
+      "operation": "Declare core memory, quarantine and provenance persistence",
+      "source": "Manual and automatically extracted memory writes; memory read/write/delete activity",
+      "data_scope": "Verbatim titles/content in SQLite, quarantined flagged content, defense audit records and provenance content hashes. A quarantine outcome is persistence outside live memory, rather than deletion.",
+      "recipient_or_storage": "~/.shieldcortex/memories.db and associated local audit/quarantine stores",
+      "condition": "Entry declares defense filtering before writes, live storage for allowed content and blocked/quarantined outcomes otherwise. Memories persist across sessions until removal or pruning. Core implementation is absent.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 80,
+          "end_line": 82
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 168,
+          "end_line": 170
+        },
+        {
+          "path": "bundled/cortex-memory-hook/HOOK.md",
+          "start_line": 74,
+          "end_line": 100
+        }
+      ]
+    },
+    {
+      "operation": "Declare additional local scans and display surfaces",
+      "source": "Agent memory/rules files, MCP configurations and .env files",
+      "data_scope": "Local file contents for security analysis; dashboard memory rows with RESTRICTED content withheld and credential patterns in titles/metadata masked.",
+      "recipient_or_storage": "Local scanner and localhost API/dashboard/WebSocket/browser",
+      "condition": "Explicit scans/audit or dashboard use. Entry declares loopback defaults; non-loopback API binding requires an explicit flag and SHIELDCORTEX_API_TOKEN. Implementations are absent.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 43,
+          "end_line": 54
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 105,
+          "end_line": 113
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 271,
+          "end_line": 284
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 325,
+          "end_line": 328
+        }
+      ]
+    },
+    {
+      "operation": "Declare optional core Cloud uploads",
+      "source": "Security scan metadata, stored memories, embeddings, graph records and quarantine",
+      "data_scope": "Audit scores, indicators, categories, timings and device name; PUBLIC/INTERNAL memory titles/content with embeddings/metadata and graph entities/relationships; quarantine content with detected credentials redacted.",
+      "recipient_or_storage": "https://api.shieldcortex.ai, including /v1/audit/ingest and /v1/sync/memories",
+      "condition": "Cloud explicitly enabled with an API key. Full memory/graph sync requires Enterprise or grandfathered Team access; CONFIDENTIAL/RESTRICTED memories excluded by default and metadata-only mode offered. Quarantine sync is Enterprise. Actual selection, redaction and remote retention are unresolved.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 173,
+          "end_line": 179
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 286,
+          "end_line": 293
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 312,
+          "end_line": 315
+        }
+      ]
+    },
+    {
+      "operation": "Declare model/package downloads and explicit remote lookups",
+      "source": "Model identifiers, package identifiers and user-supplied env-scan URLs",
+      "data_scope": "Download/lookup requests; X-Ray package name in request URL; downloaded model/package artifacts. No memory-content upload is declared for these paths.",
+      "recipient_or_storage": "huggingface.co; registry.npmjs.org; metadata-selected deep X-Ray tarball host; supplied env-scan URL. Models cache under ~/.cache/shieldcortex/models.",
+      "condition": "Uncached embedding model downloads at startup/first embedding operation, with one corruption retry, unless SHIELDCORTEX_SKIP_EMBEDDINGS=1. Explainer download requires explicit consent. Updates/X-Ray/env scans are explicit. Missing local server can invoke npx -y shieldcortex on a tool call.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 57,
+          "end_line": 65
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 109,
+          "end_line": 110
+        },
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 71,
+          "end_line": 100
+        },
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 169,
+          "end_line": 192
+        }
+      ]
+    },
+    {
+      "operation": "Declare license validation and configured webhook disclosure",
+      "source": "Activated license and memory/operator/maintenance events",
+      "data_scope": "Subscription identifier for license validation; memory-event payloads of unspecified shape; action-guard hold/deny notifications and maintenance_fail check names.",
+      "recipient_or_storage": "https://api.shieldcortex.ai for license activation; user-configured webhook URLs for event POSTs",
+      "condition": "License activation, including with Cloud disabled; webhooks only after configuration. No periodic license recheck is declared. Implementations and webhook field selection are absent.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 61,
+          "end_line": 64
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 110,
+          "end_line": 110
+        }
+      ]
+    },
+    {
+      "operation": "Declare installation/configuration persistence and legacy migration",
+      "source": "Existing integration configuration, legacy memory/config directories and packaged integration files",
+      "data_scope": "MCP/hook registration, copied integration files, seeded defaults and moved or removed legacy memory/config data.",
+      "recipient_or_storage": "~/.shieldcortex/, integration config files and OpenClaw hook/plugin locations",
+      "condition": "User-run setup/install; fresh global non-CI installation may seed openclawAutoMemory=true and proactiveRecall=true. Existing config is retained. Named-host setup can wire without asking.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 94,
+          "end_line": 94
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 102,
+          "end_line": 103
+        },
+        {
+          "path": "bundled/cortex-memory-hook/HOOK.md",
+          "start_line": 110,
+          "end_line": 114
+        }
+      ]
+    },
+    {
+      "operation": "Read, copy and delete hook files during automatic self-heal",
+      "source": "Running hook files, installed package copies and two legacy hook directories",
+      "data_scope": "HOOK.md, handler.ts and runtime.mjs; local installation paths in logs/bootstrap notices.",
+      "recipient_or_storage": "Canonical ~/.openclaw/hooks/internal/cortex-memory/; recursive deletion of ~/.clawdbot/hooks/cortex-memory and ~/.clawdbot/hooks/internal/cortex-memory without backup",
+      "condition": "First bootstrap per gateway process. Mutations default on unless selfHeal=false or SHIELDCORTEX_SKIP_SELF_HEAL=1. Expected-location branch removes legacy copies when ~/.clawdbot is not a symlink and reads package files for staleness; unexpected-location branch copies the hook.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 11,
+          "end_line": 24
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 1002,
+          "end_line": 1115
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 1117,
+          "end_line": 1178
+        }
+      ]
+    },
+    {
+      "operation": "Declare memory deletion and pruning",
+      "source": "Stored memories and malformed-memory selections",
+      "data_scope": "Individual or filtered memory records; source-wide revocation; low-value entries; malformed-memory deletion with a backup.",
+      "recipient_or_storage": "Local memory database, deletion audit ledger and malformed-purge backup",
+      "condition": "forget is declared own-only and audited; source revocation additionally requires out-of-band enablement, hierarchy checks and a row cap. Decay/consolidation may prune. Implementations and cleanup of secondary copies are absent.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 104,
+          "end_line": 104
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 169,
+          "end_line": 169
+        },
+        {
+          "path": "bundled/cortex-memory-hook/HOOK.md",
+          "start_line": 102,
+          "end_line": 108
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Full transcript history and collected user-message strings beyond assistant extraction input",
+      "recipient_or_storage": "Hook process memory during getRecentMessages",
+      "condition": "Auto-memory session extraction with an available transcript.",
+      "purpose_basis": "Recent assistant context is needed for optional extraction; reading all history is an implementation choice. This is extra data in a required read.",
+      "necessary_behavior": "Extract from eligible assistant text in the last 30 transcript records.",
+      "proposed_reduction": "Read only the last 30 complete JSONL records and avoid constructing retained user-message strings.",
+      "preservation_conditions": "Preserve record ordering, assistant-role filtering, command exclusion and current text-block selection.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 309,
+          "end_line": 364
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 395,
+          "end_line": 416
+        }
+      ]
+    },
+    {
+      "data_scope": "Transcript content read when no local extractor can resolve",
+      "recipient_or_storage": "Hook process memory",
+      "condition": "Auto-memory enabled but loadOpenClawExtract returns null after the transcript has already been read.",
+      "purpose_basis": "No extraction or save can occur on this path; the entire transcript read is redundant.",
+      "necessary_behavior": "Skip capture when the required local extractor is unavailable.",
+      "proposed_reduction": "Resolve the extractor before opening the transcript.",
+      "preservation_conditions": "Keep the existing skip notice and successful extraction behavior.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 395,
+          "end_line": 416
+        },
+        {
+          "path": "bundled/cortex-memory-hook/runtime.mjs",
+          "start_line": 134,
+          "end_line": 167
+        }
+      ]
+    },
+    {
+      "data_scope": "Unrelated text in the first 500 characters of pattern-matching assistant output, and its first-80-character title",
+      "recipient_or_storage": "Local remember request and declared persistent memory database",
+      "condition": "Realtime auto-memory enabled; a qualifying pattern can occur anywhere in a longer output block.",
+      "purpose_basis": "Capturing decisions, fixes and preferences requires the relevant fact, not an arbitrary prefix. This is extra data in a required save.",
+      "necessary_behavior": "Retain the matched durable fact with enough context to remain useful.",
+      "proposed_reduction": "Extract the matching segment with bounded surrounding context and derive its title from that segment.",
+      "preservation_conditions": "Preserve meaningful context, category inference, candidate limits, deduplication and defense checks.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 285,
+          "end_line": 319
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 528,
+          "end_line": 558
+        }
+      ]
+    },
+    {
+      "data_scope": "Plaintext memory titles, categories and creation timestamps duplicated beside fingerprints",
+      "recipient_or_storage": "~/.shieldcortex/openclaw-memory-cache.json",
+      "condition": "Novelty cache updated after a truthy remember reply.",
+      "purpose_basis": "Dedupe comparisons use content hashes and token hashes; descriptive fields are additional persistent data.",
+      "necessary_behavior": "Suppress exact and near duplicates across capture paths and restarts.",
+      "proposed_reduction": "Persist only the fingerprints and ordering needed for count-bounded deduplication.",
+      "preservation_conditions": "Keep both components compatible and retain current similarity thresholds and cache limits.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 120,
+          "end_line": 198
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 386,
+          "end_line": 465
+        }
+      ]
+    },
+    {
+      "data_scope": "Unredacted input and memory previews, including rejected content",
+      "recipient_or_storage": "~/.shieldcortex/audit/realtime-YYYY-MM-DD.jsonl",
+      "condition": "Flagged input or any audited interceptor outcome, including ordinary logging and blocked writes.",
+      "purpose_basis": "Security auditing requires verdicts and provenance; raw previews are optional diagnostic detail and create another content store outside live-memory filtering.",
+      "necessary_behavior": "Record threat classifications, decisions, timestamps and sufficient correlation evidence.",
+      "proposed_reduction": "Omit previews by default; use content fingerprints and explicitly enabled, credential-redacted previews with bounded retention.",
+      "preservation_conditions": "Retain auditable outcomes and an operator-controlled route for necessary forensic detail.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 82,
+          "end_line": 82
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 343,
+          "end_line": 349
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 491,
+          "end_line": 499
+        },
+        {
+          "path": "bundled/openclaw-plugin/interceptor.js",
+          "start_line": 197,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "data_scope": "Refused memory candidate title",
+      "recipient_or_storage": "Gateway console output",
+      "condition": "Optional candidate screen refuses an automatically extracted memory.",
+      "purpose_basis": "Explaining refusal needs pattern identifiers; reproducing the rejected title adds content to diagnostics.",
+      "necessary_behavior": "Report refusal reason and counts.",
+      "proposed_reduction": "Omit the title or replace it with a correlation fingerprint.",
+      "preservation_conditions": "Keep pattern names and aggregate refusal reporting.",
+      "evidence": [
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 450,
+          "end_line": 456
+        },
+        {
+          "path": "bundled/cortex-memory-hook/handler.ts",
+          "start_line": 479,
+          "end_line": 479
+        }
+      ]
+    },
+    {
+      "data_scope": "Interceptor event metadata and authentication using the initially captured cloudApiKey",
+      "recipient_or_storage": "<initial cloudBaseUrl>/v1/audit/ingest",
+      "condition": "Cloud was enabled at interceptor initialization and is subsequently disabled or reconfigured without restarting the plugin.",
+      "purpose_basis": "Cloud telemetry is explicitly optional. Initial consent is retained in a closure instead of checking current consent, allowing redundant disclosure after opt-out.",
+      "necessary_behavior": "Forward metadata only while current Cloud configuration authorizes it.",
+      "proposed_reduction": "Reload current configuration for each interception event before invoking syncInterceptEvent.",
+      "preservation_conditions": "Keep metadata-only payloads, current endpoint/credential selection and nonblocking failure handling.",
+      "evidence": [
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 245,
+          "end_line": 255
+        },
+        {
+          "path": "bundled/openclaw-plugin/index.js",
+          "start_line": 597,
+          "end_line": 636
+        },
+        {
+          "path": "bundled/openclaw-plugin/intercept-ingest.js",
+          "start_line": 1,
+          "end_line": 23
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "All nine supplied files were assessed. Core MCP server, CLI, setup/postinstall, API/dashboard, worker and core Cloud implementations are absent; their declared reads, storage, filtering, transmission and deletion remain unverified.",
+    "Dynamically loaded openclaw-extract, inject-pack, recall-frame and shieldcortex/defence implementations are absent. Exact extraction scope, bootstrap candidate selection, ACL enforcement, pack/state contents and defense-pipeline side effects remain unresolved (bundled/cortex-memory-hook/runtime.mjs:134–167; bundled/cortex-memory-hook/handler.ts:529–646,855–883; bundled/openclaw-plugin/index.js:615–636).",
+    "The bundled plugin normalizer omits interceptor despite manifest configuration options. Registration therefore obtains defaults rather than those overrides; default high/critical actions warn/log ordinary pipeline results. End-to-end prevention of unsafe storage depends on the absent memory server (bundled/openclaw-plugin/index.js:188–218,245–255,597–636; bundled/openclaw-plugin/interceptor.js:15–29,255–274).",
+    "Truthy remember replies are not parsed as accepted-storage outcomes. Whether quarantined or refused writes produce truthy replies, and consequently populate the novelty cache, is unknown (bundled/cortex-memory-hook/handler.ts:459–477; bundled/openclaw-plugin/index.js:552–564).",
+    "Cloud retention, access controls, downstream recipients and deletion behavior are not supplied. The entry's seven-day free audit-retention claim is not implementation evidence (SKILL.md:312–315).",
+    "The relationship between quarantine-content uploads and the entry's statement that memory sync is the sole raw-text exception is unclear; actual quarantine redaction and payload selection cannot be checked (SKILL.md:175–179). Imported threatIndicators also lack definitions, so their metadata-only semantics cannot be independently established.",
+    "No supplied implementation establishes whether forget, database removal or uninstall also clears novelty fingerprints, audit previews, quarantine, backups, bootstrap state or remote replicas (SKILL.md:104,169; bundled/cortex-memory-hook/HOOK.md:102–108).",
+    "mcporter, npx, downloaded packages/models and remote services are external to the supplied source. Their additional logging, network behavior and retention are unknown. Console retention and any host forwarding are also unspecified."
+  ]
+}

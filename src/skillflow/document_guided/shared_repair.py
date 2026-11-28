@@ -5,29 +5,39 @@ from .failed_stage_material import checked_structural_failure
 
 IDENTITY = "skillflow-shared-repair-decision-v2"
 FRAGMENTS = frozenset({"processing", "task-correspondence", "sensitivity"})
+FIXED_UPSTREAM = frozenset({"task", "flow", "graph"})
+DOWNSTREAM_REQUESTS = FRAGMENTS | {"review", "revision/review"} | {"revision-" + key for key in FRAGMENTS}
+
+
+def fixed_findings(findings):
+    """Keep each objection's bound review ID and exact source/edit locations."""
+    return [{key: row[key] for key in ("id", "domain", "target_ids", "source_refs")}
+            for row in findings if row["domain"] in {"cfg", "task"}]
 
 
 def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_only=False, processing_gaps=(),
-                    normalize_blocks=True, check_occurrences=True):
+                    normalize_blocks=True, check_occurrences=True, fixed_upstream=False):
     findings = (reviewed.get("review") or {}).get("findings", [])
-    domains = {row["domain"] for row in findings}
+    actionable = ([row for row in findings if row["domain"] == "annotation" and row.get("owner") in FRAGMENTS]
+                  if fixed_upstream else findings)
+    domains = {row["domain"] for row in actionable}
     reviewed_status = reviewed.get("status")
     review_available = reviewed_status in {"complete", "partial"}
     upstream = {"task", "graph"} <= set(values)
     validation_ids = sorted({row["instruction_id"] for row in processing_gaps
                              if row.get("origin") == "validation" and row.get("validation_errors")})
     validation_repair = bool(validation_ids) and upstream and "processing" in values
-    usual = bool(findings) and (selected is not None
+    usual = bool(actionable) and (selected is not None
         or upstream and bool(domains & {"cfg", "task"})
         or upstream and bool(FRAGMENTS & set(values)) and any(
-            row["domain"] == "annotation" and row.get("owner") in FRAGMENTS for row in findings))
+            row["domain"] == "annotation" and row.get("owner") in FRAGMENTS for row in actionable))
     failure = errors.get("graph", {})
     evidence = failure.get("evidence")
     bound = (failure.get("status") == "structural_failure"
         and checked_structural_failure(evidence, stage="graph", files=files))
     missing_cfg = "graph" not in values
     prerequisites = {"task", "flow"} <= set(values)
-    recovery = missing_cfg and prerequisites and bound
+    recovery = not fixed_upstream and missing_cfg and prerequisites and bound
     scoped_blocked = False
     if graph_facts_only and (recovery or "cfg" in domains and "graph" in values):
         from .graph_steps import rejected_facts, repair_input, repair_slots
@@ -46,12 +56,15 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
         barriers.append("No completed or locally retained source review is available for shared repair.")
     if scoped_blocked:
         barriers.append("The graph findings or rejected draft define no source-bound editable slot.")
-    if missing_cfg:
+    if missing_cfg and not fixed_upstream:
         if not prerequisites:
             barriers.append("Missing-CFG repair requires the accepted source-only Task and flow document.")
         if not bound:
             barriers.append("No source-bound terminal structural rejection of the current CFG is available; a request failure or capability gap does not authorize another sample.")
     eligible = (review_available and (usual or recovery)) or validation_repair
+    if fixed_upstream and not all(values.get(key, {}).get("value") is not None for key in FIXED_UPSTREAM):
+        eligible = False
+        barriers.append("A downstream-only repair requires the verified inherited Task, flow and CFG.")
     if validation_repair:
         domains.add("annotation")
     if eligible and recovery:
@@ -67,6 +80,8 @@ def repair_decision(*, files, values, errors, reviewed, selected, graph_facts_on
         "graph_failure_sha256": canonical_sha256(failure) if failure else None,
         "graph_failure_material_sha256": evidence.get("material_sha256") if isinstance(evidence, dict) else None,
         **({"deferred_cfg": scoped_blocked} if graph_facts_only else {}),
+        **({"fixed_upstream": sorted(FIXED_UPSTREAM), "fixed_upstream_findings": fixed_findings(findings)}
+           if fixed_upstream else {}),
         "barriers": barriers,
         "basis": (("A required CFG has source-bound writable fact slots. Use the existing shared round only for those slots."
                   if graph_facts_only else

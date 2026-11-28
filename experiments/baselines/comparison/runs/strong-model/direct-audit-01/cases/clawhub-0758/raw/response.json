@@ -1,0 +1,258 @@
+{
+  "status": "completed",
+  "declared_purpose": "Manage Asana workspaces, projects and tasks, including search, creation, updates, completion and comments. PAT-first authentication is recommended; OAuth is optional. These capabilities are explicit; field selections, credential persistence and request construction are implementation choices (SKILL.md:3-3,15-26,53-76; README.md:3-12).",
+  "data_operations": [
+    {
+      "operation": "Read local configuration and resolve authentication",
+      "source": "CLI arguments, environment and local JSON files",
+      "data_scope": "PAT, OAuth access/refresh tokens, client credentials and default workspace. main reads config.json even when --token is supplied; authentication prefers --token, ASANA_PAT, config PAT, then token.json.",
+      "recipient_or_storage": "Local scripts/asana_api.mjs process",
+      "condition": "CLI execution; OAuth token loading occurs only when no direct token or PAT resolves. Refresh credentials come from flags.client_id/flags.client_secret or environment.",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 26, "end_line": 74},
+        {"path": "scripts/asana_api.mjs", "start_line": 116, "end_line": 160},
+        {"path": "scripts/asana_api.mjs", "start_line": 244, "end_line": 252}
+      ]
+    },
+    {
+      "operation": "Persist PAT or default workspace locally",
+      "source": "CLI arguments, ASANA_PAT and existing configuration",
+      "data_scope": "PAT or default_workspace_gid, preserving existing configuration properties",
+      "recipient_or_storage": "~/.openclaw/asana/config.json as serialized JSON",
+      "condition": "configure.mjs PAT mode, asana_api.mjs set-pat, or set-default-workspace. The workspace command resolves authentication before saving.",
+      "evidence": [
+        {"path": "scripts/configure.mjs", "start_line": 22, "end_line": 42},
+        {"path": "scripts/configure.mjs", "start_line": 57, "end_line": 66},
+        {"path": "scripts/asana_api.mjs", "start_line": 63, "end_line": 67},
+        {"path": "scripts/asana_api.mjs", "start_line": 254, "end_line": 259},
+        {"path": "scripts/asana_api.mjs", "start_line": 270, "end_line": 295}
+      ]
+    },
+    {
+      "operation": "Remove the saved PAT property",
+      "source": "Existing local configuration",
+      "data_scope": "The pat property only",
+      "recipient_or_storage": "~/.openclaw/asana/config.json rewritten without pat",
+      "condition": "clear-pat; other properties remain. This does not remove environment credentials, OAuth files or revoke credentials remotely.",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 262, "end_line": 267}
+      ]
+    },
+    {
+      "operation": "Persist OAuth client credentials locally",
+      "source": "CLI arguments or ASANA_CLIENT_ID and ASANA_CLIENT_SECRET",
+      "data_scope": "client_id and client_secret",
+      "recipient_or_storage": "~/.openclaw/asana/credentials.json as serialized JSON",
+      "condition": "configure.mjs --mode oauth with both credentials available",
+      "evidence": [
+        {"path": "scripts/configure.mjs", "start_line": 26, "end_line": 28},
+        {"path": "scripts/configure.mjs", "start_line": 39, "end_line": 42},
+        {"path": "scripts/configure.mjs", "start_line": 69, "end_line": 80}
+      ]
+    },
+    {
+      "operation": "Construct and return an OAuth authorization URL",
+      "source": "CLI/environment client ID, optional scope/state and generated state",
+      "data_scope": "Client ID, OOB redirect URI, response type, state and explicit scope when supplied",
+      "recipient_or_storage": "Standard output to the caller; https://app.asana.com/-/oauth_authorize only if the URL is opened",
+      "condition": "oauth_oob.mjs authorize; the script prints instructions and does not itself open the browser or fetch this URL. Default scope omits the scope parameter.",
+      "evidence": [
+        {"path": "scripts/oauth_oob.mjs", "start_line": 14, "end_line": 16},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 82, "end_line": 106}
+      ]
+    },
+    {
+      "operation": "Exchange an authorization code remotely",
+      "source": "CLI authorization code and CLI/environment client credentials",
+      "data_scope": "Authorization code, client ID, client secret, grant type and OOB redirect URI",
+      "recipient_or_storage": "https://app.asana.com/-/oauth_token in a form POST",
+      "condition": "oauth_oob.mjs token with required inputs; supports the optional OAuth authentication purpose",
+      "evidence": [
+        {"path": "scripts/oauth_oob.mjs", "start_line": 15, "end_line": 16},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 61, "end_line": 80},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 109, "end_line": 120}
+      ]
+    },
+    {
+      "operation": "Refresh OAuth authentication remotely",
+      "source": "Loaded OAuth token and CLI/environment client credentials",
+      "data_scope": "Refresh token, client ID, client secret and refresh grant type",
+      "recipient_or_storage": "https://app.asana.com/-/oauth_token in a form POST",
+      "condition": "OAuth fallback with a refresh token when expiry is absent or within two minutes; requires client credentials. This also runs before local set-default-workspace when these conditions hold.",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 19, "end_line": 19},
+        {"path": "scripts/asana_api.mjs", "start_line": 86, "end_line": 129},
+        {"path": "scripts/asana_api.mjs", "start_line": 142, "end_line": 160},
+        {"path": "scripts/asana_api.mjs", "start_line": 270, "end_line": 295}
+      ]
+    },
+    {
+      "operation": "Persist OAuth responses and derived expiry metadata",
+      "source": "Successful token exchange or refresh response",
+      "data_scope": "Entire response object plus obtained_at_ms and calculated expires_at_ms; refresh also preserves prior token properties",
+      "recipient_or_storage": "~/.openclaw/asana/token.json as serialized JSON",
+      "condition": "Successful OAuth exchange or refresh; exact returned fields are not defined by the supplied source",
+      "evidence": [
+        {"path": "scripts/oauth_oob.mjs", "start_line": 37, "end_line": 50},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 122, "end_line": 130},
+        {"path": "scripts/asana_api.mjs", "start_line": 57, "end_line": 61},
+        {"path": "scripts/asana_api.mjs", "start_line": 131, "end_line": 139}
+      ]
+    },
+    {
+      "operation": "Read Asana account, workspace and project data",
+      "source": "Asana REST API",
+      "data_scope": "me and workspaces return server-selected fields; projects requests workspace-filtered gid, name, resource_type, archived and public by default, with caller-overridable fields and limit",
+      "recipient_or_storage": "Bearer credential and query parameters go to https://app.asana.com/api/1.0; responses return through standard output to the caller",
+      "condition": "me, workspaces/list-workspaces or projects",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 18, "end_line": 18},
+        {"path": "scripts/asana_api.mjs", "start_line": 163, "end_line": 181},
+        {"path": "scripts/asana_api.mjs", "start_line": 240, "end_line": 242},
+        {"path": "scripts/asana_api.mjs", "start_line": 277, "end_line": 309}
+      ]
+    },
+    {
+      "operation": "Read task lists and task details",
+      "source": "Asana REST API",
+      "data_scope": "Project or assignee filters and task fields, including names, completion, assignees, dates, links and modification times; task detail additionally requests notes and project/section names. opt_fields and list limits are configurable.",
+      "recipient_or_storage": "Authenticated requests to https://app.asana.com/api/1.0; responses return through standard output to the caller",
+      "condition": "tasks-in-project, tasks-assigned or task; tasks-assigned defaults to self and completed_since=now",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 163, "end_line": 181},
+        {"path": "scripts/asana_api.mjs", "start_line": 311, "end_line": 343},
+        {"path": "scripts/asana_api.mjs", "start_line": 367, "end_line": 375}
+      ]
+    },
+    {
+      "operation": "Resolve self-assignment through an additional account read",
+      "source": "GET /users/me",
+      "data_scope": "Unrestricted response requested; only data.gid is consumed to resolve the current account",
+      "recipient_or_storage": "Asana API receives the authenticated request; response remains in the local process",
+      "condition": "tasks-assigned with default/explicit me, or search-tasks with --assignee me",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 233, "end_line": 238},
+        {"path": "scripts/asana_api.mjs", "start_line": 329, "end_line": 330},
+        {"path": "scripts/asana_api.mjs", "start_line": 348, "end_line": 353}
+      ]
+    },
+    {
+      "operation": "Search tasks using forwarded CLI flags",
+      "source": "CLI flags and configured/default workspace",
+      "data_scope": "Search text, filters and almost all other flags, including authentication flags if supplied; assignee/project aliases are transformed. Default response fields include task names, completion, assignee names, due dates and links.",
+      "recipient_or_storage": "URL query at https://app.asana.com/api/1.0/workspaces/{workspace}/tasks/search; response returns through standard output",
+      "condition": "search-tasks; only _, assignee, project and opt_fields are removed from the initial flag copy before request construction",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 163, "end_line": 172},
+        {"path": "scripts/asana_api.mjs", "start_line": 208, "end_line": 223},
+        {"path": "scripts/asana_api.mjs", "start_line": 345, "end_line": 364}
+      ]
+    },
+    {
+      "operation": "Send task mutations and return their results",
+      "source": "Caller-supplied task identifiers and content",
+      "data_scope": "Updates: name, notes, due date or completion; completion: completed=true; comments: text; creation: name, notes and optional workspace, projects and due date",
+      "recipient_or_storage": "Authenticated POST/PUT requests to Asana task/story endpoints; responses return to the caller",
+      "condition": "update-task, complete-task, comment or create-task after required-input checks. Server-side retention and visibility are unspecified.",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 184, "end_line": 206},
+        {"path": "scripts/asana_api.mjs", "start_line": 378, "end_line": 428}
+      ]
+    },
+    {
+      "operation": "Return remote error content locally",
+      "source": "Asana API or OAuth token endpoint responses",
+      "data_scope": "Entire parsed error response, or up to 300 characters of a non-JSON response, included in an error/stack",
+      "recipient_or_storage": "Standard error to the invoking caller",
+      "condition": "Remote HTTP failure or non-JSON response; no additional logging recipient is implemented here",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 92, "end_line": 99},
+        {"path": "scripts/asana_api.mjs", "start_line": 173, "end_line": 180},
+        {"path": "scripts/asana_api.mjs", "start_line": 194, "end_line": 201},
+        {"path": "scripts/asana_api.mjs", "start_line": 433, "end_line": 433},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 69, "end_line": 78},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 137, "end_line": 137}
+      ]
+    },
+    {
+      "operation": "Interpret chat input locally and return command arguments",
+      "source": "asana_chat.mjs --text",
+      "data_scope": "Normalized input; slash-command arguments, inferred command/self-assignment intent and extracted date range",
+      "recipient_or_storage": "Standard output to the caller; this helper does not execute the generated API command",
+      "condition": "Optional chat helper invocation; unmatched text returns unknown",
+      "evidence": [
+        {"path": "scripts/asana_chat.mjs", "start_line": 3, "end_line": 12},
+        {"path": "scripts/asana_chat.mjs", "start_line": 33, "end_line": 106}
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "Authentication flags such as token, client_secret/client-secret and client_id/client-id, plus unrelated CLI flags",
+      "recipient_or_storage": "Asana task-search URL query, beyond the required bearer header or OAuth token endpoint",
+      "condition": "search-tasks invoked with these flags; environment credentials alone are not copied into the query",
+      "purpose_basis": "Task search requires search criteria and authenticated access; copying all CLI flags is an implementation choice.",
+      "necessary_behavior": "Authenticate the request and transmit the requested task-search filters.",
+      "proposed_reduction": "Separate authentication/control flags from search parameters and forward only supported search filters. This removes extra data from a required request.",
+      "preservation_conditions": "Retain documented search filters, field selection and limits, and preserve the existing bearer-authentication path.",
+      "evidence": [
+        {"path": "SKILL.md", "start_line": 3, "end_line": 3},
+        {"path": "scripts/asana_api.mjs", "start_line": 142, "end_line": 160},
+        {"path": "scripts/asana_api.mjs", "start_line": 163, "end_line": 172},
+        {"path": "scripts/asana_api.mjs", "start_line": 345, "end_line": 362}
+      ]
+    },
+    {
+      "data_scope": "OAuth client ID and client secret",
+      "recipient_or_storage": "~/.openclaw/asana/credentials.json",
+      "condition": "configure.mjs --mode oauth; no supplied authentication component reads this file",
+      "purpose_basis": "Optional OAuth setup is declared and storage is documented, but this credential copy does not feed the packaged OAuth exchange or refresh paths.",
+      "necessary_behavior": "Make client credentials available to OAuth exchange/refresh through their implemented flags or environment inputs.",
+      "proposed_reduction": "Remove the unused credential-file write from the packaged setup flow and use the existing direct inputs. This removes redundant persistence.",
+      "preservation_conditions": "Update setup instructions consistently; preserve explicit credential persistence only if a separately required consumer is established.",
+      "evidence": [
+        {"path": "README.md", "start_line": 21, "end_line": 33},
+        {"path": "scripts/configure.mjs", "start_line": 69, "end_line": 80},
+        {"path": "scripts/oauth_oob.mjs", "start_line": 82, "end_line": 85},
+        {"path": "scripts/asana_api.mjs", "start_line": 116, "end_line": 128}
+      ]
+    },
+    {
+      "data_scope": "OAuth refresh token and client credentials; refreshed token response",
+      "recipient_or_storage": "https://app.asana.com/-/oauth_token and subsequent ~/.openclaw/asana/token.json rewrite",
+      "condition": "set-default-workspace with OAuth fallback requiring refresh",
+      "purpose_basis": "Saving a caller-provided default workspace is a local configuration operation; it does not use an access token.",
+      "necessary_behavior": "Persist default_workspace_gid while preserving the other configuration properties.",
+      "proposed_reduction": "Handle set-default-workspace before resolving bearer authentication. This removes a redundant refresh action and token rewrite from that path.",
+      "preservation_conditions": "Keep authentication and refresh for commands that actually call Asana.",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 103, "end_line": 139},
+        {"path": "scripts/asana_api.mjs", "start_line": 142, "end_line": 160},
+        {"path": "scripts/asana_api.mjs", "start_line": 270, "end_line": 295}
+      ]
+    },
+    {
+      "data_scope": "Any /users/me response fields beyond data.gid, if returned",
+      "recipient_or_storage": "Local resolveMeGid process memory",
+      "condition": "Self-assignee resolution for tasks-assigned or search-tasks",
+      "purpose_basis": "This internal lookup consumes only the current account GID; other returned account fields have no demonstrated use on this path.",
+      "necessary_behavior": "Resolve me to the correct account GID.",
+      "proposed_reduction": "Request only gid if the endpoint supports field selection. This narrows data in a required lookup rather than assuming the lookup can be removed.",
+      "preservation_conditions": "Verify endpoint support and preserve correct self-assignee resolution. Actual default response fields are unresolved.",
+      "evidence": [
+        {"path": "scripts/asana_api.mjs", "start_line": 163, "end_line": 181},
+        {"path": "scripts/asana_api.mjs", "start_line": 233, "end_line": 238},
+        {"path": "scripts/asana_api.mjs", "start_line": 329, "end_line": 330},
+        {"path": "scripts/asana_api.mjs", "start_line": 348, "end_line": 350}
+      ]
+    }
+  ],
+  "unknowns": [
+    "Asana-side retention, query logging, sharing, deletion and exact response fields are undocumented here; remote disclosure does not establish those later operations.",
+    "Actual OAuth grants when scope is omitted are unknown. The reference lists scope examples, while authorize omits scope by default (references/asana-endpoints.md:19-20; scripts/oauth_oob.mjs:90-101).",
+    "Token-response field contents are unknown, so excess fields persisted by whole-response copying cannot be identified conclusively (scripts/oauth_oob.mjs:124-130; scripts/asana_api.mjs:131-138).",
+    "Support for selecting only gid on /users/me remains unverified; this blocks confirming the proposed field reduction.",
+    "External wrappers, consumers of credentials.json, caller-side output retention, filesystem permissions and storage protections are outside the supplied source.",
+    "End-to-end OAuth setup has source inconsistencies: README documents auth-url although the helper dispatches authorize/token; API refresh reads underscore credential flags despite documenting hyphenated flags (README.md:25-25; scripts/oauth_oob.mjs:90-134; scripts/asana_api.mjs:10-11,156-159)."
+  ]
+}

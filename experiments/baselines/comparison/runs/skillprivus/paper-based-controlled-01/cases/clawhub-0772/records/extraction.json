@@ -1,0 +1,453 @@
+{
+  "request_sha256": "3046d32848ec3ad17f875435cc06b38f35e74a020a3d76f99cc195f4fb51d8b5",
+  "answer_sha256": "ac5438eb815f4f3f426e6b024ec210631cbf9e5daade81c86e6eabe52c05d164",
+  "result": {
+    "status": "complete",
+    "reason": "Completed static extraction from the supplied files. The instructions install or launch the CLI; the code parses trip inputs, delegates searches, transforms results, captures library output, prints results or errors, and supports installer detection and upgrades. The fast-flights and package-manager implementations are absent, so their network endpoints, internal reads, installation paths, and retention remain unknown.",
+    "claim": "Search Google Flights from the command line for prices, times, and airlines without an API key, using fast-flights.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 27,
+        "end_line": 29,
+        "quote": "Search Google Flights from the command line. Get prices, times, and airlines - no API key needed.\n\nBuilt on [fast-flights](https://github.com/AWeirdDev/flights)."
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Read",
+        "data": "Origin and destination airports, departure and optional return dates, adult and child counts, seat class, result limit, output format, and version or upgrade options.",
+        "source": "Arguments supplied to main(args), parsed by argparse",
+        "recipient": "CLI parsed argument namespace",
+        "condition": "When the CLI entry point parses arguments; defaults include one adult, zero children, economy, ten results, and text output.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 121,
+            "end_line": 122,
+            "quote": "def main(args: Optional[list[str]] = None) -> int:\n    \"\"\"Main entry point for the CLI.\"\"\""
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 135,
+            "end_line": 158,
+            "quote": "    parser.add_argument(\"-v\", \"--version\", action=\"version\", version=f\"%(prog)s {__version__}\")\n    parser.add_argument(\"--upgrade\", action=\"store_true\", help=\"Upgrade flight-search to latest version\")\n    parser.add_argument(\"origin\", nargs=\"?\", help=\"Origin airport code (e.g., DEN, LAX, JFK)\")\n    parser.add_argument(\"destination\", nargs=\"?\", help=\"Destination airport code\")\n    parser.add_argument(\"--date\", \"-d\", help=\"Departure date (YYYY-MM-DD)\")\n    parser.add_argument(\"--return\", \"-r\", dest=\"return_date\", help=\"Return date for round trips (YYYY-MM-DD)\")\n    parser.add_argument(\"--adults\", \"-a\", type=int, default=1, help=\"Number of adults (default: 1)\")\n    parser.add_argument(\"--children\", \"-c\", type=int, default=0, help=\"Number of children (default: 0)\")\n    parser.add_argument(\n        \"--class\", \"-C\",\n        dest=\"seat_class\",\n        choices=[\"economy\", \"premium-economy\", \"business\", \"first\"],\n        default=\"economy\",\n        help=\"Seat class (default: economy)\",\n    )\n    parser.add_argument(\"--limit\", \"-l\", type=int, default=10, help=\"Max results (default: 10)\")\n    parser.add_argument(\n        \"--output\", \"-o\",\n        choices=[\"text\", \"json\"],\n        default=\"text\",\n        help=\"Output format (default: text)\",\n    )\n\n    parsed = parser.parse_args(args)"
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Read",
+        "data": "Current local calendar date.",
+        "source": "Runtime clock through datetime.now()",
+        "recipient": "CLI date validation",
+        "condition": "During a search invocation after required arguments are present and the departure date parses.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 171,
+            "end_line": 174,
+            "quote": "    try:\n        dep_date = datetime.strptime(parsed.date, \"%Y-%m-%d\").date()\n        today = datetime.now().date()\n        if dep_date < today:"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Infer",
+        "data": "Whether required search arguments are present, dates parse, departure is not before today, and return is not before departure.",
+        "source": "Parsed CLI arguments and current local date",
+        "recipient": "CLI control flow",
+        "condition": "Search path only; invalid inputs stop the search. A return date equal to departure is accepted by the comparison.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 160,
+            "end_line": 189,
+            "quote": "    # Handle --upgrade\n    if parsed.upgrade:\n        return do_upgrade()\n\n    # Validate required args for search\n    if not parsed.origin or not parsed.destination:\n        parser.error(\"origin and destination are required (unless using --upgrade)\")\n    if not parsed.date:\n        parser.error(\"--date is required (unless using --upgrade)\")\n\n    # Validate date format and ensure it's not in the past\n    try:\n        dep_date = datetime.strptime(parsed.date, \"%Y-%m-%d\").date()\n        today = datetime.now().date()\n        if dep_date < today:\n            print(f\"Error: Departure date {parsed.date} is in the past. Use a future date.\", file=sys.stderr)\n            return 1\n    except ValueError:\n        print(f\"Error: Invalid date format '{parsed.date}'. Use YYYY-MM-DD.\", file=sys.stderr)\n        return 1\n\n    if parsed.return_date:\n        try:\n            ret_date = datetime.strptime(parsed.return_date, \"%Y-%m-%d\").date()\n            if ret_date < dep_date:\n                print(\"Error: Return date must be after departure date.\", file=sys.stderr)\n                return 1\n        except ValueError:\n            print(f\"Error: Invalid return date format '{parsed.return_date}'. Use YYYY-MM-DD.\", file=sys.stderr)\n            return 1"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Infer",
+        "data": "Normalized search request: uppercased CLI airport codes, mapped seat class, outbound itinerary, optional reversed return itinerary, one-way or round-trip designation, passenger counts, and zero infants.",
+        "source": "CLI inputs or search_flights function arguments",
+        "recipient": "FlightData and Passengers objects and local search parameters",
+        "condition": "Return itinerary is added only when return_date is truthy. Unrecognized seat classes passed directly to the Python API fall back to economy.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 196,
+            "end_line": 205,
+            "quote": "            result = search_flights(\n                origin=parsed.origin.upper(),\n                destination=parsed.destination.upper(),\n                date=parsed.date,\n                return_date=parsed.return_date,\n                adults=parsed.adults,\n                children=parsed.children,\n                seat_class=parsed.seat_class,\n                max_results=parsed.limit,\n            )"
+          },
+          {
+            "path": "flight_search/search.py",
+            "start_line": 85,
+            "end_line": 109,
+            "quote": "    # Map seat class names\n    seat_map = {\n        \"economy\": \"economy\",\n        \"premium-economy\": \"premium-economy\",\n        \"business\": \"business\",\n        \"first\": \"first\",\n    }\n    seat = seat_map.get(seat_class.lower(), \"economy\")\n\n    # Build flight data\n    flight_data = [FlightData(date=date, from_airport=origin, to_airport=destination)]\n\n    # Add return flight for round trips\n    trip = \"one-way\"\n    if return_date:\n        flight_data.append(FlightData(date=return_date, from_airport=destination, to_airport=origin))\n        trip = \"round-trip\"\n\n    # Build passengers\n    passengers = Passengers(\n        adults=adults,\n        children=children,\n        infants_in_seat=0,\n        infants_on_lap=0,\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Send",
+        "data": "Outbound and optional return airport/date itinerary, trip type, seat class, adult and child counts, zero infant counts, and fetch_mode=\"common\".",
+        "source": "Constructed search request",
+        "recipient": "fast_flights.get_flights dependency; external network destination is not visible in the supplied implementation",
+        "condition": "When search_flights reaches the search call. max_results is applied locally afterward and is not passed to get_flights.",
+        "evidence": [
+          {
+            "path": "flight_search/search.py",
+            "start_line": 83,
+            "end_line": 119,
+            "quote": "    from fast_flights import FlightData, Passengers, get_flights\n\n    # Map seat class names\n    seat_map = {\n        \"economy\": \"economy\",\n        \"premium-economy\": \"premium-economy\",\n        \"business\": \"business\",\n        \"first\": \"first\",\n    }\n    seat = seat_map.get(seat_class.lower(), \"economy\")\n\n    # Build flight data\n    flight_data = [FlightData(date=date, from_airport=origin, to_airport=destination)]\n\n    # Add return flight for round trips\n    trip = \"one-way\"\n    if return_date:\n        flight_data.append(FlightData(date=return_date, from_airport=destination, to_airport=origin))\n        trip = \"round-trip\"\n\n    # Build passengers\n    passengers = Passengers(\n        adults=adults,\n        children=children,\n        infants_in_seat=0,\n        infants_on_lap=0,\n    )\n\n    # Perform search\n    # Use \"common\" mode (direct scraping) - \"fallback\" requires a token\n    result = get_flights(\n        flight_data=flight_data,\n        trip=trip,\n        seat=seat,\n        passengers=passengers,\n        fetch_mode=\"common\",\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "Dependency-returned flight names, departure and arrival times, duration, stops, prices, best flags, arrival offsets, and current-price category.",
+        "source": "Object returned by fast_flights.get_flights",
+        "recipient": "search_flights result conversion",
+        "condition": "After get_flights returns; flight fields are read from result.flights[:max_results]. The dependency's underlying retrieval is not supplied.",
+        "evidence": [
+          {
+            "path": "flight_search/search.py",
+            "start_line": 113,
+            "end_line": 154,
+            "quote": "    result = get_flights(\n        flight_data=flight_data,\n        trip=trip,\n        seat=seat,\n        passengers=passengers,\n        fetch_mode=\"common\",\n    )\n\n    # Convert results\n    flights = []\n    for flight in result.flights[:max_results]:\n        # Parse price - it might be a string like \"$123\" or an int\n        price = None\n        if flight.price:\n            price_str = str(flight.price)\n            # Remove currency symbols and commas\n            price_clean = price_str.replace(\"$\", \"\").replace(\",\", \"\").strip()\n            try:\n                price = int(price_clean)\n            except ValueError:\n                pass\n\n        flights.append(Flight(\n            airline=flight.name or \"Unknown\",\n            departure_time=flight.departure or \"\",\n            arrival_time=flight.arrival or \"\",\n            duration=flight.duration or \"\",\n            stops=flight.stops if isinstance(flight.stops, int) else 0,\n            stop_info=str(flight.stops) if flight.stops and not isinstance(flight.stops, int) else None,\n            price=price,\n            is_best=flight.is_best or False,\n            arrival_ahead=flight.arrival_time_ahead,\n        ))\n\n    return SearchResult(\n        flights=flights,\n        current_price=result.current_price,\n        origin=origin,\n        destination=destination,\n        date=date,\n        return_date=return_date,\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Infer",
+        "data": "Limited and normalized flight results: integer prices after removing dollar signs and commas; null prices on missing or unparseable values; fallback names, times, stops, and best flags; itinerary metadata attached to SearchResult.",
+        "source": "Dependency result and original search arguments",
+        "recipient": "Flight objects and returned SearchResult",
+        "condition": "For the result.flights[:max_results] slice. Non-integer stops become zero with a separate textual stop_info when truthy.",
+        "evidence": [
+          {
+            "path": "flight_search/search.py",
+            "start_line": 121,
+            "end_line": 154,
+            "quote": "    # Convert results\n    flights = []\n    for flight in result.flights[:max_results]:\n        # Parse price - it might be a string like \"$123\" or an int\n        price = None\n        if flight.price:\n            price_str = str(flight.price)\n            # Remove currency symbols and commas\n            price_clean = price_str.replace(\"$\", \"\").replace(\",\", \"\").strip()\n            try:\n                price = int(price_clean)\n            except ValueError:\n                pass\n\n        flights.append(Flight(\n            airline=flight.name or \"Unknown\",\n            departure_time=flight.departure or \"\",\n            arrival_time=flight.arrival or \"\",\n            duration=flight.duration or \"\",\n            stops=flight.stops if isinstance(flight.stops, int) else 0,\n            stop_info=str(flight.stops) if flight.stops and not isinstance(flight.stops, int) else None,\n            price=price,\n            is_best=flight.is_best or False,\n            arrival_ahead=flight.arrival_time_ahead,\n        ))\n\n    return SearchResult(\n        flights=flights,\n        current_price=result.current_price,\n        origin=origin,\n        destination=destination,\n        date=date,\n        return_date=return_date,\n    )"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Save",
+        "data": "Python stdout and stderr emitted during search_flights, potentially including underlying-library error page content.",
+        "source": "Output streams during the wrapped search call",
+        "recipient": "In-memory captured_out and captured_err StringIO buffers",
+        "condition": "CLI searches only. The supplied code does not subsequently read these buffers or specify persistence, a retention period, or explicit deletion.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 191,
+            "end_line": 205,
+            "quote": "    try:\n        # Suppress fast-flights' noisy output (it dumps raw page content on errors)\n        captured_out = io.StringIO()\n        captured_err = io.StringIO()\n        with redirect_stdout(captured_out), redirect_stderr(captured_err):\n            result = search_flights(\n                origin=parsed.origin.upper(),\n                destination=parsed.destination.upper(),\n                date=parsed.date,\n                return_date=parsed.return_date,\n                adults=parsed.adults,\n                children=parsed.children,\n                seat_class=parsed.seat_class,\n                max_results=parsed.limit,\n            )"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Send",
+        "data": "Search itinerary, current-price category, and normalized flight results as JSON or human-readable text.",
+        "source": "SearchResult returned by search_flights",
+        "recipient": "CLI stdout",
+        "condition": "Successful CLI search. JSON includes stop_info and arrival_ahead; text conditionally displays price category, return date, best flag, arrival offset, and stop information.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 207,
+            "end_line": 210,
+            "quote": "        if parsed.output == \"json\":\n            print(json.dumps(result.to_dict(), indent=2))\n        else:\n            print(format_text_output(result))"
+          },
+          {
+            "path": "flight_search/search.py",
+            "start_line": 21,
+            "end_line": 32,
+            "quote": "    def to_dict(self) -> dict:\n        return {\n            \"airline\": self.airline,\n            \"departure_time\": self.departure_time,\n            \"arrival_time\": self.arrival_time,\n            \"duration\": self.duration,\n            \"stops\": self.stops,\n            \"stop_info\": self.stop_info,\n            \"price\": self.price,\n            \"is_best\": self.is_best,\n            \"arrival_ahead\": self.arrival_ahead,\n        }"
+          },
+          {
+            "path": "flight_search/search.py",
+            "start_line": 46,
+            "end_line": 54,
+            "quote": "    def to_dict(self) -> dict:\n        return {\n            \"origin\": self.origin,\n            \"destination\": self.destination,\n            \"date\": self.date,\n            \"return_date\": self.return_date,\n            \"current_price\": self.current_price,\n            \"flights\": [f.to_dict() for f in self.flights],\n        }"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 78,
+            "end_line": 118,
+            "quote": "def format_text_output(result: SearchResult) -> str:\n    \"\"\"Format search results as human-readable text.\"\"\"\n    lines = []\n\n    # Header\n    trip_type = \"Round trip\" if result.return_date else \"One way\"\n    lines.append(f\"✈️  {result.origin} → {result.destination}\")\n    lines.append(f\"   {trip_type} · {result.date}\" + (f\" - {result.return_date}\" if result.return_date else \"\"))\n\n    if result.current_price:\n        lines.append(f\"   Prices are currently: {result.current_price}\")\n\n    lines.append(\"\")\n\n    if not result.flights:\n        lines.append(\"   No flights found.\")\n        return \"\\n\".join(lines)\n\n    # Flights\n    for flight in result.flights:\n        best_tag = \" ⭐ BEST\" if flight.is_best else \"\"\n        price_str = f\"${flight.price}\" if flight.price else \"Price N/A\"\n\n        lines.append(f\"{'─' * 50}\")\n        lines.append(f\"   {flight.airline}{best_tag}\")\n        lines.append(f\"   🕐 {flight.departure_time} → {flight.arrival_time}\" +\n                    (f\" {flight.arrival_ahead}\" if flight.arrival_ahead else \"\"))\n        lines.append(f\"   ⏱️  {flight.duration}\")\n\n        if flight.stops == 0:\n            lines.append(\"   ✅ Nonstop\")\n        else:\n            stop_text = f\"{flight.stops} stop\" + (\"s\" if flight.stops > 1 else \"\")\n            if flight.stop_info:\n                stop_text += f\" ({flight.stop_info})\"\n            lines.append(f\"   🔄 {stop_text}\")\n\n        lines.append(f\"   💰 {price_str}\")\n        lines.append(\"\")\n\n    return \"\\n\".join(lines)"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Infer",
+        "data": "Sanitized search error message.",
+        "source": "Exception caught around search and result output",
+        "recipient": "err_str used for CLI error output",
+        "condition": "Replace the exception string with a fixed message when it exceeds 200 characters, contains 'Skip to main content', or contains '<'; otherwise retain the exception string.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 214,
+            "end_line": 219,
+            "quote": "    except Exception as err:\n        # Clean up error message - fast-flights can include page garbage\n        err_str = str(err)\n        # If error is too long or contains HTML-like content, simplify it\n        if len(err_str) > 200 or \"Skip to main content\" in err_str or \"<\" in err_str:\n            err_str = \"No flights found. Check your airports and dates.\""
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Send",
+        "data": "Argument-validation diagnostics, invalid or past date values where interpolated, and sanitized exception messages in text or JSON.",
+        "source": "CLI validation and exception handling",
+        "recipient": "CLI stderr, directly or through argparse.parser.error",
+        "condition": "Missing required arguments, invalid dates, departure before today, return before departure, or an exception. JSON formatting applies to caught exceptions, while date-validation messages remain text.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 165,
+            "end_line": 189,
+            "quote": "    if not parsed.origin or not parsed.destination:\n        parser.error(\"origin and destination are required (unless using --upgrade)\")\n    if not parsed.date:\n        parser.error(\"--date is required (unless using --upgrade)\")\n\n    # Validate date format and ensure it's not in the past\n    try:\n        dep_date = datetime.strptime(parsed.date, \"%Y-%m-%d\").date()\n        today = datetime.now().date()\n        if dep_date < today:\n            print(f\"Error: Departure date {parsed.date} is in the past. Use a future date.\", file=sys.stderr)\n            return 1\n    except ValueError:\n        print(f\"Error: Invalid date format '{parsed.date}'. Use YYYY-MM-DD.\", file=sys.stderr)\n        return 1\n\n    if parsed.return_date:\n        try:\n            ret_date = datetime.strptime(parsed.return_date, \"%Y-%m-%d\").date()\n            if ret_date < dep_date:\n                print(\"Error: Return date must be after departure date.\", file=sys.stderr)\n                return 1\n        except ValueError:\n            print(f\"Error: Invalid return date format '{parsed.return_date}'. Use YYYY-MM-DD.\", file=sys.stderr)\n            return 1"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 214,
+            "end_line": 225,
+            "quote": "    except Exception as err:\n        # Clean up error message - fast-flights can include page garbage\n        err_str = str(err)\n        # If error is too long or contains HTML-like content, simplify it\n        if len(err_str) > 200 or \"Skip to main content\" in err_str or \"<\" in err_str:\n            err_str = \"No flights found. Check your airports and dates.\"\n\n        if parsed.output == \"json\":\n            print(json.dumps({\"error\": err_str}), file=sys.stderr)\n        else:\n            print(f\"Error: {err_str}\", file=sys.stderr)\n        return 1"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Read",
+        "data": "Availability or executable location of flight-search, uv, pipx, pip3, and pip; Python executable identity is also referenced.",
+        "source": "Runtime executable lookup and sys.executable",
+        "recipient": "Installer-detection and installation control flow",
+        "condition": "CLI detection runs for --upgrade; shell lookups run if install.sh is executed. The flight-search lookup expression in detect_installer is discarded.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 17,
+            "end_line": 22,
+            "quote": "def detect_installer() -> str:\n    \"\"\"Detect how flight-search was installed.\"\"\"\n    shutil.which(\"flight-search\") or sys.executable\n\n    # Check for uv tool installation (typically ~/.local/bin or has uv in path)\n    if shutil.which(\"uv\"):"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 36,
+            "end_line": 37,
+            "quote": "    # Check for pipx installation\n    if shutil.which(\"pipx\"):"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 6,
+            "end_line": 17,
+            "quote": "if command -v uv &>/dev/null; then\n  echo \"Using uv...\"\n  uv tool install flight-search\nelif command -v pipx &>/dev/null; then\n  echo \"Using pipx...\"\n  pipx install flight-search\nelif command -v pip3 &>/dev/null; then\n  echo \"Using pip3...\"\n  pip3 install --user flight-search\nelif command -v pip &>/dev/null; then\n  echo \"Using pip...\"\n  pip install --user flight-search"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 66,
+            "end_line": 67,
+            "quote": "    else:\n        cmd = [sys.executable, \"-m\", \"pip\", \"install\", \"--upgrade\", \"flight-search\"]"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Send",
+        "data": "Local installation-inventory query commands: uv tool list and pipx list.",
+        "source": "detect_installer",
+        "recipient": "Local uv or pipx subprocess",
+        "condition": "During --upgrade detection, when the corresponding executable is available; each query has a five-second timeout.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 22,
+            "end_line": 30,
+            "quote": "    if shutil.which(\"uv\"):\n        # Check if uv knows about this tool\n        try:\n            result = subprocess.run(\n                [\"uv\", \"tool\", \"list\"],\n                capture_output=True,\n                text=True,\n                timeout=5\n            )"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 37,
+            "end_line": 44,
+            "quote": "    if shutil.which(\"pipx\"):\n        try:\n            result = subprocess.run(\n                [\"pipx\", \"list\"],\n                capture_output=True,\n                text=True,\n                timeout=5\n            )"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Read",
+        "data": "Captured text output from local uv and pipx inventory subprocesses; stdout is inspected for the substring flight-search.",
+        "source": "uv tool list or pipx list subprocess output",
+        "recipient": "CompletedProcess result and installer detection",
+        "condition": "When each available inventory command completes. Both streams are captured, but only stdout is inspected in the supplied code.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 25,
+            "end_line": 34,
+            "quote": "            result = subprocess.run(\n                [\"uv\", \"tool\", \"list\"],\n                capture_output=True,\n                text=True,\n                timeout=5\n            )\n            if \"flight-search\" in result.stdout:\n                return \"uv\"\n        except Exception:\n            pass"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 39,
+            "end_line": 48,
+            "quote": "            result = subprocess.run(\n                [\"pipx\", \"list\"],\n                capture_output=True,\n                text=True,\n                timeout=5\n            )\n            if \"flight-search\" in result.stdout:\n                return \"pipx\"\n        except Exception:\n            pass"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Infer",
+        "data": "Installer choice: uv first when its inventory contains flight-search, otherwise pipx when its inventory contains flight-search, otherwise pip.",
+        "source": "Executable availability and captured inventory stdout",
+        "recipient": "do_upgrade installer variable",
+        "condition": "Detection exceptions are ignored; pip is the unconditional fallback rather than a verified installation origin.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 22,
+            "end_line": 56,
+            "quote": "    if shutil.which(\"uv\"):\n        # Check if uv knows about this tool\n        try:\n            result = subprocess.run(\n                [\"uv\", \"tool\", \"list\"],\n                capture_output=True,\n                text=True,\n                timeout=5\n            )\n            if \"flight-search\" in result.stdout:\n                return \"uv\"\n        except Exception:\n            pass\n\n    # Check for pipx installation\n    if shutil.which(\"pipx\"):\n        try:\n            result = subprocess.run(\n                [\"pipx\", \"list\"],\n                capture_output=True,\n                text=True,\n                timeout=5\n            )\n            if \"flight-search\" in result.stdout:\n                return \"pipx\"\n        except Exception:\n            pass\n\n    # Default to pip\n    return \"pip\"\n\n\ndef do_upgrade() -> int:\n    \"\"\"Upgrade flight-search using the detected installer.\"\"\"\n    installer = detect_installer()"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Send",
+        "data": "Request to upgrade the flight-search package using uv, pipx, or the current Python interpreter's pip.",
+        "source": "do_upgrade and its detected installer",
+        "recipient": "Selected local package-manager subprocess",
+        "condition": "CLI --upgrade path. Package retrieval, network destinations, installed files, and retention are implemented by the absent package manager, not shown here.",
+        "evidence": [
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 54,
+            "end_line": 70,
+            "quote": "def do_upgrade() -> int:\n    \"\"\"Upgrade flight-search using the detected installer.\"\"\"\n    installer = detect_installer()\n\n    print(f\"Detected installer: {installer}\")\n    print(f\"Current version: {__version__}\")\n    print(\"Upgrading...\")\n\n    if installer == \"uv\":\n        cmd = [\"uv\", \"tool\", \"upgrade\", \"flight-search\"]\n    elif installer == \"pipx\":\n        cmd = [\"pipx\", \"upgrade\", \"flight-search\"]\n    else:\n        cmd = [sys.executable, \"-m\", \"pip\", \"install\", \"--upgrade\", \"flight-search\"]\n\n    try:\n        subprocess.run(cmd, check=True)"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 160,
+            "end_line": 162,
+            "quote": "    # Handle --upgrade\n    if parsed.upgrade:\n        return do_upgrade()"
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Send",
+        "data": "Version, selected installer, installation or upgrade progress and completion messages, upgrade failure exception text, and installer instructions. Upgrade subprocess output is not captured by this code.",
+        "source": "Package version, installer choice, subprocess status, and fixed diagnostic strings",
+        "recipient": "CLI stdout or stderr; installer shell output; upgrade subprocess inherits its runtime streams",
+        "condition": "Version option, --upgrade, or execution of install.sh, as applicable. Stream redirection by the surrounding execution context is unknown.",
+        "evidence": [
+          {
+            "path": "flight_search/__init__.py",
+            "start_line": 6,
+            "end_line": 6,
+            "quote": "__version__ = \"0.1.7\""
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 13,
+            "end_line": 13,
+            "quote": "from . import __version__"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 135,
+            "end_line": 135,
+            "quote": "    parser.add_argument(\"-v\", \"--version\", action=\"version\", version=f\"%(prog)s {__version__}\")"
+          },
+          {
+            "path": "flight_search/cli.py",
+            "start_line": 54,
+            "end_line": 75,
+            "quote": "def do_upgrade() -> int:\n    \"\"\"Upgrade flight-search using the detected installer.\"\"\"\n    installer = detect_installer()\n\n    print(f\"Detected installer: {installer}\")\n    print(f\"Current version: {__version__}\")\n    print(\"Upgrading...\")\n\n    if installer == \"uv\":\n        cmd = [\"uv\", \"tool\", \"upgrade\", \"flight-search\"]\n    elif installer == \"pipx\":\n        cmd = [\"pipx\", \"upgrade\", \"flight-search\"]\n    else:\n        cmd = [sys.executable, \"-m\", \"pip\", \"install\", \"--upgrade\", \"flight-search\"]\n\n    try:\n        subprocess.run(cmd, check=True)\n        print(\"\\n✅ Upgrade complete! Run 'flight-search --version' to verify.\")\n        return 0\n    except subprocess.CalledProcessError as e:\n        print(f\"\\n❌ Upgrade failed: {e}\", file=sys.stderr)\n        return 1"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 4,
+            "end_line": 28,
+            "quote": "echo \"✈️  Installing flight-search...\"\n\nif command -v uv &>/dev/null; then\n  echo \"Using uv...\"\n  uv tool install flight-search\nelif command -v pipx &>/dev/null; then\n  echo \"Using pipx...\"\n  pipx install flight-search\nelif command -v pip3 &>/dev/null; then\n  echo \"Using pip3...\"\n  pip3 install --user flight-search\nelif command -v pip &>/dev/null; then\n  echo \"Using pip...\"\n  pip install --user flight-search\nelse\n  echo \"❌ No Python package manager found (uv, pipx, or pip)\"\n  echo \"Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh\"\n  exit 1\nfi\n\necho \"\"\necho \"✅ flight-search installed!\"\necho \"\"\necho \"Try it:\"\necho \"  flight-search DEN LAX --date 2025-03-01\""
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Read",
+        "data": "Remote installation shell-script response body.",
+        "source": "https://raw.githubusercontent.com/Olafs-World/flight-search/main/install.sh",
+        "recipient": "curl output stream",
+        "condition": "If the README's installation one-liner is followed. The remote response at execution time is not established by the supplied local install.sh.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "start_line": 35,
+            "end_line": 39,
+            "quote": "## Installation\n\n```bash\n# one-liner\ncurl -fsSL https://raw.githubusercontent.com/Olafs-World/flight-search/main/install.sh | bash"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Send",
+        "data": "Fetched installation shell-script bytes for execution.",
+        "source": "curl stdout from the README's remote install.sh request",
+        "recipient": "Local bash process through a shell pipe",
+        "condition": "If the README installation one-liner is followed; no intermediate file save is specified.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "start_line": 37,
+            "end_line": 39,
+            "quote": "```bash\n# one-liner\ncurl -fsSL https://raw.githubusercontent.com/Olafs-World/flight-search/main/install.sh | bash"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Send",
+        "data": "Package-install or execution requests naming uv or flight-search; skill examples also pass airport codes and dates to uvx flight-search.",
+        "source": "Skill prerequisite metadata, documented commands, or install.sh",
+        "recipient": "Configured pip-kind installer, local uv/uvx, pipx, pip3, or pip command",
+        "condition": "When the prerequisite installer is invoked, documented commands are followed, or install.sh runs. install.sh chooses the first available manager in uv, pipx, pip3, pip order; pip variants use --user. Package-manager internals and external destinations are not supplied.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 10,
+            "end_line": 19,
+            "quote": "        \"requires\": { \"bins\": [\"uvx\"] },\n        \"install\":\n          [\n            {\n              \"id\": \"uv\",\n              \"kind\": \"pip\",\n              \"package\": \"uv\",\n              \"bins\": [\"uvx\"],\n              \"label\": \"Install uv (for uvx)\",\n            },"
+          },
+          {
+            "path": "SKILL.md",
+            "start_line": 33,
+            "end_line": 40,
+            "quote": "```bash\n# one-off search (no install needed)\nuvx flight-search DEN LAX --date 2026-03-01\n\n# or install globally\nuv tool install flight-search\nflight-search JFK LHR --date 2026-06-15 --return 2026-06-22\n```"
+          },
+          {
+            "path": "README.md",
+            "start_line": 41,
+            "end_line": 48,
+            "quote": "# using uv (recommended)\nuv tool install flight-search\n\n# or pip\npip install flight-search\n\n# or run directly without installing\nuvx flight-search DEN LAX --date 2026-03-01"
+          },
+          {
+            "path": "install.sh",
+            "start_line": 6,
+            "end_line": 17,
+            "quote": "if command -v uv &>/dev/null; then\n  echo \"Using uv...\"\n  uv tool install flight-search\nelif command -v pipx &>/dev/null; then\n  echo \"Using pipx...\"\n  pipx install flight-search\nelif command -v pip3 &>/dev/null; then\n  echo \"Using pip3...\"\n  pip3 install --user flight-search\nelif command -v pip &>/dev/null; then\n  echo \"Using pip...\"\n  pip install --user flight-search"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,679 @@
+{
+  "status": "completed",
+  "declared_purpose": "Provide informational stock and crypto analysis, comparisons, portfolio tracking, watchlist alerts, dividend metrics, trend detection and rumor scoring. These capabilities are explicit; particular fetches, credential handling and scanner caches are implementation choices. Sources: SKILL.md:2-15,19-30,80-175; docs/CONCEPT.md:11-21. App-Plan.md describes a future commercial product, not the current skill.",
+  "data_operations": [
+    {
+      "operation": "Read and persist portfolio records locally",
+      "source": "PortfolioStore; portfolio commands and analyze_stock.py --portfolio",
+      "data_scope": "Portfolio names, creation/update timestamps, asset tickers, inferred asset types, quantities, cost bases and added timestamps. Loading reads the complete JSON store.",
+      "recipient_or_storage": "${CLAWDBOT_STATE_DIR}/skills/stock-analysis/portfolios.json, defaulting to ~/.clawdbot/skills/stock-analysis/portfolios.json; temporary sibling .tmp during writes; process memory",
+      "condition": "Portfolio access or modification. JSON is written without application-level encryption; failed writes attempt to unlink the temporary file.",
+      "evidence": [
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 42,
+          "end_line": 122
+        },
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 133,
+          "end_line": 183
+        },
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 228,
+          "end_line": 313
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2163,
+          "end_line": 2198
+        }
+      ]
+    },
+    {
+      "operation": "Delete or replace portfolio records",
+      "source": "PortfolioStore.delete_portfolio, remove_asset and rename_portfolio",
+      "data_scope": "Selected portfolio, selected asset or old portfolio name/key",
+      "recipient_or_storage": "In-memory store and rewritten portfolios.json",
+      "condition": "Explicit delete, remove or rename command. This is logical removal/replacement, not demonstrated secure erasure of filesystem history or backups.",
+      "evidence": [
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 185,
+          "end_line": 226
+        },
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 315,
+          "end_line": 340
+        }
+      ]
+    },
+    {
+      "operation": "Read, persist and remove watchlist records",
+      "source": "watchlist.py",
+      "data_scope": "Tickers, added timestamps, initial prices, targets, stops, signal-alert preferences, last signals/checks and optional free-text notes",
+      "recipient_or_storage": "~/.clawdbot/skills/stock-analysis/watchlist.json and process memory",
+      "condition": "Add/update, list, remove or check operations. Add and check rewrite JSON; removal filters the selected ticker and rewrites the file.",
+      "evidence": [
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 32,
+          "end_line": 77
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 90,
+          "end_line": 163
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 209,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "operation": "Request asset data from Yahoo Finance",
+      "source": "analyze_stock.py fetch_stock_data and crypto correlation analysis",
+      "data_scope": "Requested ticker; returned company/crypto information, earnings dates, recommendations, analyst targets and one-year price history. Non-BTC crypto correlation additionally requests BTC-USD history.",
+      "recipient_or_storage": "Yahoo Finance through yfinance; responses remain in the analysis process",
+      "condition": "Each requested ticker, including portfolio tickers; up to three fetch attempts. Stock-specific fields are fetched before the crypto branch skips their analysis.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 230,
+          "end_line": 286
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 453,
+          "end_line": 468
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2218,
+          "end_line": 2268
+        }
+      ]
+    },
+    {
+      "operation": "Request prices for portfolio/watchlist validation and valuation",
+      "source": "portfolio.py and watchlist.py",
+      "data_scope": "Asset ticker; full stock.info response is accessed for a price or ticker-validity check. Quantities, cost bases, portfolio names, targets, stops and notes are not passed in these calls.",
+      "recipient_or_storage": "Yahoo Finance through yfinance; caller process",
+      "condition": "Portfolio asset addition/show; watchlist addition/list/check",
+      "evidence": [
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 256,
+          "end_line": 264
+        },
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 358,
+          "end_line": 401
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 80,
+          "end_line": 106
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 166,
+          "end_line": 218
+        }
+      ]
+    },
+    {
+      "operation": "Fetch benchmarks and infer market and sector attributes",
+      "source": "analyze_market_context, analyze_sector_performance and get_vix_term_structure",
+      "data_scope": "Fixed VIX/SPY/QQQ/GLD/TLT/UUP symbols and a sector ETF selected from returned company information; inferred market regime, risk-off state, relative performance and simplified VIX structure",
+      "recipient_or_storage": "Yahoo Finance through yfinance; local analysis results",
+      "condition": "Market context for stocks and crypto on cache miss; sector comparison for mapped stock sectors; VIX sentiment for stocks. VIX structure is inferred from spot levels, not fetched futures curves.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 653,
+          "end_line": 795
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1016,
+          "end_line": 1100
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1394,
+          "end_line": 1442
+        }
+      ]
+    },
+    {
+      "operation": "Fetch public sentiment and insider filings",
+      "source": "get_fear_greed_index and get_insider_activity",
+      "data_scope": "CNN Fear & Greed index; selected company ticker and package-configured SEC identity; Form 4 transactions aggregated into net shares/value and a score, using a 90-day window and at most 50 filings",
+      "recipient_or_storage": "CNN through fear_and_greed; SEC EDGAR through edgartools; aggregates returned to the local caller",
+      "condition": "Stock sentiment analysis. Insider fetching is skipped with --no-insider or --fast; Fear & Greed uses the shared cache.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1316,
+          "end_line": 1358
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1445,
+          "end_line": 1559
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1646,
+          "end_line": 1664
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2294,
+          "end_line": 2301
+        }
+      ]
+    },
+    {
+      "operation": "Attempt options analysis without reaching its intended fetch on the packaged path",
+      "source": "get_put_call_ratio",
+      "data_scope": "Would request expirations and the nearest options chain, then aggregate put/call volumes",
+      "recipient_or_storage": "Local failing attribute lookup; no options request is reached for the packaged StockData objects",
+      "condition": "Stock sentiment invokes the helper, but StockData has no ticker_obj field. The resulting exception is caught and the helper returns None.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 75,
+          "end_line": 82
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1562,
+          "end_line": 1590
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1648,
+          "end_line": 1664
+        }
+      ]
+    },
+    {
+      "operation": "Fetch news and infer crisis/geopolitical exposure",
+      "source": "check_breaking_news and check_sector_geopolitical_risk",
+      "data_scope": "Two fixed market/economy search queries; returned titles, summaries and publication dates; selected crisis headlines and inferred ticker/sector risk penalties",
+      "recipient_or_storage": "news.google.com RSS; local analysis and shared cache",
+      "condition": "Analysis outside --fast mode, on cache miss. Examines up to 20 entries per feed and filters known publication dates against 24 hours. Holdings are matched locally rather than inserted into these queries.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 871,
+          "end_line": 951
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 954,
+          "end_line": 1013
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2204,
+          "end_line": 2214
+        }
+      ]
+    },
+    {
+      "operation": "Cache shared indicators in memory",
+      "source": "_SENTIMENT_CACHE",
+      "data_scope": "Market context, Fear & Greed, inferred VIX structure and breaking-news results with timestamps",
+      "recipient_or_storage": "Analysis-process dictionary",
+      "condition": "Cache setters run after their fetches. One-hour TTL controls reuse; expired entries are not explicitly deleted. Cached None news results do not prevent another fetch.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 788,
+          "end_line": 790
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 877,
+          "end_line": 880
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 943,
+          "end_line": 946
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1296,
+          "end_line": 1356
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1438,
+          "end_line": 1440
+        }
+      ]
+    },
+    {
+      "operation": "Calculate dividend metrics and return results",
+      "source": "dividends.py",
+      "data_scope": "Ticker, Yahoo company information and dividend history; inferred payout status, growth, payment frequency, safety score and income rating",
+      "recipient_or_storage": "Yahoo Finance through yfinance; local caller/stdout",
+      "condition": "Dividend command. Dividend history is accessed for dividend-paying assets; no application-level file persistence is implemented here.",
+      "evidence": [
+        {
+          "path": "scripts/dividends.py",
+          "start_line": 66,
+          "end_line": 179
+        },
+        {
+          "path": "scripts/dividends.py",
+          "start_line": 180,
+          "end_line": 290
+        },
+        {
+          "path": "scripts/dividends.py",
+          "start_line": 350,
+          "end_line": 380
+        }
+      ]
+    },
+    {
+      "operation": "Produce recommendations, portfolio metrics and alert outputs",
+      "source": "Analysis synthesis, portfolio summary and watchlist signal-check subprocess",
+      "data_scope": "BUY/HOLD/SELL scores, confidence and risk explanations; locally calculated holdings value, P&L, period returns and concentration; alert thresholds and signal changes",
+      "recipient_or_storage": "Calling process/stdout; analyze_stock.py child receives the watched ticker and returns JSON to watchlist.py",
+      "condition": "Requested analysis or portfolio summary. Signal-alert checking launches full analysis only for items with alert_on_signal and an available price. --notify constructs a Telegram-formatted string; this source does not send it to Telegram.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 1767,
+          "end_line": 1881
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2354,
+          "end_line": 2483
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 209,
+          "end_line": 284
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 310,
+          "end_line": 332
+        }
+      ]
+    },
+    {
+      "operation": "Read authentication configuration and expose environment to bird",
+      "source": "Hot Scanner module initialization; Rumor Scanner load_env and Twitter searches",
+      "data_scope": "All parsed skill-directory .env assignments, including AUTH_TOKEN and CT0 when configured; complete parent environment copied into each bird child",
+      "recipient_or_storage": "Scanner process environment and local bird subprocess environment; optional credential file at the skill root",
+      "condition": "Hot Scanner reads .env at import, including --no-social. Rumor Scanner loads it in both Twitter search functions. Documentation offers manual token persistence or exported variables; its browser-cookie alternative requests Full Disk Access and bird whoami verification, whose internals are absent.",
+      "evidence": [
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 22,
+          "end_line": 30
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 379,
+          "end_line": 394
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 28,
+          "end_line": 38
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 74,
+          "end_line": 95
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 127,
+          "end_line": 150
+        },
+        {
+          "path": "docs/HOT_SCANNER.md",
+          "start_line": 132,
+          "end_line": 166
+        }
+      ]
+    },
+    {
+      "operation": "Collect public market, news and social data for trend detection",
+      "source": "HotScanner.scan_all and source-specific scanners",
+      "data_scope": "Fixed CoinGecko endpoints, Google finance/crypto feeds, Yahoo movers pages, Reddit community feeds and two fixed bird search queries; returned market data, headlines, social excerpts and engagement. Tickers, buzz counts and sentiment hints are inferred locally.",
+      "recipient_or_storage": "api.coingecko.com, news.google.com, finance.yahoo.com, old.reddit.com; local bird CLI for Twitter/X search; scanner memory",
+      "condition": "Core scans always run. Reddit and bird scans run by default and are skipped with --no-social. Direct HTTP code supplies generic browser headers, without explicitly attaching AUTH_TOKEN or CT0.",
+      "evidence": [
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 39,
+          "end_line": 100
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 102,
+          "end_line": 279
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 281,
+          "end_line": 424
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 426,
+          "end_line": 509
+        }
+      ]
+    },
+    {
+      "operation": "Collect and score public rumors and buzz",
+      "source": "rumor_scanner.py",
+      "data_scope": "Four fixed rumor queries and three fixed buzz queries passed to bird; five Google News queries. Retains tweet excerpts up to 300 characters, author usernames, engagement and query metadata; news titles, links and dates; inferred symbols, counts and impact scores.",
+      "recipient_or_storage": "Local bird CLI for Twitter/X search; news.google.com RSS; scanner memory and caller output",
+      "condition": "Every Rumor Scanner main run attempts both Twitter categories and news; no social-disable option is implemented.",
+      "evidence": [
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 58,
+          "end_line": 200
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 202,
+          "end_line": 245
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 247,
+          "end_line": 327
+        }
+      ]
+    },
+    {
+      "operation": "Persist scanner snapshots and support optional automation",
+      "source": "Scanner main functions and documented cron examples",
+      "data_scope": "Hot summary including social excerpts, news and inferred trends; rumor snapshot including up to 20 rumors, buzz records, author metadata and symbol counts",
+      "recipient_or_storage": "Skill-root cache/hot_scan_latest.json and cache/rumor_scan_latest.json; optional cron output at cache/daily_scan.json or /var/log/hot_scanner.log; host-controlled delivery destination",
+      "condition": "Both scanner main functions overwrite their latest file on each completed run. No TTL/deletion routine is shown. Cron redirection and OpenClaw deliver:true occur only if those examples are configured.",
+      "evidence": [
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 458,
+          "end_line": 538
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 329,
+          "end_line": 339
+        },
+        {
+          "path": "docs/HOT_SCANNER.md",
+          "start_line": 225,
+          "end_line": 253
+        },
+        {
+          "path": "README.md",
+          "start_line": 150,
+          "end_line": 190
+        }
+      ]
+    },
+    {
+      "operation": "Make network requests during integration tests",
+      "source": "TestIntegration",
+      "data_scope": "Fixed AAPL and BTC-USD tickers and their fetched market data",
+      "recipient_or_storage": "Yahoo Finance through fetch_stock_data; test process",
+      "condition": "These tests execute when selected. Their integration marker alone does not exclude them; the direct pytest invocation supplies a filename ignore glob rather than a marker exclusion.",
+      "evidence": [
+        {
+          "path": "scripts/test_stock_analysis.py",
+          "start_line": 356,
+          "end_line": 380
+        }
+      ]
+    },
+    {
+      "operation": "Describe future cloud storage, notifications and analytics",
+      "source": "Commercial product roadmap",
+      "data_scope": "Planned account email/password hashes, subscription/payment identifiers, holdings and alert preferences; planned usage/business metrics, error tracking and notifications",
+      "recipient_or_storage": "Proposed AWS/PostgreSQL/Redis/S3, Cognito or Firebase, Stripe, FCM, Mixpanel/Amplitude, Sentry and CloudWatch",
+      "condition": "Planning only. No corresponding deployed backend, analytics integration or account database implementation is supplied; GDPR export/deletion is also a planned consideration.",
+      "evidence": [
+        {
+          "path": "App-Plan.md",
+          "start_line": 7,
+          "end_line": 58
+        },
+        {
+          "path": "App-Plan.md",
+          "start_line": 132,
+          "end_line": 150
+        },
+        {
+          "path": "App-Plan.md",
+          "start_line": 276,
+          "end_line": 360
+        },
+        {
+          "path": "App-Plan.md",
+          "start_line": 426,
+          "end_line": 438
+        }
+      ]
+    }
+  ],
+  "potential_excess": [
+    {
+      "data_scope": "All skill-directory .env assignments, potentially including social authentication credentials",
+      "recipient_or_storage": "Hot Scanner process environment",
+      "condition": "Importing hot_scanner.py, including a --no-social run",
+      "purpose_basis": "Social integration is optional; --no-social explicitly requests scans without social sources.",
+      "necessary_behavior": "Fetch and summarize the non-social market/news sources.",
+      "proposed_reduction": "Load social credentials only when a bird search will run. This removes a redundant local credential read rather than narrowing a required network request.",
+      "preservation_conditions": "Retain existing credential discovery when social scanning is enabled.",
+      "evidence": [
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 22,
+          "end_line": 30
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 76,
+          "end_line": 89
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 512,
+          "end_line": 519
+        },
+        {
+          "path": "SKILL.md",
+          "start_line": 126,
+          "end_line": 154
+        }
+      ]
+    },
+    {
+      "data_scope": "Unrelated .env keys and inherited environment values beyond bird authentication/runtime needs",
+      "recipient_or_storage": "Local bird subprocess environment in both scanners",
+      "condition": "Each bird search launches with os.environ.copy() after indiscriminate .env loading",
+      "purpose_basis": "Authenticated Twitter/X search needs its authentication configuration, not every available environment value.",
+      "necessary_behavior": "Launch bird with working runtime configuration and the required social credentials.",
+      "proposed_reduction": "Allowlist supported authentication keys when loading .env and construct a minimal child environment. This narrows data crossing a required subprocess boundary; it does not establish that the full environment reaches X.",
+      "preservation_conditions": "Determine bird's actual runtime and credential requirements before removing variables needed for execution.",
+      "evidence": [
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 22,
+          "end_line": 30
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 385,
+          "end_line": 391
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 32,
+          "end_line": 38
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 74,
+          "end_line": 81
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 127,
+          "end_line": 134
+        }
+      ]
+    },
+    {
+      "data_scope": "Separate analyst recommendations/targets for every asset; earnings dates for crypto",
+      "recipient_or_storage": "Yahoo Finance through yfinance and returned StockData fields",
+      "condition": "fetch_stock_data runs before asset-specific analysis",
+      "purpose_basis": "Stock analysis uses analyst fields from info; crypto analysis explicitly skips stock earnings, analyst and historical dimensions.",
+      "necessary_behavior": "Retain consumed stock metrics, crypto fundamentals and price histories.",
+      "proposed_reduction": "Remove unused analyst_info property fetches and skip earnings retrieval for crypto. These are redundant property-fetch actions, not extra fields sent with a necessary request.",
+      "preservation_conditions": "Preserve earnings history for stock earnings/timing analysis and retain analyst fields consumed from info; do not assume a fixed reduction in underlying HTTP requests because library caching is unknown.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 245,
+          "end_line": 273
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 506,
+          "end_line": 576
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2240,
+          "end_line": 2277
+        }
+      ]
+    },
+    {
+      "data_scope": "Full company-information responses where only current price or ticker validity is consumed",
+      "recipient_or_storage": "Yahoo Finance response to portfolio/watchlist process",
+      "condition": "Portfolio add/show and watchlist price lookups",
+      "purpose_basis": "Validation, valuation and threshold alerts require price/validity, not the full fundamentals bundle.",
+      "necessary_behavior": "Obtain a reliable current price and distinguish invalid or unavailable tickers.",
+      "proposed_reduction": "Use a supported price-only retrieval path where equivalent. This narrows data in a required lookup rather than removing the lookup.",
+      "preservation_conditions": "Preserve regularMarketPrice/currentPrice fallback behavior, supported asset coverage and validation semantics; availability of a suitable provider/library API is unresolved.",
+      "evidence": [
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 256,
+          "end_line": 264
+        },
+        {
+          "path": "scripts/portfolio.py",
+          "start_line": 375,
+          "end_line": 380
+        },
+        {
+          "path": "scripts/watchlist.py",
+          "start_line": 80,
+          "end_line": 87
+        }
+      ]
+    },
+    {
+      "data_scope": "Repeated portfolio ticker lookups and full stock.info responses",
+      "recipient_or_storage": "Yahoo Finance through yfinance during portfolio summary generation",
+      "condition": "After per-asset analysis, when a portfolio summary is produced: text output or multi-result JSON",
+      "purpose_basis": "Portfolio valuation needs current prices already obtained during the same analysis run.",
+      "necessary_behavior": "Calculate holdings value, P&L and concentration from a consistent price snapshot.",
+      "proposed_reduction": "Carry fetched prices into summary generation and avoid the additional info lookups. Requested period-return history remains a separate necessary operation.",
+      "preservation_conditions": "Use complete prices from the same run, retain failure handling and fetch anew if an explicitly fresher snapshot is required. Library-level request reuse is unknown.",
+      "evidence": [
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 230,
+          "end_line": 243
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2354,
+          "end_line": 2379
+        },
+        {
+          "path": "scripts/analyze_stock.py",
+          "start_line": 2382,
+          "end_line": 2422
+        }
+      ]
+    },
+    {
+      "data_scope": "Scanner summaries, social excerpts, rumor author usernames, engagement, query metadata and news records",
+      "recipient_or_storage": "Skill-root cache/hot_scan_latest.json and cache/rumor_scan_latest.json",
+      "condition": "Every completed scanner main run, even when only an immediate console/JSON result is requested",
+      "purpose_basis": "Trend/rumor detection requires producing results. Latest-result caching is documented, but unconditional persistence is an implementation choice rather than an entry-document requirement.",
+      "necessary_behavior": "Return the current trends, rumors, supporting context and scores to the caller.",
+      "proposed_reduction": "Make snapshot writing optional and apply a retention limit when enabled. For required snapshots, retain only needed result fields; omit author identifiers or query metadata when attribution/debugging is unnecessary.",
+      "preservation_conditions": "Preserve current caller output and explicit automation/cache consumers. Keep necessary source attribution and provenance when users need them to assess rumors.",
+      "evidence": [
+        {
+          "path": "SKILL.md",
+          "start_line": 126,
+          "end_line": 175
+        },
+        {
+          "path": "scripts/hot_scanner.py",
+          "start_line": 458,
+          "end_line": 538
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 89,
+          "end_line": 98
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 143,
+          "end_line": 151
+        },
+        {
+          "path": "scripts/rumor_scanner.py",
+          "start_line": 329,
+          "end_line": 339
+        },
+        {
+          "path": "docs/HOT_SCANNER.md",
+          "start_line": 225,
+          "end_line": 253
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    "Blocking for an end-to-end credential audit: bird source is absent. Its actual cookie/browser reads, authentication transport, endpoints, logging, persistence and deletion cannot be established.",
+    "Third-party library internals are absent. Exact HTTP requests, redirects, cookies, caches, telemetry and retention inside yfinance, edgartools, fear_and_greed, feedparser and uv remain unresolved; property accesses do not prove one network request each.",
+    "External providers' logging, retention, onward disclosure and deletion behavior are undocumented in the supplied source.",
+    "Actual .env contents, inherited environment values, filesystem permissions, encryption supplied by the host, backups and secure-erasure behavior are unknown.",
+    "Cron installation, output-log rotation, OpenClaw delivery recipients and any forwarding of normal caller output are not supplied. The notification formatter alone establishes no Telegram disclosure.",
+    "The future cloud application's implemented data flows, analytics payloads, payment handling and export/deletion guarantees cannot be audited because only its roadmap is packaged."
+  ]
+}

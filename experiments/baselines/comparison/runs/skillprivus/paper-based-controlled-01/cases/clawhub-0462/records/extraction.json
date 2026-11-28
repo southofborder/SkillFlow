@@ -1,0 +1,1039 @@
+{
+  "request_sha256": "67b8aa6c3c1df9d0cea06a0541772c3db0401c71a8c06b596483887365efebc9",
+  "answer_sha256": "26daf4a1e7b04502de6b42a3e1715c6e34eddf1087bf7b3089213d8059d33200",
+  "result": {
+    "status": "complete",
+    "reason": "Extracted from the supplied static source without execution or external reads. Code behavior is conditional on invocation, dependencies, credentials, and successful requests. Reference-only caching and logging recommendations are identified separately. The .env example has no corresponding loader in the supplied code; design-token extraction contains placeholders. No runtime activity is asserted.",
+    "claim": "The skill presents itself as a professional, read-only Figma integration for extracting design data, exporting assets, auditing accessibility and design systems, and generating documentation and reports.",
+    "claim_evidence": [
+      {
+        "path": "SKILL.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "description: Professional Figma design analysis and asset export. Use for extracting design data, exporting assets in multiple formats, auditing accessibility compliance, analyzing design systems, and generating comprehensive design documentation. Read-only analysis of Figma files with powerful export and reporting capabilities."
+      },
+      {
+        "path": "SKILL.md",
+        "start_line": 152,
+        "end_line": 157,
+        "quote": "### Read-Only Operations\nThis skill provides **read-only access** to Figma files through the REST API. It can:\n- ✅ Extract data, components, and styles\n- ✅ Export assets in multiple formats\n- ✅ Analyze and audit design files\n- ✅ Generate comprehensive reports"
+      }
+    ],
+    "moves": [
+      {
+        "move_id": "m01",
+        "operation": "Save",
+        "data": "Figma access token in an exported shell environment variable.",
+        "source": "Token supplied by the person following the setup example.",
+        "recipient": "FIGMA_ACCESS_TOKEN in the shell environment.",
+        "condition": "Setup example, if followed; no persistence beyond the shell environment is specified.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 60,
+            "end_line": 61,
+            "quote": "# Set your Figma access token\nexport FIGMA_ACCESS_TOKEN=\"your-token-here\""
+          }
+        ]
+      },
+      {
+        "move_id": "m02",
+        "operation": "Save",
+        "data": "Plaintext FIGMA_ACCESS_TOKEN assignment appended to a .env file.",
+        "source": "Token supplied by the person following the setup example.",
+        "recipient": ".env relative to the shell working directory.",
+        "condition": "Alternative setup example, if followed; append operation with no retention or deletion instruction.",
+        "evidence": [
+          {
+            "path": "SKILL.md",
+            "start_line": 63,
+            "end_line": 64,
+            "quote": "# Or store in .env file\necho \"FIGMA_ACCESS_TOKEN=your-token\" >> .env"
+          }
+        ]
+      },
+      {
+        "move_id": "m03",
+        "operation": "Read",
+        "data": "Figma access token, preferring an explicit constructor argument over the FIGMA_ACCESS_TOKEN environment variable.",
+        "source": "FigmaClient access_token argument, including CLI --token, or process environment FIGMA_ACCESS_TOKEN.",
+        "recipient": "FigmaConfig.access_token and the requests session's X-Figma-Token header.",
+        "condition": "During client construction; a missing token raises ValueError. No .env file read is implemented here.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 28,
+            "end_line": 40,
+            "quote": "    def __init__(self, access_token: str = None):\n        self.config = FigmaConfig(\n            access_token=access_token or os.getenv('FIGMA_ACCESS_TOKEN')\n        )\n        \n        if not self.config.access_token:\n            raise ValueError(\"Figma access token required. Set FIGMA_ACCESS_TOKEN env var or pass token.\")\n            \n        self.session = requests.Session()\n        self.session.headers.update({\n            'X-Figma-Token': self.config.access_token,\n            'Content-Type': 'application/json'\n        })"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 239,
+            "end_line": 244,
+            "quote": "    parser.add_argument('--token', help='Figma access token (overrides env var)')\n    \n    args = parser.parse_args()\n    \n    try:\n        client = FigmaClient(access_token=args.token)"
+          }
+        ]
+      },
+      {
+        "move_id": "m04",
+        "operation": "Send",
+        "data": "Authenticated API requests containing the Figma token in X-Figma-Token, resource identifiers in endpoint paths, and supplied query parameters such as node IDs, image format, scale, or file filters.",
+        "source": "FigmaClient configuration, method arguments, and session headers.",
+        "recipient": "self.config.base_url plus the requested endpoint; default base URL https://api.figma.com/v1.",
+        "condition": "When an API method invokes _request; up to three attempts by default, with rate-limit delay and retries.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 20,
+            "end_line": 23,
+            "quote": "    access_token: str\n    base_url: str = \"https://api.figma.com/v1\"\n    rate_limit_delay: float = 0.5\n    max_retries: int = 3"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 36,
+            "end_line": 54,
+            "quote": "        self.session = requests.Session()\n        self.session.headers.update({\n            'X-Figma-Token': self.config.access_token,\n            'Content-Type': 'application/json'\n        })\n    \n    def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:\n        \"\"\"Make authenticated request with rate limiting and retry logic\"\"\"\n        url = f\"{self.config.base_url}/{endpoint.lstrip('/')}\"\n        \n        for attempt in range(self.config.max_retries):\n            try:\n                # Rate limiting\n                time.sleep(self.config.rate_limit_delay)\n                \n                response = self.session.request(method, url, **kwargs)\n                response.raise_for_status()\n                \n                return response.json()"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 76,
+            "end_line": 86,
+            "quote": "    def get_file(self, file_key: str, **params) -> Dict[str, Any]:\n        \"\"\"Get complete file data including components and styles\"\"\"\n        return self._request('GET', f'/files/{file_key}', params=params)\n    \n    def get_file_nodes(self, file_key: str, node_ids: Union[str, List[str]], **params) -> Dict[str, Any]:\n        \"\"\"Get specific nodes from a file\"\"\"\n        if isinstance(node_ids, list):\n            node_ids = ','.join(node_ids)\n        \n        params['ids'] = node_ids\n        return self._request('GET', f'/files/{file_key}/nodes', params=params)"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 102,
+            "end_line": 114,
+            "quote": "    def export_images(self, file_key: str, node_ids: Union[str, List[str]], \n                     format: str = 'png', scale: float = 1.0, **params) -> Dict[str, Any]:\n        \"\"\"Export nodes as images\"\"\"\n        if isinstance(node_ids, list):\n            node_ids = ','.join(node_ids)\n            \n        params.update({\n            'ids': node_ids,\n            'format': format,\n            'scale': scale\n        })\n        \n        return self._request('GET', f'/images/{file_key}', params=params)"
+          }
+        ]
+      },
+      {
+        "move_id": "m05",
+        "operation": "Read",
+        "data": "Figma file JSON, selected-node JSON, version history, file component metadata, and file style metadata.",
+        "source": "Responses to /files/{file_key}, /files/{file_key}/nodes, /versions, /components, and /styles through the configured Figma API base URL.",
+        "recipient": "Calling Python code as parsed JSON.",
+        "condition": "When the corresponding client method is invoked and HTTP status validation and JSON parsing succeed; node lists become a comma-separated ids parameter.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 44,
+            "end_line": 54,
+            "quote": "        url = f\"{self.config.base_url}/{endpoint.lstrip('/')}\"\n        \n        for attempt in range(self.config.max_retries):\n            try:\n                # Rate limiting\n                time.sleep(self.config.rate_limit_delay)\n                \n                response = self.session.request(method, url, **kwargs)\n                response.raise_for_status()\n                \n                return response.json()"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 76,
+            "end_line": 98,
+            "quote": "    def get_file(self, file_key: str, **params) -> Dict[str, Any]:\n        \"\"\"Get complete file data including components and styles\"\"\"\n        return self._request('GET', f'/files/{file_key}', params=params)\n    \n    def get_file_nodes(self, file_key: str, node_ids: Union[str, List[str]], **params) -> Dict[str, Any]:\n        \"\"\"Get specific nodes from a file\"\"\"\n        if isinstance(node_ids, list):\n            node_ids = ','.join(node_ids)\n        \n        params['ids'] = node_ids\n        return self._request('GET', f'/files/{file_key}/nodes', params=params)\n    \n    def get_file_versions(self, file_key: str) -> Dict[str, Any]:\n        \"\"\"Get version history for a file\"\"\"\n        return self._request('GET', f'/files/{file_key}/versions')\n    \n    def get_file_components(self, file_key: str) -> Dict[str, Any]:\n        \"\"\"Get all components in a file\"\"\"\n        return self._request('GET', f'/files/{file_key}/components')\n    \n    def get_file_styles(self, file_key: str) -> Dict[str, Any]:\n        \"\"\"Get all styles in a file\"\"\"\n        return self._request('GET', f'/files/{file_key}/styles')"
+          }
+        ]
+      },
+      {
+        "move_id": "m06",
+        "operation": "Read",
+        "data": "Image-export JSON, including node-to-image-URL mappings, and image-fill metadata.",
+        "source": "Responses to /images/{file_key} and /files/{file_key}/images through the configured Figma API base URL.",
+        "recipient": "Calling Python code as parsed JSON; ExportManager selects images[node_id].",
+        "condition": "When the corresponding client method is invoked successfully. The reference states export URLs expire after 30 days; the code does not enforce that expiration.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 51,
+            "end_line": 54,
+            "quote": "                response = self.session.request(method, url, **kwargs)\n                response.raise_for_status()\n                \n                return response.json()"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 102,
+            "end_line": 118,
+            "quote": "    def export_images(self, file_key: str, node_ids: Union[str, List[str]], \n                     format: str = 'png', scale: float = 1.0, **params) -> Dict[str, Any]:\n        \"\"\"Export nodes as images\"\"\"\n        if isinstance(node_ids, list):\n            node_ids = ','.join(node_ids)\n            \n        params.update({\n            'ids': node_ids,\n            'format': format,\n            'scale': scale\n        })\n        \n        return self._request('GET', f'/images/{file_key}', params=params)\n    \n    def get_image_fills(self, file_key: str) -> Dict[str, Any]:\n        \"\"\"Get image fill metadata from a file\"\"\"\n        return self._request('GET', f'/files/{file_key}/images')"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 221,
+            "end_line": 229,
+            "quote": "                        export_data = self.client.export_images(\n                            file_key, [node_id], \n                            format=format, scale=scale\n                        )\n                        \n                        if 'images' in export_data and node_id in export_data['images']:\n                            image_url = export_data['images'][node_id]\n                            \n                            if image_url:"
+          },
+          {
+            "path": "references/figma-api-reference.md",
+            "start_line": 57,
+            "end_line": 57,
+            "quote": "**Returns:** Map of node IDs to image URLs (URLs expire after 30 days)"
+          }
+        ]
+      },
+      {
+        "move_id": "m07",
+        "operation": "Read",
+        "data": "Team projects, project files, team component and style libraries, and individual component and style metadata.",
+        "source": "Configured Figma API responses for the supplied team, project, component, or style identifiers.",
+        "recipient": "Calling Python code as parsed JSON.",
+        "condition": "When the corresponding client method is invoked successfully; these methods are available programmatically even where the CLI does not expose them.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 51,
+            "end_line": 54,
+            "quote": "                response = self.session.request(method, url, **kwargs)\n                response.raise_for_status()\n                \n                return response.json()"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 122,
+            "end_line": 146,
+            "quote": "    def get_team_projects(self, team_id: str) -> Dict[str, Any]:\n        \"\"\"Get projects for a team\"\"\"\n        return self._request('GET', f'/teams/{team_id}/projects')\n    \n    def get_project_files(self, project_id: str) -> Dict[str, Any]:\n        \"\"\"Get files in a project\"\"\"\n        return self._request('GET', f'/projects/{project_id}/files')\n    \n    # ========== COMPONENT & STYLE OPERATIONS ==========\n    \n    def get_team_components(self, team_id: str, **params) -> Dict[str, Any]:\n        \"\"\"Get team component library\"\"\"\n        return self._request('GET', f'/teams/{team_id}/components', params=params)\n    \n    def get_component(self, component_key: str) -> Dict[str, Any]:\n        \"\"\"Get individual component metadata\"\"\"\n        return self._request('GET', f'/components/{component_key}')\n    \n    def get_team_styles(self, team_id: str, **params) -> Dict[str, Any]:\n        \"\"\"Get team style library\"\"\"\n        return self._request('GET', f'/teams/{team_id}/styles', params=params)\n    \n    def get_style(self, style_key: str) -> Dict[str, Any]:\n        \"\"\"Get individual style metadata\"\"\"\n        return self._request('GET', f'/styles/{style_key}')"
+          }
+        ]
+      },
+      {
+        "move_id": "m08",
+        "operation": "Read",
+        "data": "Current authenticated user's information.",
+        "source": "Configured Figma API /me response.",
+        "recipient": "Calling Python code and the user-info CLI result.",
+        "condition": "When get_user_info or the user-info command is invoked successfully.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 51,
+            "end_line": 54,
+            "quote": "                response = self.session.request(method, url, **kwargs)\n                response.raise_for_status()\n                \n                return response.json()"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 157,
+            "end_line": 159,
+            "quote": "    def get_user_info(self) -> Dict[str, Any]:\n        \"\"\"Get current user information\"\"\"\n        return self._request('GET', '/me')"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 295,
+            "end_line": 296,
+            "quote": "        elif args.command == 'user-info':\n            result = client.get_user_info()"
+          }
+        ]
+      },
+      {
+        "move_id": "m09",
+        "operation": "Infer",
+        "data": "File key extracted from a URL containing /file/, or the unchanged input otherwise.",
+        "source": "Supplied Figma URL or file-key string.",
+        "recipient": "Caller of parse_file_url and subsequent API method arguments.",
+        "condition": "Only /file/ URLs receive the implemented split-based extraction.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 150,
+            "end_line": 155,
+            "quote": "    def parse_file_url(self, url: str) -> str:\n        \"\"\"Extract file key from Figma URL\"\"\"\n        # https://www.figma.com/file/ABC123/File-Name\n        if '/file/' in url:\n            return url.split('/file/')[1].split('/')[0]\n        return url  # Assume it's already a file key"
+          }
+        ]
+      },
+      {
+        "move_id": "m10",
+        "operation": "Infer",
+        "data": "List of solid-fill RGBA values associated with node IDs and names.",
+        "source": "Figma file document tree passed to extract_colors.",
+        "recipient": "Returned colors list.",
+        "condition": "Recursively traverses document children; includes nonempty colors on SOLID fills.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 173,
+            "end_line": 198,
+            "quote": "    def extract_colors(self, file_data: Dict[str, Any]) -> List[Dict[str, Any]]:\n        \"\"\"Extract all colors used in a file\"\"\"\n        colors = []\n        \n        def traverse_node(node):\n            if 'fills' in node:\n                for fill in node.get('fills', []):\n                    if fill.get('type') == 'SOLID':\n                        color = fill.get('color', {})\n                        if color:\n                            colors.append({\n                                'r': color.get('r', 0),\n                                'g': color.get('g', 0), \n                                'b': color.get('b', 0),\n                                'a': color.get('a', 1),\n                                'node_id': node.get('id'),\n                                'node_name': node.get('name', '')\n                            })\n            \n            for child in node.get('children', []):\n                traverse_node(child)\n        \n        if 'document' in file_data:\n            traverse_node(file_data['document'])\n        \n        return colors"
+          }
+        ]
+      },
+      {
+        "move_id": "m11",
+        "operation": "Infer",
+        "data": "Text-style records containing font family, size, weight, line height, letter spacing, node ID, node name, and full node characters.",
+        "source": "TEXT nodes in the supplied Figma document tree.",
+        "recipient": "Returned text_styles list.",
+        "condition": "Recursively includes TEXT nodes with a nonempty style.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 200,
+            "end_line": 225,
+            "quote": "    def extract_text_styles(self, file_data: Dict[str, Any]) -> List[Dict[str, Any]]:\n        \"\"\"Extract all text styles used in a file\"\"\"\n        text_styles = []\n        \n        def traverse_node(node):\n            if node.get('type') == 'TEXT':\n                style = node.get('style', {})\n                if style:\n                    text_styles.append({\n                        'font_family': style.get('fontFamily', ''),\n                        'font_size': style.get('fontSize', 0),\n                        'font_weight': style.get('fontWeight', 400),\n                        'line_height': style.get('lineHeightPx', 0),\n                        'letter_spacing': style.get('letterSpacing', 0),\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', ''),\n                        'text': node.get('characters', '')\n                    })\n            \n            for child in node.get('children', []):\n                traverse_node(child)\n        \n        if 'document' in file_data:\n            traverse_node(file_data['document'])\n        \n        return text_styles"
+          }
+        ]
+      },
+      {
+        "move_id": "m12",
+        "operation": "Read",
+        "data": "Image response bytes retrieved with requests.get(image_url).",
+        "source": "The image_url argument; ExportManager obtains it from export_data['images'][node_id]. The actual hostname is not constrained by this code.",
+        "recipient": "HTTP response object used by FigmaClient.download_image.",
+        "condition": "A selected node has a nonempty export URL and the export is not skipped as an existing file; HTTP status validation must succeed. The request uses requests.get rather than the authenticated API session.",
+        "evidence": [
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 221,
+            "end_line": 229,
+            "quote": "                        export_data = self.client.export_images(\n                            file_key, [node_id], \n                            format=format, scale=scale\n                        )\n                        \n                        if 'images' in export_data and node_id in export_data['images']:\n                            image_url = export_data['images'][node_id]\n                            \n                            if image_url:"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 247,
+            "end_line": 252,
+            "quote": "                                if self.config.skip_existing and output_path.exists():\n                                    print(f\"  Skipping existing file: {output_path}\")\n                                    continue\n                                \n                                # Download the image\n                                self.client.download_image(str(image_url), str(output_path))"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 161,
+            "end_line": 167,
+            "quote": "    def download_image(self, image_url: str, output_path: str) -> str:\n        \"\"\"Download image from Figma CDN\"\"\"\n        response = requests.get(image_url)\n        response.raise_for_status()\n        \n        with open(output_path, 'wb') as f:\n            f.write(response.content)"
+          }
+        ]
+      },
+      {
+        "move_id": "m13",
+        "operation": "Save",
+        "data": "Downloaded image bytes in files named using the node name, ID, format, and optionally scale.",
+        "source": "response.content from download_image.",
+        "recipient": "Configured output directory, default ./figma-exports, optionally under a format subdirectory; filename follows naming_pattern.",
+        "condition": "Written in wb mode, replacing an existing file unless skip_existing is enabled. Defaults are skip_existing=False and naming_pattern='{name}_{id}.{format}', which does not include scale. No retention period is specified.",
+        "evidence": [
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 30,
+            "end_line": 37,
+            "quote": "    formats: List[str] = field(default_factory=lambda: ['png'])\n    scales: List[float] = field(default_factory=lambda: [1.0])\n    output_dir: str = './figma-exports'\n    naming_pattern: str = '{name}_{id}.{format}'\n    create_manifest: bool = True\n    skip_existing: bool = False\n    max_concurrent: int = 5\n    organize_by_format: bool = True"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 210,
+            "end_line": 212,
+            "quote": "        for node in nodes:\n            node_id = node['id']\n            node_name = self._sanitize_filename(node.get('name', 'untitled'))"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 231,
+            "end_line": 252,
+            "quote": "                                filename = self.config.naming_pattern.format(\n                                    name=node_name,\n                                    id=node_id,\n                                    format=format,\n                                    scale=f'{scale}x' if scale != 1.0 else ''\n                                )\n                                \n                                # Organize by format if configured\n                                if self.config.organize_by_format:\n                                    format_dir = Path(self.config.output_dir) / format\n                                    format_dir.mkdir(exist_ok=True)\n                                    output_path = format_dir / filename\n                                else:\n                                    output_path = Path(self.config.output_dir) / filename\n                                \n                                # Skip if file exists and skip_existing is True\n                                if self.config.skip_existing and output_path.exists():\n                                    print(f\"  Skipping existing file: {output_path}\")\n                                    continue\n                                \n                                # Download the image\n                                self.client.download_image(str(image_url), str(output_path))"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 163,
+            "end_line": 169,
+            "quote": "        response = requests.get(image_url)\n        response.raise_for_status()\n        \n        with open(output_path, 'wb') as f:\n            f.write(response.content)\n        \n        return output_path"
+          }
+        ]
+      },
+      {
+        "move_id": "m14",
+        "operation": "Save",
+        "data": "Export manifest containing export timestamp, Figma file key, file count, format/scale/naming configuration, and each downloaded asset's local path, node ID, node name, format, scale, and image URL.",
+        "source": "Export configuration and exported_files records assembled from successful downloads.",
+        "recipient": "export-manifest.json in the current configured export directory.",
+        "condition": "When create_manifest is true, which is the default; opened in w mode. No cleanup or retention period is implemented.",
+        "evidence": [
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 34,
+            "end_line": 34,
+            "quote": "    create_manifest: bool = True"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 254,
+            "end_line": 261,
+            "quote": "                                exported_files.append({\n                                    'path': str(output_path),\n                                    'node_id': node_id,\n                                    'node_name': node_name,\n                                    'format': format,\n                                    'scale': scale,\n                                    'url': image_url\n                                })"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 275,
+            "end_line": 290,
+            "quote": "        if self.config.create_manifest:\n            manifest_path = Path(self.config.output_dir) / 'export-manifest.json'\n            manifest_data = {\n                'exported_at': time.strftime('%Y-%m-%d %H:%M:%S'),\n                'file_key': file_key,\n                'total_files': len(exported_files),\n                'config': {\n                    'formats': self.config.formats,\n                    'scales': self.config.scales,\n                    'naming_pattern': self.config.naming_pattern\n                },\n                'files': exported_files\n            }\n            \n            with open(manifest_path, 'w') as f:\n                json.dump(manifest_data, f, indent=2)"
+          }
+        ]
+      },
+      {
+        "move_id": "m15",
+        "operation": "Infer",
+        "data": "Design-token dictionaries: normalized style names, color strings made from style-ID prefixes, fixed typography and effect placeholders, and a fixed spacing scale.",
+        "source": "Figma file styles plus constants embedded in the extraction helpers.",
+        "recipient": "tokens dictionary used by export_design_tokens.",
+        "condition": "During token export. These helpers do not extract actual color, typography, effect, or spacing values as their descriptions suggest.",
+        "evidence": [
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 134,
+            "end_line": 142,
+            "quote": "        file_data = self.client.get_file(file_key)\n        \n        # Extract design tokens\n        tokens = {\n            'colors': self._extract_color_tokens(file_data),\n            'typography': self._extract_typography_tokens(file_data),\n            'effects': self._extract_effect_tokens(file_data),\n            'spacing': self._extract_spacing_tokens(file_data)\n        }"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 331,
+            "end_line": 380,
+            "quote": "    def _extract_color_tokens(self, file_data: Dict[str, Any]) -> Dict[str, str]:\n        \"\"\"Extract color design tokens from file styles\"\"\"\n        colors = {}\n        \n        for style_id, style in file_data.get('styles', {}).items():\n            if style.get('styleType') == 'FILL':\n                name = style.get('name', '').replace('/', '-').lower()\n                # This would need to be enhanced with actual color values\n                # from the style definition\n                colors[name] = f\"#{style_id[:6]}\"  # Placeholder\n        \n        return colors\n    \n    def _extract_typography_tokens(self, file_data: Dict[str, Any]) -> Dict[str, Dict]:\n        \"\"\"Extract typography design tokens\"\"\"\n        typography = {}\n        \n        for style_id, style in file_data.get('styles', {}).items():\n            if style.get('styleType') == 'TEXT':\n                name = style.get('name', '').replace('/', '-').lower()\n                typography[name] = {\n                    'fontSize': '16px',  # Placeholder - would need actual values\n                    'fontWeight': '400',\n                    'lineHeight': '1.5',\n                    'fontFamily': 'Inter'\n                }\n        \n        return typography\n    \n    def _extract_effect_tokens(self, file_data: Dict[str, Any]) -> Dict[str, str]:\n        \"\"\"Extract effect design tokens (shadows, etc.)\"\"\"\n        effects = {}\n        \n        for style_id, style in file_data.get('styles', {}).items():\n            if style.get('styleType') == 'EFFECT':\n                name = style.get('name', '').replace('/', '-').lower()\n                effects[name] = \"0 2px 4px rgba(0,0,0,0.1)\"  # Placeholder\n        \n        return effects\n    \n    def _extract_spacing_tokens(self, file_data: Dict[str, Any]) -> Dict[str, str]:\n        \"\"\"Extract spacing tokens from layout patterns\"\"\"\n        # This would analyze common spacing patterns in the design\n        return {\n            'xs': '4px',\n            'sm': '8px', \n            'md': '16px',\n            'lg': '24px',\n            'xl': '32px'\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m16",
+        "operation": "Save",
+        "data": "Formatted design tokens as JSON, CSS, SCSS, or a JavaScript module.",
+        "source": "tokens dictionary and the selected formatting helper.",
+        "recipient": "design-tokens.json, design-tokens.css, design-tokens.scss, or design-tokens.js under self.config.output_dir.",
+        "condition": "During export_design_tokens; format selects the filename and serialization. Files are opened in w mode with no retention policy.",
+        "evidence": [
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 145,
+            "end_line": 160,
+            "quote": "        if output_format == 'css':\n            output_content = self._tokens_to_css(tokens)\n            output_file = Path(self.config.output_dir) / 'design-tokens.css'\n        elif output_format == 'scss':\n            output_content = self._tokens_to_scss(tokens)\n            output_file = Path(self.config.output_dir) / 'design-tokens.scss'\n        elif output_format == 'js':\n            output_content = self._tokens_to_js(tokens)\n            output_file = Path(self.config.output_dir) / 'design-tokens.js'\n        else:  # json\n            output_content = json.dumps(tokens, indent=2)\n            output_file = Path(self.config.output_dir) / 'design-tokens.json'\n        \n        # Write output file\n        with open(output_file, 'w') as f:\n            f.write(output_content)"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 422,
+            "end_line": 424,
+            "quote": "    def _tokens_to_js(self, tokens: Dict[str, Any]) -> str:\n        \"\"\"Convert tokens to JavaScript/JSON module\"\"\"\n        return f\"export const designTokens = {json.dumps(tokens, indent=2)};\\n\\nexport default designTokens;\\n\""
+          }
+        ]
+      },
+      {
+        "move_id": "m17",
+        "operation": "Save",
+        "data": "Client-package README containing Figma file name, key, last-modified value, version, export date, asset counts, package locations, and usage documentation.",
+        "source": "A further get_file result, file_key, export results, current time, and embedded documentation text.",
+        "recipient": "README.md under the package directory within the configured output directory.",
+        "condition": "During create_client_package; package name defaults to a normalized Figma file name. Documentation is written in w mode.",
+        "evidence": [
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 168,
+            "end_line": 173,
+            "quote": "        if not package_name:\n            file_data = self.client.get_file(file_key)\n            package_name = file_data.get('name', 'figma-package').replace(' ', '-').lower()\n        \n        package_dir = Path(self.config.output_dir) / package_name\n        package_dir.mkdir(parents=True, exist_ok=True)"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 196,
+            "end_line": 198,
+            "quote": "        # 4. Create documentation\n        doc_file = package_dir / 'README.md'\n        self._create_package_documentation(file_key, doc_file, results)"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 433,
+            "end_line": 461,
+            "quote": "    def _create_package_documentation(self, file_key: str, doc_path: Path, results: Dict[str, Any]):\n        \"\"\"Create documentation for the exported package\"\"\"\n        \n        file_data = self.client.get_file(file_key)\n        \n        doc_content = f\"\"\"# {file_data.get('name', 'Figma Export')}\n        \nExported from Figma on {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n## File Information\n- **File Key**: {file_key}\n- **Last Modified**: {file_data.get('lastModified', 'Unknown')}\n- **Version**: {file_data.get('version', 'Unknown')}\n\n## Package Contents\n\n### Frames ({results.get('frames', {}).get('exported', 0)} files)\nAll page frames exported in configured formats\nLocation: `./frames/`\n\n### Components ({results.get('components', {}).get('exported', 0)} files)\nAll reusable components exported for development handoff\nLocation: `./components/`\n\n### Design Tokens\nDesign system tokens in multiple formats:\n- `design-tokens.json` - Raw token data\n- `design-tokens.css` - CSS custom properties\n- `design-tokens.scss` - SCSS variables"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 491,
+            "end_line": 492,
+            "quote": "        with open(doc_path, 'w') as f:\n            f.write(doc_content)"
+          }
+        ]
+      },
+      {
+        "move_id": "m18",
+        "operation": "Read",
+        "data": "Nonempty, stripped lines used as Figma file keys or URLs for a multiple-file audit.",
+        "source": "Local file at args.file_keys.",
+        "recipient": "file_keys list, followed by parse_file_url and audit_multiple_files.",
+        "condition": "Only for audit-multiple when os.path.isfile(args.file_keys) is true; otherwise the argument is split on commas.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 737,
+            "end_line": 746,
+            "quote": "        elif args.command == 'audit-multiple':\n            # Parse file keys (could be comma-separated or from file)\n            if os.path.isfile(args.file_keys):\n                with open(args.file_keys) as f:\n                    file_keys = [line.strip() for line in f if line.strip()]\n            else:\n                file_keys = args.file_keys.split(',')\n            \n            file_keys = [client.parse_file_url(key) for key in file_keys]\n            result = auditor.audit_multiple_files(file_keys)"
+          }
+        ]
+      },
+      {
+        "move_id": "m19",
+        "operation": "Delete",
+        "data": "Previous AuditIssue entries in the StyleAuditor instance's in-memory issues list.",
+        "source": "StyleAuditor.self.issues.",
+        "recipient": null,
+        "condition": "At the start of every audit_file call. This clears the list, not previously written reports or returned result dictionaries.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 52,
+            "end_line": 61,
+            "quote": "    def __init__(self, figma_client: FigmaClient, config: AuditConfig = None):\n        self.client = figma_client\n        self.config = config or AuditConfig()\n        self.issues: List[AuditIssue] = []\n    \n    def audit_file(self, file_key: str) -> Dict[str, Any]:\n        \"\"\"Perform comprehensive audit of a Figma file\"\"\"\n        \n        print(f\"Starting audit of file: {file_key}\")\n        self.issues.clear()"
+          }
+        ]
+      },
+      {
+        "move_id": "m20",
+        "operation": "Infer",
+        "data": "Style-auditor accessibility issues associated with node IDs and names: text contrast against assumed white, small button dimensions, and potentially missing focus indicators, with severity, suggestions, and applicable details.",
+        "source": "Retrieved Figma file tree and configured minimum contrast and touch-target thresholds.",
+        "recipient": "StyleAuditor.self.issues.",
+        "condition": "When check_accessibility is enabled; recursive node type/name tests select checks. Focus detection requires a DROP_SHADOW effect whose string contains 'focus'.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 64,
+            "end_line": 68,
+            "quote": "        file_data = self.client.get_file(file_key)\n        \n        # Run audit checks\n        if self.config.check_accessibility:\n            self._audit_accessibility(file_data)"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 118,
+            "end_line": 140,
+            "quote": "        def audit_node_accessibility(node):\n            node_type = node.get('type', '')\n            node_name = node.get('name', '')\n            node_id = node.get('id', '')\n            \n            # Check text contrast\n            if node_type == 'TEXT':\n                self._check_text_contrast(node)\n            \n            # Check touch targets\n            if node_type in ['COMPONENT', 'INSTANCE', 'FRAME'] and 'button' in node_name.lower():\n                self._check_touch_target_size(node)\n            \n            # Check focus indicators\n            if 'interactive' in node_name.lower() or 'button' in node_name.lower():\n                self._check_focus_indicators(node)\n            \n            # Recursively check children\n            for child in node.get('children', []):\n                audit_node_accessibility(child)\n        \n        if 'document' in file_data:\n            audit_node_accessibility(file_data['document'])"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 218,
+            "end_line": 244,
+            "quote": "        fills = text_node.get('fills', [])\n        if not fills:\n            return\n        \n        text_color = fills[0].get('color', {})\n        if not text_color:\n            return\n        \n        # For now, assume white background (would need parent background detection)\n        bg_color = {'r': 1, 'g': 1, 'b': 1}  # White\n        \n        contrast_ratio = self._calculate_contrast_ratio(text_color, bg_color)\n        \n        if contrast_ratio < self.config.min_contrast_ratio:\n            self.issues.append(AuditIssue(\n                severity='error',\n                category='accessibility',\n                message=f'Insufficient color contrast: {contrast_ratio:.1f}:1 (minimum: {self.config.min_contrast_ratio}:1)',\n                node_id=text_node.get('id'),\n                node_name=text_node.get('name', ''),\n                suggestions=[\n                    'Darken text color or lighten background',\n                    'Use high contrast color combinations',\n                    'Test with accessibility tools'\n                ],\n                details={'contrast_ratio': contrast_ratio, 'text_color': text_color}\n            ))"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 249,
+            "end_line": 269,
+            "quote": "        bounds = node.get('absoluteBoundingBox', {})\n        if not bounds:\n            return\n        \n        width = bounds.get('width', 0)\n        height = bounds.get('height', 0)\n        \n        if width < self.config.min_touch_target or height < self.config.min_touch_target:\n            self.issues.append(AuditIssue(\n                severity='warning',\n                category='accessibility',\n                message=f'Touch target too small: {width}×{height}px (minimum: {self.config.min_touch_target}×{self.config.min_touch_target}px)',\n                node_id=node.get('id'),\n                node_name=node.get('name', ''),\n                suggestions=[\n                    f'Increase size to at least {self.config.min_touch_target}×{self.config.min_touch_target}px',\n                    'Add padding around interactive elements',\n                    'Consider user interaction patterns'\n                ],\n                details={'current_size': {'width': width, 'height': height}}\n            ))"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 277,
+            "end_line": 296,
+            "quote": "        effects = node.get('effects', [])\n        has_focus_effect = any(\n            effect.get('type') == 'DROP_SHADOW' and \n            'focus' in str(effect).lower() \n            for effect in effects\n        )\n        \n        if not has_focus_effect:\n            self.issues.append(AuditIssue(\n                severity='info',\n                category='accessibility',\n                message='Interactive element may need focus indicator',\n                node_id=node.get('id'),\n                node_name=node.get('name', ''),\n                suggestions=[\n                    'Add focus state with visible outline',\n                    'Use consistent focus indicator style',\n                    'Test keyboard navigation'\n                ]\n            ))"
+          }
+        ]
+      },
+      {
+        "move_id": "m21",
+        "operation": "Infer",
+        "data": "Brand-compliance findings containing non-brand fill colors or font families, node IDs and names, suggested brand colors or fonts, and suggestions.",
+        "source": "Figma node fills and text styles compared with configured brand_colors and brand_fonts, including CLI values.",
+        "recipient": "StyleAuditor.self.issues.",
+        "condition": "When brand-compliance checking is enabled; the check returns without findings if neither brand colors nor fonts are configured. The supplied brand template is not loaded by this code.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 70,
+            "end_line": 71,
+            "quote": "        if self.config.check_brand_compliance:\n            self._audit_brand_compliance(file_data)"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 145,
+            "end_line": 155,
+            "quote": "        if not self.config.brand_colors and not self.config.brand_fonts:\n            return  # Skip if no brand guidelines configured\n        \n        def audit_node_brand(node):\n            # Check color compliance\n            if 'fills' in node:\n                self._check_brand_colors(node)\n            \n            # Check font compliance\n            if node.get('type') == 'TEXT':\n                self._check_brand_fonts(node)"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 304,
+            "end_line": 327,
+            "quote": "        fills = node.get('fills', [])\n        for fill in fills:\n            if fill.get('type') == 'SOLID':\n                color = fill.get('color', {})\n                if color:\n                    hex_color = self._rgb_to_hex(color)\n                    \n                    if hex_color not in self.config.brand_colors:\n                        # Check if it's close to a brand color\n                        closest_brand_color = self._find_closest_brand_color(hex_color)\n                        \n                        self.issues.append(AuditIssue(\n                            severity='warning',\n                            category='brand',\n                            message=f'Non-brand color used: {hex_color}',\n                            node_id=node.get('id'),\n                            node_name=node.get('name', ''),\n                            suggestions=[\n                                f'Consider using brand color: {closest_brand_color}',\n                                'Check brand color palette',\n                                'Use design system colors'\n                            ],\n                            details={'used_color': hex_color, 'suggested_color': closest_brand_color}\n                        ))"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 335,
+            "end_line": 351,
+            "quote": "        style = text_node.get('style', {})\n        font_family = style.get('fontFamily', '')\n        \n        if font_family and font_family not in self.config.brand_fonts:\n            self.issues.append(AuditIssue(\n                severity='warning',\n                category='brand',\n                message=f'Non-brand font used: {font_family}',\n                node_id=text_node.get('id'),\n                node_name=text_node.get('name', ''),\n                suggestions=[\n                    f'Use brand fonts: {\", \".join(self.config.brand_fonts)}',\n                    'Check typography guidelines',\n                    'Maintain font consistency'\n                ],\n                details={'used_font': font_family, 'brand_fonts': self.config.brand_fonts}\n            ))"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 724,
+            "end_line": 729,
+            "quote": "        config = AuditConfig(\n            min_contrast_ratio=args.min_contrast,\n            brand_colors=args.brand_colors.split(',') if args.brand_colors else [],\n            brand_fonts=args.brand_fonts.split(',') if args.brand_fonts else [],\n            generate_report=args.generate_html\n        )"
+          }
+        ]
+      },
+      {
+        "move_id": "m22",
+        "operation": "Infer",
+        "data": "Design-consistency findings about similar but distinct colors, color usage counts, more than three font families, and more than eight font sizes.",
+        "source": "Solid-fill colors and TEXT-node font attributes recursively collected from the Figma document tree.",
+        "recipient": "StyleAuditor.self.issues.",
+        "condition": "When check_consistency is enabled. Spacing collection is a pass placeholder.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 73,
+            "end_line": 74,
+            "quote": "        if self.config.check_consistency:\n            self._audit_consistency(file_data)"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 174,
+            "end_line": 211,
+            "quote": "            if 'fills' in node:\n                for fill in node.get('fills', []):\n                    if fill.get('type') == 'SOLID':\n                        color = fill.get('color', {})\n                        if color:\n                            colors_used.append({\n                                'color': color,\n                                'node_id': node.get('id'),\n                                'node_name': node.get('name', '')\n                            })\n            \n            # Collect fonts\n            if node.get('type') == 'TEXT':\n                style = node.get('style', {})\n                if style:\n                    fonts_used.append({\n                        'font_family': style.get('fontFamily', ''),\n                        'font_size': style.get('fontSize', 0),\n                        'font_weight': style.get('fontWeight', 400),\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', '')\n                    })\n            \n            # Collect spacing (approximation from layout)\n            if 'children' in node and len(node['children']) > 1:\n                # This would need more sophisticated analysis\n                pass\n            \n            # Recursively collect from children\n            for child in node.get('children', []):\n                collect_styles(child)\n        \n        if 'document' in file_data:\n            collect_styles(file_data['document'])\n        \n        # Analyze collected styles\n        self._analyze_color_consistency(colors_used)\n        self._analyze_typography_consistency(fonts_used)"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 359,
+            "end_line": 390,
+            "quote": "        for color_data in colors_used:\n            color = color_data['color']\n            hex_color = self._rgb_to_hex(color)\n            \n            # Find similar colors (within tolerance)\n            similar_group = None\n            for group_color in color_groups.keys():\n                if self._colors_are_similar(hex_color, group_color):\n                    similar_group = group_color\n                    break\n            \n            if similar_group:\n                color_groups[similar_group].append(color_data)\n            else:\n                color_groups[hex_color] = [color_data]\n        \n        # Flag groups with multiple similar but not identical colors\n        for base_color, group in color_groups.items():\n            if len(group) > 1:\n                unique_colors = set(self._rgb_to_hex(item['color']) for item in group)\n                if len(unique_colors) > 1:\n                    self.issues.append(AuditIssue(\n                        severity='info',\n                        category='consistency',\n                        message=f'Multiple similar colors found: {\", \".join(unique_colors)}',\n                        suggestions=[\n                            'Standardize similar colors',\n                            'Use design system color tokens',\n                            'Review color palette'\n                        ],\n                        details={'similar_colors': list(unique_colors), 'usage_count': len(group)}\n                    ))"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 405,
+            "end_line": 430,
+            "quote": "        families = set(font['font_family'] for font in fonts_used)\n        sizes = set(font['font_size'] for font in fonts_used)\n        \n        if len(families) > 3:\n            self.issues.append(AuditIssue(\n                severity='warning',\n                category='consistency',\n                message=f'Too many font families: {len(families)} ({\", \".join(families)})',\n                suggestions=[\n                    'Reduce to 2-3 font families maximum',\n                    'Establish typography hierarchy',\n                    'Use consistent font pairing'\n                ]\n            ))\n        \n        if len(sizes) > 8:\n            self.issues.append(AuditIssue(\n                severity='info',\n                category='consistency',\n                message=f'Many font sizes used: {len(sizes)} different sizes',\n                suggestions=[\n                    'Create modular typography scale',\n                    'Reduce to 6-8 standard sizes',\n                    'Use consistent size progression'\n                ]\n            ))"
+          }
+        ]
+      },
+      {
+        "move_id": "m23",
+        "operation": "Infer",
+        "data": "Style-audit result with file key/name, timestamp, serialized issues, severity/category counts, score, grade, and recommendations.",
+        "source": "Retrieved file metadata and StyleAuditor.self.issues.",
+        "recipient": "Returned audit_file result.",
+        "condition": "After enabled checks complete; score deducts 10 per error, 3 per warning, and 1 per informational issue, bounded below by zero.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 76,
+            "end_line": 87,
+            "quote": "        # Generate summary\n        summary = self._generate_summary()\n        \n        print(f\"Audit completed: {len(self.issues)} issues found\")\n        return {\n            'file_key': file_key,\n            'file_name': file_data.get('name', 'Unknown'),\n            'audit_timestamp': time.time(),\n            'summary': summary,\n            'issues': [self._issue_to_dict(issue) for issue in self.issues],\n            'recommendations': self._generate_recommendations()\n        }"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 510,
+            "end_line": 537,
+            "quote": "        summary = {\n            'total_issues': len(self.issues),\n            'by_severity': {\n                'error': len([i for i in self.issues if i.severity == 'error']),\n                'warning': len([i for i in self.issues if i.severity == 'warning']),\n                'info': len([i for i in self.issues if i.severity == 'info'])\n            },\n            'by_category': {\n                'accessibility': len([i for i in self.issues if i.category == 'accessibility']),\n                'brand': len([i for i in self.issues if i.category == 'brand']),\n                'consistency': len([i for i in self.issues if i.category == 'consistency'])\n            }\n        }\n        \n        # Calculate overall score (0-100)\n        max_score = 100\n        error_penalty = 10\n        warning_penalty = 3\n        info_penalty = 1\n        \n        penalty = (summary['by_severity']['error'] * error_penalty +\n                  summary['by_severity']['warning'] * warning_penalty +\n                  summary['by_severity']['info'] * info_penalty)\n        \n        summary['score'] = max(0, max_score - penalty)\n        summary['grade'] = self._score_to_grade(summary['score'])\n        \n        return summary"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 552,
+            "end_line": 577,
+            "quote": "    def _generate_recommendations(self) -> List[str]:\n        \"\"\"Generate overall recommendations based on audit results\"\"\"\n        \n        recommendations = []\n        \n        error_count = len([i for i in self.issues if i.severity == 'error'])\n        warning_count = len([i for i in self.issues if i.severity == 'warning'])\n        \n        if error_count > 0:\n            recommendations.append(f\"Fix {error_count} critical accessibility issues immediately\")\n        \n        if warning_count > 5:\n            recommendations.append(\"Review and address design consistency issues\")\n        \n        brand_issues = len([i for i in self.issues if i.category == 'brand'])\n        if brand_issues > 0:\n            recommendations.append(\"Establish and enforce brand guidelines\")\n        \n        consistency_issues = len([i for i in self.issues if i.category == 'consistency'])\n        if consistency_issues > 3:\n            recommendations.append(\"Create and apply design system standards\")\n        \n        if not recommendations:\n            recommendations.append(\"Great work! Consider periodic design system reviews\")\n        \n        return recommendations"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 605,
+            "end_line": 615,
+            "quote": "    def _issue_to_dict(self, issue: AuditIssue) -> Dict[str, Any]:\n        \"\"\"Convert AuditIssue to dictionary for JSON serialization\"\"\"\n        return {\n            'severity': issue.severity,\n            'category': issue.category,\n            'message': issue.message,\n            'node_id': issue.node_id,\n            'node_name': issue.node_name,\n            'suggestions': issue.suggestions,\n            'details': issue.details\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m24",
+        "operation": "Infer",
+        "data": "Multiple-file audit collection with per-file results or exception strings, total and successful file counts, total issues, five most common issue types, and count of files with error-severity findings.",
+        "source": "Results of audit_file calls for supplied file keys.",
+        "recipient": "Returned audit_multiple_files result.",
+        "condition": "During a multiple-file audit; failed individual audits are represented by an error string and excluded from cross-file issue aggregation.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 95,
+            "end_line": 113,
+            "quote": "        for file_key in file_keys:\n            try:\n                result = self.audit_file(file_key)\n                all_results[file_key] = result\n                aggregated_issues.extend(self.issues)\n                print(f\"✓ Audited {result['file_name']}: {len(result['issues'])} issues\")\n            except Exception as e:\n                print(f\"✗ Failed to audit {file_key}: {e}\")\n                all_results[file_key] = {'error': str(e)}\n        \n        # Generate cross-file analysis\n        cross_file_analysis = self._analyze_cross_file_patterns(all_results)\n        \n        return {\n            'individual_audits': all_results,\n            'cross_file_analysis': cross_file_analysis,\n            'total_files': len(file_keys),\n            'successful_audits': len([r for r in all_results.values() if 'error' not in r])\n        }"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 585,
+            "end_line": 603,
+            "quote": "        total_issues = 0\n        common_issues = {}\n        \n        for file_key, result in all_results.items():\n            if 'error' not in result:\n                total_issues += result['summary']['total_issues']\n                \n                for issue in result['issues']:\n                    issue_type = f\"{issue['category']}:{issue['message'].split(':')[0]}\"\n                    common_issues[issue_type] = common_issues.get(issue_type, 0) + 1\n        \n        # Find most common issues\n        most_common = sorted(common_issues.items(), key=lambda x: x[1], reverse=True)[:5]\n        \n        return {\n            'total_issues_across_files': total_issues,\n            'most_common_issues': most_common,\n            'files_with_errors': len([r for r in all_results.values() if 'error' not in r and r['summary']['by_severity']['error'] > 0])\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m25",
+        "operation": "Save",
+        "data": "JSON-serialized single-file or multiple-file style-audit results.",
+        "source": "result returned by audit_file or audit_multiple_files.",
+        "recipient": "CLI args.output path.",
+        "condition": "When --output is supplied; opened in w mode. If HTML is also requested, its derived path can coincide with this path when the name contains no .json.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 733,
+            "end_line": 746,
+            "quote": "        if args.command == 'audit-file':\n            file_key = client.parse_file_url(args.file_keys)\n            result = auditor.audit_file(file_key)\n            \n        elif args.command == 'audit-multiple':\n            # Parse file keys (could be comma-separated or from file)\n            if os.path.isfile(args.file_keys):\n                with open(args.file_keys) as f:\n                    file_keys = [line.strip() for line in f if line.strip()]\n            else:\n                file_keys = args.file_keys.split(',')\n            \n            file_keys = [client.parse_file_url(key) for key in file_keys]\n            result = auditor.audit_multiple_files(file_keys)"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 748,
+            "end_line": 761,
+            "quote": "        # Output results\n        output_content = json.dumps(result, indent=2)\n        \n        if args.output:\n            with open(args.output, 'w') as f:\n                f.write(output_content)\n            print(f\"Audit results saved to {args.output}\")\n        else:\n            print(output_content)\n        \n        # Generate HTML report if requested\n        if args.generate_html and args.command == 'audit-file':\n            html_path = args.output.replace('.json', '.html') if args.output else 'audit-report.html'\n            auditor.generate_report(result, html_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "m26",
+        "operation": "Save",
+        "data": "HTML style-audit report containing file name, audit date, summary, issue messages, node names/IDs, suggestions, and recommendations.",
+        "source": "audit_results passed to generate_report and its HTML renderer.",
+        "recipient": "Requested output_path; programmatic default figma-audit-report.html; CLI default audit-report.html or --output with .json replaced by .html.",
+        "condition": "When generate_report is called; CLI calls it only for audit-file with --generate-html. Opened in w mode without a retention policy.",
+        "evidence": [
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 617,
+            "end_line": 629,
+            "quote": "    def generate_report(self, audit_results: Dict[str, Any], output_path: str = None) -> str:\n        \"\"\"Generate comprehensive audit report\"\"\"\n        \n        if not output_path:\n            output_path = 'figma-audit-report.html'\n        \n        html_report = self._create_html_report(audit_results)\n        \n        with open(output_path, 'w') as f:\n            f.write(html_report)\n        \n        print(f\"Audit report generated: {output_path}\")\n        return output_path"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 655,
+            "end_line": 656,
+            "quote": "        <p>File: {audit_results.get('file_name', 'Unknown')}</p>\n        <p>Audit Date: {time.strftime('%Y-%m-%d %H:%M:%S')}</p>"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 663,
+            "end_line": 670,
+            "quote": "                <div class=\"grade\">{audit_results['summary']['grade']}</div>\n                <div>Score: {audit_results['summary']['score']}/100</div>\n            </div>\n            <div>\n                <p><strong>Total Issues:</strong> {audit_results['summary']['total_issues']}</p>\n                <p><strong>Errors:</strong> {audit_results['summary']['by_severity']['error']}</p>\n                <p><strong>Warnings:</strong> {audit_results['summary']['by_severity']['warning']}</p>\n                <p><strong>Info:</strong> {audit_results['summary']['by_severity']['info']}</p>"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 678,
+            "end_line": 688,
+            "quote": "        for issue in audit_results['issues']:\n            severity_class = issue['severity']\n            html += f\"\"\"\n    <div class=\"issue {severity_class}\">\n        <h3>{issue['category'].title()}: {issue['message']}</h3>\n        <p><strong>Node:</strong> {issue.get('node_name', 'N/A')} ({issue.get('node_id', 'N/A')})</p>\n        <p><strong>Suggestions:</strong></p>\n        <ul>\n\"\"\"\n            for suggestion in issue.get('suggestions', []):\n                html += f\"<li>{suggestion}</li>\\n\""
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 697,
+            "end_line": 698,
+            "quote": "        for rec in audit_results['recommendations']:\n            html += f\"<li>{rec}</li>\\n\""
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 759,
+            "end_line": 761,
+            "quote": "        if args.generate_html and args.command == 'audit-file':\n            html_path = args.output.replace('.json', '.html') if args.output else 'audit-report.html'\n            auditor.generate_report(result, html_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "m27",
+        "operation": "Infer",
+        "data": "Accessibility-checker text contrast findings with node ID/name, calculated and required ratios, text color, large-text classification, severity, and WCAG criterion.",
+        "source": "TEXT-node first fill color and font size/weight from retrieved file_data; assumed white background and AA/AAA thresholds.",
+        "recipient": "results['issues'].",
+        "condition": "For recursively visited TEXT nodes with a color and insufficient contrast; large text means size at least 18, or at least 14 with weight at least 700.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 35,
+            "end_line": 48,
+            "quote": "        file_data = self.client.get_file(file_key)\n        \n        results = {\n            'file_key': file_key,\n            'file_name': file_data.get('name', 'Unknown'),\n            'wcag_level': level,\n            'timestamp': time.time(),\n            'compliance_score': 0,\n            'issues': [],\n            'summary': {}\n        }\n        \n        # Run all WCAG checks\n        self._check_color_contrast(file_data, results, level)"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 62,
+            "end_line": 114,
+            "quote": "        contrast_requirements = {\n            'AA': {'normal_text': 4.5, 'large_text': 3.0, 'ui_components': 3.0},\n            'AAA': {'normal_text': 7.0, 'large_text': 4.5, 'ui_components': 4.5}\n        }\n        \n        requirements = contrast_requirements[level]\n        \n        def check_node_contrast(node):\n            if node.get('type') == 'TEXT':\n                # Get text color\n                fills = node.get('fills', [])\n                if not fills:\n                    return\n                \n                text_color = fills[0].get('color', {})\n                if not text_color:\n                    return\n                \n                # Estimate background color (simplified - would need parent analysis)\n                bg_color = {'r': 1, 'g': 1, 'b': 1}  # Assume white background\n                \n                contrast_ratio = self._calculate_contrast_ratio(text_color, bg_color)\n                \n                # Determine if text is large\n                style = node.get('style', {})\n                font_size = style.get('fontSize', 16)\n                font_weight = style.get('fontWeight', 400)\n                \n                is_large_text = font_size >= 18 or (font_size >= 14 and font_weight >= 700)\n                required_ratio = requirements['large_text'] if is_large_text else requirements['normal_text']\n                \n                if contrast_ratio < required_ratio:\n                    results['issues'].append({\n                        'type': 'color_contrast',\n                        'severity': 'error' if level == 'AA' else 'warning',\n                        'message': f'Insufficient contrast: {contrast_ratio:.1f}:1 (required: {required_ratio}:1)',\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', ''),\n                        'wcag_criterion': '1.4.3' if level == 'AA' else '1.4.6',\n                        'details': {\n                            'contrast_ratio': contrast_ratio,\n                            'required_ratio': required_ratio,\n                            'text_color': self._rgb_to_hex(text_color),\n                            'is_large_text': is_large_text\n                        }\n                    })\n            \n            # Check children\n            for child in node.get('children', []):\n                check_node_contrast(child)\n        \n        if 'document' in file_data:\n            check_node_contrast(file_data['document'])"
+          }
+        ]
+      },
+      {
+        "move_id": "m28",
+        "operation": "Infer",
+        "data": "Touch-target warnings containing node ID/name, width, height, minimum size, and WCAG criterion.",
+        "source": "Figma node names/types and absoluteBoundingBox dimensions.",
+        "recipient": "results['issues'].",
+        "condition": "Names containing button or link, or COMPONENT/INSTANCE names containing btn, tap, click, or interactive, are treated as interactive; either dimension below 44 produces a warning.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 49,
+            "end_line": 49,
+            "quote": "        self._check_touch_targets(file_data, results)"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 119,
+            "end_line": 158,
+            "quote": "        min_size = 44  # iOS/WCAG standard\n        \n        def check_node_size(node):\n            # Look for interactive elements\n            node_name = node.get('name', '').lower()\n            node_type = node.get('type', '')\n            \n            is_interactive = (\n                'button' in node_name or \n                'link' in node_name or \n                node_type in ['COMPONENT', 'INSTANCE'] and \n                any(keyword in node_name for keyword in ['btn', 'tap', 'click', 'interactive'])\n            )\n            \n            if is_interactive:\n                bounds = node.get('absoluteBoundingBox', {})\n                width = bounds.get('width', 0)\n                height = bounds.get('height', 0)\n                \n                if width < min_size or height < min_size:\n                    results['issues'].append({\n                        'type': 'touch_target',\n                        'severity': 'warning',\n                        'message': f'Touch target too small: {width:.0f}×{height:.0f}px (minimum: {min_size}×{min_size}px)',\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', ''),\n                        'wcag_criterion': '2.5.5',\n                        'details': {\n                            'width': width,\n                            'height': height,\n                            'min_size': min_size\n                        }\n                    })\n            \n            # Check children\n            for child in node.get('children', []):\n                check_node_size(child)\n        \n        if 'document' in file_data:\n            check_node_size(file_data['document'])"
+          }
+        ]
+      },
+      {
+        "move_id": "m29",
+        "operation": "Infer",
+        "data": "Text-size issues with node ID/name, font size, threshold, and, for sizes below 12, the first 50 characters of node text.",
+        "source": "TEXT-node style.fontSize and characters in the Figma document tree.",
+        "recipient": "results['issues'].",
+        "condition": "Size below 12 yields an error and text excerpt; size from 12 to below 16 yields informational findings without the excerpt.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 50,
+            "end_line": 50,
+            "quote": "        self._check_text_sizing(file_data, results)"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 163,
+            "end_line": 204,
+            "quote": "        min_size = 12  # Minimum readable size\n        recommended_size = 16  # Recommended for body text\n        \n        def check_text_size(node):\n            if node.get('type') == 'TEXT':\n                style = node.get('style', {})\n                font_size = style.get('fontSize', 16)\n                \n                if font_size < min_size:\n                    results['issues'].append({\n                        'type': 'text_size',\n                        'severity': 'error',\n                        'message': f'Text too small: {font_size}px (minimum: {min_size}px)',\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', ''),\n                        'wcag_criterion': '1.4.4',\n                        'details': {\n                            'font_size': font_size,\n                            'min_size': min_size,\n                            'characters': node.get('characters', '')[:50]\n                        }\n                    })\n                elif font_size < recommended_size:\n                    results['issues'].append({\n                        'type': 'text_size',\n                        'severity': 'info',\n                        'message': f'Text smaller than recommended: {font_size}px (recommended: {recommended_size}px)',\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', ''),\n                        'wcag_criterion': '1.4.4',\n                        'details': {\n                            'font_size': font_size,\n                            'recommended_size': recommended_size\n                        }\n                    })\n            \n            # Check children\n            for child in node.get('children', []):\n                check_text_size(child)\n        \n        if 'document' in file_data:\n            check_text_size(file_data['document'])"
+          }
+        ]
+      },
+      {
+        "move_id": "m30",
+        "operation": "Infer",
+        "data": "Potentially missing focus-indicator findings containing node ID/name and a suggestion to add a visible focus state.",
+        "source": "Figma node names/types and effects.",
+        "recipient": "results['issues'].",
+        "condition": "Names containing button, link, or input, and all COMPONENT/INSTANCE nodes, are treated as interactive. An effect containing 'focus' or any DROP_SHADOW is accepted as a focus indicator.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 51,
+            "end_line": 51,
+            "quote": "        self._check_focus_indicators(file_data, results)"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 209,
+            "end_line": 247,
+            "quote": "        def check_focus_states(node):\n            node_name = node.get('name', '').lower()\n            node_type = node.get('type', '')\n            \n            is_interactive = (\n                'button' in node_name or \n                'link' in node_name or \n                'input' in node_name or\n                node_type in ['COMPONENT', 'INSTANCE']\n            )\n            \n            if is_interactive:\n                # Check for focus-related effects or states\n                effects = node.get('effects', [])\n                has_focus_indicator = any(\n                    'focus' in str(effect).lower() or\n                    effect.get('type') == 'DROP_SHADOW'\n                    for effect in effects\n                )\n                \n                if not has_focus_indicator:\n                    results['issues'].append({\n                        'type': 'focus_indicator',\n                        'severity': 'info',\n                        'message': 'Interactive element may need focus indicator',\n                        'node_id': node.get('id'),\n                        'node_name': node.get('name', ''),\n                        'wcag_criterion': '2.4.7',\n                        'details': {\n                            'suggestion': 'Add visible focus state for keyboard navigation'\n                        }\n                    })\n            \n            # Check children\n            for child in node.get('children', []):\n                check_focus_states(child)\n        \n        if 'document' in file_data:\n            check_focus_states(file_data['document'])"
+          }
+        ]
+      },
+      {
+        "move_id": "m31",
+        "operation": "Infer",
+        "data": "Accessibility score, counts by issue type/severity, total issue count, and a derived FAIL/A/AA/AAA compliance label.",
+        "source": "Accessibility results['issues'].",
+        "recipient": "results['compliance_score'] and results['summary'].",
+        "condition": "After all checker passes. Score uses penalties of 10/3/1; label depends on error and warning counts rather than an independent verification of all WCAG criteria.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 53,
+            "end_line": 57,
+            "quote": "        # Calculate compliance score\n        results['compliance_score'] = self._calculate_compliance_score(results)\n        results['summary'] = self._generate_summary(results)\n        \n        return results"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 280,
+            "end_line": 321,
+            "quote": "    def _calculate_compliance_score(self, results: Dict[str, Any]) -> int:\n        \"\"\"Calculate overall compliance score (0-100)\"\"\"\n        \n        error_count = len([i for i in results['issues'] if i['severity'] == 'error'])\n        warning_count = len([i for i in results['issues'] if i['severity'] == 'warning'])\n        info_count = len([i for i in results['issues'] if i['severity'] == 'info'])\n        \n        # Scoring: errors are -10 points, warnings -3 points, info -1 point\n        penalty = error_count * 10 + warning_count * 3 + info_count * 1\n        score = max(0, 100 - penalty)\n        \n        return score\n    \n    def _generate_summary(self, results: Dict[str, Any]) -> Dict[str, Any]:\n        \"\"\"Generate summary of accessibility results\"\"\"\n        \n        issues_by_type = {}\n        issues_by_severity = {'error': 0, 'warning': 0, 'info': 0}\n        \n        for issue in results['issues']:\n            issue_type = issue['type']\n            severity = issue['severity']\n            \n            issues_by_type[issue_type] = issues_by_type.get(issue_type, 0) + 1\n            issues_by_severity[severity] += 1\n        \n        compliance_level = 'FAIL'\n        if issues_by_severity['error'] == 0:\n            if issues_by_severity['warning'] == 0:\n                compliance_level = 'AAA'\n            elif issues_by_severity['warning'] <= 2:\n                compliance_level = 'AA'\n            else:\n                compliance_level = 'A'\n        \n        return {\n            'total_issues': len(results['issues']),\n            'issues_by_type': issues_by_type,\n            'issues_by_severity': issues_by_severity,\n            'compliance_level': compliance_level,\n            'score': results['compliance_score']\n        }"
+          }
+        ]
+      },
+      {
+        "move_id": "m32",
+        "operation": "Save",
+        "data": "JSON accessibility results, including file metadata, timestamp, issues and their details, score, and summary.",
+        "source": "checker.check_wcag_compliance result serialized with json.dumps.",
+        "recipient": "CLI args.output path.",
+        "condition": "When output format is json and --output is supplied; opened in w mode. No retention policy is specified.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 536,
+            "end_line": 550,
+            "quote": "        file_key = client.parse_file_url(args.file_key)\n        results = checker.check_wcag_compliance(file_key, args.level)\n        \n        if args.format == 'html':\n            output_path = args.output or f\"accessibility-report-{file_key}.html\"\n            checker.generate_accessibility_report(results, output_path)\n        else:\n            output_content = json.dumps(results, indent=2)\n            \n            if args.output:\n                with open(args.output, 'w') as f:\n                    f.write(output_content)\n                print(f\"Accessibility results saved to {args.output}\")\n            else:\n                print(output_content)"
+          }
+        ]
+      },
+      {
+        "move_id": "m33",
+        "operation": "Save",
+        "data": "HTML accessibility report containing file name, requested WCAG level, timestamp, summary, derived compliance label, and issue details including any captured text excerpts.",
+        "source": "Accessibility results passed to the HTML renderer.",
+        "recipient": "Requested output_path; programmatic default accessibility-report-{timestamp}.html; CLI default accessibility-report-{file_key}.html.",
+        "condition": "When generate_accessibility_report is called, including CLI --format html; opened in w mode without a retention policy.",
+        "evidence": [
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 323,
+            "end_line": 335,
+            "quote": "    def generate_accessibility_report(self, results: Dict[str, Any], output_path: str = None) -> str:\n        \"\"\"Generate detailed accessibility report\"\"\"\n        \n        if not output_path:\n            output_path = f\"accessibility-report-{int(time.time())}.html\"\n        \n        html_report = self._create_accessibility_html_report(results)\n        \n        with open(output_path, 'w') as f:\n            f.write(html_report)\n        \n        print(f\"Accessibility report generated: {output_path}\")\n        return output_path"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 442,
+            "end_line": 446,
+            "quote": "        <p><strong>File:</strong> {results['file_name']}</p>\n        <p><strong>WCAG Level:</strong> {results['wcag_level']}</p>\n        <p><strong>Generated:</strong> {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(results['timestamp']))}</p>\n        <div class=\"compliance-badge\">\n            WCAG {results['summary']['compliance_level']} Compliance"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 473,
+            "end_line": 492,
+            "quote": "        if results['issues']:\n            html += \"<h2>🐛 Issues Found</h2>\\n\"\n            \n            for issue in results['issues']:\n                severity_class = issue['severity']\n                html += f\"\"\"\n    <div class=\"issue {severity_class}\">\n        <h3>{issue['type'].replace('_', ' ').title()}: {issue['message']}</h3>\n        <span class=\"wcag-criterion\">WCAG {issue['wcag_criterion']}</span>\n        <div class=\"node-info\">\n            <strong>Element:</strong> {issue.get('node_name', 'N/A')} \n            (ID: {issue.get('node_id', 'N/A')})\n        </div>\n\"\"\"\n                \n                if 'details' in issue and issue['details']:\n                    html += \"<div style='margin-top: 10px;'><strong>Details:</strong><ul>\"\n                    for key, value in issue['details'].items():\n                        html += f\"<li><strong>{key.replace('_', ' ').title()}:</strong> {value}</li>\"\n                    html += \"</ul></div>\""
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 539,
+            "end_line": 541,
+            "quote": "        if args.format == 'html':\n            output_path = args.output or f\"accessibility-report-{file_key}.html\"\n            checker.generate_accessibility_report(results, output_path)"
+          }
+        ]
+      },
+      {
+        "move_id": "m34",
+        "operation": "Save",
+        "data": "JSON serialization of the selected Figma-client result, including raw API data, extracted color/text records, image-export URL mappings, or current-user information according to the command.",
+        "source": "Figma-client CLI result.",
+        "recipient": "CLI args.output path.",
+        "condition": "When --output is supplied; opened in w mode. No retention or cleanup is implemented.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 279,
+            "end_line": 304,
+            "quote": "        elif args.command == 'extract-colors':\n            if not args.file_key:\n                parser.error('file_key required for extract-colors command')\n                \n            file_key = client.parse_file_url(args.file_key)\n            file_data = client.get_file(file_key)\n            result = client.extract_colors(file_data)\n            \n        elif args.command == 'extract-typography':\n            if not args.file_key:\n                parser.error('file_key required for extract-typography command')\n                \n            file_key = client.parse_file_url(args.file_key)\n            file_data = client.get_file(file_key)\n            result = client.extract_text_styles(file_data)\n            \n        elif args.command == 'user-info':\n            result = client.get_user_info()\n        \n        # Output result\n        output = json.dumps(result, indent=2)\n        \n        if args.output:\n            with open(args.output, 'w') as f:\n                f.write(output)\n            print(f\"Output saved to {args.output}\")"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 250,
+            "end_line": 263,
+            "quote": "            file_key = client.parse_file_url(args.file_key)\n            result = client.get_file(file_key)\n            \n        elif args.command == 'export-images':\n            if not args.file_key or not args.node_ids:\n                parser.error('file_key and --node-ids required for export-images command')\n            \n            file_key = client.parse_file_url(args.file_key)\n            result = client.export_images(\n                file_key, \n                args.node_ids.split(','),\n                format=args.format,\n                scale=args.scale\n            )"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 269,
+            "end_line": 277,
+            "quote": "            file_key = client.parse_file_url(args.file_key)\n            result = client.get_file_components(file_key)\n            \n        elif args.command == 'get-styles':\n            if not args.file_key:\n                parser.error('file_key required for get-styles command')\n                \n            file_key = client.parse_file_url(args.file_key)\n            result = client.get_file_styles(file_key)"
+          }
+        ]
+      },
+      {
+        "move_id": "m35",
+        "operation": "Send",
+        "data": "Command results and operational messages to process output: JSON API/extraction/audit results when no output file is selected; file keys, file/node names, export settings, paths, counts, accessibility summaries, retry messages, and exception text as applicable.",
+        "source": "API responses, derived results, export state, input identifiers, and caught exceptions.",
+        "recipient": "Invoking process's stdout and stderr; any downstream collection is unspecified.",
+        "condition": "According to selected commands and branches. CLI exceptions are printed to stderr; most progress and result messages use stdout.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 298,
+            "end_line": 310,
+            "quote": "        # Output result\n        output = json.dumps(result, indent=2)\n        \n        if args.output:\n            with open(args.output, 'w') as f:\n                f.write(output)\n            print(f\"Output saved to {args.output}\")\n        else:\n            print(output)\n            \n    except Exception as e:\n        print(f\"Error: {e}\", file=sys.stderr)\n        sys.exit(1)"
+          },
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 56,
+            "end_line": 72,
+            "quote": "            except requests.exceptions.HTTPError as e:\n                if response.status_code == 429:  # Rate limited\n                    wait_time = 2 ** attempt\n                    print(f\"Rate limited. Waiting {wait_time}s before retry {attempt + 1}/{self.config.max_retries}\")\n                    time.sleep(wait_time)\n                    continue\n                elif response.status_code == 403:\n                    raise ValueError(\"Access denied. Check your Figma token permissions.\")\n                elif response.status_code == 404:\n                    raise ValueError(f\"File or resource not found: {url}\")\n                else:\n                    raise\n            except requests.exceptions.RequestException as e:\n                if attempt == self.config.max_retries - 1:\n                    raise\n                print(f\"Request failed, retrying {attempt + 1}/{self.config.max_retries}: {e}\")\n                time.sleep(2 ** attempt)"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 210,
+            "end_line": 217,
+            "quote": "        for node in nodes:\n            node_id = node['id']\n            node_name = self._sanitize_filename(node.get('name', 'untitled'))\n            \n            for format in self.config.formats:\n                for scale in self.config.scales:\n                    current_export += 1\n                    print(f\"Exporting {current_export}/{total_exports}: {node_name} ({format} @ {scale}x)\")"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 263,
+            "end_line": 269,
+            "quote": "                                print(f\"  Saved: {output_path}\")\n                            else:\n                                print(f\"  Warning: No image URL returned for {node_name}\")\n                    \n                    except Exception as e:\n                        print(f\"  Error exporting {node_name}: {e}\")\n                        continue"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 60,
+            "end_line": 60,
+            "quote": "        print(f\"Starting audit of file: {file_key}\")"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 95,
+            "end_line": 103,
+            "quote": "        for file_key in file_keys:\n            try:\n                result = self.audit_file(file_key)\n                all_results[file_key] = result\n                aggregated_issues.extend(self.issues)\n                print(f\"✓ Audited {result['file_name']}: {len(result['issues'])} issues\")\n            except Exception as e:\n                print(f\"✗ Failed to audit {file_key}: {e}\")\n                all_results[file_key] = {'error': str(e)}"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 749,
+            "end_line": 756,
+            "quote": "        output_content = json.dumps(result, indent=2)\n        \n        if args.output:\n            with open(args.output, 'w') as f:\n                f.write(output_content)\n            print(f\"Audit results saved to {args.output}\")\n        else:\n            print(output_content)"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 33,
+            "end_line": 33,
+            "quote": "        print(f\"Checking WCAG {level} compliance for file: {file_key}\")"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 543,
+            "end_line": 562,
+            "quote": "            output_content = json.dumps(results, indent=2)\n            \n            if args.output:\n                with open(args.output, 'w') as f:\n                    f.write(output_content)\n                print(f\"Accessibility results saved to {args.output}\")\n            else:\n                print(output_content)\n        \n        # Print summary\n        print(f\"\\n🔍 Accessibility Summary:\")\n        print(f\"   Score: {results['summary']['score']}/100\")\n        print(f\"   Compliance Level: WCAG {results['summary']['compliance_level']}\")\n        print(f\"   Total Issues: {results['summary']['total_issues']}\")\n        print(f\"   Errors: {results['summary']['issues_by_severity']['error']}\")\n        print(f\"   Warnings: {results['summary']['issues_by_severity']['warning']}\")\n        \n    except Exception as e:\n        print(f\"Error: {e}\", file=sys.stderr)\n        sys.exit(1)"
+          }
+        ]
+      },
+      {
+        "move_id": "m36",
+        "operation": "Save",
+        "data": "Cached Figma file data.",
+        "source": "File-data API results.",
+        "recipient": null,
+        "condition": "Reference-only API best-practice recommendation to reduce repeated requests; no cache implementation, location, or retention duration is supplied.",
+        "evidence": [
+          {
+            "path": "references/figma-api-reference.md",
+            "start_line": 213,
+            "end_line": 215,
+            "quote": "### API Usage\n1. **Batch operations**: Group multiple API calls when possible\n2. **Cache results**: Store file data to minimize repeat requests"
+          }
+        ]
+      },
+      {
+        "move_id": "m37",
+        "operation": "Save",
+        "data": "Cached image-export URLs.",
+        "source": "Image-export API results.",
+        "recipient": null,
+        "condition": "Reference-only recommendation; URLs are documented as expiring after 30 days. No cache eviction or URL-deletion implementation is supplied.",
+        "evidence": [
+          {
+            "path": "references/figma-api-reference.md",
+            "start_line": 220,
+            "end_line": 224,
+            "quote": "### Image Exports\n1. **Choose appropriate format**: PNG for complex images, SVG for icons\n2. **Optimize scale**: Use scale=1 unless high-DPI needed\n3. **Batch exports**: Export multiple nodes in single request\n4. **Cache URLs**: Store image URLs but remember 30-day expiration"
+          }
+        ]
+      },
+      {
+        "move_id": "m38",
+        "operation": "Save",
+        "data": "API-usage audit logs; exact fields are unspecified.",
+        "source": "API usage.",
+        "recipient": null,
+        "condition": "Reference-only security recommendation; no persistent audit-log implementation, storage location, or retention duration is supplied.",
+        "evidence": [
+          {
+            "path": "references/figma-api-reference.md",
+            "start_line": 233,
+            "end_line": 237,
+            "quote": "### Security\n1. **Token protection**: Never expose access tokens in client-side code\n2. **Scope principle**: Use minimal required permissions\n3. **Input validation**: Validate all user inputs and API responses\n4. **Audit logs**: Track API usage for compliance"
+          }
+        ]
+      },
+      {
+        "move_id": "m39",
+        "operation": "Read",
+        "data": "Command-line inputs: operation, Figma keys/URLs, node IDs, export formats/scales and output paths, optional access token, brand colors/fonts, contrast threshold, WCAG level, and report format.",
+        "source": "Arguments parsed by argparse in the four CLI entry points.",
+        "recipient": "args objects, client constructors, export/audit configuration, and selected operation calls.",
+        "condition": "When a script's main function runs; available inputs vary by CLI.",
+        "evidence": [
+          {
+            "path": "scripts/figma_client.py",
+            "start_line": 230,
+            "end_line": 244,
+            "quote": "    parser.add_argument('command', choices=[\n        'get-file', 'export-images', 'get-components', 'get-styles',\n        'extract-colors', 'extract-typography', 'user-info'\n    ])\n    parser.add_argument('file_key', nargs='?', help='Figma file key or URL')\n    parser.add_argument('--node-ids', help='Comma-separated node IDs')\n    parser.add_argument('--format', default='png', choices=['png', 'svg', 'pdf'])\n    parser.add_argument('--scale', type=float, default=1.0)\n    parser.add_argument('--output', help='Output file path')\n    parser.add_argument('--token', help='Figma access token (overrides env var)')\n    \n    args = parser.parse_args()\n    \n    try:\n        client = FigmaClient(access_token=args.token)"
+          },
+          {
+            "path": "scripts/export_manager.py",
+            "start_line": 501,
+            "end_line": 522,
+            "quote": "    parser.add_argument('file_key', help='Figma file key or URL')\n    parser.add_argument('node_ids', nargs='?', help='Comma-separated node IDs for export-nodes')\n    parser.add_argument('--formats', default='png', help='Export formats (comma-separated)')\n    parser.add_argument('--scales', default='1.0', help='Export scales (comma-separated)')\n    parser.add_argument('--output-dir', default='./figma-exports', help='Output directory')\n    parser.add_argument('--token-format', default='json', choices=['json', 'css', 'scss', 'js'])\n    parser.add_argument('--package-name', help='Name for client package')\n    parser.add_argument('--frame-names', help='Specific frame names to export (comma-separated)')\n    parser.add_argument('--component-names', help='Specific component names to export (comma-separated)')\n    \n    args = parser.parse_args()\n    \n    try:\n        client = FigmaClient()\n        file_key = client.parse_file_url(args.file_key)\n        \n        # Configure export settings\n        config = ExportConfig(\n            formats=args.formats.split(','),\n            scales=[float(s) for s in args.scales.split(',')],\n            output_dir=args.output_dir\n        )"
+          },
+          {
+            "path": "scripts/style_auditor.py",
+            "start_line": 710,
+            "end_line": 729,
+            "quote": "    parser.add_argument('command', choices=['audit-file', 'audit-multiple', 'audit-brand'])\n    parser.add_argument('file_keys', help='File key(s) or path to file list')\n    parser.add_argument('--output', help='Output file for audit report')\n    parser.add_argument('--brand-colors', help='Comma-separated list of brand hex colors')\n    parser.add_argument('--brand-fonts', help='Comma-separated list of brand fonts')\n    parser.add_argument('--min-contrast', type=float, default=4.5, help='Minimum contrast ratio')\n    parser.add_argument('--generate-html', action='store_true', help='Generate HTML report')\n    \n    args = parser.parse_args()\n    \n    try:\n        client = FigmaClient()\n        \n        # Configure auditor\n        config = AuditConfig(\n            min_contrast_ratio=args.min_contrast,\n            brand_colors=args.brand_colors.split(',') if args.brand_colors else [],\n            brand_fonts=args.brand_fonts.split(',') if args.brand_fonts else [],\n            generate_report=args.generate_html\n        )"
+          },
+          {
+            "path": "scripts/accessibility_checker.py",
+            "start_line": 525,
+            "end_line": 537,
+            "quote": "    parser.add_argument('file_key', help='Figma file key or URL')\n    parser.add_argument('--level', choices=['AA', 'AAA'], default='AA', help='WCAG compliance level')\n    parser.add_argument('--output', help='Output file for accessibility report')\n    parser.add_argument('--format', choices=['json', 'html'], default='json', help='Output format')\n    \n    args = parser.parse_args()\n    \n    try:\n        client = FigmaClient()\n        checker = AccessibilityChecker(client)\n        \n        file_key = client.parse_file_url(args.file_key)\n        results = checker.check_wcag_compliance(file_key, args.level)"
+          }
+        ]
+      }
+    ]
+  }
+}

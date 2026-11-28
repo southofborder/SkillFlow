@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="1.278" timestamp="2026-11-11T21:48:29.904608+08:00" hostname="DESKTOP-329J4PA"><testcase classname="tests.document_guided.test_alignment_v9" name="test_published_connected_pairs_compile_propagate_and_load_for_doe[caller_boundary]" time="0.124"><failure message="skillflow.common.validation.StructuralValidationError: /ir_semantics/ir_003/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.; /ir_semantics/ir_003/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts r...&#10;[truncated; full report in element text]">kind = 'processing'
+raw = {'locations': {'service': {'kind': 'tool', 'name': 'Service', 'evidences': [{'file': 'skill/SKILL.md', 'start_line': 1...local', 'name': 'response'}}]}, 'ir_004': {'evidences': [{'file': 'skill/SKILL.md', 'start_line': 1, 'end_line': 1}]}}}
+material = {'version': 'security-profile-v23', 'source': {'files': [{'path': 'SKILL.md', 'content': 'Acquire request from context...rtial order; report a semantic failure only when a necessary relation cannot be represented or assessed.'}, ...]}, ...}
+processing = None, validation_gaps = (), processing_expansion = None
+
+    def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(), processing_expansion=None):
+        """Share checked processing only within this validation/assembly operation."""
+        kind, diagnostics = _kind(kind), []
+        value = _parse(kind, raw, processing, diagnostics=diagnostics)
+        if kind == "processing":
+            if not diagnostics:
+                try:
+&gt;                   processing_expansion = flat._processing_expansion(_base_wire(value), material,
+                                                                     validation_gaps=validation_gaps)
+
+src\skillflow\document_guided\fragments.py:380: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\skillflow\document_guided\annotation_wire.py:803: in _processing_expansion
+    expanded = _expand(raw, material, processing_only=True, validation_gaps=validation_gaps,
+src\skillflow\document_guided\annotation_wire.py:670: in _expand
+    _validate_processing_backend(backend, material)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+backend = {'outcome': 'completed', 'realizations': [], 'demands': [], 'expressions': [], ...}
+material = {'version': 'security-profile-v23', 'source': {'files': [{'path': 'SKILL.md', 'content': 'Acquire request from context...rtial order; report a semantic failure only when a necessary relation cannot be represented or assessed.'}, ...]}, ...}
+
+    def _validate_processing_backend(backend, material):
+        """Reuse processing checks with source and CFG only; no substitute Task."""
+        from types import SimpleNamespace
+        from skillflow.propagation.contracts.limitations import ProcessingGap
+        from skillflow.propagation.contracts.runtime_contract import runtime_contract
+        from skillflow.propagation.material import check_evidence
+        from skillflow.propagation.contracts.demand_index import build_demand_target_index
+        from skillflow.propagation.contracts.demand import (
+            DemandExpression, expression_refs, _validate_ref, _literal_inputs, _ref_leaves,
+        )
+        from skillflow.propagation.contracts.references import target_key
+        prepared = {**material, "runtime_contract": material.get("runtime_contract", runtime_contract())}
+        class ProcessingCheck(SimpleNamespace):
+            def model_dump(self, **kwargs):
+                return {"ir_semantics": {key: value.model_dump(mode="json") for key, value in self.ir_semantics.items()},
+                        "locations": {key: value.model_dump(mode="json") for key, value in self.locations.items()},
+                        "processing_gaps": [value.model_dump(mode="json") for value in self.processing_gaps]}
+        annotation = ProcessingCheck(
+            ir_semantics={key: specs.RawIRSemantics.model_validate(value) for key, value in backend["ir_semantics"].items()},
+            locations={key: specs.LocationSpec.model_validate(value) for key, value in backend["locations"].items()},
+            processing_gaps=[ProcessingGap.model_validate(value) for value in backend.get("processing_gaps", [])])
+        diagnostics = []
+        try:
+            specs.validate_specs(prepared["cfg"], annotation)
+        except StructuralValidationError as error:
+            diagnostics.extend(error.diagnostics)
+        def mechanisms(events, prefix):
+            for i, event in enumerate(events):
+                pointer = prefix + f"/{i}"
+                if isinstance(event, specs.RawForEachSpec):
+                    mechanisms(event.body, pointer + "/body")
+                elif isinstance(event, specs.ProcessingSpec) and event.mode == "local" and not any(
+                        hasattr(evidence, "file") or hasattr(evidence, "target") for evidence in event.evidences):
+                    diagnostics.extend(structural_error("mechanism_evidence_reference", pointer + "/evidences",
+                        "local processing requires source or CFG mechanism evidence").diagnostics)
+        for ir, spec in annotation.ir_semantics.items():
+            mechanisms(spec.events, json_pointer("ir_semantics", ir, "events"))
+        evidence_items = [(json_pointer("location_evidences", name, index), evidence)
+            for name, values in backend["location_evidences"].items() for index, evidence in enumerate(values)]
+        evidence_items += list(specs.iter_located_spec_evidence(annotation))
+        evidence_items += [(json_pointer("expressions", i, "evidences", j), evidence)
+            for i, expression in enumerate(backend["expressions"]) for j, evidence in enumerate(expression["evidences"])]
+        evidence_items += [(json_pointer("processing_gaps", i, "evidences", j), evidence)
+            for i, gap in enumerate(backend.get("processing_gaps", [])) for j, evidence in enumerate(gap["evidences"])]
+        for pointer, evidence in evidence_items:
+            try:
+                check_evidence(evidence, prepared)
+            except StructuralValidationError as error:
+                diagnostics.extend({**row, "path": pointer + row["path"]} for row in error.diagnostics)
+        if not diagnostics:
+            targets = build_demand_target_index(prepared["cfg"], backend)
+            from skillflow.propagation.contracts.task import task_source_files
+            expressions = [(f"/expressions/{i}", expression, targets.get(target_key(expression["target"])))
+                           for i, expression in enumerate(backend["expressions"])]
+            expressions += [(json_pointer("ir_semantics", target["instruction_id"], *target["raw_path"], "expression"),
+                             target["value"]["expression"], target) for target in targets.values()
+                            if target.get("domain") == "transfer" and target.get("kind") == "operation"
+                            and target["value"].get("expression") is not None]
+            for pointer, expression, target in expressions:
+                if target is None or not target.get("supports_expression", False):
+                    diagnostics.extend(structural_error("expression_target_capability", pointer + "/target",
+                        "expression supplements require an existing computation or control target").diagnostics)
+                    continue
+                typed = TypeAdapter(DemandExpression).validate_python(expression["expression"])
+                try:
+                    TypeAdapter(DemandExpression).validate_python(_literal_inputs(expression["expression"], target.get("input_literals", {})))
+                except ValidationError as error:
+                    diagnostics.extend(schema_error(error, pointer + "/expression", candidate=expression["expression"],
+                        schema=TypeAdapter(DemandExpression).json_schema()).diagnostics)
+                for reference in expression_refs(typed):
+                    try:
+                        _validate_ref(reference, target)
+                    except StructuralValidationError as error:
+                        diagnostics.extend({**row, "path": pointer + "/expression" + row["path"]} for row in error.diagnostics)
+                    if target.get("declared_refs") is not None and any(not hasattr(leaf, "value") and
+                            leaf.model_dump(mode="json") not in target["declared_refs"] for leaf in _ref_leaves(reference)):
+                        diagnostics.extend(structural_error("expression_input", pointer + "/expression",
+                            "expression supplements cannot introduce undeclared operation inputs").diagnostics)
+                for i, evidence in enumerate(expression["evidences"]):
+                    try:
+                        check_evidence(evidence, prepared)
+                    except StructuralValidationError as error:
+                        diagnostics.extend({**row, "path": pointer + f"/evidences/{i}" + row["path"]} for row in error.diagnostics)
+            if not diagnostics:
+                try:
+                    _require_input_contracts(targets, backend, task_source_files(prepared["source"]))
+                except StructuralValidationError as error:
+                    diagnostics.extend(error.diagnostics)
+        if diagnostics:
+&gt;           raise StructuralValidationError(diagnostics)
+E           skillflow.common.validation.StructuralValidationError: /ir_semantics/ir_003/events/0/events/1/atomic_ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.; /ir_semantics/ir_003/events/0/events/0/atomic_ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.
+
+src\skillflow\document_guided\annotation_wire.py:792: StructuralValidationError
+
+The above exception was the direct cause of the following exception:
+
+name = 'caller_boundary'
+
+    @pytest.mark.parametrize("name", list(alignment_examples()))
+    def test_published_connected_pairs_compile_propagate_and_load_for_doe(name):
+        from skillflow.propagation.loading import materials_from_result
+        from skillflow.doe.sensitivity_material import prepare_joint_sensitivity_review
+&gt;       material, (saved, raw, compiled, mapping) = compile_example(alignment_examples()[name])
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\document_guided\test_alignment_v9.py:38: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\document_guided\test_alignment_v9.py:30: in compile_example
+    assembled = assemble_fragments(example["processing"], mapping, {"declarations": []}, material)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\skillflow\document_guided\fragments.py:488: in assemble_fragments
+    p, expanded = _validate_fragment("processing", processing, material, validation_gaps=validation_gaps)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+kind = 'processing'
+raw = {'locations': {'service': {'kind': 'tool', 'name': 'Service', 'evidences': [{'file': 'skill/SKILL.md', 'start_line': 1...local', 'name': 'response'}}]}, 'ir_004': {'evidences': [{'file': 'skill/SKILL.md', 'start_line': 1, 'end_line': 1}]}}}
+material = {'version': 'security-profile-v23', 'source': {'files': [{'path': 'SKILL.md', 'content': 'Acquire request from context...rtial order; report a semantic failure only when a necessary relation cannot be represented or assessed.'}, ...]}, ...}
+processing = None, validation_gaps = (), processing_expansion = None
+
+    def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(), processing_expansion=None):
+        """Share checked processing only within this validation/assembly operation."""
+        kind, diagnostics = _kind(kind), []
+        value = _parse(kind, raw, processing, diagnostics=diagnostics)
+        if kind == "processing":
+            if not diagnostics:
+                try:
+                    processing_expansion = flat._processing_expansion(_base_wire(value), material,
+                                                                     validation_gaps=validation_gaps)
+                except StructuralValidationError as error:
+&gt;                   raise _fragment_error(kind, value, error.diagnostics) from error
+E                   skillflow.common.validation.StructuralValidationError: /ir_semantics/ir_003/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.; /ir_semantics/ir_003/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.
+
+src\skillflow\document_guided\fragments.py:383: StructuralValidationError</failure></testcase><testcase classname="tests.document_guided.test_alignment_v9" name="test_published_connected_pairs_compile_propagate_and_load_for_doe[guard_then_member]" time="0.023"><failure message="skillflow.common.validation.StructuralValidationError: /ir_semantics/ir_005/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.; /ir_semantics/ir_005/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts r...&#10;[truncated; full report in element text]">kind = 'processing'
+raw = {'locations': {'service': {'kind': 'tool', 'name': 'Service', 'evidences': [{'file': 'skill/SKILL.md', 'start_line': 1...: [], 'ops': [{...}]}], 'output_bindings': [{'output_index': 0, 'value': {'kind': 'local', 'name': 'element'}}]}, ...}}
+material = {'version': 'security-profile-v23', 'source': {'files': [{'path': 'SKILL.md', 'content': "For each URL in ['same','sam...rtial order; report a semantic failure only when a necessary relation cannot be represented or assessed.'}, ...]}, ...}
+processing = None, validation_gaps = (), processing_expansion = None
+
+    def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(), processing_expansion=None):
+        """Share checked processing only within this validation/assembly operation."""
+        kind, diagnostics = _kind(kind), []
+        value = _parse(kind, raw, processing, diagnostics=diagnostics)
+        if kind == "processing":
+            if not diagnostics:
+                try:
+&gt;                   processing_expansion = flat._processing_expansion(_base_wire(value), material,
+                                                                     validation_gaps=validation_gaps)
+
+src\skillflow\document_guided\fragments.py:380: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\skillflow\document_guided\annotation_wire.py:803: in _processing_expansion
+    expanded = _expand(raw, material, processing_only=True, validation_gaps=validation_gaps,
+src\skillflow\document_guided\annotation_wire.py:670: in _expand
+    _validate_processing_backend(backend, material)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+backend = {'outcome': 'completed', 'realizations': [], 'demands': [], 'expressions': [], ...}
+material = {'version': 'security-profile-v23', 'source': {'files': [{'path': 'SKILL.md', 'content': "For each URL in ['same','sam...rtial order; report a semantic failure only when a necessary relation cannot be represented or assessed.'}, ...]}, ...}
+
+    def _validate_processing_backend(backend, material):
+        """Reuse processing checks with source and CFG only; no substitute Task."""
+        from types import SimpleNamespace
+        from skillflow.propagation.contracts.limitations import ProcessingGap
+        from skillflow.propagation.contracts.runtime_contract import runtime_contract
+        from skillflow.propagation.material import check_evidence
+        from skillflow.propagation.contracts.demand_index import build_demand_target_index
+        from skillflow.propagation.contracts.demand import (
+            DemandExpression, expression_refs, _validate_ref, _literal_inputs, _ref_leaves,
+        )
+        from skillflow.propagation.contracts.references import target_key
+        prepared = {**material, "runtime_contract": material.get("runtime_contract", runtime_contract())}
+        class ProcessingCheck(SimpleNamespace):
+            def model_dump(self, **kwargs):
+                return {"ir_semantics": {key: value.model_dump(mode="json") for key, value in self.ir_semantics.items()},
+                        "locations": {key: value.model_dump(mode="json") for key, value in self.locations.items()},
+                        "processing_gaps": [value.model_dump(mode="json") for value in self.processing_gaps]}
+        annotation = ProcessingCheck(
+            ir_semantics={key: specs.RawIRSemantics.model_validate(value) for key, value in backend["ir_semantics"].items()},
+            locations={key: specs.LocationSpec.model_validate(value) for key, value in backend["locations"].items()},
+            processing_gaps=[ProcessingGap.model_validate(value) for value in backend.get("processing_gaps", [])])
+        diagnostics = []
+        try:
+            specs.validate_specs(prepared["cfg"], annotation)
+        except StructuralValidationError as error:
+            diagnostics.extend(error.diagnostics)
+        def mechanisms(events, prefix):
+            for i, event in enumerate(events):
+                pointer = prefix + f"/{i}"
+                if isinstance(event, specs.RawForEachSpec):
+                    mechanisms(event.body, pointer + "/body")
+                elif isinstance(event, specs.ProcessingSpec) and event.mode == "local" and not any(
+                        hasattr(evidence, "file") or hasattr(evidence, "target") for evidence in event.evidences):
+                    diagnostics.extend(structural_error("mechanism_evidence_reference", pointer + "/evidences",
+                        "local processing requires source or CFG mechanism evidence").diagnostics)
+        for ir, spec in annotation.ir_semantics.items():
+            mechanisms(spec.events, json_pointer("ir_semantics", ir, "events"))
+        evidence_items = [(json_pointer("location_evidences", name, index), evidence)
+            for name, values in backend["location_evidences"].items() for index, evidence in enumerate(values)]
+        evidence_items += list(specs.iter_located_spec_evidence(annotation))
+        evidence_items += [(json_pointer("expressions", i, "evidences", j), evidence)
+            for i, expression in enumerate(backend["expressions"]) for j, evidence in enumerate(expression["evidences"])]
+        evidence_items += [(json_pointer("processing_gaps", i, "evidences", j), evidence)
+            for i, gap in enumerate(backend.get("processing_gaps", [])) for j, evidence in enumerate(gap["evidences"])]
+        for pointer, evidence in evidence_items:
+            try:
+                check_evidence(evidence, prepared)
+            except StructuralValidationError as error:
+                diagnostics.extend({**row, "path": pointer + row["path"]} for row in error.diagnostics)
+        if not diagnostics:
+            targets = build_demand_target_index(prepared["cfg"], backend)
+            from skillflow.propagation.contracts.task import task_source_files
+            expressions = [(f"/expressions/{i}", expression, targets.get(target_key(expression["target"])))
+                           for i, expression in enumerate(backend["expressions"])]
+            expressions += [(json_pointer("ir_semantics", target["instruction_id"], *target["raw_path"], "expression"),
+                             target["value"]["expression"], target) for target in targets.values()
+                            if target.get("domain") == "transfer" and target.get("kind") == "operation"
+                            and target["value"].get("expression") is not None]
+            for pointer, expression, target in expressions:
+                if target is None or not target.get("supports_expression", False):
+                    diagnostics.extend(structural_error("expression_target_capability", pointer + "/target",
+                        "expression supplements require an existing computation or control target").diagnostics)
+                    continue
+                typed = TypeAdapter(DemandExpression).validate_python(expression["expression"])
+                try:
+                    TypeAdapter(DemandExpression).validate_python(_literal_inputs(expression["expression"], target.get("input_literals", {})))
+                except ValidationError as error:
+                    diagnostics.extend(schema_error(error, pointer + "/expression", candidate=expression["expression"],
+                        schema=TypeAdapter(DemandExpression).json_schema()).diagnostics)
+                for reference in expression_refs(typed):
+                    try:
+                        _validate_ref(reference, target)
+                    except StructuralValidationError as error:
+                        diagnostics.extend({**row, "path": pointer + "/expression" + row["path"]} for row in error.diagnostics)
+                    if target.get("declared_refs") is not None and any(not hasattr(leaf, "value") and
+                            leaf.model_dump(mode="json") not in target["declared_refs"] for leaf in _ref_leaves(reference)):
+                        diagnostics.extend(structural_error("expression_input", pointer + "/expression",
+                            "expression supplements cannot introduce undeclared operation inputs").diagnostics)
+                for i, evidence in enumerate(expression["evidences"]):
+                    try:
+                        check_evidence(evidence, prepared)
+                    except StructuralValidationError as error:
+                        diagnostics.extend({**row, "path": pointer + f"/evidences/{i}" + row["path"]} for row in error.diagnostics)
+            if not diagnostics:
+                try:
+                    _require_input_contracts(targets, backend, task_source_files(prepared["source"]))
+                except StructuralValidationError as error:
+                    diagnostics.extend(error.diagnostics)
+        if diagnostics:
+&gt;           raise StructuralValidationError(diagnostics)
+E           skillflow.common.validation.StructuralValidationError: /ir_semantics/ir_005/events/0/events/1/atomic_ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.; /ir_semantics/ir_005/events/0/events/0/atomic_ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.
+
+src\skillflow\document_guided\annotation_wire.py:792: StructuralValidationError
+
+The above exception was the direct cause of the following exception:
+
+name = 'guard_then_member'
+
+    @pytest.mark.parametrize("name", list(alignment_examples()))
+    def test_published_connected_pairs_compile_propagate_and_load_for_doe(name):
+        from skillflow.propagation.loading import materials_from_result
+        from skillflow.doe.sensitivity_material import prepare_joint_sensitivity_review
+&gt;       material, (saved, raw, compiled, mapping) = compile_example(alignment_examples()[name])
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\document_guided\test_alignment_v9.py:38: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\document_guided\test_alignment_v9.py:30: in compile_example
+    assembled = assemble_fragments(example["processing"], mapping, {"declarations": []}, material)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\skillflow\document_guided\fragments.py:488: in assemble_fragments
+    p, expanded = _validate_fragment("processing", processing, material, validation_gaps=validation_gaps)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+kind = 'processing'
+raw = {'locations': {'service': {'kind': 'tool', 'name': 'Service', 'evidences': [{'file': 'skill/SKILL.md', 'start_line': 1...: [], 'ops': [{...}]}], 'output_bindings': [{'output_index': 0, 'value': {'kind': 'local', 'name': 'element'}}]}, ...}}
+material = {'version': 'security-profile-v23', 'source': {'files': [{'path': 'SKILL.md', 'content': "For each URL in ['same','sam...rtial order; report a semantic failure only when a necessary relation cannot be represented or assessed.'}, ...]}, ...}
+processing = None, validation_gaps = (), processing_expansion = None
+
+    def _validate_fragment(kind, raw, material, processing=None, *, validation_gaps=(), processing_expansion=None):
+        """Share checked processing only within this validation/assembly operation."""
+        kind, diagnostics = _kind(kind), []
+        value = _parse(kind, raw, processing, diagnostics=diagnostics)
+        if kind == "processing":
+            if not diagnostics:
+                try:
+                    processing_expansion = flat._processing_expansion(_base_wire(value), material,
+                                                                     validation_gaps=validation_gaps)
+                except StructuralValidationError as error:
+&gt;                   raise _fragment_error(kind, value, error.diagnostics) from error
+E                   skillflow.common.validation.StructuralValidationError: /ir_semantics/ir_005/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.; /ir_semantics/ir_005/segments/0/ops/0/input_contract: This actual operation requires an explicit source-backed input_contract; account for every actual input, including zero-input interfaces. Missing facts require a specific scoped gap.
+
+src\skillflow\document_guided\fragments.py:383: StructuralValidationError</failure></testcase></testsuite></testsuites>

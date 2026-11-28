@@ -120,12 +120,18 @@ def _recorded_task_request_failure(owner, outcome):
 def _counts(run):
     counts = {"logical_calls": 0, "structural_corrections": 0, "json_normalizations": 0}
     try:
+        fixed_upstream = "revalidated_upstream" in read(run / "manifest.json")
+        inherited_history = dict(counts)
         for path in sorted(run.rglob("chain.json")):
-            if "transport" in path.relative_to(run).parts:
+            relative = path.relative_to(run).parts
+            if "transport" in relative:
                 continue
             observed = chain_counts(path.parent.parent, path.parent.name)
+            ledger = inherited_history if fixed_upstream and relative[0] == "inherited" else counts
             for key in counts:
-                counts[key] += observed.get(key, 0)
+                ledger[key] += observed.get(key, 0)
+        if fixed_upstream:
+            counts.update(scope="fresh_downstream_requests", inherited_history=inherited_history)
     except Exception:
         return {"status": "unavailable"}
     return counts
@@ -135,14 +141,20 @@ def _save(run, result, *, replay=False):
     value = {**deepcopy(result), "identity": IDENTITY, "counts": _counts(run)}
     if replay:
         saved = read(run / "result.json")
+        if value["counts"].get("scope") == "fresh_downstream_requests" and saved.get("counts") != value["counts"]:
+            raise ValueError("Replayed fresh and inherited request counts differ")
         if canonical_sha256({key: item for key, item in saved.items() if key != "counts"}) != canonical_sha256({
                 key: item for key, item in value.items() if key != "counts"}):
             raise ValueError("Replayed guided decisions differ from saved results")
         return saved
     WRITER.json(run / "result.json", value)
     try:
+        policy = ("The Task and flow are inherited. The first graph answer was revalidated offline. "
+                  "Four normal downstream requests and bounded downstream repairs may use the two workers."
+                  if value["counts"].get("scope") == "fresh_downstream_requests" else
+                  "Seven normal analysis calls; program-assembled annotation; two dependency-aware workers; no model monitoring calls.")
         lines = ["# Document-guided analysis", "", f"Status: {value['status']}; stage: {value['stage']}.",
-                 "", "Seven normal analysis calls; program-assembled annotation; two dependency-aware workers; no model monitoring calls.",
+                 "", policy,
                  "", "| Stage | Status |", "|---|---|"]
         lines += [f"| {name} | {row['status']} |" for name, row in sorted(value["stages"].items())]
         lines += ["", "Retained limitations:", *["- " + item for item in value["limitations"]],
@@ -191,6 +203,12 @@ def prepare_from_accepted_cfg(parent, *, run_dir, config=None):
     """Prepare a separate run from bound accepted upstream values, without new calls."""
     from .accepted_upstream import prepare_from_accepted_cfg as prepare_accepted
     return prepare_accepted(parent, run_dir=run_dir, config=config)
+
+
+def prepare_from_revalidated_graph(parent, *, run_dir, config=None, renderer=None):
+    """Prepare fresh downstream work from the original graph response revalidated offline."""
+    from .revalidated_upstream import prepare
+    return prepare(parent, run_dir=run_dir, config=config, renderer=renderer)
 
 
 def _verify(run):
@@ -314,6 +332,7 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                           build_processing_revision_prompt, build_sensitivity_revision_prompt,
                           build_correspondence_revision_prompt)
     from .graph_steps import FACTS, UPDATES, rejected_facts, repair_input, repair_slots
+    from .shared_repair import DOWNSTREAM_REQUESTS, FIXED_UPSTREAM, fixed_findings, repair_decision
     from .source_review import run_source_review
     run = checked_run_path(run_dir)
     if replay and client_factory is not None:
@@ -322,6 +341,9 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
         config = _verify(run)
         from .accepted_upstream import load_accepted_upstream
         inherited_values = load_accepted_upstream(run)
+        fixed_upstream = "revalidated_upstream" in read(run / "manifest.json")
+        if fixed_upstream and not all(inherited_values.get(key, {}).get("value") is not None for key in FIXED_UPSTREAM):
+            raise ValueError("A downstream-only run requires the verified inherited Task, flow and CFG")
         saved = read(run / "result.json")
         if saved["status"] not in {"prepared", "running", "interrupted"} and not replay:
             replay, client_factory = True, None
@@ -369,6 +391,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     result["stages"][name] = {"status": terminal, "reason": reason}
 
         def client(name, owner):
+            if fixed_upstream and name not in DOWNSTREAM_REQUESTS:
+                raise ValueError("Request outside the downstream-only run scope: " + name)
             if replay:
                 return None
             if client_factory is None:
@@ -397,8 +421,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             revision = base is not None
             invalid = set() if revision else set(NAMES) - set(values)
             if not revision:
-                for inherited_name in values:
-                    mark(inherited_name, "complete", origin="accepted_upstream")
+                for inherited_name, item in values.items():
+                    mark(inherited_name, "complete", origin=item.get("origin", "accepted_upstream"))
             values.pop("annotation", None)
             if revision:
                 invalid.add("assembly")
@@ -411,6 +435,8 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                 invalid.add("graph")
             if "task" in domains:
                 invalid.update(("task", "task-correspondence"))
+            if fixed_upstream and invalid & FIXED_UPSTREAM:
+                raise ValueError("A downstream-only phase cannot invalidate its inherited Task, flow or CFG")
             errors = {name: deepcopy(detail) for name, detail in (prior_errors or {}).items()
                       if name not in invalid}
             for key in invalid:
@@ -744,12 +770,13 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
             if "annotation" in values:
                 selected = select(values)
             findings = (reviewed.get("review") or {}).get("findings", [])
-            from .shared_repair import repair_decision
             processing_gaps = (read(values["processing"]["path"]).get("validation_gaps", [])
                                if "processing" in values else [])
             decision = repair_decision(files=files, values=values, errors=errors,
-                reviewed=reviewed, selected=selected, graph_facts_only=True, processing_gaps=processing_gaps)
+                reviewed=reviewed, selected=selected, graph_facts_only=True, processing_gaps=processing_gaps,
+                fixed_upstream=fixed_upstream)
             _stable(run / "audit/shared-repair-decision.json", decision, replay)
+            retained = {"review/result.json": decision.get("fixed_upstream_findings", [])}
             if decision["eligible"]:
                 result["repair_used"] = True
                 prior_errors = dict(errors)
@@ -781,6 +808,9 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                     from .revision_rechecks import retained_source_rechecks
                     rechecks = retained_source_rechecks(reviewed.get("review"), values, revised)
                     revised_review = source_review(revised, repair_errors, revision=True, rechecks=rechecks)
+                    if fixed_upstream:
+                        retained["revision/review/result.json"] = fixed_findings(
+                            (revised_review.get("review") or {}).get("findings", []))
                 if revised_review["status"] != "complete":
                     if revised_review["status"] != "not_run":
                         result["repair_review"] = {"status": "unconfirmed", "prior_review": "review/result.json",
@@ -797,11 +827,18 @@ def run(run_dir, *, client_factory=None, replay=False, renderer=None, progress=N
                         if selected is not None else "The shared repair did not form a complete annotation; partial materials remain unselected.")
                     errors = {**errors, **repair_errors}
             findings = (reviewed.get("review") or {}).get("findings", [])
+            fixed_domains = set()
+            for review_path, scoped in retained.items():
+                for row in scoped:
+                    fixed_domains.add(row["domain"])
+                    result["limitations"].append(f"Fixed upstream {row['domain']} finding {row['id']} "
+                        f"in {review_path} remains open at " + ", ".join(row["target_ids"]))
             result["graph_review"] = ("audit_passed" if reviewed["status"] == "complete"
-                and not any(row["domain"] == "cfg" for row in findings)
+                and "cfg" not in fixed_domains and not any(row["domain"] == "cfg" for row in findings)
                 and "graph" in chosen and "graph" not in errors else "incomplete")
             result["annotation_review"] = ("review_passed" if selected is not None
-                and reviewed["status"] == "complete" and not findings and not reviewed.get("diagnostic_only") else "incomplete")
+                and reviewed["status"] == "complete" and not findings and not fixed_domains
+                and not reviewed.get("diagnostic_only") else "incomplete")
             result["limitations"] += [name + ": " + detail["reason"] for name, detail in sorted(errors.items())]
             if reviewed["status"] != "complete":
                 result["limitations"].append("Unified source review did not complete ("
